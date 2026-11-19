@@ -105,6 +105,7 @@ test("authored template worlds flow into the collector without losing original s
       ["unit-identity-worlds", "unitIdentityWorlds", []],
       ["transcript-cursor-worlds", "transcriptCursorWorlds", []],
       ["delivery-history-worlds", "deliveryHistoryWorlds", []],
+      ["android-audit-worlds", "androidAuditWorlds", []],
       ["publication-revision-worlds", "publicationRevisionWorlds", []],
       ["eval-recovery-worlds", "managedEvalRecoveryWorlds", []],
       ["pdf-layout-worlds", "managedPdfLayoutWorlds", []],
@@ -2951,6 +2952,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["unit-identity-worlds", "export const unitIdentityWorlds = [];"],
       ["transcript-cursor-worlds", "export const transcriptCursorWorlds = [];"],
       ["delivery-history-worlds", "export const deliveryHistoryWorlds = [];"],
+      ["android-audit-worlds", "export const androidAuditWorlds = [];"],
       ["publication-revision-worlds", "export const publicationRevisionWorlds = [];"],
       ["eval-recovery-worlds", "export const managedEvalRecoveryWorlds = [];"],
       ["pdf-layout-worlds", "export const managedPdfLayoutWorlds = [];"],
@@ -6293,5 +6295,137 @@ test("delivery history export rejects a same-text message from a different chann
   await assert.rejects(
     exportLiveTeacherWorkflow({ ...options, cases }),
     /exact origin and consumer decisions/u
+  );
+});
+
+test("Android audit export requires the native app observation and keeps workspace readiness unverified", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, ".."),
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  const name = "android-audit-live-fresh-emulator-uninstalled-app";
+  const { assignment } = cases.get(name);
+  const pins = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(
+    options.pins,
+    JSON.stringify({ ...pins, workspace: "system" }),
+  );
+  entry.test.name = name;
+  const target = "emulator-5576";
+  const request = {
+    goal: assignment.goal,
+    operationId: "assigned-emulator",
+    target,
+    intent: "application",
+  };
+  const observed = { target, state: "device" };
+  const application = {
+    target,
+    packageName: "app.vibestudio.mobile.internal",
+    installed: false,
+    processObserved: false,
+    screenshotCaptured: false,
+    screenshotBytes: 0,
+    issues: ["app.vibestudio.mobile.internal is not installed"],
+  };
+  const runtime = {
+    observation: application,
+    status: "app-absent",
+    image: "unavailable",
+  };
+  const report = {
+    targetObservation: observed,
+    targetReview: "target-ready",
+    runtime,
+  };
+  diagnostics.androidAudit = {
+    passed: true,
+    caseId: assignment.id,
+    contextId: "ctx",
+    request,
+    owned: target,
+    observed,
+    application,
+    checks: { target: true, lineage: true, application: true, report: true },
+  };
+  const ref = (value) => {
+    const text = JSON.stringify(value);
+    return {
+      complete: true,
+      hash: createHash("sha256").update(text).digest("hex"),
+      bytes: Buffer.byteLength(text),
+    };
+  };
+  const prototype = diagnostics.natlangTeacher.calls[0];
+  const call = (name, parent, inputs, output, effects = []) => ({
+    callId: name,
+    summary: { ...prototype.summary, call_id: name },
+    record: {
+      ...prototype.record,
+      call_id: name,
+      parent_call_id: parent,
+      definition: { name },
+      outcome: "done",
+      inputs: Object.fromEntries(
+        Object.entries(inputs).map(([key, value]) => [key, ref(value)]),
+      ),
+      output: ref(output),
+      effects,
+    },
+  });
+  const effect = (method, value) => ({
+    service: "androidRuntimeAudit",
+    method,
+    args: ref([request.operationId]),
+    result: ref(value),
+  });
+  const audit = call(
+    "auditAndroidRuntime",
+    "runWorkflow",
+    { request },
+    report,
+    [effect("observeTarget", observed)],
+  );
+  const app = call(
+    "reviewRuntime",
+    "auditAndroidRuntime",
+    { operationId: request.operationId },
+    runtime,
+    [effect("observeApplication", application)],
+  );
+  diagnostics.natlangTeacher = {
+    ...diagnostics.natlangTeacher,
+    programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+    rootCallIds: ["runWorkflow"],
+    report,
+    calls: [
+      call("runWorkflow", null, {}, null),
+      audit,
+      call(
+        "reviewTarget",
+        "auditAndroidRuntime",
+        { observation: observed },
+        report.targetReview,
+      ),
+      app,
+      call(
+        "assessImage",
+        "reviewRuntime",
+        { observation: application },
+        runtime.image,
+      ),
+    ],
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+
+  runtime.status = "workspace-ready";
+  audit.record.output = ref(report);
+  app.record.output = ref(runtime);
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases }),
+    /exact package and image evidence/u,
   );
 });

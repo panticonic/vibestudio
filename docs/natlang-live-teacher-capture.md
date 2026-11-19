@@ -94,6 +94,14 @@ idempotent retry must leave exactly one matching row. A same-text message on
 another channel must hold the receipt at the origin check. The exporter
 requires the exact origin and consumer decisions in the captured call tree.
 
+Android runtime audits use the installed Mobile Debug extension and native
+ADB inventory. Run them in a System workspace with one ready disposable
+Android emulator and no internal Vibestudio app on that emulator. Cases cover
+target-only inspection, an absent application, and an absent assigned target
+with a ready emulator present. The model receives the assigned coordinate only.
+App installation, process presence, device screenshot capture, and workspace
+readiness are distinct observations.
+
 Panel health cases inspect an owned workspace renderer through CDP. The outcome records the
 exact ordered DOM markers and retained console sequence. Recovery requires fresh evidence from
 the same panel after the assigned state change.

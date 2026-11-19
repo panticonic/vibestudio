@@ -220,6 +220,19 @@ const publicationRevisionWorkflow = {
   root: "reviewPublicationRevision",
   evidence: publicationRevisionEvidence,
 };
+const androidAuditWorkflow = {
+  family: "system-live-android-runtime-audit",
+  workspace: "system",
+  namespace: "vibestudio:mobile-debug",
+  group: "android-target-and-application-evidence",
+  validator: {
+    template: "system-testing",
+    path: "skills/system-testing/android-audit-managed.ts",
+  },
+  root: "auditAndroidRuntime",
+  evidence: androidAuditEvidence,
+};
+
 const deliveryHistoryWorkflow = {
   family: "workspace-live-delivery-history",
   workspace: "system",
@@ -671,6 +684,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { unitIdentityWorlds },
     { transcriptCursorWorlds },
     { deliveryHistoryWorlds },
+    { androidAuditWorlds },
     { publicationRevisionWorlds },
     { managedEvalRecoveryWorlds },
     { managedPdfLayoutWorlds },
@@ -734,6 +748,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "unit-identity-worlds.ts",
       "transcript-cursor-worlds.ts",
       "delivery-history-worlds.ts",
+      "android-audit-worlds.ts",
       "publication-revision-worlds.ts",
       "eval-recovery-worlds.ts",
       "pdf-layout-worlds.ts",
@@ -789,6 +804,9 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of publicationRevisionWorlds) {
     cases.set(`publication-revision-live-${assignment.id}`, { ...publicationRevisionWorkflow, assignment });
+  }
+  for (const assignment of androidAuditWorlds) {
+    cases.set(`android-audit-live-${assignment.id}`, { ...androidAuditWorkflow, assignment });
   }
   for (const assignment of deliveryHistoryWorlds) {
     cases.set(`delivery-history-live-${assignment.id}`, { ...deliveryHistoryWorkflow, assignment });
@@ -2906,6 +2924,110 @@ function publicationRevisionEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: contextId, source, artifact_digest: observed.candidate.artifactDigest },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function androidAuditEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.androidAudit;
+  const { caseId, contextId, request, owned, observed, application, checks } =
+    fixture ?? {};
+  const { assignment } = workflow;
+  const report = exercise.report;
+  const records = exercise.calls.map(({ record }) => record);
+  const root = records.find(
+    ({ call_id }) => call_id === exercise.rootCallIds[0],
+  );
+  const child = (parent, name) =>
+    parent &&
+    records.find(
+      (record) =>
+        record.parent_call_id === parent.call_id &&
+        record.definition.name === name,
+    );
+  const audit = child(root, "auditAndroidRuntime");
+  const targetReview = child(audit, "reviewTarget");
+  const runtimeReview = child(audit, "reviewRuntime");
+  const imageReview = child(runtimeReview, "assessImage");
+  const foreign = assignment.mode === "foreign";
+  const inspectApplication = assignment.mode === "application";
+  const target = foreign ? "emulator-0" : owned;
+  const verdict = foreign ? "target-absent" : "target-ready";
+  const effectMatches = (effect, method, result) =>
+    effect?.service === "androidRuntimeAudit" &&
+    effect.method === method &&
+    !effect.error &&
+    matchesValue(effect.args, [request.operationId]) &&
+    matchesValue(effect.result, result);
+
+  requireEvidence(
+    fixture?.passed === true &&
+      ["target", "lineage", "application", "report"].every(
+        (key) => checks?.[key] === true,
+      ) &&
+      caseId === assignment.id &&
+      typeof contextId === "string" &&
+      contextId === execution.provenance?.contextId &&
+      /^emulator-[1-9][0-9]+$/u.test(owned ?? "") &&
+      request?.goal === assignment.goal &&
+      typeof request.operationId === "string" &&
+      !!request.operationId &&
+      request.target === target &&
+      request.intent ===
+        (assignment.mode === "target" ? "device" : "application") &&
+      isDeepStrictEqual(observed, {
+        target,
+        state: foreign ? null : "device",
+      }) &&
+      isDeepStrictEqual(report?.targetObservation, observed) &&
+      report.targetReview === verdict &&
+      matchesValue(audit?.inputs?.request, request) &&
+      matchesValue(audit.output, report) &&
+      matchesValue(targetReview?.inputs?.observation, observed) &&
+      matchesValue(targetReview.output, verdict) &&
+      audit.effects?.length === 1 &&
+      effectMatches(audit.effects[0], "observeTarget", observed) &&
+      records.flatMap(({ effects }) => effects ?? []).length ===
+        (inspectApplication ? 2 : 1),
+    "Android audit needs a native observation and decision for the assigned emulator",
+  );
+
+  requireEvidence(
+    inspectApplication
+      ? application?.target === owned &&
+          application.packageName === "app.vibestudio.mobile.internal" &&
+          application.installed === false &&
+          application.processObserved === false &&
+          application.screenshotCaptured === false &&
+          application.screenshotBytes === 0 &&
+          Array.isArray(application.issues) &&
+          application.issues.some(
+            (issue) => typeof issue === "string" && !!issue,
+          ) &&
+          isDeepStrictEqual(report.runtime, {
+            observation: application,
+            status: "app-absent",
+            image: "unavailable",
+          }) &&
+          matchesValue(
+            runtimeReview?.inputs?.operationId,
+            request.operationId,
+          ) &&
+          matchesValue(runtimeReview.output, report.runtime) &&
+          runtimeReview.effects?.length === 1 &&
+          effectMatches(
+            runtimeReview.effects[0],
+            "observeApplication",
+            application,
+          ) &&
+          matchesValue(imageReview?.inputs?.observation, application) &&
+          matchesValue(imageReview.output, "unavailable")
+      : application === null && report.runtime === null && !runtimeReview,
+    "Android audit needs the exact package and image evidence or an explicit stop after target review",
+  );
+  return {
+    world: { context_id: contextId, target },
     checks,
     evidence: { workspace: { fixture } },
   };
