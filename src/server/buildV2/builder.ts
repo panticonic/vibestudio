@@ -2506,7 +2506,7 @@ async function buildUnitStoredUnchecked(
   // adopted in-flight build started for another state, or a shared producer —
   // the caller receives them bound to its own exact state.
   const boundToRequestedState = (build: StoredBuildResult): Promise<StoredBuildResult> =>
-    build.sourceStateHash !== stateRef && build.sourceStateHash !== null
+    build.sourceStateHash !== null
       ? session.store.rebindSourceState(build, stateRef)
       : Promise.resolve(build);
 

@@ -147,6 +147,7 @@ import type {
   ExecutionArtifactRefV1,
   ExecutionRootProvider,
   ExecutionSourceContentRoot,
+  ExecutionSourceStateRef,
 } from "@vibestudio/shared/execution/retention";
 import {
   ExecutionRootProviderRegistry,
@@ -523,7 +524,9 @@ export interface BuildSystemV2 {
    * exact state off the hot path, builds the unit from that immutable state, and
    * returns the global artifact identity the loader can fetch by key.
    */
-  bindRuntimeImage(unitPath: string, ref?: string): Promise<RuntimeImageBinding>;
+  bindRuntimeImage(
+    unitPath: string, ref?: string, sourceState?: ExecutionSourceStateRef
+  ): Promise<RuntimeImageBinding>;
 
   /** Build an npm package as a CJS library bundle for sandbox use. */
   getBuildNpm(specifier: string, version: string, externals?: string[]): Promise<BuildBundleResult>;
@@ -1611,10 +1614,12 @@ export async function initBuildSystemV2(
   const runtimeBindingFlights = new Map<string, Promise<RuntimeImageBinding>>();
   const runtimeBindingKey = (stateHash: string, unitName: string, ev: string) =>
     `${stateHash}\0${unitName}\0${ev}`;
-  const usableCachedBinding = async (key: string): Promise<RuntimeImageBinding | null> => {
+  const usableCachedBinding = async (key: string, exact = false): Promise<RuntimeImageBinding | null> => {
     const binding = runtimeBindingCache.get(key);
     if (!binding) return null;
-    const build = await store.get(binding.artifact.buildKey);
+    const build = exact
+      ? await store.getByExecution(binding.artifact.buildKey, binding.artifact.executionDigest)
+      : await store.get(binding.artifact.buildKey);
     // BuildV2 reuses artifact bytes across semantic states, so the build
     // directory's metadata may have been rebound since this binding was
     // cached. A build-key hit alone is not enough: returning the old sealed
@@ -1631,9 +1636,12 @@ export async function initBuildSystemV2(
     return null;
   };
 
-  const bindRuntimeImage: BuildSystemV2["bindRuntimeImage"] = async (unitPath, requestedRef) => {
+  const bindRuntimeImage: BuildSystemV2["bindRuntimeImage"] = async (unitPath, requestedRef, sourceState) => {
     const bindingStartedAt = performance.now();
     const ref = validateBuildRef(requestedRef);
+    if (sourceState && !ref?.startsWith("state:")) {
+      throw new Error("An exact runtime source requires its immutable content state");
+    }
 
     if ((!ref || ref === MAIN_HEAD) && trigger.isSettled()) {
       const snapshot = currentState();
@@ -1689,8 +1697,9 @@ export async function initBuildSystemV2(
     const ev = evMapAtState[node.name];
     if (!ev) throw new Error(`No effective version for ${node.name} at ${stateHash}`);
 
-    const identityKey = runtimeBindingKey(stateHash, node.name, ev);
-    const cached = await usableCachedBinding(identityKey);
+    const bindingKey = runtimeBindingKey(stateHash, node.name, ev);
+    const identityKey = sourceState ? `${bindingKey}\0${canonicalJson(sourceState)}` : bindingKey;
+    const cached = await usableCachedBinding(identityKey, sourceState !== undefined);
     if (cached) return cached;
     const existingFlight = runtimeBindingFlights.get(identityKey);
     if (existingFlight) return existingFlight;
@@ -1700,13 +1709,8 @@ export async function initBuildSystemV2(
         "BuildV2",
         `Runtime binding build started for ${node.relativePath} at ${stateHash}`
       );
-      const build = await buildUnitStored(
-        builderSession,
-        node,
-        ev,
-        graphAtState,
-        workspaceRoot,
-        stateHash
+      const build = await store.withExactSource(stateHash, sourceState, () =>
+        buildUnitStored(builderSession, node, ev, graphAtState, workspaceRoot, stateHash)
       );
       logVerbose(
         "BuildV2",

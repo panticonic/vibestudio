@@ -801,11 +801,30 @@ describe("BuildSystemV2 startup", () => {
       buildRoots(workspaceRoot, [path.join(process.cwd(), "node_modules")])
     );
 
+    const left = { kind: "event", eventId: "event:left" } as const;
+    const right = { kind: "event", eventId: "event:right" } as const;
+    const [leftBinding, rightBinding] = await Promise.all([
+      buildSystem.bindRuntimeImage("workers/retained", TEST_STATE, left),
+      buildSystem.bindRuntimeImage("workers/retained", TEST_STATE, right),
+    ]);
     const warmBinding = await buildSystem.bindRuntimeImage("workers/retained", TEST_STATE);
     const warmBuild = await buildSystem.getBuildByKey(warmBinding.artifact.buildKey);
     expect(warmBuild).not.toBeNull();
     const warmBundle = await buildSystem.primaryTextArtifactContent(warmBuild!);
     expect(warmBundle).toContain("cold-cache-runtime-loaded");
+    expect(leftBinding.artifact.buildKey).toBe(warmBinding.artifact.buildKey);
+    expect(rightBinding.artifact.buildKey).toBe(warmBinding.artifact.buildKey);
+    expect(leftBinding.artifact.sourceState.state).toEqual(left);
+    expect(rightBinding.artifact.sourceState.state).toEqual(right);
+    expect(leftBinding.artifact.executionDigest).not.toBe(rightBinding.artifact.executionDigest);
+    for (const binding of [leftBinding, rightBinding, warmBinding]) {
+      const { buildKey, executionDigest, sourceState } = binding.artifact;
+      expect(
+        (await buildSystem.getBuildByExecution(buildKey, executionDigest))?.metadata.sourceState
+      ).toEqual(sourceState.state);
+    }
+    expect(await buildSystem.bindRuntimeImage("workers/retained", TEST_STATE, left)).toEqual(leftBinding);
+    expect(await buildSystem.bindRuntimeImage("workers/retained", TEST_STATE)).toEqual(warmBinding);
 
     await buildSystem.shutdown();
     buildSystem = null;

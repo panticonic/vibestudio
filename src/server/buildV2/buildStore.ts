@@ -26,6 +26,7 @@ import { ByteBudgetCache } from "@vibestudio/shared/byteBudgetCache";
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { gunzip, gzip, constants as zlibConstants } from "zlib";
 import { promisify } from "util";
 import {
@@ -315,7 +316,21 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
   const activeExecutionIdentityContext = config.executionIdentity
     ? Object.freeze({ ...config.executionIdentity })
     : null;
+  const exactSource = new AsyncLocalStorage<{ stateHash: string; sourceState: ExecutionSourceStateRef }>();
   const ownPublicationTasks = new Set<Promise<void>>();
+
+  function withExactSource<T>(
+    stateHash: string,
+    sourceState: ExecutionSourceStateRef | undefined,
+    operation: () => T
+  ): T {
+    return sourceState ? exactSource.run({ stateHash, sourceState }, operation) : operation();
+  }
+
+  function exactSourceFor(stateHash: string) {
+    const selected = exactSource.getStore();
+    return selected?.stateHash === stateHash ? selected.sourceState : undefined;
+  }
 
   // ---------------------------------------------------------------------------
   // Build Store
@@ -1360,6 +1375,7 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
     if (sharedMetadata.sourceStateHash !== null) {
       const reboundStateHash = sourceStateHash ?? sharedMetadata.sourceStateHash;
       const sourceState =
+        exactSourceFor(reboundStateHash) ??
         activeExecutionIdentityContext?.executionStateForContent(reboundStateHash);
       if (!sourceState) return null;
       const reboundMetadata: BuildMetadata = {
@@ -1548,8 +1564,12 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
     build: StoredBuildResult,
     sourceStateHash: string
   ): Promise<StoredBuildResult> {
-    if (build.sourceStateHash === sourceStateHash) return build;
-    const sourceState = activeExecutionIdentityContext?.executionStateForContent(sourceStateHash);
+    const exact = exactSourceFor(sourceStateHash);
+    const sourceState = exact ?? activeExecutionIdentityContext?.executionStateForContent(sourceStateHash);
+    if (build.sourceStateHash === sourceStateHash &&
+        (!sourceState || canonicalJson(build.metadata.sourceState ?? null) === canonicalJson(sourceState))) {
+      return build;
+    }
     if (!sourceState) {
       throw new Error(
         `Build ${build.buildKey} cannot be rebound to source state ${sourceStateHash}: state is not present in the active workspace`
@@ -1572,14 +1592,14 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
     const localDir = getBuildDir(build.buildKey);
     if (path.resolve(build.dir) === path.resolve(localDir)) {
       await writeExecutionMetadata(localDir, metadata);
-      await writeBuildMetadata(localDir, metadata);
+      if (!exact) await writeBuildMetadata(localDir, metadata);
     }
     const rebound = {
       ...build,
       sourceStateHash,
       metadata,
     };
-    if (path.resolve(build.dir) === path.resolve(localDir)) {
+    if (!exact && path.resolve(build.dir) === path.resolve(localDir)) {
       rememberVerifiedLocalBuild(rebound);
     }
     return rebound;
@@ -1663,6 +1683,7 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
         : {
             ...metadata,
             sourceState:
+              exactSourceFor(metadata.sourceStateHash) ??
               metadata.sourceState ??
               activeExecutionIdentityContext?.executionStateForContent(metadata.sourceStateHash) ??
               null,
@@ -2183,6 +2204,7 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
     compilationMetadata,
     getOrHydrate,
     getByExecution,
+    withExactSource,
     rebindSourceState,
     primaryArtifact,
     primaryTextArtifactContent,
