@@ -88,6 +88,12 @@ Channel roster cases use two owned VibeStudio channels with the same handles whe
 The program reuses the channel membership skill for each step, checks holds after conflicting
 identity evidence, and records the exact final rosters across both channels.
 
+Delivery history cases compare the original receipt against a durable PubSub
+envelope and a reconstructed conversation in a real headless client. An
+idempotent retry must leave exactly one matching row. A same-text message on
+another channel must hold the receipt at the origin check. The exporter
+requires the exact origin and consumer decisions in the captured call tree.
+
 Panel health cases inspect an owned workspace renderer through CDP. The outcome records the
 exact ordered DOM markers and retained console sequence. Recovery requires fresh evidence from
 the same panel after the assigned state change.

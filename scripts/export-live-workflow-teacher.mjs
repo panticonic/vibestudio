@@ -220,6 +220,18 @@ const publicationRevisionWorkflow = {
   root: "reviewPublicationRevision",
   evidence: publicationRevisionEvidence,
 };
+const deliveryHistoryWorkflow = {
+  family: "workspace-live-delivery-history",
+  workspace: "system",
+  namespace: "vibestudio:conversation",
+  group: "receipt-to-durable-consumer-history",
+  validator: {
+    template: "system-testing",
+    path: "skills/system-testing/delivery-history-managed.ts",
+  },
+  root: "reviewDeliveryHistory",
+  evidence: deliveryHistoryEvidence,
+};
 const transcriptCursorWorkflow = {
   family: "workspace-live-transcript-cursor",
   workspace: "system",
@@ -658,6 +670,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { gmailComposeHistoryWorlds },
     { unitIdentityWorlds },
     { transcriptCursorWorlds },
+    { deliveryHistoryWorlds },
     { publicationRevisionWorlds },
     { managedEvalRecoveryWorlds },
     { managedPdfLayoutWorlds },
@@ -720,6 +733,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "gmail-compose-history-worlds.ts",
       "unit-identity-worlds.ts",
       "transcript-cursor-worlds.ts",
+      "delivery-history-worlds.ts",
       "publication-revision-worlds.ts",
       "eval-recovery-worlds.ts",
       "pdf-layout-worlds.ts",
@@ -775,6 +789,9 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of publicationRevisionWorlds) {
     cases.set(`publication-revision-live-${assignment.id}`, { ...publicationRevisionWorkflow, assignment });
+  }
+  for (const assignment of deliveryHistoryWorlds) {
+    cases.set(`delivery-history-live-${assignment.id}`, { ...deliveryHistoryWorkflow, assignment });
   }
   for (const assignment of transcriptCursorWorlds) {
     cases.set(`transcript-cursor-live-${assignment.id}`, { ...transcriptCursorWorkflow, assignment });
@@ -2889,6 +2906,103 @@ function publicationRevisionEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: contextId, source, artifact_digest: observed.candidate.artifactDigest },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function deliveryHistoryEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.deliveryHistory;
+  const { contextId, caseId, request, observed, canonical, retryId, decoyId, checks } =
+    fixture ?? {};
+  const { assignment } = workflow;
+  const report = exercise.report;
+  const records = exercise.calls.map(({ record }) => record);
+  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const child = (parent, name) =>
+    parent &&
+    records.find(
+      (record) => record.parent_call_id === parent.call_id && record.definition.name === name
+    );
+  const review = child(root, "reviewDeliveryHistory");
+  const origin = child(review, "checkOrigin");
+  const match = child(origin, "matchReceipt");
+  const comparison = child(review, "compareConsumer");
+  const effect = review?.effects?.[0];
+  const foreign = assignment.mode === "foreign";
+  const originVerdict = foreign ? "foreign-channel" : "matched";
+  const consumerVerdict = foreign ? "unreviewed" : "matched";
+  const receipt = observed?.receipt;
+
+  requireEvidence(
+    fixture?.passed === true &&
+      ["scope", "nativeDelivery", "retained", "verdict"].every((key) => checks?.[key] === true) &&
+      caseId === assignment.id &&
+      typeof contextId === "string" &&
+      contextId === execution.provenance?.contextId &&
+      request?.goal === assignment.goal &&
+      typeof request.operationId === "string" &&
+      !!request.operationId &&
+      [
+        observed?.channelId,
+        receipt?.channelId,
+        receipt?.senderId,
+        receipt?.messageId,
+        canonical?.envelopeId,
+      ].every((value) => typeof value === "string" && !!value) &&
+      Number.isSafeInteger(canonical.sequence) &&
+      canonical.sequence > 0 &&
+      canonical.text === assignment.text &&
+      canonical.senderId === receipt.senderId &&
+      (assignment.mode === "retry" ? retryId === receipt.messageId : retryId === null) &&
+      (foreign
+        ? observed.channelId !== receipt.channelId &&
+          canonical.messageId === decoyId &&
+          typeof decoyId === "string" &&
+          !!decoyId &&
+          decoyId !== receipt.messageId &&
+          isDeepStrictEqual(observed.retained, []) &&
+          isDeepStrictEqual(observed.rendered, [])
+        : observed.channelId === receipt.channelId &&
+          canonical.messageId === receipt.messageId &&
+          decoyId === null &&
+          isDeepStrictEqual(observed.retained, [canonical]) &&
+          isDeepStrictEqual(observed.rendered, [
+            {
+              messageId: canonical.messageId,
+              senderId: canonical.senderId,
+              text: canonical.text,
+            },
+          ])) &&
+      isDeepStrictEqual(report?.observation, observed) &&
+      matchesValue(review?.inputs?.request, request) &&
+      matchesValue(review.output, report) &&
+      records.flatMap(({ effects }) => effects ?? []).length === 1 &&
+      effect?.service === "deliveryHistory" &&
+      effect.method === "inspect" &&
+      !effect.error &&
+      matchesValue(effect.args, [request.operationId]) &&
+      matchesValue(effect.result, observed),
+    "Delivery history needs the assigned native receipt, durable row, and consumer projection"
+  );
+  requireEvidence(
+    report.origin === originVerdict &&
+      report.consumer === consumerVerdict &&
+      report.verified === !foreign &&
+      matchesValue(origin?.inputs?.observation, observed) &&
+      matchesValue(origin.output, originVerdict) &&
+      (foreign
+        ? !match && !comparison
+        : matchesValue(match?.inputs?.receipt, receipt) &&
+          matchesValue(match.inputs?.row, canonical) &&
+          matchesValue(match.output, originVerdict) &&
+          matchesValue(comparison?.inputs?.retained, canonical) &&
+          matchesValue(comparison.inputs?.rendered, observed.rendered) &&
+          matchesValue(comparison.output, consumerVerdict)),
+    "Delivery history needs the exact origin and consumer decisions"
+  );
+  return {
+    world: { context_id: contextId, channel_id: observed.channelId, message_id: receipt.messageId },
     checks,
     evidence: { workspace: { fixture } },
   };

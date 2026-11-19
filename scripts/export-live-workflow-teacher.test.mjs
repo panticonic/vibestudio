@@ -104,6 +104,7 @@ test("authored template worlds flow into the collector without losing original s
       ["gmail-compose-history-worlds", "gmailComposeHistoryWorlds", []],
       ["unit-identity-worlds", "unitIdentityWorlds", []],
       ["transcript-cursor-worlds", "transcriptCursorWorlds", []],
+      ["delivery-history-worlds", "deliveryHistoryWorlds", []],
       ["publication-revision-worlds", "publicationRevisionWorlds", []],
       ["eval-recovery-worlds", "managedEvalRecoveryWorlds", []],
       ["pdf-layout-worlds", "managedPdfLayoutWorlds", []],
@@ -2949,6 +2950,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["gmail-compose-history-worlds", "export const gmailComposeHistoryWorlds = [];"],
       ["unit-identity-worlds", "export const unitIdentityWorlds = [];"],
       ["transcript-cursor-worlds", "export const transcriptCursorWorlds = [];"],
+      ["delivery-history-worlds", "export const deliveryHistoryWorlds = [];"],
       ["publication-revision-worlds", "export const publicationRevisionWorlds = [];"],
       ["eval-recovery-worlds", "export const managedEvalRecoveryWorlds = [];"],
       ["pdf-layout-worlds", "export const managedPdfLayoutWorlds = [];"],
@@ -6199,4 +6201,97 @@ test("publication revision export rejects a review that omits a changed public e
   review.record.output = ref(report);
   await save();
   await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /exact changed public files/u);
+});
+
+test("delivery history export rejects a same-text message from a different channel", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  const name = "delivery-history-live-identical-note-on-other-channel";
+  const { assignment } = cases.get(name);
+  const pins = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(options.pins, JSON.stringify({ ...pins, workspace: "system" }));
+  entry.test.name = name;
+  const request = { goal: assignment.goal, operationId: "assigned-receipt" };
+  const receipt = { channelId: "original", messageId: "msg-1", senderId: "sender" };
+  const observation = { channelId: "other", receipt, retained: [], rendered: [] };
+  const canonical = {
+    messageId: "msg-2",
+    envelopeId: "envelope",
+    sequence: 1,
+    senderId: "sender",
+    text: assignment.text,
+  };
+  const report = {
+    observation,
+    origin: "foreign-channel",
+    consumer: "unreviewed",
+    verified: false,
+  };
+  diagnostics.deliveryHistory = {
+    passed: true,
+    caseId: assignment.id,
+    contextId: "ctx",
+    request,
+    observed: observation,
+    canonical,
+    retryId: null,
+    decoyId: "msg-2",
+    checks: { scope: true, nativeDelivery: true, retained: true, verdict: true },
+  };
+  const ref = (value) => {
+    const text = JSON.stringify(value);
+    return {
+      complete: true,
+      hash: createHash("sha256").update(text).digest("hex"),
+      bytes: Buffer.byteLength(text),
+    };
+  };
+  const prototype = diagnostics.natlangTeacher.calls[0];
+  const call = (name, parent, inputs, output, effects = []) => ({
+    callId: name,
+    summary: { ...prototype.summary, call_id: name },
+    record: {
+      ...prototype.record,
+      call_id: name,
+      parent_call_id: parent,
+      definition: { name },
+      outcome: "done",
+      inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+      output: ref(output),
+      effects,
+    },
+  });
+  const review = call("reviewDeliveryHistory", "runWorkflow", { request }, report, [
+    {
+      service: "deliveryHistory",
+      method: "inspect",
+      args: ref([request.operationId]),
+      result: ref(observation),
+    },
+  ]);
+  diagnostics.natlangTeacher = {
+    ...diagnostics.natlangTeacher,
+    programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+    rootCallIds: ["runWorkflow"],
+    report,
+    calls: [
+      call("runWorkflow", null, {}, null),
+      review,
+      call("checkOrigin", "reviewDeliveryHistory", { observation }, report.origin),
+    ],
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+
+  report.origin = "matched";
+  report.verified = true;
+  review.record.output = ref(report);
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases }),
+    /exact origin and consumer decisions/u
+  );
 });
