@@ -306,14 +306,24 @@ describe("WorkspaceVcs semantic host orchestration", () => {
   it("keeps participant projections separate, advances one, and repairs its binding on retry", async () => {
     const { vcs, blobsDir, deps } = await harness();
     const contextId = "context:shared";
-    const owners = ["work-alice", "work-bob"].map((objectKey) => ({ ...TEST_PROVIDER, objectKey }));
+    const actorA = {
+      ...createVerifiedCaller("shell:alice", "shell"), taskAuthority: `task:${"a".repeat(64)}` as const,
+    };
+    const actorB = {
+      ...createVerifiedCaller("shell:bob", "shell"), taskAuthority: `task:${"b".repeat(64)}` as const,
+    };
+    const owners = [actorA, actorB].map((actor) => ({
+      ...TEST_PROVIDER,
+      objectKey: `work-${sha256HexSyncText(workspaceParticipantIdentity(actor, contextId))}`,
+    }));
     const original = (await putBytes(blobsDir, Buffer.from("shared content"))).digest;
     const privateEdit = (await putBytes(blobsDir, Buffer.from("private edit"))).digest;
     let aliceEdited = false;
     const dispatch = vi.fn(async (owner: typeof TEST_PROVIDER, method: string, input: unknown) => {
+      const edited = aliceEdited && owner.objectKey === owners[0]!.objectKey;
+      if (method === "readHistoryReferenceVisibility") return edited;
       expect(method).toBe("readHistoryProjection");
       expect(input).toEqual({ contextId });
-      const edited = aliceEdited && owner.objectKey === "work-alice";
       return {
         head: edited ? "edited" : "initial",
         state: edited
@@ -354,13 +364,12 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       canonical,
       dispatch: { dispatch: vi.fn(async (_owner, method) => {
         if (method === "readHistoryMain") return { head: "initial", eventId: "genesis" };
+        if (method === "readHistoryMainStateVisibility") return false;
         if (method === "readHistoryReplayReceipt") return null;
         if (method === "listHistoryAppliedPublications") return [];
         throw new Error(`Unexpected canonical dispatch ${method}`);
       }) },
     });
-    const actorA = createVerifiedCaller("shell:alice", "shell");
-    const actorB = createVerifiedCaller("shell:bob", "shell");
     const scope = vi.spyOn(vcs, "openParticipantScope").mockImplementation(async (input) => ({
       dispatch: { dispatch }, canonical, contextId, ownerContextId: input.ownerContextId,
       caller: input.caller,
@@ -387,6 +396,13 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       .toMatchObject({ content: { kind: "text", text: "shared content" } });
     expect(scope).toHaveBeenCalledWith({ caller: actorA, contextId, ownerContextId: contextId });
     await expect(vcs.contextRepoTargets(contextId)).rejects.toThrow("verified caller");
+    await expect(vcs.resolveParticipantBuildSource(privateSource.stateHash, actorA, contextId))
+      .resolves.toEqual(privateSource);
+    await expect(vcs.resolveParticipantBuildSource(privateSource.stateHash, actorB, contextId))
+      .rejects.toMatchObject({ code: "EACCES" });
+    aliceEdited = false;
+    await expect(vcs.resolveParticipantBuildSource(privateSource.stateHash, actorA, contextId))
+      .rejects.toMatchObject({ code: "EACCES" });
   });
 
   it("resolves current semantic content without a checkout and reuses only exact immutable heads", async () => {

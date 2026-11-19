@@ -81,6 +81,7 @@ import type {
   WorkspaceStateFile,
   WorkspaceStateSource,
 } from "../buildV2/stateTrigger.js";
+import { LruMap } from "../buildV2/lruMap.js";
 import type { BuildSourceProvider } from "../buildV2/buildSource.js";
 import { type GraphNode, type PackageGraph } from "../buildV2/packageGraph.js";
 import { discoverPackageGraphAtTree } from "../buildV2/packageGraphTree.js";
@@ -401,6 +402,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   private readonly contextHeads = new Map<string, VcsStateNodeRef | null>();
   private readonly contextInitializations = new Map<string, Promise<VcsStateNodeRef>>();
   private readonly semanticStateByContent = new Map<string, VcsStateNodeRef>();
+  private readonly participantBuildSources = new LruMap<string, VcsStateNodeRef>(256);
   /** Exact materialization receipt verified during this host generation. An
    * absent entry (including after restart) requires one disk integrity scan. */
   private readonly verifiedProjectionStates = new Map<string, string>();
@@ -719,6 +721,18 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     if (!source) throw new Error("Participant workspace history is unavailable");
     const main = await readWorkspaceCanonicalMain(source);
     return { kind: "event" as const, eventId: main.eventId };
+  }
+
+  async participantExecutionVisible(
+    artifact: import("@vibestudio/shared/execution/retention").ExecutionArtifactRefV1,
+    caller: VerifiedCaller,
+    contextId: string | null,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    const source = artifact.sourceState;
+    return source.kind === "product-seed" ||
+      (source.workspaceId === this.workspaceId &&
+        await this.participantBuildStateReachable(source.state, caller, contextId, signal));
   }
 
   async participantBuildStateReachable(
@@ -2603,7 +2617,42 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       ? await this.participantContextContent(contextId, caller, signal)
       : await this.exactContextContent(contextId);
     const { stateHash } = await this.repositories.contentView(repositories);
+    if (this.participantHistoryAttached) {
+      const key = this.participantBuildSourceKey(caller, contextId, stateHash);
+      if (key) this.participantBuildSources.set(key, semanticState);
+    }
     return { semanticState, stateHash };
+  }
+
+  private participantBuildSourceKey(caller: VerifiedCaller, contextId: string | null, stateHash: string) {
+    if (!contextId || !(caller.nativeInvocation || caller.taskAuthority || caller.subject?.userId))
+      return null;
+    return canonicalJson([workspaceParticipantIdentity(caller, contextId), contextId, stateHash]);
+  }
+
+  async resolveParticipantBuildSource(
+    stateHash: string,
+    caller: VerifiedCaller,
+    contextId: string | null,
+    signal?: AbortSignal,
+  ) {
+    if (!this.participantHistoryAttached) return null;
+    if (/^state:[0-9a-f]{64}$/u.test(stateHash)) {
+      const key = this.participantBuildSourceKey(caller, contextId, stateHash);
+      const exact = key ? this.participantBuildSources.get(key) : undefined;
+      if (exact && await this.participantBuildStateReachable(exact, caller, contextId, signal))
+        return { stateHash, semanticState: exact };
+
+      await this.ensureFresh();
+      const remembered = this.executionStateForContent(stateHash);
+      if (remembered && await this.participantBuildStateReachable(remembered, caller, key ? contextId : null, signal))
+        return { stateHash, semanticState: remembered };
+      if (key && contextId) {
+        const current = await this.resolveCallerContextState(contextId, caller, signal);
+        if (current.stateHash === stateHash) return current;
+      }
+    }
+    throw Object.assign(new Error("Build content is outside the caller's visible workspace history"), { code: "EACCES" });
   }
 
   executionStateForContent(

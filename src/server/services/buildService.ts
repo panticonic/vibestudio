@@ -56,6 +56,8 @@ const SKILLS_PACKAGE_SCOPE = (() => {
   return scope;
 })();
 
+type ExactBuildSource = { stateHash: string; semanticState: ExecutionSourceStateRef };
+
 export function createBuildService(deps: {
   buildSystem: BuildSystemV2;
   listUnits: () => BuildUnitCatalogEntry[] | Promise<BuildUnitCatalogEntry[]>;
@@ -64,7 +66,8 @@ export function createBuildService(deps: {
   executionVisibility?: (ctx: ServiceContext) => ((artifact: ExecutionArtifactRefV1) => Promise<boolean>) | undefined;
   resolveContextBuildSource?: (
     ctx: ServiceContext, contextId: string
-  ) => Promise<{ stateHash: string; semanticState: ExecutionSourceStateRef } | null>;
+  ) => Promise<ExactBuildSource | null>;
+  resolveContentBuildSource?: (ctx: ServiceContext, stateHash: string) => Promise<ExactBuildSource | null>;
 }): ServiceDefinition {
   const visibleBuild = async (ctx: ServiceContext, key: string) => {
     const build = await deps.buildSystem.getBuildByKey(key);
@@ -73,8 +76,10 @@ export function createBuildService(deps: {
   async function atBuildRef<T>(
     ctx: ServiceContext, ref: string | undefined, operation: (selected?: string) => Promise<T>
   ): Promise<T> {
-    if (!ref?.startsWith("ctx:") || !deps.resolveContextBuildSource) return operation(ref);
-    const source = await deps.resolveContextBuildSource(ctx, ref.slice(4));
+    if (!ref) return operation(ref);
+    const source = ref.startsWith("ctx:")
+      ? await deps.resolveContextBuildSource?.(ctx, ref.slice(4))
+      : ref.startsWith("state:") ? await deps.resolveContentBuildSource?.(ctx, ref) : null;
     return source
       ? deps.buildSystem.withExactBuildSource(
           source.stateHash, source.semanticState, () => operation(source.stateHash)
@@ -251,7 +256,7 @@ export function createBuildService(deps: {
         };
       }),
       getEffectiveVersion: (_ctx, [unit]) => deps.buildSystem.getEffectiveVersion(unit),
-      inspectBuildProvenance: async (_ctx, [source]) => {
+      inspectBuildProvenance: async (ctx, [source]) => {
         const bs = deps.buildSystem;
         const graph = bs.getGraph();
         const exactNode =
@@ -297,7 +302,7 @@ export function createBuildService(deps: {
         const cachedBuilds = Object.fromEntries(
           await Promise.all(
             Object.entries(buildKeys).map(async ([kind, key]) => {
-              const build = key ? await bs.getBuildByKey(key) : null;
+              const build = key ? await visibleBuild(ctx, key) : null;
               return [
                 kind,
                 {

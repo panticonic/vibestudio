@@ -2948,6 +2948,12 @@ async function main() {
               throw Object.assign(new Error("Build context is outside the caller's working copy"), { code: "EACCES" });
             return workspaceVcs.resolveCallerContextState(contextId, ctx.caller, ctx.signal);
           },
+          resolveContentBuildSource: (ctx, stateHash) => workspaceVcs.resolveParticipantBuildSource(
+            stateHash,
+            ctx.caller,
+            ctx.caller.agentBinding?.contextId ?? callerBuildContextId(entityCache, ctx.caller.runtime.id),
+            ctx.signal,
+          ),
           canReadBuild: async (ctx, build) =>
             build.sourceStateHash === null || await workspaceVcs.participantBuildStateReachable(
               build.metadata.sourceState,
@@ -2956,13 +2962,12 @@ async function main() {
               ctx.signal,
             ),
           executionVisibility: (ctx) => workspaceVcs.participantHistoryAttached
-            ? async ({ sourceState }) => sourceState.kind === "product-seed" ||
-              (sourceState.workspaceId === workspaceId && await workspaceVcs.participantBuildStateReachable(
-                sourceState.state,
+            ? (artifact) => workspaceVcs.participantExecutionVisible(
+                artifact,
                 ctx.caller,
                 ctx.caller.agentBinding?.contextId ?? callerBuildContextId(entityCache, ctx.caller.runtime.id),
                 ctx.signal,
-              ))
+              )
             : undefined,
           listUnits: () =>
             listBuildUnitCatalog({
@@ -4731,15 +4736,25 @@ async function main() {
 
               const source = spec.execution.source;
               const requestedRef = spec.execution.ref;
-              const participantSource =
-                !existingBuildKey && !spec.execution.artifact &&
-                workspaceVcs.participantHistoryAttached && sourceAuthority &&
-                requestedRef === `ctx:${sourceAuthority.contextId}`
-                  ? await workspaceVcs.resolveCallerContextState(
-                      sourceAuthority.contextId,
-                      sourceAuthority.caller
-                    )
-                  : undefined;
+              let participantSource;
+              if (!existingBuildKey && workspaceVcs.participantHistoryAttached && sourceAuthority) {
+                const { caller, contextId: sourceContext } = sourceAuthority;
+                const artifact = spec.execution.artifact;
+                if (artifact) {
+                  const stored = await buildSystem.getBuildByExecution(artifact.buildKey, artifact.executionDigest);
+                  const execution = stored?.metadata.execution;
+                  if (!execution || !await workspaceVcs.participantExecutionVisible(execution, caller, sourceContext)) {
+                    throw Object.assign(new Error("Runtime execution is unavailable"), { code: "EACCES" });
+                  }
+                } else if (requestedRef?.startsWith("ctx:")) {
+                  if (!sourceContext || requestedRef !== `ctx:${sourceContext}`) {
+                    throw Object.assign(new Error("Runtime build context is outside the caller's working copy"), { code: "EACCES" });
+                  }
+                  participantSource = await workspaceVcs.resolveCallerContextState(sourceContext, caller);
+                } else if (requestedRef?.startsWith("state:")) {
+                  participantSource = await workspaceVcs.resolveParticipantBuildSource(requestedRef, caller, sourceContext);
+                }
+              }
               const ref = participantSource?.stateHash ?? requestedRef;
               const sourceState = participantSource?.semanticState;
               let prepared: {

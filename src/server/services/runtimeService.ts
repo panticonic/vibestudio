@@ -165,7 +165,7 @@ export interface RuntimePreparationInput<S extends RuntimeEntityCreateSpec> {
   spec: S;
   key: string;
   contextId: string;
-  sourceAuthority?: { caller: VerifiedCaller; contextId: string };
+  sourceAuthority?: { caller: VerifiedCaller; contextId: string | null };
   existingBuildKey?: string;
   parent?: {
     parentId: string;
@@ -1082,13 +1082,16 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     }
 
     await setUpContext(existing.contextId);
+    const reservedRef = `ctx:${existing.contextId}`;
+    const ref = spec.execution.ref ?? reservedRef;
+    const sourceContextId = caller && ref !== reservedRef
+      ? await store.resolveWorkContext(caller.runtime.id)
+      : existing.contextId;
     const prepared = await deps.hooks.prepare({
-      spec: {
-        ...spec,
-        execution: { ...spec.execution, ref: spec.execution.ref ?? `ctx:${existing.contextId}` },
-      },
+      spec: { ...spec, execution: { ...spec.execution, ref } },
       key: spec.key,
       contextId: existing.contextId,
+      ...(caller ? { sourceAuthority: { caller, contextId: sourceContextId } } : {}),
     });
     if (prepared.surface !== "code") {
       throw new Error(`Reserved entity ${canonicalId} did not prepare a code incarnation`);
@@ -1298,7 +1301,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         contextId,
         // A storage fork can be provisioning the participant work cell itself.
         // Its source selection must not open that same work cell.
-        ...(sourceContextId && !cloneSource
+        ...(spec.kind !== "session" && spec.execution.surface === "code" && !cloneSource
           ? { sourceAuthority: { caller: actors.initiatingCaller, contextId: sourceContextId } }
           : {}),
         ...(existing?.activeBuildKey ? { existingBuildKey: existing.activeBuildKey } : {}),

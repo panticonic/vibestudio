@@ -319,7 +319,7 @@ describe("build service extension diagnostics", () => {
     });
   });
 
-  it("compiles a context build at its caller's sealed revision", async () => {
+  it("compiles admitted context and content selectors at their sealed revision", async () => {
     const buildSystem = makeBuildSystem();
     vi.mocked(buildSystem.getBuild).mockResolvedValue({ bundle: "module.exports = {};" } as never);
     const withExactBuildSource = vi.fn(
@@ -331,8 +331,13 @@ describe("build service extension diagnostics", () => {
       semanticState: { kind: "application", applicationId: "private" },
     } as const;
     const resolveContextBuildSource = vi.fn(async () => source);
+    const resolveContentBuildSource = vi.fn(async (request: { caller: { runtime: { id: string } } }) => {
+      if (request.caller.runtime.id !== "owner") throw new Error("Content unavailable");
+      return source;
+    });
     const service = createBuildService({
-      buildSystem, listUnits: () => [], getCallerContextId: () => null, resolveContextBuildSource,
+      buildSystem, listUnits: () => [], getCallerContextId: () => null,
+      resolveContextBuildSource, resolveContentBuildSource,
     });
     const ctx = { caller: createVerifiedCaller("owner", "shell") };
     await expect(service.handler(ctx, "getBuild", [
@@ -343,6 +348,12 @@ describe("build service extension diagnostics", () => {
     expect(buildSystem.getBuild).toHaveBeenCalledWith("@workspace-packages/example", source.stateHash, {
       library: true, libraryTarget: "worker",
     });
+    const rawArgs = ["@workspace-packages/example", source.stateHash, { library: true, libraryTarget: "worker" }];
+    await expect(service.handler(ctx, "getBuild", rawArgs)).resolves.toEqual({ bundle: "module.exports = {};" });
+    expect(resolveContentBuildSource).toHaveBeenCalledWith(ctx, source.stateHash);
+    const stranger = { caller: createVerifiedCaller("stranger", "shell") };
+    await expect(service.handler(stranger, "getBuild", rawArgs)).rejects.toThrow("Content unavailable");
+    expect(buildSystem.getBuild).toHaveBeenCalledTimes(2);
   });
 
   it("returns compact build metadata by default", async () => {
