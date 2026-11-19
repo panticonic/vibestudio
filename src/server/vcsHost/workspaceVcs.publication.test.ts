@@ -214,6 +214,83 @@ describe("WorkspaceVcs protected publication notification", () => {
     expect(gate).not.toHaveBeenCalled();
   });
 
+  it("finishes a peer publication's interrupted host projection before returning the retry receipt", async () => {
+    root = await fsp.mkdtemp(path.join(os.tmpdir(), "peer-publication-recovery-"));
+    const blobsDir = path.join(root, "blobs");
+    ensureLayout(blobsDir);
+    const refs = createProtectedRefStore({
+      statePath: path.join(root, "refs"), gate: async () => undefined,
+    });
+    await refs.updateMains({
+      entries: [],
+      evidence: {
+        publicationId: "initial",
+        previousEventId: "genesis",
+        publishedEventId: "initial-event",
+        hostRefsBasisDigest: hostRefBasisDigest([]),
+      },
+    });
+    const vcs = new WorkspaceVcs({
+      workspaceId: "workspace:test",
+      blobsDir,
+      workspaceRoot: path.join(root, "source"),
+      contextProjectionsRoot: path.join(root, "contexts"),
+      buildSourcesRoot: path.join(root, "build-sources"),
+      refs,
+    });
+    const canonical = {
+      source: "workers/workspace-source", className: "GadHistoryDO", objectKey: "canonical",
+    };
+    const transition = {
+      publicationId: "a".repeat(64), sourceNodeId: "b".repeat(64),
+      previousHead: "1".repeat(40), proposedHead: "2".repeat(40),
+    };
+    const receipt = {
+      approval: {
+        publicationId: `chronolog-publication:${transition.publicationId}`,
+        participantId: "chronolog:group:publisher",
+        previousEventId: "initial-event",
+        proposedEventId: "peer-event",
+        publication: { previousHead: transition.previousHead, proposedHead: transition.proposedHead },
+      },
+      applied: true,
+      expiresAt: 1,
+    };
+    let applied = false;
+    let acknowledged = false;
+    const dispatch = vi.fn(async (target: typeof canonical, method: string, input?: unknown) => {
+      expect(target).toEqual(canonical);
+      switch (method) {
+        case "readHistoryMain":
+          return { head: transition.previousHead, eventId: "initial-event" };
+        case "readHistoryReplayReceipt":
+          return null;
+        case "listHistoryAppliedPublications":
+          return applied && !acknowledged ? [receipt] : [];
+        case "readHistoryPublicationApproval":
+          expect(input).toEqual({ publicationId: receipt.approval.publicationId });
+          return applied && !acknowledged ? receipt : null;
+        case "readHistoryPublishedRevision":
+          expect(input).toEqual({ eventId: "peer-event" });
+          return { head: transition.proposedHead, state: { kind: "event", eventId: "peer-event" }, repositories: [] };
+        case "acknowledgeHistoryPublication":
+          expect(refs.readMainSemanticState()?.eventId).toBe("peer-event");
+          acknowledged = true;
+          return null;
+        case "stageIncomingHistory":
+          expect(acknowledged).toBe(true);
+          return { kind: "applied", head: transition.proposedHead };
+        default:
+          throw new Error(`Unexpected history method ${method}`);
+      }
+    });
+    await vcs.attachParticipantHistory({ dispatch: { dispatch }, canonical });
+    applied = true;
+    await expect(vcs.dispatchIncomingHistory("stageIncomingHistory", transition, vi.fn()))
+      .resolves.toEqual({ kind: "applied", head: transition.proposedHead });
+    expect(refs.readMainSemanticState()?.eventId).toBe("peer-event");
+  });
+
   async function interruptedPublication(semanticAcknowledged: boolean) {
     root = await fsp.mkdtemp(path.join(os.tmpdir(), "vcs-launch-recovery-"));
     const blobsDir = path.join(root, "blobs");
