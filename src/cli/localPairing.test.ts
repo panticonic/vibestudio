@@ -97,6 +97,63 @@ describe("pairLocalCliFromDevice", () => {
       deviceId: `dev_${"C".repeat(24)}`,
     });
   });
+  it("pairs to the exact catalog workspace id and refuses to retarget the saved credential", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-cli-catalog-"));
+    roots.push(root);
+    const credentialFile = path.join(root, "credentials.json");
+    const serverId = `srv_${"S".repeat(24)}`;
+    const serverBootId = `boot_${"B".repeat(24)}`;
+    const ready = {
+      gatewayUrl: "http://127.0.0.1:5000",
+      serverId,
+      serverBootId,
+      mode: "hub",
+      gatewayPort: 5000,
+      pid: 1,
+      version: "0.1.33",
+      buildId: "a".repeat(64),
+      workspaces: [],
+      rootInvite: {
+        code: "D".repeat(21) + "A",
+        expiresInMs: 1000000,
+        expiresAt: Date.now() + 1000000,
+        serverId,
+        serverBootId,
+        reach: { status: "preparing" },
+      },
+    };
+    const call = vi.fn(async () => ({
+      workspace: "examples-pinned",
+      workspaceId: "ws_examples",
+      running: true,
+      serverUrl: ready.gatewayUrl,
+      workspaceReach: reach("bb"),
+      serverId,
+      serverBootId,
+    }));
+    const options = {
+      credentialFile,
+      fetch: (async () =>
+        Response.json({
+          deviceId: `dev_${"C".repeat(24)}`,
+          refreshToken: "R".repeat(43),
+        })) as typeof fetch,
+      rpcClient: () => ({ call, close: async () => {} }),
+    };
+    await expect(pairLocalCli(ready, { ...options, workspaceId: "ws_examples" })).resolves.toEqual({
+      status: "paired",
+      workspaceName: "examples-pinned",
+      workspaceId: "ws_examples",
+    });
+    expect(call).toHaveBeenCalledExactlyOnceWith("hubControl.routeWorkspace", [
+      { workspaceId: "ws_examples" },
+    ]);
+    await expect(
+      pairLocalCli({ ...ready, rootInvite: null }, { ...options, workspaceId: "ws_other" })
+    ).rejects.toThrow(/belongs to a different workspace/);
+    expect(call).toHaveBeenCalledOnce();
+  });
+
   it("routes a saved private identity without publishing it in hub readiness", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-cli-private-"));
     roots.push(root);

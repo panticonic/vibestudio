@@ -46,11 +46,16 @@ describe("panel history proof", () => {
       onError: (e) => errors.push(e),
     });
     let n = 0;
-    const report = (entity: string, phase: PanelAttempt["phase"], code?: string) => {
+    const report = (
+      entity: string,
+      phase: PanelAttempt["phase"],
+      code?: string,
+      slotId = "slot"
+    ) => {
       const attempt = {
         epoch: "ep",
         attemptId: `a${++n}`,
-        slotId: "slot",
+        slotId,
         runtimeEntityId: entity,
         buildKey: `b${entity.slice(-1)}`,
         phase,
@@ -96,7 +101,7 @@ describe("panel history proof", () => {
     expect(reverts).toEqual([]);
   });
 
-  it("reverts once per build and not when the slot already moved on", async () => {
+  it("leaves a slot that already moved on alone", async () => {
     const { proof, report, reverts, setCurrent } = setup();
     report("panel:e1", "ready");
     setCurrent("panel:e2");
@@ -104,6 +109,21 @@ describe("panel history proof", () => {
     report("panel:e3", "failed", "boot_stalled");
     await proof.idle();
     expect(reverts).toEqual([]);
+  });
+
+  it("reverts a known failed build in each slot and coalesces concurrent failures", async () => {
+    const { proof, report, reverts, setCurrent } = setup();
+    report("panel:e1", "ready");
+    report("panel:e3", "failed", "entry_threw", "first");
+    report("panel:e3", "failed", "entry_threw", "first");
+    await proof.idle();
+    setCurrent("panel:e3");
+    report("panel:e3", "failed", "entry_threw", "second");
+    await proof.idle();
+    expect(reverts).toEqual([
+      ["first", "panel:e3", "e1"],
+      ["second", "panel:e3", "e1"],
+    ]);
   });
 
   it("leaves the failure visible when nothing is proven", async () => {

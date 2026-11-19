@@ -2,10 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type {
-  SystemTestRunnerClient,
-  SystemTestRunnerSnapshot,
-} from "@vibestudio/service-schemas/systemTestRunner";
+import type { SystemTestRunnerSnapshot } from "@vibestudio/service-schemas/systemTestRunner";
 import type { SessionScope } from "./agent/sessionContext.js";
 import {
   loadSystemTestArtifact,
@@ -14,6 +11,7 @@ import {
   type StoredSystemTestRun,
 } from "./systemTestStore.js";
 import {
+  type SystemTestRunnerCaller,
   isRetryableSystemTestStatusReadFailure,
   settleSystemTestDoctor,
   settleSystemTestStartup,
@@ -366,7 +364,7 @@ describe("system-test startup preparation", () => {
 });
 
 describe("system-test durable driver lifecycle", () => {
-  function runnerClient(overrides: Partial<SystemTestRunnerClient> = {}): SystemTestRunnerClient {
+  function runnerClient(overrides: Partial<SystemTestRunnerCaller> = {}): SystemTestRunnerCaller {
     const unexpected = async (name: string): Promise<never> => {
       throw new Error(`unexpected ${name}`);
     };

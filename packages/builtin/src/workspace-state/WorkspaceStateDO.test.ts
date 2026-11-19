@@ -1291,7 +1291,15 @@ describe("WorkspaceStateDO slot operations", () => {
     expect(navigated.revision).toBeGreaterThan(created.revision);
     expect(navigated.slot.current_entity_id).toBe(entryB.id);
     expect(navigated.currentHistory.entity_id).toBe(entryB.id);
-    expect(instance.slotHistoryRelative("snapshot-slot", -1)?.entity_id).toBe(entryA.id);
+    const earlier = instance.slotHistoryRelative("snapshot-slot", -1);
+    expect(earlier).toMatchObject({
+      slot_id: "snapshot-slot",
+      entry_key: entryA.key,
+      entity_id: entryA.id,
+      recorded_at: expect.any(Number),
+    });
+    expect(instance.slotHistoryEntry("snapshot-slot", entryA.key)).toEqual(earlier);
+    expect(instance.slotHistoryEntry("another-slot", entryA.key)).toBeNull();
 
     instance.slotPatchCurrentStateArgs(
       "snapshot-slot",

@@ -18,6 +18,7 @@ const ENTRY_CAPACITY = 1_000;
 const ERROR_CAPACITY = 500;
 
 class PanelHistory {
+  nextSeq = 1;
   entries: ConsoleHistoryEntry[] = [];
   errors: ConsoleHistoryEntry[] = [];
   droppedEntries = 0;
@@ -31,14 +32,14 @@ export class ConsoleHistoryStore {
   record(slotId: string, entry: ConsoleHistoryEntry): void {
     const history = this.panels.get(slotId) ?? new PanelHistory();
     this.panels.set(slotId, history);
-    entry = { ...entry, seq: history.nextSeq++ };
-    history.entries.push(entry);
+    const recorded = { ...entry, seq: history.nextSeq++ };
+    history.entries.push(recorded);
     while (history.entries.length > ENTRY_CAPACITY) {
       history.entries.shift();
       history.droppedEntries += 1;
     }
     if (entry.level === "error") {
-      history.errors.push(entry);
+      history.errors.push(recorded);
       while (history.errors.length > ERROR_CAPACITY) {
         history.errors.shift();
         history.droppedErrors += 1;

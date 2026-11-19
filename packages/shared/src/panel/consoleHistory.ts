@@ -1,16 +1,13 @@
-export type PanelConsoleHistoryLevel = "debug" | "info" | "warning" | "error" | "unknown";
-
-export interface PanelConsoleHistoryEntry {
-  seq?: number;
-  timestamp: number;
-  level: PanelConsoleHistoryLevel;
-  message: string;
-  line: number;
-  sourceId: string;
-  url: string;
-  source?: "console" | "lifecycle";
-  fields?: Record<string, unknown>;
-}
+import type {
+  PanelConsoleHistoryEntry,
+  PanelConsoleHistoryLevel,
+  PanelConsoleHistoryResult,
+} from "./observation.js";
+export type {
+  PanelConsoleHistoryEntry,
+  PanelConsoleHistoryLevel,
+  PanelConsoleHistoryResult,
+} from "./observation.js";
 
 export interface PanelConsoleHistoryOptions {
   limit?: number;
@@ -28,10 +25,6 @@ export interface PanelConsoleHistorySnapshot {
   errors: PanelConsoleHistoryEntry[];
   dropped: { entries: number; errors: number };
   capacity: { entries: number; errors: number };
-}
-
-export interface PanelConsoleHistoryResult extends PanelConsoleHistorySnapshot {
-  page: { nextBeforeSeq: number | null; hasOlder: boolean };
 }
 
 /** The desktop and headless providers expose the same filtered cursor window. */

@@ -125,8 +125,14 @@ export function parseArguments(argv) {
   }
   if (options.caseDeadlineMs !== undefined) {
     options.caseDeadlineMs = Number(options.caseDeadlineMs);
-    if (!Number.isInteger(options.caseDeadlineMs) || options.caseDeadlineMs < 1 || options.caseDeadlineMs > MAX_TIMER_MS) {
-      throw new UsageError(`--case-deadline-ms must be a whole number of milliseconds between 1 and ${MAX_TIMER_MS}`);
+    if (
+      !Number.isInteger(options.caseDeadlineMs) ||
+      options.caseDeadlineMs < 1 ||
+      options.caseDeadlineMs > MAX_TIMER_MS
+    ) {
+      throw new UsageError(
+        `--case-deadline-ms must be a whole number of milliseconds between 1 and ${MAX_TIMER_MS}`
+      );
     }
   }
   return options;
@@ -224,6 +230,13 @@ export async function ensureStagedEval({
  * Returns the bundle's entry module.
  */
 export function layoutEvalBundle({ stagedDir, repository, runRoot }) {
+  const marker = path.join(runRoot, "natlang-pin.json");
+  const sourcePin = fs.readFileSync(path.join(stagedDir, "natlang-pin.json"), "utf8");
+  if (fs.existsSync(marker)) {
+    if (fs.readFileSync(marker, "utf8") !== sourcePin)
+      throw new UsageError("one collection context must use one pinned natlang bundle");
+    return path.join(runRoot, "ts-host", EVAL_BUNDLE);
+  }
   const tsHost = path.join(runRoot, "ts-host");
   fs.mkdirSync(tsHost, { recursive: true });
   fs.cpSync(path.join(stagedDir, "eval"), path.join(tsHost, "eval"), { recursive: true });
@@ -244,6 +257,7 @@ export function layoutEvalBundle({ stagedDir, repository, runRoot }) {
   // from `ts-host/src/llama`; without them the managed model reports itself unavailable.
   const models = path.join(repository, "models");
   if (fs.existsSync(models)) fs.symlinkSync(models, path.join(path.dirname(runRoot), "models"));
+  fs.writeFileSync(marker, sourcePin);
   return path.join(tsHost, EVAL_BUNDLE);
 }
 
@@ -440,6 +454,7 @@ export const defaultDependencies = {
   },
   loadEval: (entry) => import(pathToFileURL(entry).href),
   openModels: openNatlangModels,
+  evaluateSuite,
   openInstanceRecorder,
   stdout: (text) => process.stdout.write(`${text}\n`),
   progress: (text) => process.stderr.write(`${text}\n`),
@@ -497,6 +512,13 @@ export async function runNatlangEval(options, context, dependencies = defaultDep
       );
       retirements.push(composition.release);
       await ownership.own(composition.root, "template composition");
+      // Workspace source runs as ES modules in workerd. The host-owned Node projection must declare that same
+      // module boundary: otherwise NodeNext treats package-less skill folders as CommonJS (and rejects import.meta).
+      const packagePath = path.join(composition.root, "package.json");
+      const packageManifest = fs.existsSync(packagePath)
+        ? JSON.parse(fs.readFileSync(packagePath, "utf8"))
+        : {};
+      fs.writeFileSync(packagePath, `${JSON.stringify({ ...packageManifest, type: "module" })}\n`);
       signal.throwIfAborted();
       const projection = await projectionTools.prepareUserlandDependencyProjection({
         appRoot,
@@ -515,7 +537,7 @@ export async function runNatlangEval(options, context, dependencies = defaultDep
       const models = await deps.openModels(natlang, prepared.suite);
       return runWithOwnedCleanup(
         () =>
-          evaluateSuite({
+          deps.evaluateSuite({
             natlang,
             prepared,
             models,
@@ -524,7 +546,9 @@ export async function runNatlangEval(options, context, dependencies = defaultDep
             deps,
             commit,
             suiteRelative,
+            workspaceRoot: composition.root,
             recorder,
+            selected,
           }),
         () => models.close(),
         "Model session cleanup failed"
@@ -620,7 +644,12 @@ async function evaluateSuite({
 /** The exit status of a failed run. */
 export function exitCodeFor(error) {
   const failures = error instanceof AggregateError ? error.errors : [error];
-  if (failures.some((failure) => ["EvaluationInfrastructureError", "RecordingError"].includes(failure?.name))) return 4;
+  if (
+    failures.some((failure) =>
+      ["EvaluationInfrastructureError", "RecordingError"].includes(failure?.name)
+    )
+  )
+    return 4;
   return 2;
 }
 

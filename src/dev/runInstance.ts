@@ -8,7 +8,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { createShellSurfaceLink } from "@vibestudio/shared/shellSurface";
-import { CLI_WORKSPACE_ENV, isCliWorkspaceSelection } from "./cliWorkspaceSelection.js";
+import {
+  CLI_WORKSPACE_ENV,
+  isCliWorkspaceSelection,
+  isSystemTestWorkspace,
+} from "./cliWorkspaceSelection.js";
+import { HubReadyPayloadSchema } from "@vibestudio/service-schemas/hubControl";
 import type { StdioOptions } from "node:child_process";
 import { getProfileDataPath } from "@vibestudio/env-paths";
 import { LEASE_FD_ENV } from "@vibestudio/shared/ownershipLease";
@@ -405,22 +410,28 @@ async function runServer(
         ) {
           throw new Error("Source host readiness does not belong to its supervised server process");
         }
-        // Which private workspace this instance's CLI opens is fixed when it
+        // Which workspace this instance's CLI opens is fixed when it
         // pairs: the workspace installs the units its cases need, so it is a
         // property of the instance rather than of a single command.
         const configuredWorkspace = env[CLI_WORKSPACE_ENV]?.trim();
-        if (configuredWorkspace && !isCliWorkspaceSelection(configuredWorkspace)) {
-          throw new Error(
-            `${CLI_WORKSPACE_ENV} must name personal or system, not ${configuredWorkspace}`
-          );
-        }
-        const selectedWorkspace = isCliWorkspaceSelection(configuredWorkspace)
+        const privateWorkspace = isCliWorkspaceSelection(configuredWorkspace)
           ? configuredWorkspace
           : undefined;
+        const catalogName =
+          configuredWorkspace && !privateWorkspace
+            ? optionValue(forwarded, "--bootstrap-workspace")
+            : undefined;
+        const catalogWorkspace = catalogName
+          ? HubReadyPayloadSchema.parse(ready).workspaces.find(({ name }) => name === catalogName)
+          : undefined;
+        if (configuredWorkspace && !privateWorkspace && !catalogWorkspace) {
+          throw new Error(`The hub did not register the selected ${configuredWorkspace} workspace`);
+        }
         serverStep?.done();
         pairStep = terminal?.progress.step("Pairing this terminal");
         const bootstrap = await pairLocalCli(ready, {
-          ...(selectedWorkspace ? { workspace: selectedWorkspace } : {}),
+          ...(privateWorkspace ? { workspace: privateWorkspace } : {}),
+          ...(catalogWorkspace ? { workspaceId: catalogWorkspace.workspaceId } : {}),
         });
         publishDevInstanceReady(instance, bootstrap);
         pairStep?.done();
@@ -709,6 +720,17 @@ async function main(): Promise<void> {
   );
   const id = parsed.instanceId ?? (disposable ? generatedInstanceId(mode) : "source");
   const ledgerId = devInstanceLedgerId(repoRoot, id);
+  const selectedWorkspace = process.env[CLI_WORKSPACE_ENV]?.trim();
+  if (selectedWorkspace && !isSystemTestWorkspace(selectedWorkspace)) {
+    throw new Error(`Unknown workspace selection ${selectedWorkspace}`);
+  }
+  const catalogId =
+    selectedWorkspace && !isCliWorkspaceSelection(selectedWorkspace)
+      ? selectedWorkspace
+      : undefined;
+  if (catalogId && (!parsed.systemTestManaged || mode !== "server")) {
+    throw new Error("Catalog workspace selection belongs to a managed system-test server");
+  }
   // The ownership claim is what makes this instance id exclusive: its scratch
   // root, registry record and every process this supervisor starts are owned
   // by the claim's reaper, which retires them whether this process finishes
@@ -723,6 +745,7 @@ async function main(): Promise<void> {
       repoRoot,
       managed: parsed.systemTestManaged,
       selfDevelopment: parsed.selfDevelopment,
+      ...(selectedWorkspace ? { systemTestWorkspace: selectedWorkspace } : {}),
     },
   }).catch((error: unknown) => {
     if (error instanceof OwnershipClaimedError) {
@@ -889,13 +912,23 @@ async function main(): Promise<void> {
       ].map(workspaceSourceFromCheckout),
       checkpointRoot: templateCheckpointRoot,
     });
-    const targetWorkspace = templateOptions.workspaceCheckout
-      ? developmentTemplates.find(
-          (template) =>
-            template.sourceCheckout ===
-            fs.realpathSync(path.resolve(templateOptions.workspaceCheckout!))
-        )
-      : undefined;
+    if (catalogId && templateOptions.workspaceCheckout) {
+      throw new Error("Select one workspace source for the instance");
+    }
+    const catalogTemplate = catalogId ? defaultTemplates?.sourcePins[catalogId] : undefined;
+    if (catalogId && !catalogTemplate) {
+      throw new Error(`No local template snapshot for ${catalogId}`);
+    }
+    const targetWorkspace =
+      catalogId && catalogTemplate
+        ? { sourceCheckout: catalogId, pin: catalogTemplate }
+        : templateOptions.workspaceCheckout
+          ? developmentTemplates.find(
+              (template) =>
+                template.sourceCheckout ===
+                fs.realpathSync(path.resolve(templateOptions.workspaceCheckout!))
+            )
+          : undefined;
     if (templateOptions.workspaceCheckout && !targetWorkspace) {
       throw new Error("The requested workspace checkout has no prepared template snapshot");
     }

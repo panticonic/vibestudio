@@ -1,3 +1,4 @@
+import { vcsMergeSourceSchema } from "./vcs.js";
 import { createReceiverRpcMethods } from "@vibestudio/shared/rpcMethods";
 import { evalRunStatusSchema } from "./eval.js";
 import { z } from "zod";
@@ -129,7 +130,54 @@ export const systemTestFailedRunSchema = z
   .strict();
 export type SystemTestFailedRun = z.infer<typeof systemTestFailedRunSchema>;
 
+export const panelTeacherInputSchema = z.object({
+  contextId: z.string().min(1), panelId: z.string().min(1),
+  panelSource: z.string().regex(/^panels\/[A-Za-z0-9][A-Za-z0-9._-]*$/u), executorModel: z.string().regex(/^[^:]+:.+$/u), goal: z.string().min(1),
+}).strict();
+export type PanelTeacherInput = z.infer<typeof panelTeacherInputSchema>;
+export interface PanelTeacherResult {
+  report: unknown;
+  rootCallIds: string[];
+  calls: unknown[];
+  evalRunId: string;
+  programPath: string;
+  trainingEligible?: boolean;
+}
+
+export const workspaceIntegrationTeacherInputSchema = z.object({
+  contextId: z.string().min(1), source: vcsMergeSourceSchema,
+  files: z.array(z.object({repositoryId:z.string().min(1),path:z.string().min(1),workspacePath:z.string().min(1)}).strict()).min(1),
+  executorModel:z.string().regex(/^[^:]+:.+$/u),goal:z.string().min(1),
+}).strict();
+export type WorkspaceIntegrationTeacherInput = z.infer<typeof workspaceIntegrationTeacherInputSchema>;
+
+export const unitRepairTeacherInputSchema = z.object({
+  contextId: z.string().min(1),
+  unit: z.string().regex(/^workers\/[A-Za-z0-9][A-Za-z0-9._-]*$/u),
+  executorModel: z.string().regex(/^[^:]+:.+$/u),
+  goal: z.string().min(1),
+}).strict();
+export type UnitRepairTeacherInput = z.infer<typeof unitRepairTeacherInputSchema>;
+export interface UnitRepairTeacherResult {
+  teacher: PanelTeacherResult;
+  world: {
+    contextId: string;
+    unit: string;
+    before: string;
+    after: string;
+    baseline: { source: string; severity: string; file: string; message: string }[];
+  };
+  verification: {
+    passed: boolean;
+    checks: Record<string, boolean>;
+    evidence: unknown;
+  };
+}
+
 export interface SystemTestRunnerRpc {
+  runUnitRepairTeacher(input: UnitRepairTeacherInput): Promise<UnitRepairTeacherResult>;
+  runWorkspaceIntegrationTeacher(input: WorkspaceIntegrationTeacherInput): Promise<PanelTeacherResult>;
+  runPanelTeacher(input: PanelTeacherInput): Promise<PanelTeacherResult>;
   doctor(model?: string): Promise<SystemTestDoctorResult>;
   listSystemTests(category?: string): Promise<SystemTestDescriptor[]>;
   startSystemTestRun(options: SystemTestRunConfig): Promise<{ runId: string }>;
@@ -151,6 +199,9 @@ export interface SystemTestRunnerRpc {
 export type SystemTestRunnerClient = SystemTestRunnerRpc;
 
 export const systemTestRunnerRpcMethods = createReceiverRpcMethods<SystemTestRunnerRpc>([
+  "runPanelTeacher",
+  "runUnitRepairTeacher",
+  "runWorkspaceIntegrationTeacher",
   "doctor",
   "listSystemTests",
   "startSystemTestRun",

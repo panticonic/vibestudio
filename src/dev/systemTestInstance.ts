@@ -1,8 +1,8 @@
 import * as fs from "node:fs";
 import {
   CLI_WORKSPACE_ENV,
-  isCliWorkspaceSelection,
-  type CliWorkspaceSelection,
+  isSystemTestWorkspace,
+  SYSTEM_TEST_WORKSPACES,
 } from "./cliWorkspaceSelection.js";
 import { SYSTEM_TEST_INSTANCE_ENV } from "../server/systemTestInstanceMode.js";
 import * as path from "node:path";
@@ -48,8 +48,8 @@ type LauncherArgs = {
    * always does.
    */
   keep: boolean;
-  /** Which private workspace this instance's CLI opens; System by default. */
-  workspace?: CliWorkspaceSelection;
+  /** Which workspace this instance's CLI opens; System by default. */
+  workspace?: string;
   /** Device drivers to attach for the command (`--device terminal|desktop`). */
   devices?: DeviceKind[];
   command: string[];
@@ -87,7 +87,7 @@ export function parseSystemTestLauncherArgs(argv: readonly string[]): LauncherAr
   let persistent = false;
   let selfDevelopment = false;
   let keep = false;
-  let workspace: CliWorkspaceSelection | undefined;
+  let workspace: string | undefined;
   const devices: DeviceKind[] = [];
   const command: string[] = [];
   for (let index = 0; index < argv.length; index += 1) {
@@ -111,10 +111,12 @@ export function parseSystemTestLauncherArgs(argv: readonly string[]): LauncherAr
       const value = arg.startsWith("--workspace=")
         ? arg.slice("--workspace=".length)
         : argv[(index += 1)];
-      if (!value) throw new Error("--workspace requires personal or system");
+      if (!value) throw new Error("--workspace requires a workspace from the development catalog");
       if (workspace) throw new Error("--workspace may only be specified once");
-      if (!isCliWorkspaceSelection(value)) {
-        throw new Error(`--workspace must name personal or system, not ${value}`);
+      if (!isSystemTestWorkspace(value)) {
+        throw new Error(
+          `--workspace must name ${SYSTEM_TEST_WORKSPACES.join(", ")}, received ${value}`
+        );
       }
       workspace = value;
       continue;
@@ -311,8 +313,8 @@ type EnsureOptions = {
   persistent?: boolean;
   /** Serve the developer's own checkouts so their projects can be adopted. */
   selfDevelopment?: boolean;
-  /** Private workspace this instance's CLI pairs into; System by default. */
-  workspace?: CliWorkspaceSelection;
+  /** Workspace this instance's CLI pairs into; System by default. */
+  workspace?: string;
   /**
    * The contract of an instance this call creates (default `until-stop`).
    * `leased` ends with the launcher's ownership; `until-stop` ends only when
@@ -414,7 +416,7 @@ async function createInstance(
     ...(options.selfDevelopment ? ["--self-development"] : []),
   ];
   const env = systemTestInstanceEnvironment(process.env, {
-    ...(options.workspace ? { [CLI_WORKSPACE_ENV]: options.workspace } : {}),
+    [CLI_WORKSPACE_ENV]: options.workspace ?? "system",
   });
   const output = fs.openSync(logFile, "a", 0o600);
   let child: ChildProcess;
@@ -506,6 +508,12 @@ function assertAttachable(
       `System-test instance ${JSON.stringify(instanceId)} is leased to the launcher that ` +
         `created it (supervisor pid ${ledger.owner.pid}) and ends with it; it cannot be kept. ` +
         `Stop it, or choose another id with --instance.`
+    );
+  }
+  const workspace = ledger.meta["systemTestWorkspace"] ?? "system";
+  if (ledger.meta["managed"] === true && options.workspace && options.workspace !== workspace) {
+    throw new Error(
+      `System-test instance ${JSON.stringify(instanceId)} uses workspace ${workspace}, requested ${options.workspace}. Choose another --instance.`
     );
   }
   if (options.selfDevelopment && ledger.meta["selfDevelopment"] !== true) {

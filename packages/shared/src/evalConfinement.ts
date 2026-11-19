@@ -40,6 +40,7 @@ const SAFE_GUEST_GLOBALS = [
   "Promise",
   "Proxy",
   "RangeError",
+  "ReadableStream",
   "ReferenceError",
   "Reflect",
   "RegExp",

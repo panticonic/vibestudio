@@ -933,9 +933,10 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
       "cancel",
       "pause",
       "resume",
+      "transitionAtRevision",
       "retire",
     ],
-    "Durable automations (vibestudio.missions.v1). launch({name, charter}) and edit(missionId, {name?, charter?}) compile the charter's authority plan as the calling author, then call the missions controller, which verifies that plan; never compile by hand. edit recompiles only when the execution changes or a seeded default is customized. overview/list/get/listRuns/getRun read the ledger; runNow/cancel/pause/resume/retire control one automation. Agents launching work for themselves use the launch_automation tool instead."
+    "Durable automations (vibestudio.missions.v1). launch({name, charter}) and edit(missionId, {name?, charter?}) compile the charter's authority plan as the calling author, then call the missions controller, which verifies that plan; never compile by hand. edit recompiles only when the execution changes or a seeded default is customized. overview/list/get/listRuns/getRun read the ledger; runNow/cancel/pause/resume/retire control one automation. transitionAtRevision(missionId, action, digest) pauses or resumes scheduling only if the installed definition matches the supplied revision digest. Agents launching work for themselves use the launch_automation tool instead."
   ),
   blobstore: namespaceEntry(
     BLOBSTORE_MEMBERS,

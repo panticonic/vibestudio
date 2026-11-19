@@ -1,6 +1,9 @@
 {
   "compilerOptions": {
     "baseUrl": "../..",
-    "paths": { "zod": ["node_modules/zod"] }
+    "paths": {
+      "zod": ["node_modules/zod"],
+      "@vibestudio/service-schemas/*": ["packages/service-schemas/src/*"]
+    }
   }
 }

@@ -59,11 +59,15 @@ test("arguments parse as natlang's CLI parses them", () => {
     { template: "base", suite: "s.ts", split: "test", preflight: true, out: "o" }
   );
   assert.equal(
-    parseArguments(["--template", "base", "--suite", "s.ts", "--case-deadline-ms", "600000"]).caseDeadlineMs,
+    parseArguments(["--template", "base", "--suite", "s.ts", "--case-deadline-ms", "600000"])
+      .caseDeadlineMs,
     600000
   );
   for (const [argv, message] of [
-    [["--template", "base", "--suite", "s.ts", "--case-deadline-ms", "soon"], /--case-deadline-ms must be/],
+    [
+      ["--template", "base", "--suite", "s.ts", "--case-deadline-ms", "soon"],
+      /--case-deadline-ms must be/,
+    ],
     [["--suite", "s.ts"], /--template is required/],
     [["--template", "base"], /--suite is required/],
     [["--template", "base", "--suite", "s.ts", "--split", "dev"], /--split must be one of/],
@@ -218,6 +222,7 @@ test("the bundle is laid out beside the natlang checkout's installed packages", 
   write(path.join(repository, "ts-host/node_modules/yaml/package.json"), "{}");
   write(path.join(repository, "node_modules/just-bash/package.json"), "{}");
   const stagedDir = path.join(root, "staged");
+  write(path.join(stagedDir, "natlang-pin.json"), JSON.stringify({ commit: "pin" }));
   write(path.join(stagedDir, "eval/natlang-eval.js"), "export {}");
   const entry = layoutEvalBundle({ stagedDir, repository, runRoot: path.join(root, "run") });
   assert.equal(entry, path.join(root, "run/ts-host/eval/natlang-eval.js"));
@@ -230,13 +235,17 @@ test("the laid-out bundle is ES module code, is its own package root, and finds 
   const repository = path.join(root, "natlang");
   write(path.join(repository, "models/templates/LFM3-1.7B.jinja"), "{{ messages }}");
   const stagedDir = path.join(root, "staged");
+  write(path.join(stagedDir, "natlang-pin.json"), JSON.stringify({ commit: "pin" }));
   write(path.join(stagedDir, "eval/natlang-eval.js"), "export {}");
   const runRoot = path.join(root, "scratch/run");
   layoutEvalBundle({ stagedDir, repository, runRoot });
   // Without a module package the bundle loads through a CommonJS resolver that cannot read import-only exports.
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(runRoot, "ts-host/package.json"), "utf8")), {
-    type: "module",
-  });
+  assert.deepEqual(
+    JSON.parse(fs.readFileSync(path.join(runRoot, "ts-host/package.json"), "utf8")),
+    {
+      type: "module",
+    }
+  );
   // A program compiled for a suite imports the runtime from `../index.js` of the bundle.
   assert.match(fs.readFileSync(path.join(runRoot, "ts-host/index.js"), "utf8"), /natlang-eval\.js/);
   // The bundle looks for templates at `../../../models/templates` of its own file.
@@ -275,7 +284,10 @@ test("a suite's workspace specifiers for natlang resolve to the staged bundle", 
   const loaded = await import(path.join(workspace, "suite.mjs"));
   assert.deepEqual(loaded.default, { identity: "id" });
   // The suite is type-checked as natlang builds it: the specifiers carry the bundle's declarations.
-  const declaration = fs.readFileSync(path.join(workspace, "node_modules/@workspace/natlang/evaluation.d.ts"), "utf8");
+  const declaration = fs.readFileSync(
+    path.join(workspace, "node_modules/@workspace/natlang/evaluation.d.ts"),
+    "utf8"
+  );
   assert.ok(declaration.includes(JSON.stringify(bundle)));
 });
 
@@ -797,7 +809,11 @@ test("progress prints a line when a case starts and when a model request starts 
   const gateway = {};
   const lines = [];
   let clock = 1_000_000;
-  watchProgress(gateway, (line) => lines.push(line), () => clock);
+  watchProgress(
+    gateway,
+    (line) => lines.push(line),
+    () => clock
+  );
   const ledger = (rollouts, modelCalls, inFlight) => ({
     rollouts,
     usage: { modelCalls, inputTokens: modelCalls * 100, outputTokens: null },
@@ -814,4 +830,21 @@ test("progress prints a line when a case starts and when a model request starts 
     "[+00:01:01] case 1  model requests 1 started, 1 in flight  tokens in 100 out unknown",
     "[+01:01:01] case 1  model requests 1 started, 0 in flight  tokens in 100 out unknown",
   ]);
+});
+
+test("one collection context reuses one runtime module URL and rejects a different pin", (t) => {
+  const root = temporary(t),
+    repository = path.join(root, "repo"),
+    stagedDir = path.join(root, "staged"),
+    runRoot = path.join(root, "run");
+  write(path.join(repository, "ts-host/node_modules/yaml/package.json"), "{}");
+  write(path.join(stagedDir, "natlang-pin.json"), JSON.stringify({ commit: "one" }));
+  write(path.join(stagedDir, "eval/natlang-eval.js"), "export {};");
+  const first = layoutEvalBundle({ stagedDir, repository, runRoot });
+  assert.equal(layoutEvalBundle({ stagedDir, repository, runRoot }), first);
+  write(path.join(stagedDir, "natlang-pin.json"), JSON.stringify({ commit: "two" }));
+  assert.throws(
+    () => layoutEvalBundle({ stagedDir, repository, runRoot }),
+    /one pinned natlang bundle/
+  );
 });

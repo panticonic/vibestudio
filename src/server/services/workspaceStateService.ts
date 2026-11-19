@@ -501,7 +501,7 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
         // Ownership attribution comes from the verified caller, never a
         // caller-supplied fourth wire argument.
         const ownerUserId = verifiedInitiatingUserId(ctx);
-        await receiver.slotMove(slotId, parentSlotId, placement, ownerUserId);
+        await receiver.slotMove(slotId, parentSlotId, placement ?? {}, ownerUserId);
         deps.onSlotStateChanged?.();
       },
       "slot.close": async (_ctx, [slotId]) => {

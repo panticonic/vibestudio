@@ -403,6 +403,13 @@ export const missionsMethods = defineReceiverServiceMethods({
   },
   pause: lifecycle("Pause", "pause"),
   resume: lifecycle("Resume", "resume"),
+  transitionAtRevision: {
+    ...lifecycle("Change", "change scheduling for"),
+    description:
+      "Pause or resume scheduling only when the installed definition matches the expected revision digest.",
+    args: z.tuple([z.string().min(1), z.enum(["pause", "resume"]), hex64]),
+    agentFacing: false,
+  },
   retire: {
     website: {
       kind: "closed",

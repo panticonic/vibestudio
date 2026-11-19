@@ -4,7 +4,8 @@
  *
  * The declarations are not written by hand: each service's contract (a zod
  * method table in `packages/service-schemas`, or beside its implementation in
- * the Base template) is rendered as `export function` declarations with doc
+ * the Base template, or an authored signature in its owning template) is
+ * rendered as `export function` declarations with doc
  * comments. `--check` fails when the committed file is stale, like the other
  * generated runtime catalogs (`pnpm check:runtime-docs`).
  *
@@ -16,6 +17,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { tsImport } from "tsx/esm/api";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import developmentTemplateConfig from "../src/dev/developmentTemplateConfig.cjs";
+import { renderAuthoredService } from "./lib/authored-natlang-services.mjs";
 import { docComment, renderMethod } from "./lib/json-schema-declarations.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -61,7 +63,8 @@ async function loadTable(contract, userlandRoot) {
 function renderService(entry, table) {
   const declarations = entry.methods.map((method) => {
     const contract = table[method.name];
-    if (!contract) throw new Error(`${entry.name}.${method.name}: no contract entry ${method.name}`);
+    if (!contract)
+      throw new Error(`${entry.name}.${method.name}: no contract entry ${method.name}`);
     const returns = contract.returns ?? contract.result;
     const description = contract.description ?? method.description;
     if (!description)
@@ -79,14 +82,37 @@ function renderService(entry, table) {
 }
 
 /** Render every service's declaration, keyed by service name. */
-export async function renderServiceDeclarations(userlandRoot) {
+export async function renderServiceDeclarations(userlandRoot, checkouts) {
   const { SERVICE_CATALOG } = await tsImport(
     path.join(userlandRoot, "packages/natlang-services/src/catalog.ts"),
     importOptions
   );
+  const names = new Set(SERVICE_CATALOG.map(({ name }) => name));
+  for (const [template, checkout] of Object.entries(checkouts)) {
+    for (const relative of fs.globSync("skills/**/natlang.json", {
+      cwd: checkout,
+      exclude: ["**/node_modules/**"],
+    })) {
+      const manifest = JSON.parse(fs.readFileSync(path.join(checkout, relative), "utf8"));
+      for (const service of Object.keys(manifest.serviceScopes ?? {})) {
+        if (!names.has(service))
+          throw new Error(
+            `${template}/${relative} scopes service ${service}, which is missing from the Natlang service catalog`
+          );
+      }
+    }
+  }
   const declarations = {};
   for (const entry of SERVICE_CATALOG) {
-    declarations[entry.name] = renderService(entry, await loadTable(entry.contract, userlandRoot));
+    const contract = entry.contract;
+    if (contract.origin === "authored") {
+      declarations[entry.name] = renderAuthoredService(
+        entry,
+        path.join(checkouts[contract.template], contract.file)
+      );
+    } else {
+      declarations[entry.name] = renderService(entry, await loadTable(contract, userlandRoot));
+    }
   }
   return declarations;
 }
@@ -116,11 +142,9 @@ export function renderModule(declarations) {
 }
 
 export async function generate({ checkOnly = false } = {}) {
-  const userlandRoot = developmentTemplateConfig.requireDevelopmentTemplateCheckout(
-    repoRoot,
-    "base"
-  );
-  const next = renderModule(await renderServiceDeclarations(userlandRoot));
+  const { checkouts } = developmentTemplateConfig.requireDevelopmentTemplateCheckouts(repoRoot);
+  const userlandRoot = checkouts.base;
+  const next = renderModule(await renderServiceDeclarations(userlandRoot, checkouts));
   const target = path.join(userlandRoot, OUTPUT);
   const current = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : null;
   if (checkOnly) {

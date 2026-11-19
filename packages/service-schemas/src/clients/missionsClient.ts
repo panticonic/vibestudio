@@ -108,6 +108,8 @@ export function createMissionsClient(rpc: MissionRpc): MissionsClient {
     cancel: (missionId) => call("cancel", [missionId]),
     pause: (missionId) => call("pause", [missionId]),
     resume: (missionId) => call("resume", [missionId]),
+    transitionAtRevision: (missionId, action, expectedRevisionDigest) =>
+      call("transitionAtRevision", [missionId, action, expectedRevisionDigest]),
     retire: (missionId) => call("retire", [missionId]),
   };
 }

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { SYSTEM_TEST_WORKSPACES } from "./cliWorkspaceSelection.js";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import type { StdioOptions } from "node:child_process";
@@ -24,6 +25,7 @@ import {
   systemTestPreparationFailureDetail,
 } from "./systemTestPreparation.js";
 import { attachDeviceDrivers } from "./deviceExecutors.js";
+import { seedIntegrationReadinessFixture } from "./systemTestIntegrationFixture.js";
 import {
   adoptSelfDevelopmentProjects,
   selfDevelopmentProjects,
@@ -57,7 +59,8 @@ Commands:
 
 Options:
   --instance ID                  Stable unique instance name (default: system-test)
-  --workspace personal|system    Private workspace this instance runs in (default: system).
+  --workspace NAME               Workspace template for this instance (default: system).
+                                 Choices: ${SYSTEM_TEST_WORKSPACES.join(", ")}.
                                  Fixed when the instance pairs; cases naming units
                                  the workspace does not install are reported
                                  not-installed rather than run.
@@ -296,6 +299,7 @@ async function runCommand({
     session && commandTakesScope(command) && !command.includes("--session")
       ? [...command, "--session", session]
       : command;
+  await seedIntegrationReadinessFixture(ensured.instance, scopedCommand, signal);
   // Device drivers are scoped to the command: attached once the instance is
   // ready (so they pair into a prepared account), stopped on every exit path.
   const drivers = parsed.devices?.length
