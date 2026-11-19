@@ -1,5 +1,5 @@
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
-import { compareUtf16CodeUnits } from "@vibestudio/content-addressing";
+import { compareUtf16CodeUnits, sha256HexSyncText } from "@vibestudio/content-addressing";
 import { vcsStateNodeRefSchema, type VcsStateNodeRef } from "@vibestudio/service-schemas/vcs";
 import { z } from "zod";
 import type { DODispatch } from "../doDispatch.js";
@@ -9,6 +9,7 @@ const headSchema = z.object({ head: z.string().min(1) }).strict();
 const replayReceiptSchema = headSchema
   .extend({
     eventId: z.string().min(1),
+    frozenPlanDigest: z.string().regex(/^[0-9a-f]{64}$/u).optional(),
     contexts: z.array(
       z
         .object({
@@ -87,13 +88,26 @@ export async function migrateWorkspaceHistory(input: {
   const { dispatch, source, destination, freeze } = input;
   const readPlan = async (): Promise<HistoryReplayPlan> =>
     planSchema.parse(await dispatch.dispatch(source, "exportHistoryReplayPlan"));
-  const plan = freeze
-    ? planSchema.parse(await dispatch.dispatch(source, "beginHistoryReplayFreeze", freeze))
-    : await readPlan();
+  const { generation, ...plan } = freeze
+    ? planSchema.extend({ generation: z.string().uuid() }).parse(
+        await dispatch.dispatch(source, "beginHistoryReplayFreeze", freeze)
+      )
+    : { ...(await readPlan()), generation: undefined };
   if (plan.main?.kind !== "event")
     throw new Error("Workspace replay requires an initialized source");
   if (freeze && plan.main.eventId !== freeze.expectedMainEventId)
     throw new Error("Workspace history froze a different source event");
+  const frozenPlanDigest = generation
+    ? sha256HexSyncText(canonicalJson({ source, freeze, plan, generation }))
+    : undefined;
+  if (frozenPlanDigest) {
+    const existing = await readWorkspaceHistoryReplayReceipt(dispatch, destination);
+    if (existing?.frozenPlanDigest) {
+      if (existing.frozenPlanDigest !== frozenPlanDigest || existing.eventId !== plan.main.eventId)
+        throw new Error("Workspace replay already installed a different frozen source");
+      return { main: existing.head, contexts: existing.contexts };
+    }
+  }
   const installed = new Map<string, string>();
   for (const ref of plan.steps) {
     const step = await dispatch.dispatch(source, "exportHistoryReplayStep", ref);
@@ -125,13 +139,20 @@ export async function migrateWorkspaceHistory(input: {
   if (canonicalJson(plan) !== canonicalJson(await readPlan())) {
     throw new Error("Workspace source advanced during replay");
   }
-  const receipt = { eventId: plan.main.eventId, head: main, contexts };
+  const receipt = {
+    eventId: plan.main.eventId, head: main, contexts,
+    ...(frozenPlanDigest ? { frozenPlanDigest } : {}),
+  };
   const result = headSchema.parse(
     await dispatch.dispatch(destination, "finishHistoryReplay", receipt)
   );
   if (result.head !== main) throw new Error("Workspace replay installed a different head");
   const recorded = await readWorkspaceHistoryReplayReceipt(dispatch, destination);
-  if (canonicalJson(recorded) !== canonicalJson(receipt)) {
+  if (!recorded ||
+      canonicalJson({
+        eventId: recorded.eventId, head: recorded.head, contexts: recorded.contexts,
+        ...(frozenPlanDigest ? { frozenPlanDigest: recorded.frozenPlanDigest } : {}),
+      }) !== canonicalJson(receipt)) {
     throw new Error("Workspace replay recorded different context revisions");
   }
   return { main, contexts };

@@ -23,10 +23,11 @@ it("replays onto one destination and returns the exact migrated context after a 
   let lost = true;
   let receipt: unknown = null;
   const freeze = { operationId: "cutover", expectedMainEventId: main.eventId };
+  let generation = "651b30c5-20f1-42b8-8b31-df2de5b13aed";
   const dispatch = vi.fn(async (target, method, input) => {
     if (target === source && method === "beginHistoryReplayFreeze") {
       expect(input).toEqual(freeze);
-      return plan;
+      return { ...plan, generation };
     }
     if (target === source && method === "exportHistoryReplayPlan") return plan;
     if (target === source && method === "exportHistoryReplayStep") {
@@ -52,15 +53,20 @@ it("replays onto one destination and returns the exact migrated context after a 
     main: "installed-main",
     contexts: [{ id: "context:A", committed: "installed-main", working: "installed-working" }],
   });
-  const installed = {
+  expect(receipt).toEqual({
     eventId: main.eventId,
     head: "installed-main",
     contexts: [{ id: "context:A", committed: "installed-main", working: "installed-working" }],
-  };
+    frozenPlanDigest: expect.stringMatching(/^[0-9a-f]{64}$/u),
+  });
+  generation = "5046ed08-2fcf-4a67-83bf-81de6ac65dde";
+  await expect(migrateWorkspaceHistory(args)).rejects.toThrow(
+    "Workspace replay already installed a different frozen source"
+  );
   expect(dispatch.mock.calls.filter(([, method]) => method === "finishHistoryReplay")).toEqual([
-    [destination, "finishHistoryReplay", installed],
-    [destination, "finishHistoryReplay", installed],
+    [destination, "finishHistoryReplay", receipt],
   ]);
+  expect(dispatch.mock.calls.filter(([, method]) => method === "stageHistoryReplayStep")).toHaveLength(2);
 });
 
 it("keeps a replay staged if the source advances before installation", async () => {
