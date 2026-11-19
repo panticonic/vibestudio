@@ -195,7 +195,8 @@ afterEach(async () => {
 
 describe("WorkspaceVcs semantic host orchestration", () => {
   it("restores migrated work only for its recorded participant and reclaims directories after archival", async () => {
-    const { vcs, blobsDir } = await harness();
+    const { vcs, blobsDir, refs } = await harness();
+    vi.spyOn(refs, "readMainSemanticState").mockReturnValue({ kind: "event", eventId: "main-event" });
     const canonical = { ...TEST_PROVIDER, objectKey: "canonical" };
     const contextId = "ctx-shared";
     const content = (await putBytes(blobsDir, Buffer.from("participant-only bytes"))).digest;
@@ -279,7 +280,8 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const [first, second] = await Promise.all([bind(1), bind(2)]);
     expect(first?.sourceRoot).toBeDefined();
     expect(first?.sourceRoot).not.toBe(second?.sourceRoot);
-    const { vcs: restarted } = await harness();
+    const { vcs: restarted, refs: restartedRefs } = await harness();
+    vi.spyOn(restartedRefs, "readMainSemanticState").mockReturnValue({ kind: "event", eventId: "main-event" });
     await restarted.attachParticipantHistory({ dispatch: { dispatch }, canonical });
     await expect(restarted.openParticipantScope({
       contextId, ownerContextId: contextId, caller: taskCaller(1),
@@ -383,6 +385,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
         throw new Error(`Unexpected canonical dispatch ${method}`);
       }) },
     };
+    vi.spyOn(deps.refs, "readMainSemanticState").mockReturnValue({ kind: "event", eventId: "genesis" });
     await vcs.attachParticipantHistory(attachment);
     const resolveScope: WorkspaceVcs["openParticipantScope"] = async (input) => ({
       dispatch: { dispatch }, canonical, contextId, ownerContextId: input.ownerContextId,
@@ -1247,7 +1250,8 @@ describe("WorkspaceVcs semantic host orchestration", () => {
   });
 
   it("keeps private participant content across the destructive GC boundary", async () => {
-    const { blobsDir, vcs } = await harness();
+    const { blobsDir, vcs, refs } = await harness();
+    vi.spyOn(refs, "readMainSemanticState").mockReturnValue({ kind: "event", eventId: "main-event" });
     const before = await putBytes(blobsDir, Buffer.from("private before preparation"));
     const archived = await putBytes(blobsDir, Buffer.from("saved during retirement"));
     const recent = await putBytes(blobsDir, Buffer.from("private after preparation"));

@@ -135,7 +135,7 @@ describe("WorkspaceVcs protected publication notification", () => {
     expect(refs.readMain("packages/a")?.contentRoot).toMatch(/^state:[0-9a-f]{64}$/);
   });
 
-  it("recovers canonical publications in order without asking for approval again", async () => {
+  it("recovers canonical publications before accepting the matching shared head", async () => {
     root = await fsp.mkdtemp(path.join(os.tmpdir(), "participant-publication-recovery-"));
     const blobsDir = path.join(root, "blobs");
     ensureLayout(blobsDir);
@@ -178,8 +178,12 @@ describe("WorkspaceVcs protected publication notification", () => {
     const pending = new Map([second, first].map((value) => [value.approval.publicationId, value]));
     const observed: string[] = [];
     refs.onRefsChanged((value) => { observed.push(value.publishedEventId); });
+    let canonicalEventId = "unreconciled";
     const dispatch = vi.fn(async (target: typeof canonical, method: string, input?: unknown) => {
       expect(target).toEqual(canonical);
+      if (method === "readHistoryMain")
+        return { head: `head:${canonicalEventId}`, eventId: canonicalEventId };
+      if (method === "readHistoryReplayReceipt") return null;
       if (method === "listHistoryAppliedPublications") return [...pending.values()];
       if (method === "readHistoryPublishedRevision") {
         const { eventId } = input as { eventId: string };
@@ -194,9 +198,17 @@ describe("WorkspaceVcs protected publication notification", () => {
       }
       throw new Error(`Publication recovery attempted ${method}`);
     });
-    const recover = () => vcs.recoverParticipantPublications({ dispatch: { dispatch }, canonical });
-    await expect(recover()).resolves.toBe(2);
-    await expect(recover()).resolves.toBe(0);
+    const attach = () => vcs.attachParticipantHistory({ dispatch: { dispatch }, canonical });
+    await expect(attach()).rejects.toMatchObject({
+      code: "REF_EVENT_CONFLICT",
+      expectedEventId: "unreconciled",
+      actualEventId: "second",
+    });
+    expect(vcs.participantHistoryAttached).toBe(false);
+    expect(pending.size).toBe(0);
+    canonicalEventId = "second";
+    await expect(attach()).resolves.toBeUndefined();
+    expect(vcs.participantHistoryAttached).toBe(true);
     expect(observed).toEqual(["first", "second"]);
     expect(refs.readMainSemanticState()).toEqual({ kind: "event", eventId: "second" });
     expect(gate).not.toHaveBeenCalled();

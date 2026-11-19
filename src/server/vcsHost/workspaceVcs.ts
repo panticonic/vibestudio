@@ -676,8 +676,16 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       if (this.participantHistorySource) {
         throw new Error("Participant workspace history is already attached");
       }
-      await readWorkspaceCanonicalMain(source);
       await this.recoverParticipantPublications(source);
+      const main = await readWorkspaceCanonicalMain(source);
+      const protectedEventId = this.deps.refs.readMainSemanticState()?.eventId ?? null;
+      if (main.eventId !== protectedEventId) {
+        throw new RefEventConflictError(
+          main.eventId,
+          protectedEventId,
+          this.deps.refs.readHeadPublication()?.publicationId ?? null
+        );
+      }
       const receipt = await readWorkspaceHistoryReplayReceipt(source.dispatch, source.canonical);
       const replayedWorkingHeads = new Map<string, { participantId: string; head: string }>();
       const suppliedOwners = [...source.replayedContextOwners ?? []].map(
