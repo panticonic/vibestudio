@@ -374,6 +374,17 @@ export interface WorkspaceHistorySource {
   canonical: WorkspaceSourceProviderRef;
 }
 
+export async function listWorkspaceHistoryRuntimeContexts(
+  source: WorkspaceHistorySource,
+  prefix?: string
+): Promise<string[]> {
+  return z.array(z.string().min(1)).parse(
+    await source.dispatch.dispatch(source.canonical, "listHistoryRuntimeContexts", {
+      ...(prefix === undefined ? {} : { prefix }),
+    })
+  );
+}
+
 export async function workspaceMainStateReachable(
   source: WorkspaceHistorySource,
   state: VcsStateNodeRef

@@ -118,6 +118,7 @@ import {
   editWorkspaceParticipant,
   forkWorkspaceParticipantContext,
   listAppliedWorkspacePublications,
+  listWorkspaceHistoryRuntimeContexts,
   mergeWorkspaceParticipantContext,
   observeAppliedWorkspacePublication,
   openWorkspaceParticipantContext,
@@ -225,6 +226,8 @@ const CONTENT_OBSERVATION_CONCURRENCY = 32;
 const SLOW_SEMANTIC_EFFECT_MS = 500;
 
 type ParticipantHistoryAttachment = WorkspaceHistorySource & {
+  /** Physical allocations inherit this provider lifetime and cannot reenter their creating DO. */
+  infrastructureContextId?: string;
   replayedContextOwners?: ReadonlyMap<string, { caller: VerifiedCaller; ownerContextId: string }>;
   destroyRetiredStorage?: (owner: WorkspaceSourceProviderRef) => Promise<void>;
 };
@@ -392,6 +395,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   private sourceProviderCaller: WorkspaceSourceProviderV1 | null = null;
   private participantHistorySource: (WorkspaceHistorySource & {
     replayedWorkingHeads: ReadonlyMap<string, { participantId: string; head: string }>;
+    infrastructureContextId?: string;
     destroyRetiredStorage?: ParticipantHistoryAttachment["destroyRetiredStorage"];
   }) | null = null;
   private readonly protectedPublicationListeners = new Set<
@@ -622,6 +626,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   async listSemanticContexts(prefix?: string): Promise<string[]> {
     await this.whenSemanticReady();
+    if (this.participantHistorySource)
+      return listWorkspaceHistoryRuntimeContexts(this.participantHistorySource, prefix);
     return this.gad().listContexts({
       ...(prefix === undefined ? {} : { prefix }),
     });
@@ -720,6 +726,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         dispatch: source.dispatch,
         canonical: source.canonical,
         replayedWorkingHeads,
+        ...(source.infrastructureContextId ? { infrastructureContextId: source.infrastructureContextId } : {}),
         ...(source.destroyRetiredStorage ? { destroyRetiredStorage: source.destroyRetiredStorage } : {}),
       };
     });
@@ -1796,6 +1803,21 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   // Context lifecycle
   // -----------------------------------------------------------------------
 
+  async ensureRuntimeContext(contextId: string): Promise<void> {
+    await this.whenSemanticReady();
+    const source = this.participantHistorySource;
+    if (!source) {
+      await this.ensureSemanticContext(contextId);
+      return;
+    }
+    if (contextId === source.infrastructureContextId) return;
+    await this.locked(`context-lifecycle:${contextId}`, async () => {
+      if (this.contextHeads.get(contextId) === null)
+        throw new Error("Workspace participant context has retired");
+      await source.dispatch.dispatch(source.canonical, "ensureHistoryRuntimeContext", { contextId });
+    });
+  }
+
   /**
    * Ensure only the durable semantic coordinate exists.
    *
@@ -2318,7 +2340,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       // success can never be followed by a stale projection resurrection.
       await this.materializer.drop(contextId);
       this.verifiedProjectionStates.delete(contextId);
-      await this.gad().dropContext({ contextId });
+      if (!source) await this.gad().dropContext({ contextId });
       this.contextHeads.set(contextId, null);
     });
   }

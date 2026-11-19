@@ -4721,9 +4721,7 @@ async function main() {
           },
           // GAD-owned semantic context lifecycle for runtime entities.
           semanticContexts: {
-            ensureContext: async (contextId) => {
-              await workspaceVcs.ensureSemanticContext(contextId);
-            },
+            ensureContext: (contextId) => workspaceVcs.ensureRuntimeContext(contextId),
             dropContext: (contextId) => workspaceVcs.dropContext(contextId),
             forkContext: async (sourceContextId, targetContextId) => {
               await workspaceVcs.forkContext(sourceContextId, targetContextId);

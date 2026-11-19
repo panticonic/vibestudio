@@ -305,6 +305,46 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     await expect(fsp.stat(first!.sourceRoot)).rejects.toHaveProperty("code", "ENOENT");
   });
 
+  it("uses native context registration and retirement while legacy history stays frozen", async () => {
+    const { vcs, refs } = await harness();
+    const canonical = { ...TEST_PROVIDER, objectKey: "canonical" };
+    const contextId = "native-runtime-context";
+    const infrastructureContextId = "native-history-provider";
+    const contexts = new Set<string>();
+    vi.spyOn(refs, "readMainSemanticState").mockReturnValue({ kind: "event", eventId: "main-event" });
+    const legacy = vi.fn(async () => { throw new Error("Legacy workspace history is frozen"); });
+    await vcs.attachGad(providerFromWireCall(legacy));
+    const dispatch = vi.fn(async (owner: typeof canonical, method: string, value?: unknown) => {
+      expect(owner).toEqual(canonical);
+      switch (method) {
+        case "readHistoryMain": return { head: "main", eventId: "main-event" };
+        case "readHistoryReplayReceipt": return null;
+        case "listHistoryAppliedPublications": return [];
+        case "ensureHistoryRuntimeContext":
+          expect(value).toEqual({ contextId });
+          contexts.add(contextId);
+          return;
+        case "listHistoryRuntimeContexts":
+          expect(value).toEqual({ prefix: "native-runtime" });
+          return [...contexts];
+        case "retireHistoryContext":
+          expect(value).toEqual({ contextId });
+          contexts.delete(contextId);
+          return { contextId, targets: [] };
+        default: throw new Error(`Unexpected participant dispatch ${method}`);
+      }
+    });
+    await vcs.attachParticipantHistory({ canonical, dispatch: { dispatch }, infrastructureContextId });
+    await vcs.ensureRuntimeContext(infrastructureContextId);
+    await vcs.ensureRuntimeContext(contextId);
+    await vcs.ensureRuntimeContext(contextId);
+    await expect(vcs.listSemanticContexts("native-runtime")).resolves.toEqual([contextId]);
+    await vcs.dropContext(contextId);
+    await expect(vcs.listSemanticContexts("native-runtime")).resolves.toEqual([]);
+    await expect(vcs.ensureRuntimeContext(contextId)).rejects.toThrow("context has retired");
+    expect(legacy).not.toHaveBeenCalled();
+  });
+
   it("keeps participant projections separate, advances one, and repairs its binding on retry", async () => {
     const { vcs, blobsDir, deps } = await harness();
     const contextId = "context:shared";
