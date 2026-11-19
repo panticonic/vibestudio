@@ -135,7 +135,14 @@ export const panelTeacherInputSchema = z.object({
   panelSource: z.string().regex(/^panels\/[A-Za-z0-9][A-Za-z0-9._-]*$/u), executorModel: z.string().regex(/^[^:]+:.+$/u), goal: z.string().min(1),
 }).strict();
 export type PanelTeacherInput = z.infer<typeof panelTeacherInputSchema>;
-export interface PanelTeacherResult { report: unknown; rootCallIds: string[]; calls: unknown[]; evalRunId: string; programPath: string; }
+export interface PanelTeacherResult {
+  report: unknown;
+  rootCallIds: string[];
+  calls: unknown[];
+  evalRunId: string;
+  programPath: string;
+  trainingEligible?: boolean;
+}
 
 export const workspaceIntegrationTeacherInputSchema = z.object({
   contextId: z.string().min(1), source: vcsMergeSourceSchema,

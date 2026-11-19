@@ -146,7 +146,10 @@ use the panel's quiet observation action in an estate without storyteller seats.
 sequence, elapsed phases, and attachment gains on distinct days.
 Spectrolite navigation reviews retain the browser-observed source and destination of each
 wiki-link hop. The navigation finding binds the whole route to the final canonical document,
-and any preview finding refers to that same editor and revision.
+and any preview finding refers to that same editor and revision. Draft reviews compare the
+editor's working document against the same file at the committed vault reference. The checks
+distinguish changed notes from unchanged notes in a dirty vault. The exporter requires the
+nested revision-review calls and rejects stale editor text or a different committed reference.
 Personal memory comparisons call the existing verified recall skill once for each assigned
 revision. They retain both original quotations and independently observed endpoint outcomes,
 including when one revision has no recall lead or no source. The exporter requires both nested

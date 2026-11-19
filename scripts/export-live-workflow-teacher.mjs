@@ -497,6 +497,7 @@ export async function loadLiveTeacherCases(checkouts) {
     requiredText,
     heading,
     previewText,
+    draft,
     follow,
   } of managedSpectroliteWorlds) {
     cases.set(`spectrolite-live-${id}`, {
@@ -508,6 +509,11 @@ export async function loadLiveTeacherCases(checkouts) {
       requiredText,
       heading,
       previewText,
+      draft: draft && {
+        committedTitle: draft.committedTitle,
+        staleText: draft.staleText,
+        visibleText: draft.visibleText,
+      },
       expectedNavigation: (follow ?? []).map(({ path: from, target, destination: to }) => ({
         from,
         target,
@@ -1989,14 +1995,26 @@ function spectroliteEvidence(execution, exercise, _scenario, workflow) {
   const fixture = execution.diagnostics.managedSpectrolite;
   const verification = fixture?.verification;
   const report = exercise.report;
-  const { vault, document, preview, navigation } = verification?.observed ?? {};
+  const { vault, document, preview, navigation, committedDocument } = verification?.observed ?? {};
   requireEvidence(
     typeof fixture?.contextId === "string" &&
       fixture.contextId === execution.provenance?.contextId &&
       verification?.caseId === workflow.caseId &&
       verification.passed === true &&
       vault?.id === `${fixture.contextId}:vault` &&
-      vault.clean === true &&
+      vault.clean === !workflow.draft &&
+      (!workflow.draft ||
+        (vault.working?.kind === "application" &&
+          vault.committed?.kind === "event" &&
+          committedDocument?.id === `${fixture.contextId}:committed-document` &&
+          committedDocument.path === document?.path &&
+          committedDocument.repositoryId === vault.repositoryId &&
+          typeof committedDocument.fileId === "string" &&
+          committedDocument.fileId === document?.fileId &&
+          typeof committedDocument.contentHash === "string" &&
+          committedDocument.title === workflow.draft.committedTitle &&
+          isDeepStrictEqual(committedDocument.ref, vault.committed) &&
+          verification.checks?.committedBaseline === true)) &&
       typeof vault.repositoryId === "string" &&
       vault.repositoryId === document?.repositoryId &&
       document.id === `${fixture.contextId}:document` &&
@@ -2004,6 +2022,10 @@ function spectroliteEvidence(execution, exercise, _scenario, workflow) {
       verification.browser?.path === document.path &&
       typeof verification.browser.text === "string" &&
       verification.browser.text.includes(workflow.heading) &&
+      (!workflow.draft?.staleText ||
+        !verification.browser.text.includes(workflow.draft.staleText)) &&
+      (!workflow.draft?.visibleText ||
+        verification.browser.text.includes(workflow.draft.visibleText)) &&
       (workflow.previewText === null ||
         verification.browser.rendered?.some(
           (text) => typeof text === "string" && text.includes(workflow.previewText)
@@ -2024,13 +2046,21 @@ function spectroliteEvidence(execution, exercise, _scenario, workflow) {
         const check = workflow.checks[index];
         const ids = [
           vault.id,
-          document.id,
+          ...(check === "publication" ? [] : [document.id]),
+          ...(check === "revision" && committedDocument ? [committedDocument.id] : []),
           ...(check === "preview" && preview ? [preview.id] : []),
           ...(check === "navigation" && navigation ? [navigation.id] : []),
         ];
         return (
           finding?.check === check &&
           finding.code === workflow.expected[index] &&
+          (finding.code !== "draft-changed" ||
+            (committedDocument && committedDocument.contentHash !== document.contentHash)) &&
+          (finding.code !== "revision-unchanged" ||
+            committedDocument?.contentHash === document.contentHash) &&
+          (finding.code !== "working-copy-dirty" || vault.clean === false) &&
+          (check !== "revision" ||
+            (typeof finding.detail === "string" && finding.detail.includes(document.path))) &&
           (finding.code !== "preview-ready" || preview?.phase === "rendered") &&
           (finding.code !== "preview-missing" || preview === null) &&
           (finding.code !== "navigation-ready" || navigation?.hops.at(-1)?.to === document.path) &&
@@ -2051,13 +2081,45 @@ function spectroliteEvidence(execution, exercise, _scenario, workflow) {
       ].every((name) => verification.checks?.[name] === true),
     "Spectrolite findings must match the assigned canonical revision and rendered editor"
   );
+  if (workflow.draft) {
+    const child = (parentId, name) =>
+      exercise.calls.find(
+        ({ record }) =>
+          record.parent_call_id === parentId &&
+          record.definition?.name === name &&
+          record.outcome === "done"
+      );
+    const skill = child(exercise.rootCallIds[0], "reviewSpectrolite");
+    const live = skill && child(skill.callId, "reviewLiveVault");
+    const revision = live && child(live.callId, "inspectRevision");
+    const stages = {
+      document: "inspectDocument",
+      preview: "inspectPreview",
+      navigation: "inspectNavigation",
+      revision: "inspectRevision",
+      publication: "inspectPublication",
+    };
+    const publication = live && child(live.callId, "inspectPublication");
+    requireEvidence(
+      live &&
+        child(live.callId, "readVault") &&
+        workflow.checks.every((check) => child(live.callId, stages[check])) &&
+        revision &&
+        child(revision.callId, "matchCommittedDocument") &&
+        child(revision.callId, "compareDocumentContent") &&
+        (!workflow.checks.includes("publication") ||
+          (publication && child(publication.callId, "interpretProgress"))),
+      "Spectrolite draft findings must come from the live review and its nested revision checks"
+    );
+  }
   return {
     world: {
       context_id: fixture.contextId,
       document_path: document.path,
       content_hash: document.contentHash,
+      ...(committedDocument ? { committed_hash: committedDocument.contentHash } : {}),
     },
-    checks: verification.checks,
+    checks: { ...verification.checks, ...(workflow.draft ? { revisionReviewTree: true } : {}) },
     evidence: { workspace: { fixture } },
   };
 }

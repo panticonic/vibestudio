@@ -1784,7 +1784,7 @@ test("News export rejects findings that cite a different schedule owner", async 
   );
 });
 
-test("Spectrolite export rejects a preview from another canonical revision", async (t) => {
+test("Spectrolite export binds the browser, committed baseline and nested revision checks", async (t) => {
   const { options, diagnostics, entry, save } = await fixture(t);
   const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
     path.resolve(import.meta.dirname, "..")
@@ -1871,6 +1871,94 @@ test("Spectrolite export rejects a preview from another canonical revision", asy
   await save();
   await assert.rejects(
     exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-wrong-route` }),
+    /Spectrolite findings must match the assigned canonical revision/u
+  );
+
+  entry.test.name = "spectrolite-live-draft-evacuation-route";
+  const draft = cases.get(entry.test.name);
+  const workingDraft = { kind: "application", id: "uncommitted" };
+  run.report.findings = draft.checks.map((check, index) => ({
+    check,
+    code: draft.expected[index],
+    detail: draft.documentPath,
+    evidenceIds: [
+      "ctx:vault",
+      ...(check === "publication" ? [] : ["ctx:document"]),
+      ...(check === "preview" ? ["ctx:preview"] : []),
+      ...(check === "revision" ? ["ctx:committed-document"] : []),
+    ],
+  }));
+  const verification = diagnostics.managedSpectrolite.verification;
+  Object.assign(verification, {
+    caseId: draft.caseId,
+    browser: {
+      path: draft.documentPath,
+      text: draft.heading,
+      rendered: [draft.previewText],
+    },
+  });
+  Object.assign(verification.observed.vault, {
+    clean: false,
+    committed: working,
+    working: workingDraft,
+  });
+  Object.assign(verification.observed.document, {
+    fileId: "file:spectrolite",
+    path: draft.documentPath,
+    ref: workingDraft,
+  });
+  verification.observed.committedDocument = {
+    ...verification.observed.document,
+    id: "ctx:committed-document",
+    contentHash: "baseline",
+    title: draft.draft.committedTitle,
+    ref: working,
+  };
+  verification.observed.navigation = null;
+  preview.documentPath = draft.documentPath;
+  verification.checks.committedBaseline = true;
+  const capture = (name, parent) => {
+    const call = structuredClone(leaf);
+    call.callId = call.summary.call_id = name;
+    call.record.definition.name = name;
+    call.record.outcome = "done";
+    call.record.parent_call_id = parent;
+    run.calls.push(call);
+  };
+  leaf.record.definition.name = "reviewLiveVault";
+  leaf.record.outcome = skill.record.outcome = "done";
+  for (const name of [
+    "readVault",
+    "inspectDocument",
+    "inspectPreview",
+    "inspectRevision",
+    "inspectPublication",
+  ])
+    capture(name, leaf.callId);
+  capture("matchCommittedDocument", "inspectRevision");
+  capture("compareDocumentContent", "inspectRevision");
+  capture("interpretProgress", "inspectPublication");
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-working-draft` });
+  const compare = run.calls.find(({ callId }) => callId === "compareDocumentContent");
+  compare.record.parent_call_id = leaf.callId;
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-flat-revision-review` }),
+    /Spectrolite draft findings must come from the live review and its nested revision checks/u
+  );
+  compare.record.parent_call_id = "inspectRevision";
+  verification.observed.committedDocument.ref = workingDraft;
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-wrong-committed-ref` }),
+    /Spectrolite findings must match the assigned canonical revision/u
+  );
+  verification.observed.committedDocument.ref = working;
+  verification.browser.text += draft.draft.staleText;
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-stale-draft-browser` }),
     /Spectrolite findings must match the assigned canonical revision/u
   );
 });
