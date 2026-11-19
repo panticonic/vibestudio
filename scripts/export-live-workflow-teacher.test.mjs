@@ -61,7 +61,11 @@ test("authored template worlds flow into the collector without losing original s
           },
         ],
       ],
-      ["automation-lifecycle-worlds", "managedAutomationWorlds", [{ id: "stale", status: "held" }]],
+      [
+        "automation-lifecycle-worlds",
+        "managedAutomationWorlds",
+        [{ id: "stale", status: "held", problem: "revision-race" }],
+      ],
       [
         "publication-preflight-worlds",
         "managedPublicationWorlds",
@@ -220,6 +224,56 @@ test("authored template worlds flow into the collector without losing original s
   const automation = cases.get("automation-lifecycle-live-stale");
   assert.equal(automation.root, "reconcileAutomation");
   assert.equal(automation.expectedStatus, "held");
+  const currentRevision = "b".repeat(64);
+  const oldRevision = "a".repeat(64);
+  const automationVerification = {
+    passed: true,
+    caseId: automation.caseId,
+    expectedStatus: "held",
+    problem: "revision-race",
+    assignedId: "assigned-mission",
+    expectedRevision: oldRevision,
+    observedRevision: currentRevision,
+    reportedRevision: currentRevision,
+    afterState: "active",
+    reportedState: "active",
+    checks: Object.fromEntries(
+      [
+        "exactStateAndReport",
+        "defaultMonitorUnchanged",
+        "exactDefinition",
+        "revisionGuard",
+        "effectReadback",
+        "scopedReadback",
+        "noAutomationRunStarted",
+        "assignedTransition",
+        "missingStaysMissing",
+      ].map((name) => [name, true])
+    ),
+  };
+  const automationExecution = {
+    provenance: { contextId: "owned" },
+    diagnostics: {
+      managedAutomation: { contextId: "owned", verification: automationVerification },
+    },
+  };
+  const automationReport = {
+    missionId: "assigned-mission",
+    status: "held",
+    revisionDigest: currentRevision,
+    state: "active",
+  };
+  assert.ok(automation.evidence(automationExecution, { report: automationReport }, "", automation));
+  assert.throws(
+    () =>
+      automation.evidence(
+        automationExecution,
+        { report: { ...automationReport, revisionDigest: oldRevision } },
+        "",
+        automation
+      ),
+    /independently verified scheduling/
+  );
   const cleanPdf = cases.get("pdf-intake-live-page-missing");
   assert.equal(cleanPdf.root, "extractPdfEvidence");
   assert.equal(cleanPdf.expectedStatus, "missing-pages");

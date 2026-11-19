@@ -106,6 +106,10 @@ Publication preflight uses a locally built website and a real preview panel capt
 approval for the exact destination, provider, and environment, and distinguishes audience labels
 present only in the website package from labels observed in the reviewed panel. Controlled delivery
 faults exercise missing HTML and changed manifests. The checks cover review and publication status.
+Automation lifecycle cases use manual-only Missions. The test context can install a new revision
+around a pause or resume, or interrupt the receipt at the service boundary. The workflow uses
+at most one scheduling attempt and reports the actual installed state and revision. The oracle checks controller receipts
+and confirms that the automation did not start a run.
 Integration handoffs combine the workspace integration and scratch evidence skills. The scratch
 binding opens only after the VCS oracle verifies the integration. Some questions require
 citations from multiple resulting files. If those files lack a required decision, such as a

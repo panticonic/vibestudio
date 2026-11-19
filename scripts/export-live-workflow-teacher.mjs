@@ -485,11 +485,12 @@ export async function loadLiveTeacherCases(checkouts) {
       expectedVisual,
     });
   }
-  for (const { id, status } of managedAutomationWorlds) {
+  for (const { id, status, problem } of managedAutomationWorlds) {
     cases.set(`automation-lifecycle-live-${id}`, {
       ...automationLifecycleWorkflow,
       caseId: id,
       expectedStatus: status,
+      problem: problem ?? null,
     });
   }
   for (const { id, integration, questions } of integrationHandoffWorlds) {
@@ -1680,13 +1681,23 @@ function automationLifecycleEvidence(execution, exercise, _scenario, workflow) {
     fixture?.contextId === execution.provenance?.contextId &&
       verification?.caseId === workflow.caseId &&
       verification.expectedStatus === workflow.expectedStatus &&
+      verification.problem === workflow.problem &&
       report?.status === workflow.expectedStatus &&
       report.missionId === verification.assignedId &&
+      report.revisionDigest === verification.reportedRevision &&
+      report.state === verification.reportedState &&
+      (workflow.problem === "missing"
+        ? report.revisionDigest === null && report.state === null
+        : report.revisionDigest === verification.observedRevision &&
+          report.state === verification.afterState) &&
       verification.passed === true &&
       [
         "exactStateAndReport",
         "defaultMonitorUnchanged",
-        "definitionPreserved",
+        "exactDefinition",
+        "revisionGuard",
+        "effectReadback",
+        "scopedReadback",
         "noAutomationRunStarted",
         "assignedTransition",
         "missingStaysMissing",
