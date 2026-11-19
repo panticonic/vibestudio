@@ -5951,10 +5951,23 @@ test("Gmail compose export requires the native delivery history and reconciliati
   const receipt = { channelId: seed.channelId, messageId: seed.messageId, events };
   const decision = { action: "reconcile-delivery", reason: "Check the existing MIME identity." };
   const evidenceIds = [events[0].id, events.at(-1).id];
-  const report = { receipt, decision, evidenceIds };
+  const historyReport = { receipt, decision, evidenceIds };
+  const latest = events.at(-1);
+  const target = { id: events[0].id, channelId: seed.channelId, accountRef: "channel-only:" + seed.channelId };
+  const projected = {
+    kind: "compose", goal: assignment.goal,
+    scope: { target, observed: { ...target, id: latest.id, binding: "channel-readback" } },
+    card: {
+      id: latest.id, messageId: seed.messageId, requestedMessageId: seed.messageId, ownedByChannel: true,
+      state: latest.state.status, hasRecipient: true, alias: "default",
+    },
+    readback: { kind: "reconcile", id: latest.id, providerProof: "not-checked" },
+  };
+  const review = { status: "waiting", findings: [{ code: "delivery-unproven", evidenceIds: [latest.id] }] };
+  const report = { history: historyReport, review };
   diagnostics.gmailComposeHistory = {
-    passed: true, seed, request, received: receipt,
-    checks: { channel: true, lineage: true, disposition: true, evidence: true },
+    passed: true, seed, request, received: receipt, projected,
+    checks: { channel: true, lineage: true, disposition: true, evidence: true, projection: true, review: true },
   };
   const ref = (value) => {
     const text = JSON.stringify(value);
@@ -5975,7 +5988,7 @@ test("Gmail compose export requires the native delivery history and reconciliati
       effects,
     },
   });
-  const history = call("inspectComposeHistory", "runWorkflow", { request }, report, [{
+  const history = call("inspectComposeHistory", "auditComposeHistory", { request }, historyReport, [{
     service: "gmailComposeHistory", method: "read", args: ref([request.operationId]), result: ref(receipt),
   }]);
   diagnostics.natlangTeacher = {
@@ -5984,16 +5997,31 @@ test("Gmail compose export requires the native delivery history and reconciliati
     rootCallIds: ["runWorkflow"],
     report,
     calls: [
-      call("runWorkflow", null, {}, null), history,
+      call("runWorkflow", null, {}, null),
+      call("auditComposeHistory", "runWorkflow", { request }, report, [{
+        service: "gmailComposeAudit", method: "project", args: ref([request.operationId, "reconcile"]), result: ref(projected),
+      }]),
+      history,
       call("assessComposeState", "inspectComposeHistory", { events }, decision),
       call("checkDelivery", "assessComposeState", { state: events.at(-1).state }, decision),
       call("citeComposeHistory", "inspectComposeHistory", { events }, evidenceIds),
+      call("reviewGmailWorkflow", "auditComposeHistory", { request: projected }, review),
+      call("reviewCompose", "reviewGmailWorkflow", { input: projected }, review),
+      call("establishGmailScope", "reviewGmailWorkflow", { scope: projected.scope }, null),
+      call("qualifyComposeCard", "reviewCompose", { input: projected.card }, null),
+      call("inspectDelivery", "reviewCompose", { input: projected }, review),
     ],
   };
   await save();
   await exportLiveTeacherWorkflow({ ...options, cases });
+  const workflowReview = diagnostics.natlangTeacher.calls.find(({ callId }) => callId === "reviewGmailWorkflow");
+  workflowReview.record.inputs.request = ref({ ...projected, card: { ...projected.card, messageId: "other-card" } });
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /exact assigned channel and persisted readback/u);
+  workflowReview.record.inputs.request = ref(projected);
   evidenceIds[1] = "other-channel-event";
-  history.record.output = ref(report);
+  history.record.output = ref(historyReport);
+  diagnostics.natlangTeacher.calls[1].record.output = ref(report);
   await save();
   await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /exact lineage and appropriate recovery/u);
 });

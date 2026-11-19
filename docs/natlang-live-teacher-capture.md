@@ -94,6 +94,13 @@ idempotent retry must leave exactly one matching row. A same-text message on
 another channel must hold the receipt at the origin check. The exporter
 requires the exact origin and consumer decisions in the captured call tree.
 
+Gmail compose audits run in an owned channel in the Google Workspace template.
+The shared program calls the compose-history skill, projects a typed draft or
+delivery readback from that same native cursor, and calls the Gmail workflow
+review. Cases cover first save, repeated save, changed draft ID, cleared recipient,
+and uncertain delivery. The channel projection makes no provider claim about
+delivery. Run `gmail-compose-history-oracle-qualification` for the model-free check.
+
 Android runtime audits use the installed Mobile Debug extension and native
 ADB inventory. Run them in a System workspace with one ready disposable
 Android emulator and no internal Vibestudio app on that emulator. Cases cover

@@ -309,7 +309,7 @@ const gmailComposeHistoryWorkflow = {
   namespace: "vibestudio:gmail",
   group: "native-channel-compose-lineage",
   validator: { template: "system-testing", path: "skills/system-testing/gmail-compose-history-managed.ts" },
-  root: "inspectComposeHistory",
+  root: "auditComposeHistory",
   evidence: gmailComposeHistoryEvidence,
 };
 const explorerTextWorkflow = {
@@ -3787,22 +3787,26 @@ function unitIdentityEvidence(execution, exercise, _scenario, workflow) {
 
 function gmailComposeHistoryEvidence(execution, exercise, _scenario, workflow) {
   const fixture = execution.diagnostics.gmailComposeHistory;
-  const { seed, request, received, checks } = fixture ?? {};
+  const { seed, request, received, projected, checks } = fixture ?? {};
   const { assignment } = workflow;
-  const report = exercise.report;
+  const report = exercise.report?.history;
   const records = exercise.calls.map(({ record }) => record);
   const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
   const child = (parent, name) => parent && records.find(
     (record) => record.parent_call_id === parent.call_id && record.definition.name === name
   );
-  const history = child(root, "inspectComposeHistory");
+  const audit = child(root, "auditComposeHistory");
+  const history = child(audit, "inspectComposeHistory");
+  const gmailReview = child(audit, "reviewGmailWorkflow");
+  const composeReview = child(gmailReview, "reviewCompose");
+  const projection = audit?.effects?.[0];
   const assessment = child(history, "assessComposeState");
   const cite = child(history, "citeComposeHistory");
   const effects = records.flatMap(({ effects }) => effects ?? []);
   const effect = history?.effects?.[0];
   requireEvidence(
     fixture?.passed === true &&
-      ["channel", "lineage", "disposition", "evidence"].every((key) => checks?.[key] === true) &&
+      ["channel", "lineage", "disposition", "evidence", "projection", "review"].every((key) => checks?.[key] === true) &&
       seed?.caseId === assignment.id && typeof seed.contextId === "string" &&
       seed.contextId === execution.provenance?.contextId &&
       seed.channelId === execution.provenance?.channelId &&
@@ -3813,9 +3817,14 @@ function gmailComposeHistoryEvidence(execution, exercise, _scenario, workflow) {
       seed.lineage.every(({ id, seq }, i) => typeof id === "string" && id.length > 0 &&
         Number.isSafeInteger(seq) && seq > (seed.lineage[i - 1]?.seq ?? -1)) &&
       new Set(seed.lineage.map(({ id }) => id)).size === seed.lineage.length &&
+      matchesValue(audit?.inputs?.request, request) && matchesValue(audit.output, exercise.report) &&
       matchesValue(history?.inputs?.request, request) && matchesValue(history.output, report) &&
-      effects.length === 1 && effect?.service === "gmailComposeHistory" && effect.method === "read" &&
-      !effect.error && matchesValue(effect.args, [request.operationId]) && matchesValue(effect.result, received),
+      effects.length === 2 && effect?.service === "gmailComposeHistory" && effect.method === "read" &&
+      !effect.error && matchesValue(effect.args, [request.operationId]) && matchesValue(effect.result, received) &&
+      projection?.service === "gmailComposeAudit" && projection.method === "project" && !projection.error &&
+      matchesValue(projection.args, [request.operationId, assignment.review.kind]) &&
+      matchesValue(projection.result, projected) && matchesValue(gmailReview?.inputs?.request, projected) &&
+      matchesValue(composeReview?.inputs?.input, projected),
     "Gmail compose history requires the exact assigned channel and persisted readback"
   );
   let state = { ...assignment.initial };
@@ -3828,6 +3837,14 @@ function gmailComposeHistoryEvidence(execution, exercise, _scenario, workflow) {
   });
   const review = child(assessment, assignment.action === "reconcile-delivery" ? "checkDelivery" : "checkDraft");
   const citations = [events[0].id, events.at(-1).id];
+  const latest = events.at(-1);
+  const expectedReview = {
+    status: assignment.review.status,
+    findings: [{ code: assignment.review.code, evidenceIds: [latest.id] }],
+  };
+  const scopeCheck = child(gmailReview, "establishGmailScope");
+  const cardCheck = child(composeReview, "qualifyComposeCard");
+  const readbackCheck = child(composeReview, assignment.review.kind === "draft" ? "inspectDraftLineage" : "inspectDelivery");
   requireEvidence(
     isDeepStrictEqual(received.events, events) && isDeepStrictEqual(report?.receipt, received) &&
       matchesValue(assessment?.inputs?.events, received.events) &&
@@ -3836,7 +3853,12 @@ function gmailComposeHistoryEvidence(execution, exercise, _scenario, workflow) {
       matchesValue(review.output, report.decision) &&
       report.decision.action === assignment.action &&
       typeof report.decision.reason === "string" && report.decision.reason.trim() &&
-      isDeepStrictEqual(report.evidenceIds, citations) && matchesValue(cite?.output, citations),
+      isDeepStrictEqual(report.evidenceIds, citations) && matchesValue(cite?.output, citations) &&
+      isDeepStrictEqual(exercise.report.review, expectedReview) &&
+      matchesValue(scopeCheck?.inputs?.scope, projected.scope) && matchesValue(scopeCheck.output, null) &&
+      matchesValue(cardCheck?.inputs?.input, projected.card) && matchesValue(cardCheck.output, null) &&
+      matchesValue(readbackCheck?.inputs?.input, projected) && matchesValue(readbackCheck.output, expectedReview) &&
+      matchesValue(composeReview.output, expectedReview) && matchesValue(gmailReview.output, expectedReview),
     "Gmail compose history requires the exact lineage and appropriate recovery decision"
   );
   return {
