@@ -111,6 +111,13 @@ service call. Both cases check that the panel has been archived. Run
 `chat-delivery-oracle-qualification` to exercise the real workspace and browser
 checks without model calls.
 
+Assigned automation planning cases use the real Missions service. The shared
+program reads the assigned manual monitor and its ledger, calls the automation
+planner, then checks the same assignment again. The stale case edits the
+mission definition after the first read. Both cases require the installed
+scheduling state and run count to stay unchanged. Run
+`automation-planning-managed-qualification` for the model-free live check.
+
 Gmail compose audits run in an owned channel in the Google Workspace template.
 The shared program calls the compose-history skill, projects a typed draft or
 delivery readback from that same native cursor, and calls the Gmail workflow

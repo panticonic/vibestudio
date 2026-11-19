@@ -253,6 +253,7 @@ test("authored template worlds flow into the collector without losing original s
       writeFile(
         path.join(casesDir, `${file}.ts`),
         `export const ${name} = ${JSON.stringify(worlds)};
+         ${name === "managedAutomationWorlds" ? "export const managedAutomationPlanningWorlds = [];" : ""}
          ${name === "deliveryHistoryWorlds" ? "export const chatDeliveryWorlds = [];" : ""}
          ${name === "ownedOperationsWorlds" ? 'export const ownedOperationsComposedWorlds = [{ id: "release-readiness-dossier", sourceGroup: "vibestudio:owned-operations:release:pending" }];' : ""}
          ${
@@ -3056,7 +3057,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["panel-repair-world", "export const panelRepairWorlds = [];"],
       ["scratch-handoff-worlds", "export const managedScratchWorlds = [];"],
       ["integration-handoff-worlds", "export const integrationHandoffWorlds = [];"],
-      ["automation-lifecycle-worlds", "export const managedAutomationWorlds = [];"],
+      ["automation-lifecycle-worlds", "export const managedAutomationWorlds = []; export const managedAutomationPlanningWorlds = [];"],
       ["publication-preflight-worlds", "export const managedPublicationWorlds = [];"],
       ["pdf-intake-worlds", "export const managedPdfWorlds = [];"],
       ["presentation-worlds", "export const managedPresentationWorlds = [];"],
@@ -7075,5 +7076,87 @@ test("PDF media export rejects an image reference without matching stored artifa
   await assert.rejects(
     exportLiveTeacherWorkflow({ ...options, cases }),
     /original artifact evidence/u,
+  );
+});
+
+test("automation planning export requires the post-plan readback of the edited mission", async () => {
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  const id = "automation-planning-live-hold-resume-after-definition-edited";
+  const workflow = cases.get(id);
+  const mission = { id: "owned-mission", name: "Release monitor", state: "paused", latestRun: null };
+  const original = { ...mission, revisionDigest: "a".repeat(64) };
+  const current = { ...mission, revisionDigest: "b".repeat(64) };
+  const before = { visible: [original] };
+  const after = { visible: [current] };
+  const request = {
+    goal: `${workflow.assignment.goal} The assigned mission is ${mission.name}.`,
+    operationId: "assigned-window",
+    timezone: "UTC",
+    now: "2026-11-20T00:00:00.000Z",
+  };
+  const input = { goal: request.goal, timezone: request.timezone, now: request.now, visible: [mission], availableOperations: [] };
+  const plan = { kind: "control", automationId: mission.id, action: "resume" };
+  const report = { status: "changed", plan, before, after };
+  const execution = {
+    provenance: { contextId: "owned" },
+    diagnostics: {
+      automationPlanning: {
+        contextId: "owned",
+        verification: {
+          caseId: workflow.assignment.id, passed: true, request, expectedPlan: plan, before, after,
+          checks: {
+            assignedPlan: true, snapshotReadback: true, exactDefinition: true,
+            schedulingUntouched: true, protectedDefault: true,
+          },
+        },
+      },
+    },
+  };
+  const ref = (value) => {
+    const bytes = JSON.stringify(value);
+    return { complete: true, hash: createHash("sha256").update(bytes).digest("hex"), bytes: Buffer.byteLength(bytes) };
+  };
+  const timestamp = (offset) => new Date(Date.parse(request.now) + offset).toISOString();
+  const call = (id, name, parent, args, output, start, end, effects = []) => ({
+    record: {
+      call_id: id, parent_call_id: parent, definition: { name },
+      inputs: Object.fromEntries(Object.entries(args).map(([key, value]) => [key, ref(value)])),
+      output: ref(output), started_at: timestamp(start), ended_at: timestamp(end), effects,
+    },
+  });
+  const read = (id, result, start, end) => call(
+    id, "observePlanningState", "review", { operationId: request.operationId }, result, start, end,
+    [{ service: "automationPlanning", method: "inspect", args: ref([request.operationId]), result: ref(result) }],
+  );
+  const later = read("after", after, 6, 7);
+  const exercise = {
+    report, rootCallIds: ["root"],
+    calls: [
+      call("root", "runWorkflow", null, {}, null, 0, 9),
+      call("review", "reviewAssignedAutomation", "root", { request }, report, 0, 9),
+      read("before", before, 1, 2),
+      call("plan", "prepareAutomation", "review", { request: input }, plan, 2, 6),
+      call("classify", "classifyIntent", "plan", { goal: request.goal }, "control", 2, 3),
+      call("control", "planControl", "plan", { request: input }, plan, 3, 5),
+      call("resolve", "resolveVisible", "control", { visible: [mission] }, { kind: "found", automation: mission }, 3, 4),
+      call("choice", "chooseControl", "control", { state: "paused" }, "resume", 4, 5),
+      later,
+      call("handoff", "checkHandoff", "review", { plan, before, after }, "changed", 8, 9),
+    ],
+  };
+  assert.equal(workflow.evidence(execution, exercise, id, workflow).world.seed_revision, original.revisionDigest);
+  later.record.started_at = timestamp(4);
+  assert.throws(
+    () => workflow.evidence(execution, exercise, id, workflow),
+    /readback taken after its decision/u,
+  );
+  later.record.started_at = timestamp(6);
+  later.record.effects[0].result = ref(before);
+  assert.throws(
+    () => workflow.evidence(execution, exercise, id, workflow),
+    /readback taken after its decision/u,
   );
 });

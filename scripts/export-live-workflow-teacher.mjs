@@ -706,7 +706,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { workspaceIntegrationWorlds },
     { managedScratchWorlds },
     { integrationHandoffWorlds },
-    { managedAutomationWorlds },
+    { managedAutomationWorlds, managedAutomationPlanningWorlds },
     { managedPublicationWorlds },
     { managedPdfWorlds, managedPdfExpectation, managedPdfHandoffWorlds = [] },
     { managedPresentationWorlds },
@@ -1248,6 +1248,20 @@ export async function loadLiveTeacherCases(checkouts) {
       caseId: id,
       expectedStatus: status,
       problem: problem ?? null,
+    });
+  }
+  for (const assignment of managedAutomationPlanningWorlds) {
+    cases.set(`automation-planning-live-${assignment.id}`, {
+      ...automationLifecycleWorkflow,
+      family: "workspace-live-automation-planning",
+      group: "live-mission-planning-readback",
+      root: "reviewAssignedAutomation",
+      evidence: automationPlanningEvidence,
+      sourceGroups: [
+        "vibestudio:automation:live-mission-planning-readback",
+        ...workflowSourceGroups(automationLifecycleWorkflow),
+      ],
+      assignment,
     });
   }
   for (const { id, integration, questions } of integrationHandoffWorlds) {
@@ -7393,6 +7407,81 @@ function publicationPreflightEvidence(execution, exercise, _scenario, workflow) 
   return {
     world: { context_id: fixture.contextId, seed_revision: verification.seedRevision },
     checks: verification.checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function automationPlanningEvidence(execution, exercise, _scenario, { assignment }) {
+  const fixture = execution.diagnostics.automationPlanning;
+  const verification = fixture?.verification;
+  const { request, expectedPlan, before, after, checks } = verification ?? {};
+  const report = exercise.report;
+  const original = before?.visible?.[0];
+  const current = after?.visible?.[0];
+  requireEvidence(
+    fixture?.contextId === execution.provenance?.contextId &&
+      verification?.caseId === assignment.id && verification.passed === true &&
+      ["assignedPlan", "snapshotReadback", "exactDefinition", "schedulingUntouched", "protectedDefault"].every(
+        (name) => checks?.[name] === true,
+      ) &&
+      request?.goal === `${assignment.goal} The assigned mission is ${original?.name}.` &&
+      typeof request.operationId === "string" && !!request.operationId &&
+      before?.visible.length === 1 && after?.visible.length === 1 &&
+      typeof original?.id === "string" && !!original.id &&
+      original.id === current?.id && original.name === current.name &&
+      original.state === assignment.initial && current.state === original.state &&
+      original.latestRun === null && current.latestRun === null &&
+      /^[a-f0-9]{64}$/u.test(original.revisionDigest) && /^[a-f0-9]{64}$/u.test(current.revisionDigest) &&
+      (original.revisionDigest !== current.revisionDigest) === (assignment.planning === "changed") &&
+      isDeepStrictEqual(expectedPlan, { kind: "control", action: assignment.action, automationId: original.id }) &&
+      isDeepStrictEqual(report, { status: assignment.planning, plan: expectedPlan, before, after }),
+    "Automation planning needs the actual owned mission, its verified plan, and current revision",
+  );
+  const records = exercise.calls.map(({ record }) => record);
+  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const children = (parent, name) => parent ? records.filter(
+    (record) => record.parent_call_id === parent.call_id && record.definition.name === name,
+  ) : [];
+  const [review] = children(root, "reviewAssignedAutomation");
+  const [plan] = children(review, "prepareAutomation");
+  const [classify] = children(plan, "classifyIntent");
+  const [control] = children(plan, "planControl");
+  const [resolve] = children(control, "resolveVisible");
+  const [choice] = children(control, "chooseControl");
+  const [handoff] = children(review, "checkHandoff");
+  const reads = children(review, "observePlanningState").sort(
+    (a, b) => Date.parse(a.started_at) - Date.parse(b.started_at),
+  );
+  const { revisionDigest: _revision, ...visible } = original;
+  const plannerInput = { goal: request.goal, timezone: request.timezone, now: request.now, visible: [visible], availableOperations: [] };
+  requireEvidence(
+    matchesValue(review?.inputs?.request, request) && matchesValue(review.output, report) &&
+      matchesValue(plan?.inputs?.request, plannerInput) && matchesValue(plan.output, report.plan) &&
+      matchesValue(classify?.inputs?.goal, request.goal) && matchesValue(classify.output, "control") &&
+      matchesValue(control?.inputs?.request, plannerInput) && matchesValue(control.output, report.plan) &&
+      matchesValue(resolve?.inputs?.visible, [visible]) &&
+      matchesValue(resolve.output, { kind: "found", automation: visible }) &&
+      matchesValue(choice?.inputs?.state, original.state) && matchesValue(choice.output, assignment.action) &&
+      matchesValue(handoff?.inputs?.plan, report.plan) &&
+      matchesValue(handoff.inputs?.before, before) && matchesValue(handoff.inputs?.after, after) &&
+      matchesValue(handoff.output, assignment.planning) &&
+      reads.length === 2 && records.flatMap(({ effects }) => effects ?? []).length === 2 &&
+      reads.every((read, index) => {
+        const expected = [before, after][index];
+        const effect = read.effects?.[0];
+        return matchesValue(read.inputs?.operationId, request.operationId) &&
+          matchesValue(read.output, expected) && read.effects?.length === 1 &&
+          effect?.service === "automationPlanning" && effect.method === "inspect" && !effect.error &&
+          matchesValue(effect.args, [request.operationId]) && matchesValue(effect.result, expected);
+      }) &&
+      Date.parse(reads[0].ended_at) <= Date.parse(plan.started_at) &&
+      Date.parse(plan.ended_at) <= Date.parse(reads[1].started_at) &&
+      Date.parse(reads[1].ended_at) <= Date.parse(handoff.started_at),
+    "Automation planning needs the nested planner and the readback taken after its decision",
+  );
+  return {
+    world: { context_id: fixture.contextId, seed_revision: original.revisionDigest, mission_id: original.id },
+    checks,
     evidence: { workspace: { fixture } },
   };
 }
