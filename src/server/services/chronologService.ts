@@ -209,7 +209,7 @@ export function createChronologService({
         resourceKey: input.group,
         resource: groupResource(input.group),
         title: "Share this workspace's published history",
-        summary: "Allow this group's current publishers to advance this workspace's shared history",
+        summary: "Allow this workspace to send and receive published history with this Chronolog group",
       })),
       [CHRONOLOG_PUBLISH_HISTORY_RESOLVER]: prepareWrite("history.publish", async (input) => ({
         resourceKey: input.group,
