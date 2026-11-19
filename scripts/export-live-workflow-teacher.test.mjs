@@ -96,6 +96,7 @@ test("authored template worlds flow into the collector without losing original s
         ],
       ],
       ["phone-setup-world", "phoneSetupUnavailable", null],
+      ["client-admission-worlds", "managedClientAdmissionWorlds", []],
       ["extension-release-worlds", "managedExtensionReleaseWorlds", []],
       ["authority-review-worlds", "managedAuthorityReviewWorlds", []],
       ["problem-draft-worlds", "managedProblemDraftWorlds", []],
@@ -2923,6 +2924,7 @@ test("workspace integration binds conflict source and verified state without bro
     [
       ["content-project-worlds", "export const contentProjectWorlds = [];"],
       ["phone-setup-world", "export const phoneSetupUnavailable = undefined;"],
+      ["client-admission-worlds", "export const managedClientAdmissionWorlds = [];"],
       ["extension-release-worlds", "export const managedExtensionReleaseWorlds = [];"],
       ["authority-review-worlds", "export const managedAuthorityReviewWorlds = [];"],
       ["problem-draft-worlds", "export const managedProblemDraftWorlds = [];"],
@@ -4213,4 +4215,131 @@ test("extension release export rejects treating a local manifest change as the a
       /approved runtime readback/u
     );
   }
+});
+
+test("client admission export rejects substituted host ABI evidence", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  const name = "client-admission-live-working-desktop-abi-incompatible";
+  const { assignment } = cases.get(name);
+  entry.test.name = name;
+  const { goal, source, host, runtime, workingAbi, publishedAbi, abi } = assignment;
+  const operationId = "client-review";
+  const request = { goal, operationId };
+  const working = {
+    hash: "working-manifest",
+    id: "browser",
+    runtime,
+    abi: workingAbi,
+    required: ["device-session"],
+    optional: ["notifications"],
+  };
+  const observation = {
+    operationId,
+    contextId: "ctx",
+    source,
+    workingRevision: "application:working-client",
+    mainRevision: "event:published-client",
+    working,
+    published: { ...working, hash: "published-manifest", abi: publishedAbi },
+    trusted: true,
+    host: {
+      kind: host,
+      runtimes: { [runtime]: publishedAbi },
+      capabilities: ["device-session"],
+      deviceLevel: ["device-session"],
+    },
+    catalog: {
+      source,
+      status: "ready",
+      effectiveVersion: "published-version",
+      activeBuildKey: "published-build",
+    },
+  };
+  const report = {
+    source: { observation, disposition: "working-change" },
+    host: {
+      abi,
+      capabilities: {
+        missingRequired: [],
+        untrustedRequired: [],
+        deniedOptional: ["notifications"],
+      },
+    },
+    decision: "resolve-abi",
+  };
+  diagnostics.managedClientAdmission = {
+    caseId: assignment.id,
+    contextId: "ctx",
+    request,
+    observation,
+    passed: true,
+    checks: { source: true, host: true, catalog: true, unchanged: true, report: true },
+  };
+  const ref = (value) => {
+    const text = JSON.stringify(value);
+    return {
+      complete: true,
+      hash: createHash("sha256").update(text).digest("hex"),
+      bytes: Buffer.byteLength(text),
+    };
+  };
+  const prototype = diagnostics.natlangTeacher.calls[0];
+  const call = (name, parent, inputs, output, effects = []) => ({
+    callId: name,
+    summary: { ...prototype.summary, call_id: name },
+    record: {
+      ...prototype.record,
+      call_id: name,
+      parent_call_id: parent,
+      definition: { name },
+      outcome: "done",
+      inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+      output: ref(output),
+      effects,
+    },
+  });
+  const read = call("readClient", "inspectSource", { operationId }, observation, [
+    {
+      service: "clientAdmissionRead",
+      method: "observe",
+      args: ref([operationId]),
+      result: ref(observation),
+    },
+  ]);
+  diagnostics.natlangTeacher = {
+    ...diagnostics.natlangTeacher,
+    programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+    rootCallIds: ["runWorkflow"],
+    report,
+    calls: [
+      call("runWorkflow", null, {}, null),
+      call("reviewClientAdmission", "runWorkflow", { request }, report),
+      call("inspectSource", "reviewClientAdmission", { operationId }, report.source),
+      read,
+      call("reviewHost", "reviewClientAdmission", { observation }, report.host),
+      call("checkAbi", "reviewHost", { observation }, abi),
+      call("checkCapabilities", "reviewHost", { observation }, report.host.capabilities),
+      call(
+        "chooseNext",
+        "reviewClientAdmission",
+        { source: report.source, host: report.host },
+        report.decision
+      ),
+    ],
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  read.record.effects[0].result = ref({
+    ...observation,
+    host: { ...observation.host, runtimes: { [runtime]: workingAbi } },
+  });
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases }),
+    /host contract and build catalog/u
+  );
 });

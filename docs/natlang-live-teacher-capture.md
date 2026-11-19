@@ -61,6 +61,7 @@ Live workflow collection executes the authored Natlang root against real caller-
 - `evalNatlang.ts` exposes `natlang.captureModelTurns({executorModel})` before the first Natlang call in the current eval run. Capture and executor selection reset for the next run. Ordinary runs retain no raw model contexts.
 - The gateway's Pi request context and original assistant response are retained only when capture is enabled. Original tool-call IDs are preserved alongside the normalized Natlang reply. Gateway attribution describes the authenticated transport caller; call-summary owner and run fields identify the eval owner.
 - The system-testing runner invokes `skills/vibestudio-workflows/runWorkflow.nl` in a seeded, caller-owned context. The shared lambda calls a typed skill tree with that scenario's assigned input and live service bindings. Panel repair uses real browser, VCS and build ports. Workspace integration uses actual conflict and decision history. Worker repair uses real compiler reports and the original manifest-declared workerd suite through Testbench. A finite EvalDO retains the run, skill calls and nested records before scope disposal.
+- Domain capture resolves every assigned callable on the loaded shared program before dispatch. The problem-draft, authority, extension, agentic-change and client-admission qualifications use the same selectors as teacher capture.
 - Training admission and effect verification consume these records separately. A live browser/workspace episode is observed evidence, not a claim that external effects can be exactly replayed as a portable fixture. The independent system-test oracle remains separate from the teacher's report.
 
 ## Use
@@ -205,6 +206,13 @@ roster follow-up. Recap waits for both assigned headless messages to be publishe
 then binds the interpretation to the latest user message's ID, sequence, and text.
 The exporter checks the nested calls and their exact readbacks. The model-free
 qualification is `gad-review-oracle-qualification`.
+
+Client admission cases run in the System template. They compare the assigned
+working and published client manifests, published trust and live build catalog
+with the selected platform's current contract. They cover a compatible terminal
+client, a mobile variant on the wrong runtime and a local incompatible ABI.
+Run `client-admission-oracle-qualification` for model-free verification. The
+workflow inspects the platform contract without launching a device client.
 
 Extension review cases reconcile the working and protected-main repository
 trees and manifests with the real host status and exposed methods. Two cases

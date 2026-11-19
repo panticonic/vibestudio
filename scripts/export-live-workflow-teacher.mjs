@@ -203,6 +203,14 @@ const terminalCheckWorkflow = {
   root: "runTerminalChecks",
   evidence: terminalCheckEvidence,
 };
+const clientAdmissionWorkflow = {
+  family: "system-live-client-admission",
+  namespace: "vibestudio:clientdev",
+  group: "published-client-and-host-abi",
+  validator: { template: "system", path: "skills/clientdev/managed-fixture.ts" },
+  root: "reviewClientAdmission",
+  evidence: clientAdmissionEvidence,
+};
 const extensionReleaseWorkflow = {
   family: "workspace-live-extension-release",
   workspace: "examples",
@@ -478,6 +486,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedSessionReplayWorlds = [] },
     { managedTestkitCleanupWorlds = [] },
     { phoneSetupUnavailable },
+    { managedClientAdmissionWorlds },
     { managedExtensionReleaseWorlds },
     { managedAuthorityReviewWorlds },
     { managedProblemDraftWorlds },
@@ -522,6 +531,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "session-replay-worlds.ts",
       "testkit-cleanup-worlds.ts",
       "phone-setup-world.ts",
+      "client-admission-worlds.ts",
       "extension-release-worlds.ts",
       "authority-review-worlds.ts",
       "problem-draft-worlds.ts",
@@ -561,6 +571,9 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of managedTerminalCheckWorlds) {
     cases.set(`terminal-check-live-${assignment.id}`, { ...terminalCheckWorkflow, assignment });
+  }
+  for (const assignment of managedClientAdmissionWorlds) {
+    cases.set(`client-admission-live-${assignment.id}`, { ...clientAdmissionWorkflow, assignment });
   }
   for (const assignment of managedExtensionReleaseWorlds) {
     cases.set(`extension-release-live-${assignment.id}`, {
@@ -2397,6 +2410,120 @@ function terminalCheckEvidence(execution, exercise, _scenario, workflow) {
   return {
     world: { context_id: contextId, process_checks: checks.map(({ id }) => id) },
     checks: { ...fixture.checks, exactExecutionTree: true },
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function clientAdmissionEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedClientAdmission;
+  const { caseId, contextId, request, observation, checks } = fixture ?? {};
+  const { id, goal, source, host, runtime, publishedAbi, workingAbi, abi } = workflow.assignment;
+  const report = exercise.report;
+  const calls = exercise.calls.map(({ record }) => record);
+  const child = (parent, name) =>
+    parent &&
+    calls.find((call) => call.parent_call_id === parent.call_id && call.definition.name === name);
+  const root = calls.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const review = child(root, "reviewClientAdmission");
+  const inspection = child(review, "inspectSource");
+  const read = child(inspection, "readClient");
+  const hostReview = child(review, "reviewHost");
+  const abiCheck = child(hostReview, "checkAbi");
+  const capsCheck = child(hostReview, "checkCapabilities");
+  const next = child(review, "chooseNext");
+  const [effect] = read?.effects ?? [];
+  const changed = publishedAbi !== workingAbi;
+  requireEvidence(
+    caseId === id &&
+      typeof contextId === "string" &&
+      contextId === execution.provenance?.contextId &&
+      fixture.passed === true &&
+      ["source", "host", "catalog", "unchanged", "report"].every((key) => checks?.[key] === true) &&
+      request?.goal === goal &&
+      typeof request.operationId === "string" &&
+      observation?.operationId === request.operationId &&
+      observation.contextId === contextId &&
+      observation.source === source &&
+      observation.working?.runtime === runtime &&
+      observation.published?.runtime === runtime &&
+      observation.working.abi === workingAbi &&
+      observation.published.abi === publishedAbi &&
+      typeof observation.working.hash === "string" &&
+      typeof observation.published.hash === "string" &&
+      (changed
+        ? observation.working.hash !== observation.published.hash &&
+          observation.workingRevision !== observation.mainRevision
+        : observation.working.hash === observation.published.hash) &&
+      observation.host?.kind === host &&
+      observation.trusted === true &&
+      observation.catalog?.source === source &&
+      ["available", "building", "ready", "approval-required", "error"].includes(
+        observation.catalog.status
+      ) &&
+      Array.isArray(observation.working.required) &&
+      Array.isArray(observation.working.optional) &&
+      Array.isArray(observation.host.capabilities) &&
+      calls.flatMap(({ effects }) => effects ?? []).length === 1 &&
+      matchesValue(review?.inputs?.request, request) &&
+      matchesValue(review.output, report) &&
+      matchesValue(read?.output, observation) &&
+      effect?.service === "clientAdmissionRead" &&
+      effect.method === "observe" &&
+      !effect.error &&
+      matchesValue(effect.args, [request.operationId]) &&
+      matchesValue(effect.result, observation) &&
+      isDeepStrictEqual(report?.source?.observation, observation) &&
+      report.source.disposition === (changed ? "working-change" : "published-contract"),
+    "Client admission must preserve the exact working and published manifests, host contract and build catalog"
+  );
+  const installedAbi = observation.host.runtimes?.[runtime];
+  const observedAbi = installedAbi
+    ? installedAbi === workingAbi
+      ? "compatible"
+      : "wrong-abi"
+    : "wrong-runtime";
+  const { working, catalog } = observation;
+  const supported = new Set(observation.host.capabilities);
+  const missingRequired = working.required.filter((capability) => !supported.has(capability));
+  const deniedOptional = working.optional.filter((capability) => !supported.has(capability));
+  const capabilities = { missingRequired, deniedOptional, untrustedRequired: [] };
+  const decision =
+    abi === "wrong-runtime"
+      ? "match-runtime"
+      : abi === "wrong-abi"
+        ? "resolve-abi"
+        : missingRequired.length
+          ? "resolve-required-capabilities"
+          : changed
+            ? "review-candidate"
+            : {
+                available: "await-build",
+                building: "await-build",
+                ready: "reviewed-ready",
+                "approval-required": "await-approval",
+                error: "inspect-build",
+              }[catalog.status];
+  requireEvidence(
+    observedAbi === abi &&
+      report.host?.abi === abi &&
+      isDeepStrictEqual(report.host.capabilities, capabilities) &&
+      report.decision === decision &&
+      matchesValue(inspection?.inputs?.operationId, request.operationId) &&
+      matchesValue(inspection.output, report.source) &&
+      matchesValue(hostReview?.inputs?.observation, observation) &&
+      matchesValue(hostReview.output, report.host) &&
+      matchesValue(abiCheck?.inputs?.observation, observation) &&
+      matchesValue(abiCheck.output, abi) &&
+      matchesValue(capsCheck?.inputs?.observation, observation) &&
+      matchesValue(capsCheck.output, report.host.capabilities) &&
+      matchesValue(next?.inputs?.source, report.source) &&
+      matchesValue(next.inputs.host, report.host) &&
+      matchesValue(next.output, decision),
+    "Client admission needs the exact host compatibility and capability decisions"
+  );
+  return {
+    world: { context_id: contextId, source, host, abi: workingAbi },
+    checks,
     evidence: { workspace: { fixture } },
   };
 }
