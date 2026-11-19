@@ -214,6 +214,11 @@ client, a mobile variant on the wrong runtime and a local incompatible ABI.
 Run `client-admission-oracle-qualification` for model-free verification. The
 workflow inspects the platform contract without launching a device client.
 
+Offline dictation review observes the installed local speech worker and checks
+the caller's assigned recording. The managed cases cover absent audio, a
+sample outside the normalized range, and a 31-second multi-window recording.
+Run `offline-dictation-oracle-qualification` for the live readiness check.
+
 Declared test-suite review resolves the manifest route in the assigned
 context. The cases cover native declaration inspection, a focused native
 adapter child-process check, and a workerd suite. Both execution cases use the ordinary

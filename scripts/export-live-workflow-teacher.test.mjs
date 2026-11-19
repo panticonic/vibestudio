@@ -97,6 +97,7 @@ test("authored template worlds flow into the collector without losing original s
       ],
       ["phone-setup-world", "phoneSetupUnavailable", null],
       ["client-admission-worlds", "managedClientAdmissionWorlds", []],
+      ["offline-dictation-worlds", "managedDictationWorlds", []],
       ["native-suite-worlds", "managedNativeSuiteWorlds", []],
       ["git-bridge-review-worlds", "managedGitBridgeReviewWorlds", []],
       ["vcs-delivery-worlds", "managedVcsDeliveryWorlds", []],
@@ -2931,6 +2932,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["content-project-worlds", "export const contentProjectWorlds = [];"],
       ["phone-setup-world", "export const phoneSetupUnavailable = undefined;"],
       ["client-admission-worlds", "export const managedClientAdmissionWorlds = [];"],
+      ["offline-dictation-worlds", "export const managedDictationWorlds = [];"],
       ["native-suite-worlds", "export const managedNativeSuiteWorlds = [];"],
       ["git-bridge-review-worlds", "export const managedGitBridgeReviewWorlds = [];"],
       ["vcs-delivery-worlds", "export const managedVcsDeliveryWorlds = [];"],
@@ -5218,5 +5220,95 @@ test("declared-suite export binds a focused verification to the observed runtime
   await assert.rejects(
     exportLiveTeacherWorkflow({ ...options, cases }),
     /exact execution receipt/u
+  );
+});
+
+test("dictation export preserves measured audio and the live worker decision", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  const name = "offline-dictation-live-multi-window-readiness";
+  const { assignment } = cases.get(name);
+  const pins = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(options.pins, JSON.stringify({ ...pins, workspace: "examples" }));
+  entry.test.name = name;
+  const { goal, recording, durationMs, windowed } = assignment;
+  const request = {
+    goal,
+    mode: "inspect",
+    presentation: "verbatim",
+    operationId: "assigned-dictation",
+  };
+  const capture = { ready: false, recording, durationMs, windowed };
+  const review = {
+    next: "prepare-local-worker",
+    guidance: "Prepare the local worker for this multi-window recording.",
+  };
+  const report = { capture, review, transcript: null, draft: null };
+  diagnostics.managedDictation = {
+    caseId: assignment.id,
+    contextId: "ctx",
+    request,
+    passed: true,
+    observed: capture,
+    checks: { liveWorker: true, recording: true, report: true },
+  };
+  const ref = (value) => {
+    const text = JSON.stringify(value);
+    return {
+      complete: true,
+      hash: createHash("sha256").update(text).digest("hex"),
+      bytes: Buffer.byteLength(text),
+    };
+  };
+  const prototype = diagnostics.natlangTeacher.calls[0];
+  const call = (name, parent, inputs, output, effects = []) => ({
+    callId: name,
+    summary: { ...prototype.summary, call_id: name },
+    record: {
+      ...prototype.record,
+      call_id: name,
+      parent_call_id: parent,
+      definition: { name },
+      outcome: "done",
+      inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+      output: ref(output),
+      effects,
+    },
+  });
+  const inspected = {
+    service: "dictationCaptureRead",
+    method: "inspect",
+    args: ref([request.operationId]),
+    result: ref(capture),
+  };
+  const readiness = call(
+    "chooseReadiness",
+    "reviewCapture",
+    { capture, mode: "inspect" },
+    review.next
+  );
+  diagnostics.natlangTeacher = {
+    ...diagnostics.natlangTeacher,
+    programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+    rootCallIds: ["runWorkflow"],
+    report,
+    calls: [
+      call("runWorkflow", null, {}, null),
+      call("reviewDictation", "runWorkflow", { request }, report, [inspected]),
+      call("reviewCapture", "reviewDictation", { capture, mode: "inspect" }, review),
+      call("reviewRecording", "reviewCapture", { capture }, review.guidance),
+      readiness,
+    ],
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  readiness.record.output = ref("transcribe");
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases }),
+    /nested capture and readiness/u
   );
 });

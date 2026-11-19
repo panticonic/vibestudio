@@ -211,6 +211,18 @@ const clientAdmissionWorkflow = {
   root: "reviewClientAdmission",
   evidence: clientAdmissionEvidence,
 };
+const dictationWorkflow = {
+  family: "workspace-live-offline-dictation",
+  workspace: "examples",
+  namespace: "vibestudio:offline-dictation",
+  group: "capture-admission-and-local-worker-readiness",
+  validator: {
+    template: "system-testing",
+    path: "skills/system-testing/offline-dictation-managed.ts",
+  },
+  root: "reviewDictation",
+  evidence: dictationEvidence,
+};
 const nativeSuiteWorkflow = {
   family: "workspace-live-declared-test-suite",
   workspace: "examples",
@@ -549,6 +561,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedTestkitCleanupWorlds = [] },
     { phoneSetupUnavailable },
     { managedClientAdmissionWorlds },
+    { managedDictationWorlds },
     { managedNativeSuiteWorlds },
     { managedGitBridgeReviewWorlds },
     { deliveryRepository, managedVcsDeliveryWorlds },
@@ -600,6 +613,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "testkit-cleanup-worlds.ts",
       "phone-setup-world.ts",
       "client-admission-worlds.ts",
+      "offline-dictation-worlds.ts",
       "native-suite-worlds.ts",
       "git-bridge-review-worlds.ts",
       "vcs-delivery-worlds.ts",
@@ -648,6 +662,9 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of managedClientAdmissionWorlds) {
     cases.set(`client-admission-live-${assignment.id}`, { ...clientAdmissionWorkflow, assignment });
+  }
+  for (const assignment of managedDictationWorlds) {
+    cases.set(`offline-dictation-live-${assignment.id}`, { ...dictationWorkflow, assignment });
   }
   for (const assignment of managedNativeSuiteWorlds) {
     cases.set(`native-suite-live-${assignment.id}`, { ...nativeSuiteWorkflow, assignment });
@@ -2641,6 +2658,80 @@ function clientAdmissionEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: contextId, source, host, abi: workingAbi },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function dictationEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedDictation;
+  const { caseId, contextId, request, observed, checks } = fixture ?? {};
+  const { id, goal, recording, durationMs, windowed } = workflow.assignment;
+  const report = exercise.report;
+  const records = exercise.calls.map(({ record }) => record);
+  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const child = (parent, name) =>
+    parent &&
+    records.find(
+      (record) => record.parent_call_id === parent.call_id && record.definition.name === name
+    );
+  const review = child(root, "reviewDictation");
+  const capture = child(review, "reviewCapture");
+  const condition = child(capture, "reviewRecording");
+  const readiness = child(capture, "chooseReadiness");
+  const effects = records.flatMap(({ effects }) => effects ?? []);
+  const inspected = review?.effects?.[0];
+  requireEvidence(
+    fixture?.passed === true &&
+      caseId === id &&
+      contextId === execution.provenance?.contextId &&
+      typeof contextId === "string" &&
+      request?.goal === goal &&
+      request.mode === "inspect" &&
+      request.presentation === "verbatim" &&
+      typeof request.operationId === "string" &&
+      request.operationId.length > 0 &&
+      ["liveWorker", "recording", "report"].every((key) => checks?.[key] === true) &&
+      typeof observed?.ready === "boolean" &&
+      observed.recording === recording &&
+      observed.durationMs === durationMs &&
+      observed.windowed === windowed &&
+      isDeepStrictEqual(observed, report?.capture) &&
+      matchesValue(review?.inputs?.request, request) &&
+      matchesValue(review.output, report) &&
+      effects.length === 1 &&
+      inspected?.service === "dictationCaptureRead" &&
+      inspected.method === "inspect" &&
+      !inspected.error &&
+      matchesValue(inspected.args, [request.operationId]) &&
+      matchesValue(inspected.result, observed),
+    "Dictation review requires the live worker status and exact recording measurements"
+  );
+  const next =
+    recording === "absent"
+      ? "supply-recording"
+      : recording !== "valid"
+        ? "repair-recording"
+        : observed.ready
+          ? "ready"
+          : "prepare-local-worker";
+  requireEvidence(
+    report.review?.next === next &&
+      typeof report.review.guidance === "string" &&
+      report.review.guidance.trim() &&
+      report.draft === null &&
+      report.transcript === null &&
+      matchesValue(capture?.inputs?.capture, observed) &&
+      matchesValue(capture.inputs.mode, "inspect") &&
+      matchesValue(capture.output, report.review) &&
+      matchesValue(condition?.inputs?.capture, observed) &&
+      matchesValue(readiness?.inputs?.capture, observed) &&
+      matchesValue(readiness.inputs.mode, "inspect") &&
+      matchesValue(readiness.output, next),
+    "Dictation review requires the nested capture and readiness decision"
+  );
+  return {
+    world: { context_id: contextId, recording, duration_ms: durationMs },
     checks,
     evidence: { workspace: { fixture } },
   };
