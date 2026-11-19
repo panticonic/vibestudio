@@ -1296,7 +1296,9 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
             : spec,
         key,
         contextId,
-        ...(sourceContextId
+        // A storage fork can be provisioning the participant work cell itself.
+        // Its source selection must not open that same work cell.
+        ...(sourceContextId && !cloneSource
           ? { sourceAuthority: { caller: actors.initiatingCaller, contextId: sourceContextId } }
           : {}),
         ...(existing?.activeBuildKey ? { existingBuildKey: existing.activeBuildKey } : {}),
