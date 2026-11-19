@@ -3,6 +3,7 @@ import { compareUtf16CodeUnits, sha256HexSyncText } from "@vibestudio/content-ad
 import {
   vcsBlameResultSchema,
   vcsCompareResultSchema,
+  vcsHistoryResultSchema,
   vcsInspectResultSchema,
   vcsListDirectoryResultSchema,
   vcsListFilesResultSchema,
@@ -18,6 +19,7 @@ import {
   type VcsCopyInput,
   type VcsDiscardInput,
   type VcsEditInput,
+  type VcsHistoryInput,
   type VcsInspectInput,
   type VcsListDirectoryInput,
   type VcsListFilesInput,
@@ -245,6 +247,23 @@ export async function readWorkspaceParticipantBlame(input: WorkspaceHistoryParti
     if (span.start < last || span.end > blame.range.end)
       throw new Error("Workspace history returned content lineage outside the requested range");
     last = span.end;
+  }
+  return result;
+}
+
+export async function readWorkspaceParticipantHistory(input: WorkspaceHistoryParticipant & {
+  contextId: string;
+  history: VcsHistoryInput;
+}) {
+  requireWorkspaceParticipantOwner(input);
+  const { dispatch, owner, contextId, history } = input;
+  const result = vcsHistoryResultSchema.parse(
+    await dispatch.dispatch(owner, "readHistoryTimeline", { contextId, history }),
+  );
+  if (canonicalJson(result.root) !== canonicalJson(history.root) ||
+      result.entries.length > history.limit ||
+      (history.root.kind === "event" && result.entries.some(({ node }) => node.kind !== "event"))) {
+    throw new Error("Workspace history returned a different timeline");
   }
   return result;
 }

@@ -41,6 +41,7 @@ import {
   inspectWorkspaceParticipantProvenance,
   readWorkspaceParticipantBlame,
   readWorkspaceParticipantFileDescriptors,
+  readWorkspaceParticipantHistory,
   readWorkspaceParticipantNeighbors,
   readWorkspaceParticipantStatus,
   workspaceParticipantCatalog,
@@ -361,6 +362,11 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
         return readWorkspaceParticipantBlame({
           ...scope,
           blame: vcsMethods.blame.args.parse([input])[0],
+        });
+      case "history":
+        return readWorkspaceParticipantHistory({
+          ...scope,
+          history: vcsMethods.history.args.parse([input])[0],
         });
       case "compare":
         return workspace.reviewParticipantMerge({

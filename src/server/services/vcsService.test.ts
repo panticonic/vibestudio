@@ -259,6 +259,11 @@ describe("canonical vcsService", () => {
     dispatch.mockResolvedValueOnce(true).mockResolvedValueOnce(lineage);
     await expect(definition.handler(ctx, "blame", [blame])).resolves.toEqual(lineage);
     expect(dispatch).toHaveBeenCalledWith(owner, "readHistoryBlame", { contextId: scope.contextId, blame });
+    const history = { root: EVENT, direction: "past", limit: 2 };
+    const timeline = { root: EVENT, entries: [], nextCursor: null };
+    dispatch.mockResolvedValueOnce(true).mockResolvedValueOnce(timeline);
+    await expect(definition.handler(ctx, "history", [history])).resolves.toEqual(timeline);
+    expect(dispatch).toHaveBeenCalledWith(owner, "readHistoryTimeline", { contextId: scope.contextId, history });
 
     const discard = {
       contextId: scope.contextId,
