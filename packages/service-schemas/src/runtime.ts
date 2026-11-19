@@ -4,6 +4,7 @@ import type { ContextCloneResult } from "@vibestudio/shared/runtime/contextEdges
  */
 
 import { z } from "zod";
+import { ByteArraySchema } from "@vibestudio/shared/binary";
 import { JsonObjectSchema } from "@vibestudio/shared/wireValues";
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import type {
@@ -837,9 +838,9 @@ export const runtimeMethods = defineServiceMethods({
     description: "Forward an exact native history packet for an active host-approved workspace transfer.",
     args: z.tuple([z.object({
       transferId: z.string().uuid(),
-      bytes: z.instanceof(Uint8Array),
+      bytes: ByteArraySchema,
     }).strict()]),
-    returns: z.instanceof(Uint8Array),
+    returns: ByteArraySchema,
     authority: { principals: ["code"] },
     website: { kind: "closed", reason: "Only the host-selected workspace history cell can send packets." },
     tier: {
