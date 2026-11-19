@@ -97,6 +97,7 @@ test("authored template worlds flow into the collector without losing original s
       ],
       ["phone-setup-world", "phoneSetupUnavailable", null],
       ["client-admission-worlds", "managedClientAdmissionWorlds", []],
+      ["log-cursor-worlds", "managedLogCursorWorlds", []],
       ["eval-recovery-worlds", "managedEvalRecoveryWorlds", []],
       ["pdf-layout-worlds", "managedPdfLayoutWorlds", []],
       ["offline-dictation-worlds", "managedDictationWorlds", []],
@@ -2934,6 +2935,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["content-project-worlds", "export const contentProjectWorlds = [];"],
       ["phone-setup-world", "export const phoneSetupUnavailable = undefined;"],
       ["client-admission-worlds", "export const managedClientAdmissionWorlds = [];"],
+      ["log-cursor-worlds", "export const managedLogCursorWorlds = [];"],
       ["eval-recovery-worlds", "export const managedEvalRecoveryWorlds = [];"],
       ["pdf-layout-worlds", "export const managedPdfLayoutWorlds = [];"],
       ["offline-dictation-worlds", "export const managedDictationWorlds = [];"],
@@ -5515,4 +5517,122 @@ test("eval recovery export requires the original failed cell and its independent
   read.args = ref([request.operationId, "b".repeat(64)]);
   await save();
   await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /exact effect readback/u);
+});
+
+test("log cursor export rejects a sequence past the bounded live read", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  const name = "log-cursor-live-resume-one-repeated-failure";
+  const { assignment } = cases.get(name);
+  const pins = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(options.pins, JSON.stringify({ ...pins, workspace: "system" }));
+  entry.test.name = name;
+  const request = { goal: assignment.goal, operationId: "assigned-log-cursor" };
+  const seed = { marker: "owned-log", boot: "system-boot-1", start: 50, steps: [52, 54] };
+  const records = seed.steps.map((seq, i) => ({
+    seq,
+    timestamp: 123 + i,
+    level: "warn",
+    pid: 7,
+    tag: "WorkerdManager",
+    message: seed.marker + " " + assignment.lines[i],
+  }));
+  const observed = {
+    saved: { serverBootId: seed.boot, seq: seed.start },
+    liveBoot: seed.boot,
+    oldestSeq: 1,
+    latestSeq: 60,
+    throughSeq: 54,
+    overflow: false,
+    snapshot: { serverBootId: seed.boot, latestSeq: 54, totalCaptured: 60, records },
+  };
+  const decision = {
+    status: "review-window",
+    reason: "The existing boot still retains the assigned range.",
+  };
+  const finding = {
+    class: "failure",
+    count: 2,
+    firstSeq: 52,
+    lastSeq: 54,
+    tag: "WorkerdManager",
+    message: records[0].message,
+  };
+  const brief = {
+    serverBootId: seed.boot,
+    latestSeq: 54,
+    window: { fromSeq: 52, toSeq: 54, records: 2 },
+    status: "incident",
+    headline: "One repeated failure",
+    findings: [finding],
+  };
+  const report = {
+    liveBoot: seed.boot,
+    latestSeq: 60,
+    decision,
+    brief,
+    next: { serverBootId: seed.boot, seq: 54 },
+  };
+  diagnostics.managedLogCursor = {
+    caseId: assignment.id,
+    contextId: "ctx",
+    request,
+    passed: true,
+    observed,
+    seed,
+    checks: { cursor: true, raw: true, outcome: true, brief: true },
+  };
+  const ref = (value) => {
+    const text = JSON.stringify(value);
+    return {
+      complete: true,
+      hash: createHash("sha256").update(text).digest("hex"),
+      bytes: Buffer.byteLength(text),
+    };
+  };
+  const prototype = diagnostics.natlangTeacher.calls[0];
+  const call = (name, parent, inputs, output, effects = []) => ({
+    callId: name,
+    summary: { ...prototype.summary, call_id: name },
+    record: {
+      ...prototype.record,
+      call_id: name,
+      parent_call_id: parent,
+      definition: { name },
+      outcome: "done",
+      inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+      output: ref(output),
+      effects,
+    },
+  });
+  const read = {
+    service: "serverLogCursor",
+    method: "observe",
+    args: ref([request.operationId]),
+    result: ref(observed),
+  };
+  const review = call("reviewLogCursor", "runWorkflow", { request }, report, [read]);
+  diagnostics.natlangTeacher = {
+    ...diagnostics.natlangTeacher,
+    programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+    rootCallIds: ["runWorkflow"],
+    report,
+    calls: [
+      call("runWorkflow", null, {}, null),
+      review,
+      call("checkCursor", "reviewLogCursor", { window: observed }, decision),
+      call("compareBoot", "checkCursor", {}, "same"),
+      call("checkCoverage", "checkCursor", {}, decision),
+      call("classifyHostLogGroup", "reviewLogCursor", { group: finding }, "failure"),
+    ],
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  report.next.seq = 60;
+  review.record.output = ref(report);
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /exact covered records/u);
 });

@@ -214,6 +214,12 @@ client, a mobile variant on the wrong runtime and a local incompatible ABI.
 Run `client-admission-oracle-qualification` for model-free verification. The
 workflow inspects the platform contract without launching a device client.
 
+Saved log cursor review runs in the System template. It checks the observed
+boot and retained sequence before classifying a bounded window with the
+server-log skill. The cases cover a repeated failure, an earlier boot, and
+an overflowed window. Run `log-cursor-oracle-qualification` for the live
+model-free check.
+
 Eval recovery reviews a finite EvalDO result and its native journal. The
 cases cover an effect completed before a later exception, a journal-only
 confirmation, and a success-looking value with an absent store. The binding

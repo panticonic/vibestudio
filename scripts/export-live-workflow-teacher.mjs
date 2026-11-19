@@ -211,6 +211,15 @@ const clientAdmissionWorkflow = {
   root: "reviewClientAdmission",
   evidence: clientAdmissionEvidence,
 };
+const logCursorWorkflow = {
+  family: "system-live-saved-log-cursor",
+  workspace: "system",
+  namespace: "vibestudio:server-logs",
+  group: "bounded-resume-across-host-log-boots",
+  validator: { template: "system-testing", path: "skills/system-testing/log-cursor-managed.ts" },
+  root: "reviewLogCursor",
+  evidence: logCursorEvidence,
+};
 const evalRecoveryWorkflow = {
   family: "workspace-live-eval-recovery",
   workspace: "examples",
@@ -579,6 +588,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedTestkitCleanupWorlds = [] },
     { phoneSetupUnavailable },
     { managedClientAdmissionWorlds },
+    { managedLogCursorWorlds },
     { managedEvalRecoveryWorlds },
     { managedPdfLayoutWorlds },
     { managedDictationWorlds },
@@ -633,6 +643,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "testkit-cleanup-worlds.ts",
       "phone-setup-world.ts",
       "client-admission-worlds.ts",
+      "log-cursor-worlds.ts",
       "eval-recovery-worlds.ts",
       "pdf-layout-worlds.ts",
       "offline-dictation-worlds.ts",
@@ -684,6 +695,9 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of managedClientAdmissionWorlds) {
     cases.set(`client-admission-live-${assignment.id}`, { ...clientAdmissionWorkflow, assignment });
+  }
+  for (const assignment of managedLogCursorWorlds) {
+    cases.set(`log-cursor-live-${assignment.id}`, { ...logCursorWorkflow, assignment });
   }
   for (const assignment of managedEvalRecoveryWorlds) {
     cases.set(`eval-recovery-live-${assignment.id}`, { ...evalRecoveryWorkflow, assignment });
@@ -2686,6 +2700,123 @@ function clientAdmissionEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: contextId, source, host, abi: workingAbi },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function logCursorEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedLogCursor;
+  const { caseId, contextId, request, observed, seed, checks } = fixture ?? {};
+  const { id, goal, kind, lines } = workflow.assignment;
+  const report = exercise.report;
+  const records = exercise.calls.map(({ record }) => record);
+  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const child = (parent, name) =>
+    parent &&
+    records.find(
+      (record) => record.parent_call_id === parent.call_id && record.definition.name === name
+    );
+  const review = child(root, "reviewLogCursor");
+  const cursor = child(review, "checkCursor");
+  const boot = child(cursor, "compareBoot");
+  const coverage = child(cursor, "checkCoverage");
+  const classifications = records.filter(
+    ({ definition }) => definition.name === "classifyHostLogGroup"
+  );
+  const effects = records.flatMap(({ effects }) => effects ?? []);
+  const effect = review?.effects?.[0];
+  requireEvidence(
+    fixture?.passed === true &&
+      caseId === id &&
+      contextId === execution.provenance?.contextId &&
+      typeof contextId === "string" &&
+      request?.goal === goal &&
+      typeof request.operationId === "string" &&
+      request.operationId.length > 0 &&
+      ["cursor", "raw", "outcome", "brief"].every((key) => checks?.[key] === true) &&
+      typeof seed?.boot === "string" &&
+      typeof seed.marker === "string" &&
+      Number.isSafeInteger(seed.start) &&
+      Array.isArray(seed.steps) &&
+      seed.steps.length === lines.length &&
+      seed.steps.every(
+        (seq, i) => Number.isSafeInteger(seq) && seq > (seed.steps[i - 1] ?? seed.start)
+      ) &&
+      observed?.liveBoot === seed.boot &&
+      observed.throughSeq === seed.steps.at(-1) &&
+      observed.latestSeq >= observed.throughSeq &&
+      observed.saved?.seq === seed.start &&
+      observed.saved.serverBootId ===
+        (kind === "reset-for-new-boot" ? "previous:" + seed.boot : seed.boot) &&
+      observed.overflow === (kind === "narrow-window") &&
+      matchesValue(review?.inputs?.request, request) &&
+      matchesValue(review.output, report) &&
+      effects.length === 1 &&
+      effect?.service === "serverLogCursor" &&
+      effect.method === "observe" &&
+      !effect.error &&
+      matchesValue(effect.args, [request.operationId]) &&
+      matchesValue(effect.result, observed),
+    "Log cursor review requires the exact saved cursor and actual live boot observation"
+  );
+
+  requireEvidence(
+    report?.decision?.status === kind &&
+      typeof report.decision.reason === "string" &&
+      report.decision.reason.trim() &&
+      report.liveBoot === seed.boot &&
+      report.latestSeq === observed.latestSeq &&
+      matchesValue(cursor?.inputs?.window, observed) &&
+      matchesValue(cursor.output, report.decision) &&
+      matchesValue(boot?.output, kind === "reset-for-new-boot" ? "changed" : "same") &&
+      (kind === "reset-for-new-boot" ? !coverage : matchesValue(coverage?.output, report.decision)),
+    "Log cursor review needs the nested boot and coverage decision"
+  );
+  const snapshot = observed.snapshot;
+  const last = seed.steps.at(-1);
+  const first = seed.steps[0];
+  requireEvidence(
+    kind !== "review-window"
+      ? snapshot === null &&
+          report.next === null &&
+          report.brief === null &&
+          classifications.length === 0
+      : snapshot?.serverBootId === seed.boot &&
+          snapshot.latestSeq === last &&
+          Array.isArray(snapshot.records) &&
+          isDeepStrictEqual(
+            snapshot.records.map(({ seq }) => seq),
+            seed.steps
+          ) &&
+          snapshot.records.every(
+            ({ tag, message }, i) =>
+              tag === "WorkerdManager" &&
+              typeof message === "string" &&
+              message.includes(seed.marker + " " + lines[i])
+          ) &&
+          isDeepStrictEqual(report.next, { serverBootId: seed.boot, seq: last }) &&
+          report.brief?.serverBootId === seed.boot &&
+          report.brief.latestSeq === last &&
+          report.brief.status === "incident" &&
+          isDeepStrictEqual(report.brief.window, {
+            fromSeq: first,
+            toSeq: last,
+            records: seed.steps.length,
+          }) &&
+          report.brief.findings?.length === 1 &&
+          report.brief.findings[0].class === "failure" &&
+          report.brief.findings[0].count === seed.steps.length &&
+          report.brief.findings[0].firstSeq === first &&
+          report.brief.findings[0].lastSeq === last &&
+          report.brief.findings[0].tag === "WorkerdManager" &&
+          report.brief.findings[0].message === snapshot.records[0].message.slice(0, 300) &&
+          classifications.length === 1 &&
+          matchesValue(classifications[0].output, "failure"),
+    "Log cursor review must keep held cursors unchanged and cite the exact covered records"
+  );
+  return {
+    world: { context_id: contextId, server_boot_id: seed.boot, through_seq: last },
     checks,
     evidence: { workspace: { fixture } },
   };
