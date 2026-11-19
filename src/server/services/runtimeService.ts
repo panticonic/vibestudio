@@ -1276,20 +1276,24 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         ? await store.resolveWorkContext(actors.initiatingCaller.runtime.id)
         : null;
     let prepared: PreparedIncarnation;
-    if (cloneSource && existing?.activeBuildKey) {
+    const inheritForkExecutable = cloneSource && spec.kind === "do" && spec.forkStorage && spec.execution.ref === undefined;
+    const sealedExecutable = cloneSource && existing?.activeBuildKey ? existing
+      : inheritForkExecutable ? cloneSource : undefined;
+    if (sealedExecutable) {
+      if (!sealedExecutable.activeBuildKey) throw new Error(`Clone ${canonicalId} has no sealed build`);
       const identity = requireActiveExecutionIdentity(
         {
-          executionDigest: existing.activeExecutionDigest,
-          authority: existing.activeAuthority,
+          executionDigest: sealedExecutable.activeExecutionDigest,
+          authority: sealedExecutable.activeAuthority,
         },
         `Clone preparation ${canonicalId}`
       );
-      await deps.hooks.recoverExactExecution(existing);
+      if (sealedExecutable === existing) await deps.hooks.recoverExactExecution(existing);
       prepared = {
         surface: "code",
         target: { id: canonicalId },
-        effectiveVersion: existing.source.effectiveVersion,
-        buildKey: existing.activeBuildKey,
+        effectiveVersion: sealedExecutable.source.effectiveVersion,
+        buildKey: sealedExecutable.activeBuildKey,
         executionDigest: identity.activeExecutionDigest,
         authority: identity.activeAuthority,
       };
@@ -1414,6 +1418,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       if (!sealed.authoritySessionId) {
         throw new Error(`Preparing clone ${canonicalId} has no authority lifecycle`);
       }
+      if (sealedExecutable === cloneSource) await deps.hooks.recoverExactExecution(sealed);
       await deps.hooks.initializeDurableClone({
         provenance: sealed.cloneProvenance!,
         source: {

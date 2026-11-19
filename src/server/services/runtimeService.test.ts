@@ -4002,7 +4002,7 @@ describe("runtimeService.cloneContext", () => {
   });
 
   it("lets an entity fork its own storage into a new entity of its class, at a commit, and refuses any other fork", async () => {
-    const { service, instance, cloneDurableStorage } = await buildDeps();
+    const { service, instance, cloneDurableStorage, recoverExactExecution } = await buildDeps();
     const parent = await seedDO(service, "ctx-self-fork", "parent");
     const caller = createVerifiedCaller(parent.id, "do");
     const child = (await service.handler({ caller }, "createEntity", [
@@ -4031,6 +4031,11 @@ describe("runtimeService.cloneContext", () => {
       })
     );
     expect(instance.entityResolve(child.id)?.cloneProvenance?.storage).toBe("snapshot");
+    expect(recoverExactExecution).toHaveBeenCalledWith(expect.objectContaining({
+      id: child.id, status: "preparing",
+      activeBuildKey: instance.entityResolve(parent.id)?.activeBuildKey,
+      activeExecutionDigest: instance.entityResolve(parent.id)?.activeExecutionDigest,
+    }));
     // Another class is not the caller's own: no entity reads another's storage through this.
     await expect(
       service.handler({ caller }, "createEntity", [
