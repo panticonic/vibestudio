@@ -10,6 +10,12 @@ The command reads source and makes no model calls. Managed-workspace cases have 
 Scoped-fixture cases use authored observations shaped by the owning template's Vibestudio contracts and have independent verifiers in that template.
 They are not recorded live effects or training examples.
 
+Use `pnpm natlang:tasks --coverage` to inspect the tracked skill documents, local
+Natlang sources, mounted callables, and managed and scoped case counts for each
+callable. Ambiguous or unresolved assignments are listed with their possible
+sources. The report shows source relationships. A co-located program or case
+does not establish that every procedure in a skill is implemented or tested.
+
 The scale target uses the baseline of 316 entries in the managed system-test catalog at System-testing revision
 `eb8cc7f`. The resulting target is at least 632 independently authored cases. The baseline includes explicit-only and
 qualification cases so it remains conservative and does not rise when new authored cases are registered.

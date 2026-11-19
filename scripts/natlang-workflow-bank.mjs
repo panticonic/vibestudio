@@ -5,6 +5,7 @@ import { parseArgs } from "node:util";
 import { requireDevelopmentTemplateCheckouts } from "../src/dev/developmentTemplateConfig.cjs";
 import { loadLiveTeacherCases, workflowSourceGroups } from "./export-live-workflow-teacher.mjs";
 import { hasScopedWorkflowAdapter } from "./scoped-workflow-adapters.mjs";
+import { inspectWorkflowCoverage } from "./natlang-workflow-coverage.mjs";
 
 const program = "skills/vibestudio-workflows/runWorkflow.nl";
 
@@ -333,6 +334,7 @@ async function loadAuthoredWorkflowBank(checkouts) {
         family: workflow.family,
         execution: "managed-workspace",
         workspace: workflow.workspace ?? "system",
+        operations: workflow.skills ?? [workflow.root],
         sourceGroups: workflowSourceGroups(workflow),
         program,
       },
@@ -363,9 +365,14 @@ if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === imp
   const raw = process.argv.slice(2);
   const { values } = parseArgs({
     args: raw[0] === "--" ? raw.slice(1) : raw,
-    options: { summary: { type: "boolean" }, case: { type: "string" } },
+    options: {
+      summary: { type: "boolean" },
+      coverage: { type: "boolean" },
+      case: { type: "string" },
+    },
   });
-  if (values.summary && values.case) throw new Error("Choose --summary or --case ID");
+  if ([values.summary, values.coverage, values.case].filter(Boolean).length > 1)
+    throw new Error("Choose --summary, --coverage, or --case ID");
   const { checkouts } = requireDevelopmentTemplateCheckouts(
     path.resolve(import.meta.dirname, "..")
   );
@@ -374,6 +381,8 @@ if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === imp
     const found = cases.find(({ id }) => id === values.case);
     if (!found) throw new Error(`Unknown Vibestudio workflow case ${values.case}`);
     console.log(JSON.stringify(found, null, 2));
+  } else if (values.coverage) {
+    console.log(JSON.stringify(await inspectWorkflowCoverage(checkouts, cases), null, 2));
   } else if (values.summary) {
     const counts = {};
     for (const { execution, family } of cases) {
