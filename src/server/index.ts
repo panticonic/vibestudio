@@ -46,6 +46,7 @@ import {
   createHostCaller,
   createVerifiedCaller,
   verifiedInitiator,
+  type VerifiedCaller,
   type VerifiedCodeIdentity,
 } from "@vibestudio/shared/serviceDispatcher";
 import {
@@ -121,7 +122,7 @@ import {
 import { sameWorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 import { readWorkspaceSources } from "@vibestudio/workspace/workspaceSources";
 import { productBuiltinDirectAuthority } from "./services/productBuiltinDirectAuthority.js";
-import { callerControlsContextTransition } from "./services/lifecycleContextControl.js";
+import { callerControlsContextTransition, callerControlsLifecycleContext } from "./services/lifecycleContextControl.js";
 import { startEventLoopResponsivenessMonitor } from "../eventLoopResponsiveness.js";
 import {
   newlyReferencedWorkerSources,
@@ -146,7 +147,7 @@ import {
   isEvalHostRecord,
 } from "@vibestudio/shared/evalRuntimeIdentity";
 import { isEvalHost } from "./services/evalKernelAuthority.js";
-import { entityOfCodeIdentity } from "./services/principalIdentity.js";
+import { admittedEvalContextOwner, entityOfCodeIdentity } from "./services/principalIdentity.js";
 import {
   resolveHistoricalWorkspaceHost,
   requireCompatibleTransitionHost,
@@ -2598,6 +2599,34 @@ async function main() {
       listContextEdgesByChild: (contextId) => getEntityStore().listContextEdgesByChild(contextId),
       resolveRecord: (id) => getEntityStore().resolveRecord(id),
     };
+  const buildCallerContext = (caller: VerifiedCaller) =>
+    caller.agentBinding?.contextId ?? callerBuildContextId(entityCache, caller.runtime.id);
+  const buildContextOwner = (caller: VerifiedCaller, contextId: string) => {
+    const evalOwner = admittedEvalContextOwner(entityCache, caller);
+    return evalOwner?.contextId === contextId
+      ? evalOwner.runtimeId
+      : caller.agentBinding?.entityId ?? caller.runtime.id;
+  };
+  const canBuildFromContext = (caller: VerifiedCaller, ownerContextId: string, targetContextId: string) =>
+    callerControlsLifecycleContext(
+      lifecycleContextStore, buildContextOwner(caller, ownerContextId), ownerContextId, targetContextId,
+    );
+  const readableBuildContexts = async (caller: VerifiedCaller, ownerContextId: string | null) => {
+    if (!ownerContextId || !workspaceVcs.participantHistoryAttached) return [];
+    const contexts = [ownerContextId];
+    const seen = new Set(contexts);
+    for (const contextId of contexts) {
+      const children = await lifecycleContextStore.listContextEdgesByOwner({
+        ownerContextId: contextId, kind: "lifecycle",
+      });
+      for (const { contextId: child } of children) {
+        if (seen.has(child)) continue;
+        seen.add(child);
+        if (await canBuildFromContext(caller, ownerContextId, child)) contexts.push(child);
+      }
+    }
+    return contexts.slice(1);
+  };
 
   // Route registry — shared across runtimeManager (registers manifest-declared
   // worker routes) and the gateway (dispatches `/_r/` requests). Constructed
@@ -2940,34 +2969,34 @@ async function main() {
         return createBuildService({
           buildSystem,
           getCallerContextId: (callerId) => callerBuildContextId(entityCache, callerId),
-          resolveContextBuildSource: (ctx, contextId) => {
-            if (!workspaceVcs.participantHistoryAttached) return Promise.resolve(null);
-            const callerContext = ctx.caller.agentBinding?.contextId ??
-              callerBuildContextId(entityCache, ctx.caller.runtime.id);
-            if (callerContext !== contextId)
+          resolveContextBuildSource: async (ctx, contextId) => {
+            if (!workspaceVcs.participantHistoryAttached) return null;
+            const callerContext = buildCallerContext(ctx.caller);
+            if (!callerContext || !await canBuildFromContext(ctx.caller, callerContext, contextId))
               throw Object.assign(new Error("Build context is outside the caller's working copy"), { code: "EACCES" });
-            return workspaceVcs.resolveCallerContextState(contextId, ctx.caller, ctx.signal);
+            return workspaceVcs.resolveCallerContextState(contextId, ctx.caller, ctx.signal, callerContext);
           },
-          resolveContentBuildSource: (ctx, stateHash) => workspaceVcs.resolveParticipantBuildSource(
-            stateHash,
-            ctx.caller,
-            ctx.caller.agentBinding?.contextId ?? callerBuildContextId(entityCache, ctx.caller.runtime.id),
-            ctx.signal,
-          ),
-          canReadBuild: async (ctx, build) =>
-            build.sourceStateHash === null || await workspaceVcs.participantBuildStateReachable(
-              build.metadata.sourceState,
-              ctx.caller,
-              ctx.caller.agentBinding?.contextId ?? callerBuildContextId(entityCache, ctx.caller.runtime.id),
-              ctx.signal,
-            ),
+          resolveContentBuildSource: async (ctx, stateHash) => {
+            const contextId = buildCallerContext(ctx.caller);
+            return workspaceVcs.resolveParticipantBuildSource(
+              stateHash, ctx.caller, contextId, ctx.signal, await readableBuildContexts(ctx.caller, contextId),
+            );
+          },
+          canReadBuild: async (ctx, build) => {
+            if (build.sourceStateHash === null) return true;
+            const contextId = buildCallerContext(ctx.caller);
+            return workspaceVcs.participantBuildStateReachable(
+              build.metadata.sourceState, ctx.caller, contextId, ctx.signal,
+              await readableBuildContexts(ctx.caller, contextId),
+            );
+          },
           executionVisibility: (ctx) => workspaceVcs.participantHistoryAttached
-            ? (artifact) => workspaceVcs.participantExecutionVisible(
-                artifact,
-                ctx.caller,
-                ctx.caller.agentBinding?.contextId ?? callerBuildContextId(entityCache, ctx.caller.runtime.id),
-                ctx.signal,
-              )
+            ? async (artifact) => {
+                const contextId = buildCallerContext(ctx.caller);
+                return workspaceVcs.participantExecutionVisible(
+                  artifact, ctx.caller, contextId, ctx.signal, await readableBuildContexts(ctx.caller, contextId),
+                );
+              }
             : undefined,
           listUnits: () =>
             listBuildUnitCatalog({
@@ -4753,16 +4782,21 @@ async function main() {
                 if (artifact) {
                   const stored = await buildSystem.getBuildByExecution(artifact.buildKey, artifact.executionDigest);
                   const execution = stored?.metadata.execution;
-                  if (!execution || !await workspaceVcs.participantExecutionVisible(execution, caller, sourceContext)) {
+                  if (!execution || !await workspaceVcs.participantExecutionVisible(
+                    execution, caller, sourceContext, undefined, await readableBuildContexts(caller, sourceContext),
+                  )) {
                     throw Object.assign(new Error("Runtime execution is unavailable"), { code: "EACCES" });
                   }
                 } else if (requestedRef?.startsWith("ctx:")) {
-                  if (!sourceContext || requestedRef !== `ctx:${sourceContext}`) {
+                  const targetContext = requestedRef.slice(4);
+                  if (!sourceContext || !targetContext || !await canBuildFromContext(caller, sourceContext, targetContext)) {
                     throw Object.assign(new Error("Runtime build context is outside the caller's working copy"), { code: "EACCES" });
                   }
-                  participantSource = await workspaceVcs.resolveCallerContextState(sourceContext, caller);
+                  participantSource = await workspaceVcs.resolveCallerContextState(targetContext, caller, undefined, sourceContext);
                 } else if (requestedRef?.startsWith("state:")) {
-                  participantSource = await workspaceVcs.resolveParticipantBuildSource(requestedRef, caller, sourceContext);
+                  participantSource = await workspaceVcs.resolveParticipantBuildSource(
+                    requestedRef, caller, sourceContext, undefined, await readableBuildContexts(caller, sourceContext),
+                  );
                 }
               }
               const ref = participantSource?.stateHash ?? requestedRef;

@@ -154,12 +154,14 @@ export async function rememberWorkspaceParticipantContentSource(input: Workspace
 export async function readWorkspaceParticipantContentSource(input: WorkspaceHistoryParticipant & {
   contextId: string;
   stateHash: string;
+  readableContextIds?: readonly string[];
 }) {
   requireWorkspaceParticipantOwner(input);
   const { dispatch, owner, contextId, stateHash } = input;
-  return workspaceContentProjection.nullable().parse(
-    await dispatch.dispatch(owner, "readHistoryContentSource", { contextId, stateHash })
-  );
+  const readableContextIds = [...new Set(input.readableContextIds)].filter((id) => id !== contextId);
+  return workspaceContentProjection.nullable().parse(await dispatch.dispatch(owner, "readHistoryContentSource", {
+    contextId, stateHash, ...(readableContextIds.length ? { readableContextIds } : {}),
+  }));
 }
 
 /** Read shared ancestry and edits from the verified participant's own context. */

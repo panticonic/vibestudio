@@ -729,18 +729,20 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     caller: VerifiedCaller,
     contextId: string | null,
     signal?: AbortSignal,
+    readableContextIds: readonly string[] = []
   ): Promise<boolean> {
     const source = artifact.sourceState;
     return source.kind === "product-seed" ||
       (source.workspaceId === this.workspaceId &&
-        await this.participantBuildStateReachable(source.state, caller, contextId, signal));
+        await this.participantBuildStateReachable(source.state, caller, contextId, signal, readableContextIds));
   }
 
   async participantBuildStateReachable(
     state: import("@vibestudio/shared/execution/retention").ExecutionSourceStateRef | null | undefined,
     caller: VerifiedCaller,
     contextId: string | null,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    readableContextIds: readonly string[] = []
   ): Promise<boolean> {
     const source = this.participantHistorySource;
     if (!source) return true;
@@ -754,7 +756,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       caller, contextId, ownerContextId: contextId, ...(signal ? { signal } : {}),
     });
     return Boolean(scope && await workspaceParticipantReferencesReachable({
-      ...scope, contextIds: [contextId], references: [{ kind: "state-node", value: state }],
+      ...scope, contextIds: [contextId, ...readableContextIds], references: [{ kind: "state-node", value: state }],
     }));
   }
 
@@ -2374,9 +2376,14 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     };
   }
 
-  private async requireParticipantContentScope(contextId: string, caller: VerifiedCaller, signal?: AbortSignal) {
+  private async requireParticipantContentScope(
+    contextId: string,
+    caller: VerifiedCaller,
+    signal?: AbortSignal,
+    ownerContextId = contextId
+  ) {
     const scope = await this.openParticipantScope({
-      caller, contextId, ownerContextId: contextId, ...(signal ? { signal } : {}),
+      caller, contextId, ownerContextId, ...(signal ? { signal } : {}),
     });
     if (!scope) throw new Error("Participant workspace history is unavailable");
     return scope;
@@ -2662,9 +2669,14 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   /** Keep exact content and semantic identity together even when two revisions have identical bytes. */
-  async resolveCallerContextState(contextId: string, caller: VerifiedCaller, signal?: AbortSignal) {
+  async resolveCallerContextState(
+    contextId: string,
+    caller: VerifiedCaller,
+    signal?: AbortSignal,
+    ownerContextId = contextId
+  ) {
     if (this.participantHistoryAttached) {
-      const scope = await this.requireParticipantContentScope(contextId, caller, signal);
+      const scope = await this.requireParticipantContentScope(contextId, caller, signal, ownerContextId);
       return this.recordParticipantContextSource(scope);
     }
     const { semanticState, repositories } = await this.exactContextContent(contextId);
@@ -2688,6 +2700,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     caller: VerifiedCaller,
     contextId: string | null,
     signal?: AbortSignal,
+    readableContextIds: readonly string[] = []
   ) {
     if (!this.participantHistoryAttached) return null;
     if (/^state:[0-9a-f]{64}$/u.test(stateHash)) {
@@ -2695,7 +2708,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         ? await this.requireParticipantContentScope(contextId, caller, signal)
         : null;
       if (scope) {
-        const retained = await readWorkspaceParticipantContentSource({ ...scope, stateHash });
+        const retained = await readWorkspaceParticipantContentSource({ ...scope, stateHash, readableContextIds });
         if (retained) {
           const snapshot = await this.realizeContextContent({
             targetState: retained.state, repositories: retained.repositories, blobs: [],
@@ -2708,7 +2721,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
       await this.ensureFresh();
       const remembered = this.executionStateForContent(stateHash);
-      if (remembered && await this.participantBuildStateReachable(remembered, caller, scope ? contextId : null, signal))
+      if (remembered && await this.participantBuildStateReachable(
+        remembered, caller, scope ? contextId : null, signal, readableContextIds
+      ))
         return { stateHash, semanticState: remembered };
       if (scope) {
         const current = await this.recordParticipantContextSource(scope, stateHash);
