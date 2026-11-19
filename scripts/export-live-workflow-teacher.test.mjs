@@ -868,6 +868,61 @@ test("presentation export ties the exact MDX to the managed browser readback", a
   );
 });
 
+test("presentation export rejects a chart table that changes a plotted value", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  entry.test.name = "presentation-live-dispatch-pressure";
+  const world = cases.get(entry.test.name);
+  const run = diagnostics.natlangTeacher;
+  run.report = {
+    views: world.renderedIds.map((id) => ({
+      id,
+      status: "ready",
+      rendered: { mdx: `view ${id}` },
+    })),
+  };
+  run.programPath = "skills/vibestudio-workflows/runWorkflow.nl";
+  const [root, leaf] = run.calls;
+  root.record.definition.name = "runWorkflow";
+  const skill = structuredClone(leaf);
+  skill.callId = skill.summary.call_id = "skill";
+  skill.record.definition.name = "preparePresentation";
+  leaf.record.parent_call_id = "skill";
+  run.calls.push(skill);
+  const verification = {
+    passed: true,
+    panelAttempt: "attempt",
+    buildKey: "build",
+    checks: Object.fromEntries(
+      [
+        "ownedPanel",
+        "exactViewOrder",
+        "browserRenderedCatalog",
+        "visibleLabels",
+        "exactReport",
+        "protectedHeadUnchanged",
+        "interactiveReadback",
+      ].map((check) => [check, true])
+    ),
+    rendered: { ids: world.renderedIds, interactions: structuredClone(world.interactions) },
+    mdxDigests: run.report.views.map(({ rendered }) =>
+      createHash("sha256").update(rendered.mdx).digest("hex")
+    ),
+  };
+  diagnostics.managedPresentation = { contextId: "ctx", caseId: world.caseId, verification };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  verification.rendered.interactions[0].cells[1][1] = "700";
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-wrong-table` }),
+    /demonstrate its assigned controls in the live browser/u
+  );
+});
+
 test("authoring export rejects a review drawn from another baseline", async (t) => {
   const { options, diagnostics, entry, save } = await fixture(t);
   const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(

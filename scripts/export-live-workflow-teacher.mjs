@@ -584,6 +584,9 @@ export async function loadLiveTeacherCases(checkouts) {
       ...presentationWorkflow,
       caseId: id,
       renderedIds: expected.filter((view) => Object.hasOwn(view, "labels")).map(({ id }) => id),
+      interactions: expected.flatMap(({ id, interaction }) =>
+        interaction ? [{ id, ...interaction }] : []
+      ),
     });
   }
   for (const world of managedPdfWorlds) {
@@ -1019,6 +1022,13 @@ function presentationEvidence(execution, exercise, _scenario, workflow) {
         JSON.stringify(verification.mdxDigests),
     "The grounded presentation must match its managed browser readback and exact MDX"
   );
+  if (workflow.interactions?.length) {
+    requireEvidence(
+      verification.checks?.interactiveReadback === true &&
+        isDeepStrictEqual(verification.rendered?.interactions, workflow.interactions),
+      "The presentation must demonstrate its assigned controls in the live browser"
+    );
+  }
   return {
     world: { context_id: fixture.contextId, panel_attempt: verification.panelAttempt },
     checks: verification.checks,
