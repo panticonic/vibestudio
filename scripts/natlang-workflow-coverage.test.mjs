@@ -30,9 +30,14 @@ test("workflow coverage lists mounted entry points and leaves ambiguous cases un
     write("base", "skills/api/natlang/review.nl"),
     write("base", "skills/api/natlang/review/lookup.nl"),
     write("base", "skills/vibestudio-workflows/runWorkflow/operate.nl"),
-    write("system", "skills/system/SKILL.md"),
+    write("system", "skills/system/SKILL.md", "`[Example only](natlang/review.nl)`"),
     write("system", "skills/system/natlang/review.nl"),
-    write("system", "skills/local-only/SKILL.md"),
+    write(
+      "system",
+      "skills/local-only/SKILL.md",
+      "[External workflow](../system/natlang/review.nl#use)\n\n" +
+        "`[Quoted command](../../skills/system/natlang/review.nl)`\n"
+    ),
     write("system", "skills/local-only/read.nl"),
   ]);
   for (const cwd of Object.values(checkouts)) {
@@ -68,6 +73,7 @@ test("workflow coverage lists mounted entry points and leaves ambiguous cases un
       source: "skills/api/SKILL.md",
       localProgramFiles: 2,
       mountedCallables: ["api/review"],
+      linkedCallables: [],
     }
   );
   assert.deepEqual(
@@ -77,7 +83,12 @@ test("workflow coverage lists mounted entry points and leaves ambiguous cases un
       source: "skills/local-only/SKILL.md",
       localProgramFiles: 1,
       mountedCallables: [],
+      linkedCallables: ["system/review"],
     }
+  );
+  assert.deepEqual(
+    coverage.skills.find(({ source }) => source === "skills/system/SKILL.md").linkedCallables,
+    []
   );
   assert.deepEqual(
     coverage.unresolved.map(({ selector, candidates }) => [

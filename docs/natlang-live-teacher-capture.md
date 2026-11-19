@@ -12,7 +12,8 @@ They are not recorded live effects or training examples.
 
 Use `pnpm natlang:tasks --coverage` to inspect the tracked skill documents, local
 Natlang sources, mounted callables, and managed and scoped case counts for each
-callable. Ambiguous or unresolved assignments are listed with their possible
+callable. The skill entries also show direct Markdown links to mounted Natlang
+programs elsewhere in the same template. Ambiguous or unresolved assignments are listed with their possible
 sources. The report shows source relationships. A co-located program or case
 does not establish that every procedure in a skill is implemented or tested.
 
@@ -213,6 +214,12 @@ with the selected platform's current contract. They cover a compatible terminal
 client, a mobile variant on the wrong runtime and a local incompatible ABI.
 Run `client-admission-oracle-qualification` for model-free verification. The
 workflow inspects the platform contract without launching a device client.
+
+Workspace unit identity combines the existing Natlang icon chooser with
+the catalog and semantic VCS. The cases prepare a new icon, retain an
+exact match, or review a design without editing. The edit case checks its
+working-state manifest and artwork while retaining protected main. Run
+`unit-identity-oracle-qualification` for the live model-free check.
 
 Gmail compose history reviews native events from an isolated Google Workspace
 channel. Cases cover retained draft identity, conflicting identity, and a

@@ -2,10 +2,26 @@ import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { fromMarkdown } from "mdast-util-from-markdown";
 
 const git = promisify(execFile);
 const shared = "skills/vibestudio-workflows";
 const operationName = (source) => path.posix.basename(source, ".nl");
+
+function linkedPrograms(markdown, source) {
+  const links = new Set();
+  const nodes = [fromMarkdown(markdown)];
+  while (nodes.length) {
+    const node = nodes.pop();
+    if (node.children) nodes.push(...node.children);
+    if (node.type !== "link") continue;
+    const relative = node.url.split(/[?#]/u, 1)[0];
+    if (!relative.endsWith(".nl") || relative.startsWith("/") || relative.includes(":"))
+      continue;
+    links.add(path.posix.join(path.posix.dirname(source), relative));
+  }
+  return links;
+}
 
 async function trackedSources(checkout) {
   const { stdout } = await git(
@@ -104,9 +120,13 @@ export async function inspectWorkflowCoverage(checkouts, cases) {
       }
     }
   }
-  const skills = skillDocs.map(({ template, source }) => {
+  const skills = await Promise.all(skillDocs.map(async ({ template, source }) => {
     const directory = path.posix.dirname(source) + "/";
     const localSources = filesByTemplate.find((item) => item.template === template).files;
+    const explicitLinks = linkedPrograms(
+      await readFile(path.join(checkouts[template], source), "utf8"),
+      source
+    );
     return {
       template,
       source,
@@ -116,8 +136,11 @@ export async function inspectWorkflowCoverage(checkouts, cases) {
       mountedCallables: callables
         .filter((entry) => entry.template === template && entry.source.startsWith(directory))
         .map(({ callable }) => callable),
+      linkedCallables: callables
+        .filter((entry) => entry.template === template && explicitLinks.has(entry.source))
+        .map(({ callable }) => callable),
     };
-  });
+  }));
   return {
     scope: "Tracked sources in configured template checkouts and declared task assignments",
     skills,

@@ -102,6 +102,7 @@ test("authored template worlds flow into the collector without losing original s
       ["tour-rehearsal-worlds", "tourRehearsalWorlds", []],
       ["explorer-probe-worlds", "explorerTextWorlds", []],
       ["gmail-compose-history-worlds", "gmailComposeHistoryWorlds", []],
+      ["unit-identity-worlds", "unitIdentityWorlds", []],
       ["eval-recovery-worlds", "managedEvalRecoveryWorlds", []],
       ["pdf-layout-worlds", "managedPdfLayoutWorlds", []],
       ["offline-dictation-worlds", "managedDictationWorlds", []],
@@ -2944,6 +2945,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["tour-rehearsal-worlds", "export const tourRehearsalWorlds = [];"],
       ["explorer-probe-worlds", "export const explorerTextWorlds = [];"],
       ["gmail-compose-history-worlds", "export const gmailComposeHistoryWorlds = [];"],
+      ["unit-identity-worlds", "export const unitIdentityWorlds = [];"],
       ["eval-recovery-worlds", "export const managedEvalRecoveryWorlds = [];"],
       ["pdf-layout-worlds", "export const managedPdfLayoutWorlds = [];"],
       ["offline-dictation-worlds", "export const managedDictationWorlds = [];"],
@@ -5980,4 +5982,71 @@ test("Gmail compose export requires the native delivery history and reconciliati
   history.record.output = ref(report);
   await save();
   await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /exact lineage and appropriate recovery/u);
+});
+
+test("unit identity export rejects artwork that differs from the grounded catalog choice", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  const name = "unit-identity-live-stage-workspace-index-icon";
+  const { assignment } = cases.get(name);
+  const pins = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(options.pins, JSON.stringify({ ...pins, workspace: "system" }));
+  entry.test.name = name;
+  const request = { operationId: "assigned-icon", goal: assignment.goal, unit: assignment.unit, prepare: true };
+  const original = { repoPath: assignment.repoPath, revision: "assigned-before", icon: "./assets/icon.svg", artworkDigest: "a".repeat(64) };
+  const selected = { choice: { family: "lucide", id: "lucide:folder-tree" }, declaration: "./assets/icon.svg", artworkDigest: "b".repeat(64) };
+  const assessment = { candidate: selected, next: "prepare" };
+  const prepared = {
+    repoPath: original.repoPath, revision: "assigned-after", icon: selected.declaration,
+    artworkDigest: selected.artworkDigest, mainUnchanged: true, manifestOtherwiseUnchanged: true,
+    changedFiles: ["package.json", "assets/icon.svg"],
+  };
+  const report = { observed: original, intent: assignment.intent, assessment, change: prepared, outcome: "prepared" };
+  diagnostics.unitIdentity = {
+    passed: true, caseId: assignment.id, contextId: "ctx", request, original, selected, prepared,
+    operations: ["observe", "resolve", "stage"],
+    checks: { source: true, candidate: true, working: true, publication: true, operations: true },
+  };
+  const ref = (value) => {
+    const text = JSON.stringify(value);
+    return { complete: true, hash: createHash("sha256").update(text).digest("hex"), bytes: Buffer.byteLength(text) };
+  };
+  const prototype = diagnostics.natlangTeacher.calls[0];
+  const call = (name, parent, inputs, output, effects = []) => ({
+    callId: name,
+    summary: { ...prototype.summary, call_id: name },
+    record: {
+      ...prototype.record, call_id: name, parent_call_id: parent, definition: { name }, outcome: "done",
+      inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+      output: ref(output), effects,
+    },
+  });
+  const effect = (method, args, result) => ({ service: "unitIdentity", method, args: ref(args), result: ref(result) });
+  const identity = call("prepareUnitIdentity", "runWorkflow", { request }, report, [
+    effect("observe", [request.operationId], original),
+    effect("stage", [request.operationId, original.revision, selected.choice.id], prepared),
+  ]);
+  diagnostics.natlangTeacher = {
+    ...diagnostics.natlangTeacher, programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+    rootCallIds: ["runWorkflow"], report,
+    calls: [
+      call("runWorkflow", null, {}, null), identity,
+      call("iconIntent", "prepareUnitIdentity", { unit: request.unit }, report.intent),
+      call("assessIcon", "prepareUnitIdentity", { observed: original }, assessment, [
+        effect("resolve", [request.operationId, report.intent], selected),
+      ]),
+      call("chooseIconAction", "assessIcon", { candidate: selected }, "prepare"),
+      call("verifyUnitIdentity", "prepareUnitIdentity", { change: prepared }, "prepared"),
+    ],
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  prepared.artworkDigest = "c".repeat(64);
+  identity.record.output = ref(report);
+  identity.record.effects[1].result = ref(prepared);
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /verified authorized working-state outcome/u);
 });

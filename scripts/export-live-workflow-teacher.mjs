@@ -211,6 +211,15 @@ const clientAdmissionWorkflow = {
   root: "reviewClientAdmission",
   evidence: clientAdmissionEvidence,
 };
+const unitIdentityWorkflow = {
+  family: "workspace-live-unit-identity",
+  workspace: "system",
+  namespace: "vibestudio:workspace-dev",
+  group: "native-icon-catalog-and-working-state",
+  validator: { template: "system-testing", path: "skills/system-testing/unit-identity-managed.ts" },
+  root: "prepareUnitIdentity",
+  evidence: unitIdentityEvidence,
+};
 const gmailComposeHistoryWorkflow = {
   family: "google-live-gmail-compose-history",
   workspace: "google-workspace",
@@ -629,6 +638,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { tourRehearsalWorlds },
     { explorerTextWorlds },
     { gmailComposeHistoryWorlds },
+    { unitIdentityWorlds },
     { managedEvalRecoveryWorlds },
     { managedPdfLayoutWorlds },
     { managedDictationWorlds },
@@ -688,6 +698,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "tour-rehearsal-worlds.ts",
       "explorer-probe-worlds.ts",
       "gmail-compose-history-worlds.ts",
+      "unit-identity-worlds.ts",
       "eval-recovery-worlds.ts",
       "pdf-layout-worlds.ts",
       "offline-dictation-worlds.ts",
@@ -739,6 +750,9 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of managedClientAdmissionWorlds) {
     cases.set(`client-admission-live-${assignment.id}`, { ...clientAdmissionWorkflow, assignment });
+  }
+  for (const assignment of unitIdentityWorlds) {
+    cases.set(`unit-identity-live-${assignment.id}`, { ...unitIdentityWorkflow, assignment });
   }
   for (const assignment of gmailComposeHistoryWorlds) {
     cases.set(`gmail-compose-history-live-${assignment.id}`, { ...gmailComposeHistoryWorkflow, assignment });
@@ -2756,6 +2770,73 @@ function clientAdmissionEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: contextId, source, host, abi: workingAbi },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function unitIdentityEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.unitIdentity;
+  const { contextId, caseId, request, original, selected, prepared, operations, checks } = fixture ?? {};
+  const { assignment } = workflow;
+  const report = exercise.report;
+  const staged = assignment.outcome === "prepared";
+  const next = staged ? "prepare" : assignment.outcome;
+  const authoringId = `${assignment.intent.family}:${assignment.intent.term}`;
+  const records = exercise.calls.map(({ record }) => record);
+  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const child = (parent, name) => parent && records.find(
+    (record) => record.parent_call_id === parent.call_id && record.definition.name === name
+  );
+  const identity = child(root, "prepareUnitIdentity");
+  const intent = child(identity, "iconIntent");
+  const assess = child(identity, "assessIcon");
+  const choose = child(assess, "chooseIconAction");
+  const verify = child(identity, "verifyUnitIdentity");
+  const effects = records.flatMap(({ effects }) => effects ?? []);
+  const isEffect = (effect, method, args, value) =>
+    effect?.service === "unitIdentity" && effect.method === method && !effect.error &&
+    matchesValue(effect.args, args) && matchesValue(effect.result, value);
+  requireEvidence(
+    fixture?.passed === true &&
+      ["source", "candidate", "working", "publication", "operations"].every((key) => checks?.[key] === true) &&
+      caseId === assignment.id && typeof contextId === "string" &&
+      contextId === execution.provenance?.contextId && request?.goal === assignment.goal &&
+      request.prepare === assignment.prepare && isDeepStrictEqual(request.unit, assignment.unit) &&
+      typeof request.operationId === "string" && request.operationId.length > 0 &&
+      original?.repoPath === assignment.repoPath && typeof original.revision === "string" &&
+      selected?.choice?.id === authoringId && selected.choice.family === assignment.intent.family &&
+      selected.declaration === "./assets/icon.svg" && /^[0-9a-f]{64}$/u.test(selected.artworkDigest ?? "") &&
+      isDeepStrictEqual(report?.observed, original) && isDeepStrictEqual(report.intent, assignment.intent) &&
+      isDeepStrictEqual(report.assessment, { candidate: selected, next }) &&
+      matchesValue(identity?.inputs?.request, request) && matchesValue(identity.output, report) &&
+      matchesValue(intent?.inputs?.unit, request.unit) && matchesValue(intent.output, report.intent) &&
+      matchesValue(assess?.inputs?.observed, original) && matchesValue(assess.output, report.assessment) &&
+      matchesValue(choose?.inputs?.candidate, selected) && matchesValue(choose.output, next) &&
+      effects.length === (staged ? 3 : 2) &&
+      isEffect(identity.effects?.[0], "observe", [request.operationId], original) &&
+      isEffect(assess.effects?.[0], "resolve", [request.operationId, report.intent], selected),
+    "Unit identity requires the exact working revision and grounded catalog choice"
+  );
+  requireEvidence(
+    report.outcome === assignment.outcome && isDeepStrictEqual(report.change, prepared) &&
+      isDeepStrictEqual(operations, staged ? ["observe", "resolve", "stage"] : ["observe", "resolve"]) &&
+      (staged
+        ? prepared?.repoPath === assignment.repoPath && prepared.revision !== original.revision &&
+          typeof prepared.revision === "string" && prepared.icon === selected.declaration &&
+          prepared.artworkDigest === selected.artworkDigest && prepared.mainUnchanged === true &&
+          prepared.manifestOtherwiseUnchanged === true &&
+          isDeepStrictEqual(prepared.changedFiles, ["package.json", "assets/icon.svg"]) &&
+          isEffect(identity.effects?.[1], "stage", [request.operationId, original.revision, authoringId], prepared) &&
+          matchesValue(verify?.inputs?.change, prepared) && matchesValue(verify.output, "prepared")
+        : prepared === null && !verify &&
+          (next === "already-matches"
+            ? original.icon === selected.declaration && original.artworkDigest === selected.artworkDigest
+            : original.artworkDigest !== selected.artworkDigest)),
+    "Unit identity requires protected main and the verified authorized working-state outcome"
+  );
+  return {
+    world: { context_id: contextId, repository: assignment.repoPath, revision: original.revision },
     checks,
     evidence: { workspace: { fixture } },
   };
