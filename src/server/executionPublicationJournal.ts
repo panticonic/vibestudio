@@ -139,7 +139,9 @@ export class ExecutionPublicationJournal implements ExecutionPublicationPort {
       const artifacts = publication.artifacts.map((artifact) => {
         const resolved = this.resolveArtifact(artifact.buildKey, artifact.executionDigest);
         if (!resolved) {
-          throw new Error(`Cannot publish missing execution artifact ${artifact.buildKey}`);
+          throw new Error(
+            `Cannot publish missing execution artifact ${artifact.buildKey} (${artifact.executionDigest}) for ${publication.owner}`
+          );
         }
         const verified = verifyExecutionArtifactRef(resolved);
         if (

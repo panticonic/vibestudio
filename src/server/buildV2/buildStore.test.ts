@@ -983,6 +983,15 @@ describe("build artifact helpers", () => {
       ]);
       expect(retained).not.toHaveProperty("executableModules");
 
+      const participantState = { kind: "application", applicationId: "application:private" } as const;
+      const participant = await store.withExactSource(secondState, participantState, () =>
+        store.rebindSourceState(rebound, secondState)
+      );
+      expect(participant.metadata.execution?.sourceState.state).toEqual(participantState);
+      expect(store.peekLocalExecution(buildKey, participant.metadata.execution!.executionDigest))
+        .toMatchObject({ metadata: { execution: participant.metadata.execution } });
+      expect((await store.readLocal(buildKey))?.metadata.execution).toEqual(rebound.metadata.execution);
+
       const reopenedRoot = path.join(root, "reopened");
       const reopenedBuild = path.join(reopenedRoot, "builds", buildKey);
       fs.mkdirSync(path.dirname(reopenedBuild), { recursive: true });

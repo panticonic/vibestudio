@@ -1119,6 +1119,13 @@ export class RuntimeManager {
     }
     if (!isInternalDOSource(args.source)) {
       await this.admitDurableObjectSchema(image, args.className);
+      const build = await this.requireWorkspaceProvider("Durable Object execution preparation")
+        .getBuildByExecution(image.artifact.buildKey, image.artifact.executionDigest);
+      if (!build) {
+        throw new RuntimeImageUnavailableError(
+          `Durable Object ${targetId} is missing its sealed executable ${image.artifact.buildKey}`
+        );
+      }
     }
     return {
       targetId,

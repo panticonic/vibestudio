@@ -1728,10 +1728,15 @@ export async function initBuildSystemV2(
       if (!authority) {
         throw new Error(`Runtime build ${build.buildKey} is missing its sealed authority envelope`);
       }
+      const artifact = executionArtifactRefFromBuild(source.workspaceId, build);
+      if (!store.peekLocalExecution(artifact.buildKey, artifact.executionDigest) &&
+          !await store.readLocalByExecution(artifact.buildKey, artifact.executionDigest)) {
+        throw new Error(`Cannot verify the bound runtime execution for ${node.relativePath}`);
+      }
       const binding: RuntimeImageBinding = {
         source: node.relativePath,
         unitName: node.name,
-        artifact: executionArtifactRefFromBuild(source.workspaceId, build),
+        artifact,
         authority,
       };
       runtimeBindingCache.set(identityKey, binding);

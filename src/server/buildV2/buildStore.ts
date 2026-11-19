@@ -1610,8 +1610,9 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
       sourceStateHash,
       metadata,
     };
-    if (!exact && path.resolve(build.dir) === path.resolve(localDir)) {
-      rememberVerifiedLocalBuild(rebound);
+    if (path.resolve(build.dir) === path.resolve(localDir)) {
+      if (exact) supersededExecutions.set(executionCacheId(localDir, execution.executionDigest), rebound);
+      else rememberVerifiedLocalBuild(rebound);
     }
     return rebound;
   }
