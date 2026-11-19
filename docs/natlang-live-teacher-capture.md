@@ -215,6 +215,12 @@ client, a mobile variant on the wrong runtime and a local incompatible ABI.
 Run `client-admission-oracle-qualification` for model-free verification. The
 workflow inspects the platform contract without launching a device client.
 
+Publication revision review compares two packages built from the assigned
+workspace website. Its cases cover repeating an unchanged build, changing
+the target environment, and editing real public source. The qualification
+uses a disposable working context. Run
+`publication-revision-oracle-qualification` for the live model-free check.
+
 Headless transcript continuation reads a VibeStudio channel through one
 native replay watermark. Its cases cover a late append, a limited page
 budget, a foreign channel, and a checkpoint already at the end. Run

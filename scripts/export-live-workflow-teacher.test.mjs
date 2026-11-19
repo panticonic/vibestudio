@@ -104,6 +104,7 @@ test("authored template worlds flow into the collector without losing original s
       ["gmail-compose-history-worlds", "gmailComposeHistoryWorlds", []],
       ["unit-identity-worlds", "unitIdentityWorlds", []],
       ["transcript-cursor-worlds", "transcriptCursorWorlds", []],
+      ["publication-revision-worlds", "publicationRevisionWorlds", []],
       ["eval-recovery-worlds", "managedEvalRecoveryWorlds", []],
       ["pdf-layout-worlds", "managedPdfLayoutWorlds", []],
       ["offline-dictation-worlds", "managedDictationWorlds", []],
@@ -2948,6 +2949,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["gmail-compose-history-worlds", "export const gmailComposeHistoryWorlds = [];"],
       ["unit-identity-worlds", "export const unitIdentityWorlds = [];"],
       ["transcript-cursor-worlds", "export const transcriptCursorWorlds = [];"],
+      ["publication-revision-worlds", "export const publicationRevisionWorlds = [];"],
       ["eval-recovery-worlds", "export const managedEvalRecoveryWorlds = [];"],
       ["pdf-layout-worlds", "export const managedPdfLayoutWorlds = [];"],
       ["offline-dictation-worlds", "export const managedDictationWorlds = [];"],
@@ -6123,4 +6125,78 @@ test("transcript continuation export rejects a checkpoint beyond the frozen chan
   resume.record.output = ref(report);
   await save();
   await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /exact durable checkpoint/u);
+});
+
+test("publication revision export rejects a review that omits a changed public entry", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  const name = "publication-revision-live-changed-public-caption";
+  const { assignment } = cases.get(name);
+  const pins = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(options.pins, JSON.stringify({ ...pins, workspace: "system" }));
+  entry.test.name = name;
+  const request = { goal: assignment.goal, operationId: "assigned-package" };
+  const source = "panels/owned-departures";
+  const intent = { provider: "vercel", destination: "managed-review/departures", environment: "preview" };
+  const file = (path, byte) => ({ path, digest: byte.repeat(64), bytes: 30 });
+  const reviewed = {
+    sourceHash: "reviewed-state", artifactDigest: "sha256:" + "0".repeat(64), entry: "site.js", intent,
+    files: [file("site.js", "a"), file("vibestudio-build.json", "b")],
+  };
+  const candidate = {
+    sourceHash: "candidate-state", artifactDigest: "sha256:" + "1".repeat(64), entry: "site.js", intent,
+    files: [file("site.js", "c"), file("vibestudio-build.json", "d")],
+  };
+  const comparison = {
+    source, reviewed, candidate,
+    change: { added: [], removed: [], modified: reviewed.files.map((before, i) => ({ before, after: candidate.files[i] })) },
+  };
+  const impact = {
+    affectedPaths: ["site.js", "vibestudio-build.json"],
+    entryChanged: true, htmlChanged: false, manifestChanged: true,
+  };
+  const report = {
+    comparison, impact, match: "same-target", decision: "review-public-change",
+    reason: "Review the changed entry and the public manifest.",
+  };
+  diagnostics.publicationRevision = {
+    passed: true, caseId: assignment.id, contextId: "ctx", source, request, observed: comparison,
+    editApplicationId: "assigned-edit", checks: { package: true, target: true, decision: true, protection: true },
+  };
+  const ref = (value) => {
+    const text = JSON.stringify(value);
+    return { complete: true, hash: createHash("sha256").update(text).digest("hex"), bytes: Buffer.byteLength(text) };
+  };
+  const prototype = diagnostics.natlangTeacher.calls[0];
+  const call = (name, parent, inputs, output, effects = []) => ({
+    callId: name,
+    summary: { ...prototype.summary, call_id: name },
+    record: {
+      ...prototype.record, call_id: name, parent_call_id: parent, definition: { name }, outcome: "done",
+      inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+      output: ref(output), effects,
+    },
+  });
+  const review = call("reviewPublicationRevision", "runWorkflow", { request }, report, [{
+    service: "publicationRevision", method: "compare", args: ref([request.operationId]), result: ref(comparison),
+  }]);
+  diagnostics.natlangTeacher = {
+    ...diagnostics.natlangTeacher, programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+    rootCallIds: ["runWorkflow"], report,
+    calls: [
+      call("runWorkflow", null, {}, null), review,
+      call("matchPublicationTarget", "reviewPublicationRevision", { reviewed: intent, candidate: intent }, report.match),
+      call("assessRevisionChange", "reviewPublicationRevision", { comparison }, impact),
+      call("checkCriticalPaths", "assessRevisionChange", { paths: impact.affectedPaths }, impact),
+    ],
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  impact.affectedPaths.shift();
+  review.record.output = ref(report);
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /exact changed public files/u);
 });

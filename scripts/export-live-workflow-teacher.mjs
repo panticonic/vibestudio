@@ -211,6 +211,15 @@ const clientAdmissionWorkflow = {
   root: "reviewClientAdmission",
   evidence: clientAdmissionEvidence,
 };
+const publicationRevisionWorkflow = {
+  family: "workspace-live-publication-revision",
+  workspace: "system",
+  namespace: "vibestudio:publication",
+  group: "sealed-package-re-review",
+  validator: { template: "system-testing", path: "skills/system-testing/publication-revision-managed.ts" },
+  root: "reviewPublicationRevision",
+  evidence: publicationRevisionEvidence,
+};
 const transcriptCursorWorkflow = {
   family: "workspace-live-transcript-cursor",
   workspace: "system",
@@ -649,6 +658,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { gmailComposeHistoryWorlds },
     { unitIdentityWorlds },
     { transcriptCursorWorlds },
+    { publicationRevisionWorlds },
     { managedEvalRecoveryWorlds },
     { managedPdfLayoutWorlds },
     { managedDictationWorlds },
@@ -710,6 +720,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "gmail-compose-history-worlds.ts",
       "unit-identity-worlds.ts",
       "transcript-cursor-worlds.ts",
+      "publication-revision-worlds.ts",
       "eval-recovery-worlds.ts",
       "pdf-layout-worlds.ts",
       "offline-dictation-worlds.ts",
@@ -761,6 +772,9 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of managedClientAdmissionWorlds) {
     cases.set(`client-admission-live-${assignment.id}`, { ...clientAdmissionWorkflow, assignment });
+  }
+  for (const assignment of publicationRevisionWorlds) {
+    cases.set(`publication-revision-live-${assignment.id}`, { ...publicationRevisionWorkflow, assignment });
   }
   for (const assignment of transcriptCursorWorlds) {
     cases.set(`transcript-cursor-live-${assignment.id}`, { ...transcriptCursorWorkflow, assignment });
@@ -2784,6 +2798,97 @@ function clientAdmissionEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: contextId, source, host, abi: workingAbi },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function publicationRevisionEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.publicationRevision;
+  const { contextId, caseId, source, request, observed, editApplicationId, checks } = fixture ?? {};
+  const { assignment } = workflow;
+  const report = exercise.report;
+  const records = exercise.calls.map(({ record }) => record);
+  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const child = (parent, name) => parent && records.find(
+    (record) => record.parent_call_id === parent.call_id && record.definition.name === name
+  );
+  const review = child(root, "reviewPublicationRevision");
+  const target = child(review, "matchPublicationTarget");
+  const impact = child(review, "assessRevisionChange");
+  const critical = child(impact, "checkCriticalPaths");
+  const effects = records.flatMap(({ effects }) => effects ?? []);
+  const effect = review?.effects?.[0];
+  const validSite = (site) => typeof site?.sourceHash === "string" && !!site.sourceHash &&
+    /^sha256:[0-9a-f]{64}$/u.test(site.artifactDigest) &&
+    Array.isArray(site.files) && site.files.length > 0 && site.files.length <= 64 &&
+    new Set(site.files.map(({ path }) => path)).size === site.files.length &&
+    site.files.some(({ path }) => path === site.entry) &&
+    site.files.every(({ path, digest, bytes }) =>
+      typeof path === "string" && path.length > 0 && /^[0-9a-f]{64}$/u.test(digest) &&
+      Number.isSafeInteger(bytes) && bytes >= 0);
+  const reviewedIntent = { provider: "vercel", destination: "managed-review/departures", environment: "preview" };
+  const candidateIntent = { ...reviewedIntent, environment: assignment.environment };
+  requireEvidence(
+    fixture?.passed === true &&
+      ["package", "target", "decision", "protection"].every((key) => checks?.[key] === true) &&
+      caseId === assignment.id && typeof contextId === "string" &&
+      contextId === execution.provenance?.contextId && /^panels\/[^/]+$/u.test(source ?? "") &&
+      observed?.source === source && request?.goal === assignment.goal &&
+      typeof request.operationId === "string" && request.operationId.length > 0 &&
+      validSite(observed.reviewed) && validSite(observed.candidate) &&
+      isDeepStrictEqual(observed.reviewed.intent, reviewedIntent) &&
+      isDeepStrictEqual(observed.candidate.intent, candidateIntent) &&
+      isDeepStrictEqual(report?.comparison, observed) &&
+      matchesValue(review?.inputs?.request, request) && matchesValue(review.output, report) &&
+      effects.length === 1 && effect?.service === "publicationRevision" && effect.method === "compare" &&
+      !effect.error && matchesValue(effect.args, [request.operationId]) && matchesValue(effect.result, observed),
+    "Publication revision requires an exact pair of sealed website packages and destinations"
+  );
+  const original = new Map(observed.reviewed.files.map((file) => [file.path, file]));
+  const candidate = new Map(observed.candidate.files.map((file) => [file.path, file]));
+  const changes = {
+    added: observed.candidate.files.filter(({ path }) => !original.has(path)),
+    removed: observed.reviewed.files.filter(({ path }) => !candidate.has(path)),
+    modified: observed.candidate.files.flatMap((file) => {
+      const before = original.get(file.path);
+      return before && (before.digest !== file.digest || before.bytes !== file.bytes)
+        ? [{ before, after: file }] : [];
+    }),
+  };
+  const paths = [
+    ...changes.added.map(({ path }) => path),
+    ...changes.removed.map(({ path }) => path),
+    ...changes.modified.map(({ after }) => after.path),
+  ].sort();
+  const expectedImpact = {
+    affectedPaths: paths,
+    entryChanged: observed.reviewed.entry !== observed.candidate.entry ||
+      paths.includes(observed.reviewed.entry) || paths.includes(observed.candidate.entry),
+    htmlChanged: paths.includes("index.html"),
+    manifestChanged: paths.includes("vibestudio-build.json"),
+  };
+  const expectedTarget = assignment.environment === "preview" ? "same-target" : "different-target";
+  requireEvidence(
+    isDeepStrictEqual(observed.change, changes) && isDeepStrictEqual(report.impact, expectedImpact) &&
+      report.match === expectedTarget && report.decision === assignment.decision &&
+      typeof report.reason === "string" && report.reason.trim() &&
+      matchesValue(target?.inputs?.reviewed, reviewedIntent) &&
+      matchesValue(target?.inputs?.candidate, candidateIntent) && matchesValue(target.output, expectedTarget) &&
+      matchesValue(impact?.inputs?.comparison, observed) && matchesValue(impact.output, report.impact) &&
+      matchesValue(critical?.inputs?.paths, paths) && matchesValue(critical.output, report.impact) &&
+      (assignment.edit
+        ? typeof editApplicationId === "string" && !!editApplicationId &&
+          observed.reviewed.sourceHash !== observed.candidate.sourceHash &&
+          observed.reviewed.artifactDigest !== observed.candidate.artifactDigest &&
+          expectedImpact.entryChanged && expectedImpact.manifestChanged
+        : editApplicationId === null && paths.length === 0 &&
+          observed.reviewed.sourceHash === observed.candidate.sourceHash &&
+          observed.reviewed.artifactDigest === observed.candidate.artifactDigest),
+    "Publication revision requires the exact changed public files and review decision"
+  );
+  return {
+    world: { context_id: contextId, source, artifact_digest: observed.candidate.artifactDigest },
     checks,
     evidence: { workspace: { fixture } },
   };
