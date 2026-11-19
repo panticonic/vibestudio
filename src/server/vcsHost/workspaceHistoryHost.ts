@@ -758,8 +758,22 @@ export function workspaceParticipantIdentity(caller: VerifiedCaller, ownerContex
     // Every tool call in the same authenticated task reuses its working copy.
     return canonicalJson(["task", invocation.owner, invocation.task]);
   }
-  if (caller.taskAuthority) return canonicalJson(["task-grant", caller.taskAuthority]);
   const userId = caller.subject?.userId;
+  const execution = caller.executionSession;
+  if (
+    userId && ownerContextId &&
+    execution?.mode === "interactive" &&
+    execution.executor.kind === "dynamic-code" &&
+    execution.executor.runtimeId === caller.runtime.id &&
+    execution.contextId === ownerContextId &&
+    execution.ownerUser === `user:${userId}` &&
+    execution.agentBinding === null && execution.parent === null
+  ) {
+    // The host reissues task grants for individual signed evals. Their edits
+    // belong to the authenticated person's persistent session context.
+    return canonicalJson(["interactive-session", userId, ownerContextId]);
+  }
+  if (caller.taskAuthority) return canonicalJson(["task-grant", caller.taskAuthority]);
   if (userId && ownerContextId) {
     // One device can open several independent sessions with separate retirement.
     return canonicalJson(["user", userId, caller.remoteDeviceKey ?? caller.runtime.id, ownerContextId]);

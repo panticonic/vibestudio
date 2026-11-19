@@ -75,6 +75,30 @@ it("uses the verified task to choose a copy and preserves the migrated context h
   expect(editor.owner).not.toEqual(independent.owner);
 });
 
+it("retains a user's interactive working copy across signed runs without collapsing native tasks", () => {
+  const signed = (run: string, userId = "person", contextId = "session-context"): VerifiedCaller => {
+    const caller = createVerifiedCaller("do:workers/session:SessionDO:session", "do", null, null, {
+      userId, handle: userId,
+    });
+    const executionSession = {
+      mode: "interactive",
+      ownerUser: `user:${userId}`,
+      contextId,
+      agentBinding: null,
+      parent: null,
+      executor: { kind: "dynamic-code", runtimeId: caller.runtime.id, runId: run },
+    } as NonNullable<VerifiedCaller["executionSession"]>;
+    return { ...caller, taskAuthority: `task:${run}`, executionSession };
+  };
+  const first = workspaceParticipantIdentity(signed("first"), "session-context");
+  expect(workspaceParticipantIdentity(signed("second"), "session-context")).toBe(first);
+  expect(workspaceParticipantIdentity(signed("third", "other"), "session-context")).not.toBe(first);
+  expect(workspaceParticipantIdentity(signed("fourth", "person", "other-context"), "other-context")).not.toBe(first);
+  expect(workspaceParticipantIdentity(signed("first"), "other-context")).not.toBe(first);
+  expect(workspaceParticipantIdentity({ ...signed("first"), nativeInvocation: native(1, "one").nativeInvocation! }, "session-context"))
+    .toBe(workspaceParticipantIdentity(native(1, "two"), "session-context"));
+});
+
 it("withholds a grant when replay reports a different allocation", async () => {
   const dispatch = vi.fn(async () => ({
     targetId: "do:another:History:work",
