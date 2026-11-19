@@ -114,6 +114,7 @@ import {
   bindWorkspaceParticipantPublication,
   collectWorkspaceHistoryContentRoots,
   editWorkspaceParticipant,
+  forkWorkspaceParticipantContext,
   listAppliedWorkspacePublications,
   mergeWorkspaceParticipantContext,
   observeAppliedWorkspacePublication,
@@ -765,21 +766,52 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }) {
     const source = this.participantHistorySource;
     if (!source) return null;
-    return this.locked(`context-lifecycle:${input.ownerContextId}`, async () => {
-      if (this.contextHeads.get(input.ownerContextId) === null || this.contextHeads.get(input.contextId) === null) {
+    return this.locked(`context-lifecycle:${input.ownerContextId}`, () =>
+      this.openAdmittedParticipantScope(source, input)
+    );
+  }
+
+  private async openAdmittedParticipantScope(
+    source: NonNullable<WorkspaceVcs["participantHistorySource"]>,
+    input: { caller: VerifiedCaller; contextId: string; ownerContextId: string; signal?: AbortSignal }
+  ) {
+    if (this.contextHeads.get(input.ownerContextId) === null || this.contextHeads.get(input.contextId) === null) {
+      throw new Error("Workspace participant context has retired");
+    }
+    const replayed = source.replayedWorkingHeads.get(input.contextId);
+    const participantId = workspaceParticipantIdentity(input.caller, input.ownerContextId);
+    const reservation = await openWorkspaceParticipantContext({
+      ...source, ...input,
+      ...(replayed?.participantId === participantId ? { replayedWorkingHead: replayed.head } : {}),
+    });
+    return {
+      dispatch: source.dispatch, canonical: source.canonical, ...reservation,
+      caller: input.caller, contextId: input.contextId, ownerContextId: input.ownerContextId,
+    };
+  }
+
+  /** Both scopes are resolved from admitted runtime lifetimes before this call. */
+  async forkParticipantContext(input: {
+    parent: { caller: VerifiedCaller; contextId: string };
+    child: { caller: VerifiedCaller; contextId: string; ownerContextId: string };
+  }): Promise<VcsStateNodeRef> {
+    const { parent, child } = input;
+    if (parent.contextId === child.contextId) {
+      throw new Error("Workspace fork requires distinct admitted lifetimes");
+    }
+    const source = this.participantHistorySource;
+    if (!source) throw new Error("Participant workspace history is unavailable");
+    if (child.ownerContextId !== child.contextId && child.ownerContextId !== parent.contextId) {
+      throw new Error("Workspace fork target must belong to one of its admitted lifetimes");
+    }
+    const [first, second] = [parent.contextId, child.contextId].sort();
+    return this.locked(`context-lifecycle:${first}`, () => this.locked(`context-lifecycle:${second}`, async () => {
+      if (this.contextHeads.get(child.contextId) === null) {
         throw new Error("Workspace participant context has retired");
       }
-      const replayed = source.replayedWorkingHeads.get(input.contextId);
-      const participantId = workspaceParticipantIdentity(input.caller, input.ownerContextId);
-      const reservation = await openWorkspaceParticipantContext({
-        ...source, ...input,
-        ...(replayed?.participantId === participantId ? { replayedWorkingHead: replayed.head } : {}),
-      });
-      return {
-        dispatch: source.dispatch, canonical: source.canonical, ...reservation,
-        caller: input.caller, contextId: input.contextId, ownerContextId: input.ownerContextId,
-      };
-    });
+      const scope = await this.openAdmittedParticipantScope(source, { ...parent, ownerContextId: parent.contextId });
+      return forkWorkspaceParticipantContext({ ...scope, child, blobsDir: this.deps.blobsDir });
+    }));
   }
 
   /**

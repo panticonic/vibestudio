@@ -298,6 +298,11 @@ export interface RuntimeSemanticContexts {
    * semantic context. Used by clone/subagent lifecycle orchestration.
    */
   forkContext(sourceContextId: string, targetContextId: string): Promise<void>;
+  forkParticipantContext?(input: {
+    caller: VerifiedCaller | undefined;
+    sourceContextId: string;
+    targetContextId: string;
+  }): Promise<VcsStateNodeRef | null>;
   /** Exact semantic state pointer without materializing a native projection. */
   resolveWorkingState(contextId: string): Promise<VcsStateNodeRef>;
   /** Enumerate durable semantic contexts, optionally restricted by exact prefix. */
@@ -2640,11 +2645,10 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     return { contextId };
   }
 
-  async function forkSemanticContext(input: {
-    ownerRuntimeId: string;
-    parentContextId: string;
-    targetContextId: string;
-  }): Promise<{
+  async function forkSemanticContext(
+    input: { ownerRuntimeId: string; parentContextId: string; targetContextId: string },
+    caller?: VerifiedCaller
+  ): Promise<{
     contextId: string;
     parentContextId: string;
     parentWorkingHead: VcsStateNodeRef;
@@ -2661,10 +2665,13 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     }
     const parentContextId = input.parentContextId;
     const contextId = input.targetContextId;
-    const parentWorkingHead = await deps.semanticContexts.resolveWorkingState(parentContextId);
+    const selected = await deps.semanticContexts.forkParticipantContext?.({
+      caller, sourceContextId: parentContextId, targetContextId: contextId,
+    });
+    const parentWorkingHead = selected ?? await deps.semanticContexts.resolveWorkingState(parentContextId);
     // Semantic state only: do not create a projection folder and do not touch
     // entity/DO state. forkContext is valid even when the parent is empty.
-    await deps.semanticContexts.forkContext(parentContextId, contextId);
+    if (!selected) await deps.semanticContexts.forkContext(parentContextId, contextId);
     await store.recordContextEdge({
       contextId,
       ownerContextId: parentContextId,
@@ -2672,7 +2679,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       ownerEntityId: input.ownerRuntimeId,
     });
     await deps.onContextCreated?.({ contextId, ownerContextId: parentContextId });
-    const childBaseState = await deps.semanticContexts.resolveWorkingState(contextId);
+    const childBaseState = selected ?? await deps.semanticContexts.resolveWorkingState(contextId);
     return { contextId, parentContextId, parentWorkingHead, childBaseState };
   }
 
@@ -2955,7 +2962,13 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       destroyContext: async (_ctx, [{ contextId, recursive }]) => {
         await destroyContext({ contextId, recursive });
       },
-      forkSemanticContext: (_ctx, [input]) => forkSemanticContext(input),
+      forkSemanticContext: (ctx, [input]) => {
+        const caller = [ctx.caller, ctx.authorizingCaller].find(
+          (principal) => principal?.runtime.id === input.ownerRuntimeId ||
+            principal?.agentBinding?.entityId === input.ownerRuntimeId
+        );
+        return forkSemanticContext(input, caller);
+      },
       dropSemanticContext: async (_ctx, [{ contextId }]) => {
         await dropSemanticContext(contextId);
       },

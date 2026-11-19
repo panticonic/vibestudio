@@ -58,6 +58,11 @@ const reservationSchema = z
   .strict();
 
 const digest = z.string().regex(/^[0-9a-f]{64}$/u);
+const historyForkSeed = z.object({
+  branch: z.string().regex(/^fork\/[0-9a-f]{64}$/u),
+  head,
+  state: vcsStateNodeRefSchema,
+}).strict();
 const retainedParticipantKeys = z.array(z.string().regex(/^work-[0-9a-f]{64}$/u));
 const retainedContentHashes = z.array(digest);
 const blob = z.object({ contentHash: digest, base64: z.string() }).strict();
@@ -334,6 +339,50 @@ export interface WorkspaceHistoryParticipant extends WorkspaceHistorySource {
   owner: WorkspaceSourceProviderRef;
   caller: VerifiedCaller;
   ownerContextId?: string | undefined;
+}
+
+function participantStorage(canonical: WorkspaceSourceProviderRef, participantId: string) {
+  const owner = { ...canonical, objectKey: `work-${sha256HexSyncText(participantId)}` };
+  const targetId = canonicalEntityId({
+    kind: "do", source: owner.source, className: owner.className, key: owner.objectKey,
+  });
+  return { owner, targetId };
+}
+
+/** The host has verified authority over the source and admitted the destination lifetime. */
+export async function forkWorkspaceParticipantContext(input: WorkspaceHistoryParticipant & {
+  contextId: string;
+  child: { caller: VerifiedCaller; ownerContextId: string; contextId: string };
+  blobsDir: string;
+}): Promise<VcsStateNodeRef> {
+  const { dispatch, canonical, owner, child } = input;
+  const fromParticipant = requireWorkspaceParticipantOwner(input);
+  if (!input.contextId || !child.contextId || child.contextId === input.contextId) {
+    throw new Error("Workspace fork requires distinct source and target contexts");
+  }
+  const participantId = workspaceParticipantIdentity(child.caller, child.ownerContextId);
+  const target = participantStorage(canonical, participantId);
+  const fromPeer = participantStorage(canonical, fromParticipant).targetId;
+  const reservation = reservationSchema.parse(await dispatch.dispatch(canonical, "reserveHistoryParticipant", {
+    participantId,
+    contextId: participantId === fromParticipant ? input.ownerContextId : child.ownerContextId,
+  }));
+  if (reservation.targetId !== target.targetId)
+    throw new Error("Workspace fork reserved a different storage peer");
+  const request = { parentContextId: input.contextId, childContextId: child.contextId, childPeer: target.targetId };
+  return withBlobContentLock(input.blobsDir, async () => {
+    const { seed, token } = z.object({
+      seed: historyForkSeed,
+      token: z.string().min(1).nullable(),
+    }).strict().parse(await dispatch.dispatch(owner, "offerHistoryContextFork", request));
+    const accepted = historyForkSeed.parse(await dispatch.dispatch(target.owner, "acceptHistoryContextFork", {
+      participantId, origin: reservation.origin, request, seed, token, fromPeer,
+    }));
+    if (canonicalJson(accepted) !== canonicalJson(seed))
+      throw new Error("Workspace fork accepted a different revision");
+    await dispatch.dispatch(owner, "finishHistoryContextFork", { request, seed });
+    return seed.state;
+  });
 }
 
 /** Read exact file metadata without accessing content bytes. */
@@ -839,13 +888,7 @@ export async function openWorkspaceParticipantContext(input: {
   if (!ownerContextId || !contextId)
     throw new Error("Workspace contexts require durable identities");
   const participantId = workspaceParticipantIdentity(caller, ownerContextId);
-  const owner = { ...canonical, objectKey: `work-${sha256HexSyncText(participantId)}` };
-  const targetId = canonicalEntityId({
-    kind: "do",
-    source: owner.source,
-    className: owner.className,
-    key: owner.objectKey,
-  });
+  const { owner, targetId } = participantStorage(canonical, participantId);
   input.signal?.throwIfAborted();
   const reservation = reservationSchema.parse(
     await dispatch.dispatch(canonical, "reserveHistoryParticipant", {

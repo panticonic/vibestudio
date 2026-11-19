@@ -9,6 +9,7 @@ import type { WorkspaceSourceProviderRef } from "../workspaceSourceProvider.js";
 import { getBytes, putBytes } from "../services/blobstoreService.js";
 import {
   editWorkspaceParticipant,
+  forkWorkspaceParticipantContext,
   inspectWorkspaceParticipantProvenance,
   mergeWorkspaceParticipantContext,
   openWorkspaceParticipantContext,
@@ -17,6 +18,7 @@ import {
   reviewWorkspaceParticipantMerge,
   workspaceParticipantReferencesReachable,
   workspaceParticipantCatalog,
+  workspaceParticipantIdentity,
 } from "./workspaceHistoryHost.js";
 
 const canonical = {
@@ -89,6 +91,51 @@ it("withholds a grant when replay reports a different allocation", async () => {
     })
   ).rejects.toThrow("different participant owner");
   expect(dispatch).toHaveBeenCalledTimes(1);
+});
+
+it("transfers the selected fork to the destination identity and requires the exact receipt", async () => {
+  const parent = native(1, "parent");
+  const child = native(2, "child");
+  const owner = { ...canonical, objectKey: `work-${sha256HexSyncText(workspaceParticipantIdentity(parent, "parent-context"))}` };
+  const childId = workspaceParticipantIdentity(child, "child-context");
+  const target = { ...canonical, objectKey: `work-${sha256HexSyncText(childId)}` };
+  const peer = (ref: WorkspaceSourceProviderRef) => `do:${ref.source}:${ref.className}:${ref.objectKey}`;
+  const request = { parentContextId: "parent-context", childContextId: "child-context", childPeer: peer(target) };
+  const seed = {
+    branch: `fork/${"a".repeat(64)}`,
+    head: "exact-head",
+    state: { kind: "application", applicationId: "private-application" },
+  };
+  const origin = { ref: "GadHistoryDO:canonical", token: "origin-grant" };
+  const dispatch = vi.fn(async (_receiver: WorkspaceSourceProviderRef, method: string) => {
+    switch (method) {
+      case "reserveHistoryParticipant": return { targetId: peer(target), head: "main", origin };
+      case "offerHistoryContextFork": return { seed, token: "fork-grant" };
+      case "acceptHistoryContextFork": return seed;
+      case "finishHistoryContextFork": return;
+      default: throw new Error(`Unexpected history call ${method}`);
+    }
+  });
+  const fork = () => forkWorkspaceParticipantContext({
+    dispatch: { dispatch }, canonical, owner, caller: parent,
+    blobsDir: tmpdir(),
+    contextId: "parent-context", ownerContextId: "parent-context",
+    child: { caller: child, contextId: "child-context", ownerContextId: "child-context" },
+  });
+  await expect(fork()).resolves.toEqual(seed.state);
+  expect(dispatch.mock.calls).toEqual([
+    [canonical, "reserveHistoryParticipant", { participantId: childId, contextId: "child-context" }],
+    [owner, "offerHistoryContextFork", request],
+    [target, "acceptHistoryContextFork", { participantId: childId, origin, request, seed, token: "fork-grant", fromPeer: peer(owner) }],
+    [owner, "finishHistoryContextFork", { request, seed }],
+  ]);
+  dispatch.mockClear();
+  const remote = dispatch.getMockImplementation()!;
+  dispatch.mockImplementation((ref, method) => method === "acceptHistoryContextFork"
+    ? Promise.resolve({ ...seed, head: "wrong-head" })
+    : remote(ref, method));
+  await expect(fork()).rejects.toThrow("accepted a different revision");
+  expect(dispatch).toHaveBeenCalledTimes(3);
 });
 
 it("avoids opening a new participant copy during shutdown", async () => {

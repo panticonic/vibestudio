@@ -611,6 +611,35 @@ describe("runtimeService system-test agent execution policy", () => {
 });
 
 describe("runtimeService.forkSemanticContext", () => {
+  it("returns the authenticated participant's selected fork without touching the legacy workspace", async () => {
+    const selected = { kind: "application" as const, applicationId: "unsaved-private-edit" };
+    const forkParticipantContext = vi.fn(async () => selected);
+    const forkContext = vi.fn(async () => {});
+    const resolveWorkingState = vi.fn();
+    const { service, entityCache, contextFolders } = await buildDeps({
+      semanticContexts: { forkParticipantContext, forkContext, resolveWorkingState },
+    });
+    const caller = panelCaller("panel:development");
+    entityCache._onActivate({
+      id: caller.runtime.id, kind: "panel", contextId: "ctx-parent",
+      source: { repoPath: "panels/caller", effectiveVersion: "v1" },
+      key: "development", createdAt: 1, status: "active", cleanupComplete: true,
+    });
+    const result = await service.handler({ caller }, "forkSemanticContext", [{
+      ownerRuntimeId: caller.runtime.id, parentContextId: "ctx-parent", targetContextId: "ctx-child",
+    }]);
+    expect(result).toEqual({
+      contextId: "ctx-child", parentContextId: "ctx-parent",
+      parentWorkingHead: selected, childBaseState: selected,
+    });
+    expect(forkParticipantContext).toHaveBeenCalledWith({
+      caller, sourceContextId: "ctx-parent", targetContextId: "ctx-child",
+    });
+    expect(forkContext).not.toHaveBeenCalled();
+    expect(resolveWorkingState).not.toHaveBeenCalled();
+    expect(contextFolders.ensureContextFolder).not.toHaveBeenCalled();
+  });
+
   it("forks semantic state only and records a deterministic lifecycle edge for an empty context", async () => {
     const forkContext = vi.fn(async () => {});
     const resolveWorkingState = vi.fn(async (contextId: string) =>
