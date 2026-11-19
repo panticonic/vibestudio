@@ -8,6 +8,7 @@ import {
   type WorkspaceSourceProviderRef,
 } from "../workspaceSourceProvider.js";
 import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
+import type { WorkspaceHistorySource } from "../vcsHost/workspaceHistoryHost.js";
 import type { RuntimeManager } from "../runtimeManager.js";
 import type { GcEpochCoordinator } from "../services/gcEpochCoordinator.js";
 import type { BuildSystemV2 } from "../buildV2/index.js";
@@ -28,6 +29,10 @@ export interface VcsDurabilityBootstrapDeps {
   workspaceId: string;
   /** The state captured before semantic initialization may mutate the source root. */
   bootstrapStateHash: string;
+  sharedHistorySeed?: Omit<Parameters<WorkspaceVcs["initializeSharedHistory"]>[0], "dispatch" | "canonical"> & {
+    remember(): Promise<void>;
+  };
+  exportSharedHistorySeed?: (history: WorkspaceHistorySource) => Promise<void>;
   publishWorkspaceSourceEntity(input: {
     targetId: string;
     source: string;
@@ -42,7 +47,7 @@ export interface VcsDurabilityBootstrapDeps {
   readWorkspaceHistoryOwner(targetId: string): Promise<{ contextId: string } | null>;
   listWorkspaceHistorySessionOwners(contextIds: readonly string[]): Promise<Array<{ contextId: string; userId: string }>>;
   readProtectedMainEventId(): string | null;
-  activateSemanticWorkspace(workspaceVcs: WorkspaceVcs): Promise<void>;
+  activateSemanticWorkspace(workspaceVcs: WorkspaceVcs, sharedHistorySeed?: true): Promise<void>;
 }
 
 /** Resume only the canonical history named by this workspace's durable runtime. */
@@ -68,6 +73,18 @@ async function restoreParticipantHistory(
   if (prepared.targetId !== targetId)
     throw new Error("The runtime prepared a different canonical participant history");
   await deps.publishWorkspaceSourceEntity({ ...canonical, contextId, ...prepared });
+  const history = { dispatch, canonical };
+  if (deps.sharedHistorySeed) {
+    const destination = await runtime.workspaceNodeEndpoint();
+    if (destination.nodeId === deps.sharedHistorySeed.seed.sourceNodeId) {
+      throw new Error("The workspace seed destination must have its own node identity");
+    }
+    await deps.workspaceVcs.initializeSharedHistory({ ...deps.sharedHistorySeed, ...history });
+    await deps.sharedHistorySeed.remember();
+    await deps.workspaceVcs.attachParticipantHistory({ ...history, infrastructureContextId: contextId });
+    await deps.exportSharedHistorySeed?.(history);
+    return true;
+  }
   const receipt = await readWorkspaceHistoryReplayReceipt(dispatch, canonical);
   const held = await readWorkspaceHistoryReplayFreeze(dispatch, legacy);
   const expectedMainEventId = receipt?.eventId ?? deps.readProtectedMainEventId();
@@ -96,9 +113,10 @@ async function restoreParticipantHistory(
     dispatch, source: legacy, destination: canonical, freeze,
   });
   await deps.workspaceVcs.attachParticipantHistory({
-    dispatch, canonical, infrastructureContextId: contextId,
+    ...history, infrastructureContextId: contextId,
     listReplayedSessionOwners: deps.listWorkspaceHistorySessionOwners,
   });
+  await deps.exportSharedHistorySeed?.(history);
   return true;
 }
 
@@ -145,9 +163,18 @@ export function wireVcsDurability(deps: VcsDurabilityBootstrapDeps): void {
       console.log(
         `[Vcs] Attached manifest-declared workspace source provider (${gadRef.source}:${gadRef.className})`
       );
-      const historyChecked = await restoreParticipantHistory(deps, doDispatch, runtimeManager);
+      const historyChecked = !deps.sharedHistorySeed && await restoreParticipantHistory(deps, doDispatch, runtimeManager);
       if (deps.workspaceVcs.participantHistoryAttached) phaseComplete("installed participant history");
       deps.workspaceVcs.startSemanticInitialization(async () => {
+        if (deps.sharedHistorySeed) {
+          if (!runtimeManager.declaresRemoteDoltClass(gadRef.source, "GadHistoryDO")) {
+            throw new Error("Initializing a shared history seed requires the native workspace history class");
+          }
+          await restoreParticipantHistory(deps, doDispatch, runtimeManager, true);
+          phaseComplete("installed shared participant history");
+          await deps.activateSemanticWorkspace(deps.workspaceVcs, true);
+          return;
+        }
         await deps.activateSemanticWorkspace(deps.workspaceVcs);
         if (!historyChecked && runtimeManager.declaresRemoteDoltClass(gadRef.source, "GadHistoryDO")) {
           await restoreParticipantHistory(deps, doDispatch, runtimeManager, true);

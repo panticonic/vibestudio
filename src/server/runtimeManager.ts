@@ -4340,6 +4340,14 @@ export class RuntimeManager {
     return this.hasChronolog ? this.chronologToken : null;
   }
 
+  async workspaceNodeEndpoint(signal?: AbortSignal): Promise<{ nodeId: string; addrs?: string[] }> {
+    const node = this.node;
+    if (!node) throw new Error("The workspace runtime node is unavailable");
+    const localEndpoint = await node.p2pEndpoint(signal);
+    if (this.node !== node) throw new Error("The workspace runtime changed while reading its endpoint");
+    return localEndpoint;
+  }
+
   async chronologRequest(input: unknown, signal?: AbortSignal): Promise<Response> {
     if (!this.hasChronolog) throw new Error("Chronolog is unavailable in this host build");
     let body = input;
@@ -4349,13 +4357,7 @@ export class RuntimeManager {
       "action" in input &&
       (input.action === "identity" || input.action === "invite")
     ) {
-      const node = this.node;
-      if (!node) throw new Error("The workspace runtime node is unavailable");
-      const localEndpoint = await node.p2pEndpoint(signal);
-      if (this.node !== node) {
-        throw new Error("The workspace runtime changed while reading its endpoint");
-      }
-      body = { ...input, localEndpoint };
+      body = { ...input, localEndpoint: await this.workspaceNodeEndpoint(signal) };
     }
     return this.nodeFetch("/_chronolog", { chronolog: true, body, signal });
   }

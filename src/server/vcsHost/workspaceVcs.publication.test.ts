@@ -291,6 +291,76 @@ describe("WorkspaceVcs protected publication notification", () => {
     expect(refs.readMainSemanticState()?.eventId).toBe("peer-event");
   });
 
+  it("checks seed bytes before initializing empty history and recovers an interrupted install", async () => {
+    root = await fsp.mkdtemp(path.join(os.tmpdir(), "workspace-history-seed-"));
+    const blobsDir = path.join(root, "blobs");
+    ensureLayout(blobsDir);
+    const gate = vi.fn(async () => undefined);
+    const refs = createProtectedRefStore({ statePath: path.join(root, "refs"), gate });
+    const vcs = new WorkspaceVcs({
+      workspaceId: "workspace:test",
+      blobsDir,
+      workspaceRoot: path.join(root, "source"),
+      contextProjectionsRoot: path.join(root, "contexts"),
+      buildSourcesRoot: path.join(root, "build-sources"),
+      refs,
+    });
+    const canonical = {
+      source: "workers/workspace-source", className: "GadHistoryDO", objectKey: "canonical",
+    };
+    const seed = { sourceNodeId: "a".repeat(64), head: "1".repeat(40), eventId: "seed-event" };
+    const body = "verified source file";
+    const contentHash = sha256HexSyncText(body);
+    const confirmSource = vi.fn(async () => undefined);
+    let installed = false;
+    const dispatch = vi.fn(async (target: typeof canonical, method: string, input?: unknown) => {
+      expect(target).toEqual(canonical);
+      switch (method) {
+        case "stageSharedHistorySeed":
+          return {
+            state: { kind: "event", eventId: seed.eventId },
+            repositories: [{
+              repositoryId: "repo", repoPath: "packages/a", presence: "present", fileManifestId: "manifest",
+              source: { kind: "snapshot", files: [{ path: "example.txt", contentHash, mode: 0o644 }] },
+            }],
+            contentHashes: [contentHash],
+          };
+        case "readSharedHistorySeedReceipt":
+          return { seed, originalHead: "0".repeat(40), installed };
+        case "installSharedHistorySeed":
+          expect(input).toEqual(seed);
+          expect(confirmSource).toHaveBeenCalledOnce();
+          if (!installed) {
+            installed = true;
+            throw new Error("The native seed install reply was lost");
+          }
+          return seed;
+        default:
+          throw new Error(`Unexpected history method ${method}`);
+      }
+    });
+    const fetchFile = vi.fn(async (digest: string) => {
+      expect(digest).toBe(contentHash);
+      return Buffer.from(body);
+    });
+    const initialize = () => vcs.initializeSharedHistory({
+      canonical, dispatch: { dispatch }, seed,
+      offer: { destinationNodeId: "b".repeat(64), branch: "seed/fixture", token: "token" },
+      fetchPack: vi.fn(), fetchFile, confirmSource,
+    });
+    fetchFile.mockResolvedValueOnce(Buffer.from("different source file"));
+    await expect(initialize()).rejects.toThrow("bytes do not match their digest");
+    expect(gate).not.toHaveBeenCalled();
+    expect(installed).toBe(false);
+    await expect(initialize()).rejects.toThrow("native seed install reply was lost");
+    expect(refs.readMainSemanticState()).toBeNull();
+    await expect(initialize()).resolves.toBeUndefined();
+    expect(refs.readMainSemanticState()?.eventId).toBe(seed.eventId);
+    await expect(initialize()).resolves.toBeUndefined();
+    expect(gate).toHaveBeenCalledOnce();
+    expect(fetchFile).toHaveBeenCalledTimes(2);
+  });
+
   async function interruptedPublication(semanticAcknowledged: boolean) {
     root = await fsp.mkdtemp(path.join(os.tmpdir(), "vcs-launch-recovery-"));
     const blobsDir = path.join(root, "blobs");

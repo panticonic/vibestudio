@@ -9,6 +9,10 @@ import type { RuntimeManager } from "../runtimeManager.js";
 import { wireVcsDurability, type VcsDurabilityBootstrapDeps } from "./vcsDurability.js";
 import { canonicalWorkspaceObjectContextId } from "./workspaceObjectIdentity.js";
 import { WORKSPACE_PARTICIPANT_HISTORY_MIGRATION } from "../vcsHost/workspaceHistoryMigration.js";
+import { readSharedHistorySeed } from "./sharedHistorySeed.js";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 function captureServices(overrides: Partial<VcsDurabilityBootstrapDeps> = {}): {
   services: ManagedService[];
@@ -57,6 +61,75 @@ describe("wireVcsDurability", () => {
         dependencies: ["semanticWorkspace", "buildSystem"],
       },
     ]);
+  });
+
+  it("opens an approved seed before activation without replaying the root template", async () => {
+    const sequence: string[] = [];
+    let initialize: (() => Promise<void>) | undefined;
+    const workspaceVcs = {
+      attachGad: vi.fn(async () => undefined),
+      attachWorkspaceSourceProvider: vi.fn(),
+      initializeSharedHistory: vi.fn(async () => { sequence.push("seed"); }),
+      attachParticipantHistory: vi.fn(async () => { sequence.push("participant"); }),
+      startSemanticInitialization: (operation: () => Promise<void>) => { initialize = operation; },
+    } as unknown as WorkspaceVcs;
+    const sharedHistorySeed = {
+      seed: { sourceNodeId: "a".repeat(64), head: "1".repeat(40), eventId: "seed-event" },
+      offer: { destinationNodeId: "b".repeat(64), branch: "seed/fixture", token: "token" },
+      fetchPack: vi.fn(), fetchFile: vi.fn(), confirmSource: vi.fn(), remember: vi.fn(),
+    };
+    const activateSemanticWorkspace = vi.fn(async () => { sequence.push("active"); });
+    const { services } = captureServices({ workspaceVcs, sharedHistorySeed, activateSemanticWorkspace });
+    const runtimeManager = {
+      declaresRemoteDoltClass: vi.fn(() => true),
+      workspaceNodeEndpoint: vi.fn(async () => ({ nodeId: "d".repeat(64) })),
+      ensureDurableObjectEntity: vi.fn(async ({ source, className, key }) => ({
+        targetId: `do:${source}:${className}:${key}`, effectiveVersion: "a".repeat(64),
+        buildKey: "b".repeat(64), executionDigest: "c".repeat(64),
+        authority: { provides: [], requests: [] },
+      })),
+    } as unknown as RuntimeManager;
+    const dispatch = vi.fn();
+    const resolve = <D>(name: string): D | undefined =>
+      ({ doDispatch: { dispatch }, runtimeManager })[name as "doDispatch" | "runtimeManager"] as D | undefined;
+    await services.find((service) => service.name === "vcsAttach")?.start?.(resolve);
+    await initialize!();
+    expect(sequence).toEqual(["seed", "participant", "active"]);
+    expect(activateSemanticWorkspace).toHaveBeenCalledWith(workspaceVcs, true);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("loads approved seed files only for the designated workspace and verified pack", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "shared-history-seed-"));
+    try {
+      await expect(readSharedHistorySeed(root, "workspace-1")).resolves.toBeNull();
+      const seedRoot = path.join(root, "installer-staging");
+      await mkdir(seedRoot);
+      const manifest = {
+        version: 1,
+        workspaceId: "workspace-1",
+        seed: { sourceNodeId: "a".repeat(64), head: "1".repeat(40), eventId: "seed-event" },
+        offer: { destinationNodeId: "b".repeat(64), branch: `seed/${"c".repeat(64)}` },
+        packDigest: sha256HexSyncText("seed contents"),
+      };
+      const approval = path.join(seedRoot, "approved.json");
+      const pack = path.join(seedRoot, "history.pack");
+      await writeFile(approval, JSON.stringify(manifest));
+      await writeFile(pack, "seed contents");
+      await expect(readSharedHistorySeed(root, "workspace-2", seedRoot)).rejects.toThrow("different workspace");
+      const seed = await readSharedHistorySeed(root, manifest.workspaceId, seedRoot);
+      await expect(seed?.fetchPack()).resolves.toEqual(Buffer.from("seed contents"));
+      await writeFile(pack, "different contents");
+      await expect(seed?.fetchPack()).rejects.toThrow("approved digest");
+      await writeFile(approval, `${JSON.stringify(manifest)}\n`);
+      await expect(seed?.confirmSource()).rejects.toThrow("approval changed");
+      await writeFile(approval, JSON.stringify(manifest));
+      await seed?.remember();
+      await rm(seedRoot, { recursive: true });
+      await expect(readSharedHistorySeed(root, manifest.workspaceId, seedRoot)).resolves.toMatchObject({ seed: manifest.seed });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("durably publishes the manifest source-provider entity before attaching it", async () => {
