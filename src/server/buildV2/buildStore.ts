@@ -1506,7 +1506,16 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
     executionDigest: string
   ): Promise<StoredBuildResult | null> {
     const current = await get(key);
-    if (!current) return null;
+    return current && readExecutionVariant(current, executionDigest);
+  }
+
+  async function readLocalByExecution(key: string, executionDigest: string) {
+    const current = await readLocal(key);
+    return current && readExecutionVariant(current, executionDigest);
+  }
+
+  async function readExecutionVariant(current: StoredBuildResult, executionDigest: string) {
+    const key = current.buildKey;
     if (current.metadata.execution?.executionDigest === executionDigest) return current;
     try {
       const stored = JSON.parse(
@@ -2200,6 +2209,7 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
     peekLocal,
     peekLocalExecution,
     readLocal,
+    readLocalByExecution,
     get,
     compilationMetadata,
     getOrHydrate,

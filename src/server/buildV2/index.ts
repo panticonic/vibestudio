@@ -610,7 +610,10 @@ export interface BuildSystemV2 {
   /** Prepare the private, two-collector retention commit for one host epoch. */
   prepareGc(options: { epoch: number }): Promise<PreparedBuildGc>;
 
-  inspectExecution(executionDigest: string): Promise<{
+  inspectExecution(
+    executionDigest: string,
+    canRead?: (artifact: ExecutionArtifactRefV1) => Promise<boolean>
+  ): Promise<{
     artifact: ExecutionArtifactRefV1 | null;
     roots: Array<{ owner: string; ownerId: string; reason: string }>;
     reconstructible: boolean;
@@ -3644,7 +3647,7 @@ export async function initBuildSystemV2(
       return (await buildSystem.prepareGc({ epoch: 0 })).report;
     },
 
-    async inspectExecution(executionDigest: string) {
+    async inspectExecution(executionDigest, canRead) {
       if (!/^[0-9a-f]{64}$/u.test(executionDigest)) {
         throw new Error("Execution digest must be a full lowercase SHA-256 digest");
       }
@@ -3656,8 +3659,8 @@ export async function initBuildSystemV2(
       if (!artifact) {
         const scan = await store.scanRetention();
         for (const stored of scan.builds) {
-          const build = await store.readLocal(stored.key);
-          if (build?.metadata.execution?.executionDigest === executionDigest) {
+          const build = await store.readLocalByExecution(stored.key, executionDigest);
+          if (build) {
             try {
               artifact = executionArtifactRefFromBuild(source.workspaceId, build);
             } catch {
@@ -3666,6 +3669,9 @@ export async function initBuildSystemV2(
             break;
           }
         }
+      }
+      if (canRead && (!artifact || !(await canRead(artifact)))) {
+        return { artifact: null, roots: [], reconstructible: false, missing: ["artifact"] };
       }
       const missing: string[] = [];
       if (!artifact) missing.push("artifact");

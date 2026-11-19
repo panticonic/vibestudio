@@ -825,6 +825,18 @@ describe("BuildSystemV2 startup", () => {
     }
     expect(await buildSystem.bindRuntimeImage("workers/retained", TEST_STATE, left)).toEqual(leftBinding);
     expect(await buildSystem.bindRuntimeImage("workers/retained", TEST_STATE)).toEqual(warmBinding);
+    const canReadLeft = async (artifact: typeof leftBinding.artifact) =>
+      artifact.sourceState.state?.kind === "event" && artifact.sourceState.state.eventId === left.eventId;
+    await expect(
+      buildSystem.inspectExecution(leftBinding.artifact.executionDigest, canReadLeft)
+    ).resolves.toMatchObject({ artifact: leftBinding.artifact });
+    const missingExecution = { artifact: null, roots: [], reconstructible: false, missing: ["artifact"] };
+    await expect(
+      buildSystem.inspectExecution(rightBinding.artifact.executionDigest, canReadLeft)
+    ).resolves.toEqual(missingExecution);
+    await expect(buildSystem.inspectExecution("0".repeat(64), canReadLeft)).resolves.toEqual(
+      missingExecution
+    );
 
     await buildSystem.shutdown();
     buildSystem = null;

@@ -2955,6 +2955,15 @@ async function main() {
               ctx.caller.agentBinding?.contextId ?? callerBuildContextId(entityCache, ctx.caller.runtime.id),
               ctx.signal,
             ),
+          executionVisibility: (ctx) => workspaceVcs.participantHistoryAttached
+            ? async ({ sourceState }) => sourceState.kind === "product-seed" ||
+              (sourceState.workspaceId === workspaceId && await workspaceVcs.participantBuildStateReachable(
+                sourceState.state,
+                ctx.caller,
+                ctx.caller.agentBinding?.contextId ?? callerBuildContextId(entityCache, ctx.caller.runtime.id),
+                ctx.signal,
+              ))
+            : undefined,
           listUnits: () =>
             listBuildUnitCatalog({
               buildSystem,

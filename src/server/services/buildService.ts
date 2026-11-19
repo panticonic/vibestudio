@@ -7,7 +7,7 @@ import { BUILDABLE_UNIT_DIRS } from "@vibestudio/workspace-contracts/sourceDirs"
 import type { BuildSystemV2 } from "../buildV2/index.js";
 import { buildSourcemapForNode } from "../buildV2/builder.js";
 import type { BuildResult, StoredBuildResult } from "../buildV2/buildStore.js";
-import type { ExecutionSourceStateRef } from "@vibestudio/shared/execution/retention";
+import type { ExecutionArtifactRefV1, ExecutionSourceStateRef } from "@vibestudio/shared/execution/retention";
 
 export interface ResolvedPanelMetadata {
   source: string;
@@ -61,6 +61,7 @@ export function createBuildService(deps: {
   listUnits: () => BuildUnitCatalogEntry[] | Promise<BuildUnitCatalogEntry[]>;
   getCallerContextId: (callerId: string) => string | null;
   canReadBuild?: (ctx: ServiceContext, build: StoredBuildResult) => Promise<boolean>;
+  executionVisibility?: (ctx: ServiceContext) => ((artifact: ExecutionArtifactRefV1) => Promise<boolean>) | undefined;
   resolveContextBuildSource?: (
     ctx: ServiceContext, contextId: string
   ) => Promise<{ stateHash: string; semanticState: ExecutionSourceStateRef } | null>;
@@ -329,8 +330,8 @@ export function createBuildService(deps: {
       listRecentBuildEvents: (_ctx, [unit]) => deps.buildSystem.listRecentBuildEvents(unit),
       recompute: () => deps.buildSystem.recompute(),
       gc: () => deps.buildSystem.gc(),
-      inspectExecution: (_ctx, [executionDigest]) =>
-        deps.buildSystem.inspectExecution(executionDigest),
+      inspectExecution: (ctx, [executionDigest]) =>
+        deps.buildSystem.inspectExecution(executionDigest, deps.executionVisibility?.(ctx)),
       getAboutPages: () => deps.buildSystem.getAboutPages(),
       hasUnit: (_ctx, [unit]) => deps.buildSystem.hasUnit(unit),
       getPanelMetadata: (ctx, [unit, ref]) => {
