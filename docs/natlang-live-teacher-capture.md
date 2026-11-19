@@ -100,6 +100,9 @@ or reattachment.
 Examples garden tasks compare visits and elapsed time against the persisted world. Clock cases
 use the panel's quiet observation action in an estate without storyteller seats. The oracle verifies the exact action
 sequence, elapsed phases, and attachment gains on distinct days.
+Spectrolite navigation reviews retain the browser-observed source and destination of each
+wiki-link hop. The navigation finding binds the whole route to the final canonical document,
+and any preview finding refers to that same editor and revision.
 Personal memory comparisons call the existing verified recall skill once for each assigned
 revision. They retain both original quotations and independently observed endpoint outcomes,
 including when one revision has no recall lead or no source. The exporter requires both nested

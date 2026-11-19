@@ -1554,15 +1554,23 @@ test("Spectrolite export rejects a preview from another canonical revision", asy
     path.resolve(import.meta.dirname, "..")
   );
   const cases = await loadLiveTeacherCases(checkouts);
-  entry.test.name = "spectrolite-live-release-handoff";
+  entry.test.name = "spectrolite-live-dispatch-approval-route";
   const run = diagnostics.natlangTeacher;
   const world = cases.get(entry.test.name);
   run.report = {
     findings: world.checks.map((check, index) => ({
       check,
       code: world.expected[index],
-      detail: world.documentPath,
-      evidenceIds: ["ctx:vault", "ctx:document", ...(check === "preview" ? ["ctx:preview"] : [])],
+      detail:
+        check === "navigation"
+          ? [...world.expectedNavigation.map(({ from }) => from), world.documentPath].join(" → ")
+          : world.documentPath,
+      evidenceIds: [
+        "ctx:vault",
+        "ctx:document",
+        ...(check === "preview" ? ["ctx:preview"] : []),
+        ...(check === "navigation" ? ["ctx:navigation"] : []),
+      ],
     })),
   };
   run.programPath = "skills/vibestudio-workflows/runWorkflow.nl";
@@ -1581,6 +1589,7 @@ test("Spectrolite export rejects a preview from another canonical revision", asy
     phase: "rendered",
     detail: null,
   };
+  const navigation = { id: "ctx:navigation", hops: structuredClone(world.expectedNavigation) };
   diagnostics.managedSpectrolite = {
     contextId: "ctx",
     verification: {
@@ -1597,10 +1606,12 @@ test("Spectrolite export rejects a preview from another canonical revision", asy
           ref: working,
         },
         preview,
+        navigation,
       },
       checks: Object.fromEntries(
         [
           "canonicalDocument",
+          "exactNavigation",
           "browserIdentity",
           "visiblePreview",
           "actualDisposition",
@@ -1617,6 +1628,13 @@ test("Spectrolite export rejects a preview from another canonical revision", asy
   await save();
   await assert.rejects(
     exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-different-revision` }),
+    /Spectrolite findings must match the assigned canonical revision/u
+  );
+  preview.contentHash = "canonical";
+  navigation.hops.reverse();
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-wrong-route` }),
     /Spectrolite findings must match the assigned canonical revision/u
   );
 });

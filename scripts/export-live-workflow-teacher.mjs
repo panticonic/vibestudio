@@ -419,6 +419,7 @@ export async function loadLiveTeacherCases(checkouts) {
     requiredText,
     heading,
     previewText,
+    follow,
   } of managedSpectroliteWorlds) {
     cases.set(`spectrolite-live-${id}`, {
       ...spectroliteWorkflow,
@@ -429,6 +430,11 @@ export async function loadLiveTeacherCases(checkouts) {
       requiredText,
       heading,
       previewText,
+      expectedNavigation: (follow ?? []).map(({ path: from, target, destination: to }) => ({
+        from,
+        target,
+        to,
+      })),
     });
   }
   for (const { id, expected, actions } of managedGrimoireWorlds) {
@@ -1577,7 +1583,7 @@ function spectroliteEvidence(execution, exercise, _scenario, workflow) {
   const fixture = execution.diagnostics.managedSpectrolite;
   const verification = fixture?.verification;
   const report = exercise.report;
-  const { vault, document, preview } = verification?.observed ?? {};
+  const { vault, document, preview, navigation } = verification?.observed ?? {};
   requireEvidence(
     typeof fixture?.contextId === "string" &&
       fixture.contextId === execution.provenance?.contextId &&
@@ -1599,6 +1605,9 @@ function spectroliteEvidence(execution, exercise, _scenario, workflow) {
       typeof document.contentHash === "string" &&
       document.ref?.id === vault.working?.id &&
       document.ref?.kind === vault.working?.kind &&
+      isDeepStrictEqual(navigation?.hops ?? [], workflow.expectedNavigation ?? []) &&
+      (!navigation || navigation.id === `${fixture.contextId}:navigation`) &&
+      (!navigation || verification.checks?.exactNavigation === true) &&
       (preview === null ||
         (preview?.id === `${fixture.contextId}:preview` &&
           preview.documentPath === document.path &&
@@ -1611,12 +1620,14 @@ function spectroliteEvidence(execution, exercise, _scenario, workflow) {
           vault.id,
           document.id,
           ...(check === "preview" && preview ? [preview.id] : []),
+          ...(check === "navigation" && navigation ? [navigation.id] : []),
         ];
         return (
           finding?.check === check &&
           finding.code === workflow.expected[index] &&
           (finding.code !== "preview-ready" || preview?.phase === "rendered") &&
           (finding.code !== "preview-missing" || preview === null) &&
+          (finding.code !== "navigation-ready" || navigation?.hops.at(-1)?.to === document.path) &&
           JSON.stringify(finding.evidenceIds) === JSON.stringify(ids) &&
           typeof finding.detail === "string" &&
           finding.detail.trim().length > 0 &&
