@@ -674,6 +674,22 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
     group: "files",
   },
   {
+    prefix: "chronolog.read",
+    authorityCategory: { domain: "sharing", verb: "see" },
+    title: "Read a Chronolog group",
+    action: "read data shared with this Chronolog group",
+    description: "Read the linked group using the signed-in account's membership",
+    group: "sharing",
+  },
+  {
+    prefix: "chronolog.write",
+    authorityCategory: { domain: "sharing", verb: "act" },
+    title: "Write to a Chronolog group",
+    action: "make an approved change in this Chronolog group",
+    description: "Approve a group membership change or sign a specific transaction",
+    group: "sharing",
+  },
+  {
     prefix: "workspace.publish",
     authorityCategory: { domain: "files", verb: "act" },
     title: "Update workspace main",
