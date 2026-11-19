@@ -179,6 +179,14 @@ const authoringWorkflow = {
   root: "reviewProgram",
   evidence: authoringEvidence,
 };
+const phoneSetupWorkflow = {
+  family: "system-live-phone-setup",
+  namespace: "vibestudio:phone-setup",
+  group: "phone-provider-discovery",
+  validator: { template: "system-testing", path: "skills/system-testing/phone-setup-managed.ts" },
+  root: "setUpPhone",
+  evidence: phoneSetupEvidence,
+};
 const verifiedMemoryWorkflow = {
   family: "workspace-verified-memory",
   workspace: "personal",
@@ -391,6 +399,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedAuthoringWorlds },
     { managedSessionReplayWorlds = [] },
     { managedTestkitCleanupWorlds = [] },
+    { phoneSetupUnavailable },
     { managedMemoryWorlds },
     { managedSetupWorlds },
     { managedChecklistWorlds },
@@ -427,6 +436,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "authoring-worlds.ts",
       "session-replay-worlds.ts",
       "testkit-cleanup-worlds.ts",
+      "phone-setup-world.ts",
       "verified-memory-worlds.ts",
       "onboarding-worlds.ts",
       "checklist-worlds.ts",
@@ -451,6 +461,10 @@ export async function loadLiveTeacherCases(checkouts) {
     })
   );
   const cases = new Map(originalCases);
+  if (phoneSetupUnavailable) {
+    const { id, goal, platform } = phoneSetupUnavailable;
+    cases.set(id, { ...phoneSetupWorkflow, goal, platform });
+  }
   for (const { id, checks, constraint } of managedProvenanceHistoryWorlds) {
     cases.set(`provenance-history-live-${id}`, {
       ...provenanceHistoryWorkflow,
@@ -2017,6 +2031,81 @@ function hostLogAuditEvidence(execution, exercise, _scenario, workflow) {
       workspace_id: seed.workspaceId,
     },
     checks: verification.checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function phoneSetupEvidence(execution, exercise, scenario, workflow) {
+  const fixture = execution.diagnostics.managedPhoneSetup;
+  const observed = fixture?.observed;
+  const request = fixture?.request;
+  const report = exercise.report;
+  requireEvidence(
+    typeof fixture?.contextId === "string" &&
+      fixture.contextId === execution.provenance?.contextId &&
+      fixture.caseId === scenario &&
+      fixture.passed === true &&
+      ["assignedStart", "noEligibleDesktop", "reportMatches"].every(
+        (name) => fixture.checks?.[name] === true
+      ) &&
+      request?.goal === workflow.goal &&
+      /^[a-f0-9-]{36}$/u.test(request.operationId) &&
+      observed?.receipt === request.operationId + ":assignment" &&
+      observed.platform === workflow.platform &&
+      observed.providerId === null &&
+      observed.deviceId === null &&
+      observed.pairedDeviceId === null &&
+      Array.isArray(observed.desktops) &&
+      observed.desktops.length === 0 &&
+      report?.status === "desktop-unavailable" &&
+      report.pairedDeviceId === null &&
+      isDeepStrictEqual(report.evidenceIds, [observed.receipt]) &&
+      typeof report.guidance === "string" &&
+      report.guidance.trim().length > 0,
+    "Phone setup must cite the empty live provider readback for the assigned account"
+  );
+
+  const calls = exercise.calls.map(({ record }) => record);
+  const child = (parent, name) =>
+    parent &&
+    calls.find(
+      (record) =>
+        record.parent_call_id === parent.call_id &&
+        record.definition.name === name &&
+        record.outcome === "done"
+    );
+  const root = calls.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const setup = child(root, "setUpPhone");
+  const assignment = child(setup, "readAssignment");
+  const discovery = child(setup, "discoverPhone");
+  const chosen = child(discovery, "chooseDesktop");
+  const [observe] = assignment?.effects ?? [];
+  const matchesValue = (ref, value) => {
+    if (!ref?.complete) return false;
+    const bytes = JSON.stringify(value);
+    return ref.bytes === Buffer.byteLength(bytes) && ref.hash === hash(bytes);
+  };
+  requireEvidence(
+    calls.length === 5 &&
+      [setup, assignment, discovery, chosen].every(Boolean) &&
+      calls.every((record) => record.effects?.length === (record === assignment ? 1 : 0)) &&
+      observe?.service === "phoneSetupRead" &&
+      observe.method === "start" &&
+      !observe.error &&
+      matchesValue(observe.args, [request.operationId]) &&
+      matchesValue(observe.result, observed) &&
+      matchesValue(setup.inputs?.request, request) &&
+      matchesValue(setup.output, report) &&
+      matchesValue(assignment.inputs?.operationId, request.operationId) &&
+      matchesValue(assignment.output, observed) &&
+      matchesValue(discovery.inputs?.assignment, observed) &&
+      matchesValue(chosen.inputs?.assignment, observed) &&
+      matchesValue(chosen.output, null),
+    "Phone setup must follow the recorded read-only desktop decision without preparing or pairing a device"
+  );
+  return {
+    world: { context_id: fixture.contextId, assigned_platform: workflow.platform },
+    checks: { ...fixture.checks, readOnlyDiscovery: true },
     evidence: { workspace: { fixture } },
   };
 }

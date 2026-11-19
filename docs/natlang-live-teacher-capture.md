@@ -180,6 +180,12 @@ as above. The host consumes the final successful deployment receipt and rechecks
 identity before assigning the device route. The caller can supply invite material through
 `pairingFor`. The already-running path uses the same handoff and can create a new device
 profile or reopen a previously paired profile.
+The System phone case `phone-setup-live-desktop-unavailable` asks the shared
+`phoneSetup/setUpPhone` workflow to check the owned account for a compatible desktop.
+It binds the live public phone service with read authority and checks that the workflow
+stops before preparation or pairing. Export requires the exact provider receipt on the
+nested desktop decision and the absence of device effects. Its model-free qualification is
+`phone-setup-oracle-qualification`. The case runs without a connected desktop.
 Testkit cleanup cases open real scratch directories, workers, panels, and CDP clients in an
 owned workspace. They retain deferred registration order and probe the remaining resources
 after Testkit finishes. The Natlang review reports test outcome, cleanup acknowledgements, and

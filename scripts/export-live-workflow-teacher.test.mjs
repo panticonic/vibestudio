@@ -95,6 +95,7 @@ test("authored template worlds flow into the collector without losing original s
           },
         ],
       ],
+      ["phone-setup-world", "phoneSetupUnavailable", null],
       ["local-messaging/worlds", "localMessagingWorlds", [{ id: "audience-hold" }]],
       [
         "provenance-history-worlds",
@@ -2914,6 +2915,7 @@ test("workspace integration binds conflict source and verified state without bro
   await Promise.all(
     [
       ["content-project-worlds", "export const contentProjectWorlds = [];"],
+      ["phone-setup-world", "export const phoneSetupUnavailable = undefined;"],
       [
         "owned-operations-worlds",
         "export const ownedOperationsWorlds = [], ownedOperationsComposedWorlds = [];",
@@ -3141,4 +3143,105 @@ test("owned operations export requires persisted readbacks and absence after tea
   await exportLiveTeacherWorkflow(options);
   const manifest = JSON.parse(await readFile(path.join(options.out, "manifest.json"), "utf8"));
   assert.equal(manifest.world.case_id, "release-audit-continuation");
+});
+
+test("managed phone setup export binds the no-desktop outcome to the exact live read", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  const id = "phone-setup-live-desktop-unavailable";
+  const world = cases.get(id);
+  assert.equal(world.family, "system-live-phone-setup");
+  const operationId = "01234567-89ab-4cde-8fab-0123456789ab";
+  const request = { goal: world.goal, operationId };
+  const observed = {
+    receipt: operationId + ":assignment",
+    platform: "ios",
+    providerId: null,
+    deviceId: null,
+    desktops: [],
+    pairedDeviceId: null,
+  };
+  const report = {
+    status: "desktop-unavailable",
+    pairedDeviceId: null,
+    guidance: "Open the desktop app on this account.",
+    evidenceIds: [observed.receipt],
+  };
+  const ref = (value) => {
+    const text = JSON.stringify(value);
+    return {
+      complete: true,
+      bytes: Buffer.byteLength(text),
+      hash: createHash("sha256").update(text).digest("hex"),
+    };
+  };
+  entry.test.name = id;
+  diagnostics.managedPhoneSetup = {
+    contextId: "ctx",
+    caseId: id,
+    request,
+    observed,
+    passed: true,
+    checks: { assignedStart: true, noEligibleDesktop: true, reportMatches: true },
+  };
+  const prototype = diagnostics.natlangTeacher.calls[0];
+  const call = (name, parent, inputs = {}, value = null) => ({
+    callId: name,
+    summary: { ...prototype.summary, call_id: name },
+    record: {
+      ...prototype.record,
+      call_id: name,
+      parent_call_id: parent,
+      definition: { name },
+      outcome: "done",
+      inputs,
+      output: ref(value),
+      effects: [],
+    },
+  });
+  const read = call("readAssignment", "setUpPhone", { operationId: ref(operationId) }, observed);
+  read.record.effects.push({
+    service: "phoneSetupRead",
+    method: "start",
+    args: ref([operationId]),
+    result: ref(observed),
+  });
+  diagnostics.natlangTeacher = {
+    ...diagnostics.natlangTeacher,
+    rootCallIds: ["runWorkflow"],
+    report,
+    programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+    calls: [
+      call("runWorkflow", null),
+      call("setUpPhone", "runWorkflow", { request: ref(request) }, report),
+      read,
+      call("discoverPhone", "setUpPhone", { assignment: ref(observed) }),
+      call("chooseDesktop", "discoverPhone", { assignment: ref(observed) }),
+    ],
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  const exported = JSON.parse(await readFile(path.join(options.out, "manifest.json"), "utf8"));
+  assert.equal(exported.world.assigned_platform, "ios");
+  assert.deepEqual(exported.source_groups, ["vibestudio:phone-setup:phone-provider-discovery"]);
+
+  read.record.effects[0].result = ref({ ...observed, receipt: "foreign-assignment" });
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases }),
+    /recorded read-only desktop decision/u
+  );
+  read.record.effects[0].result = ref(observed);
+  diagnostics.natlangTeacher.calls[3].record.effects.push({
+    service: "phoneSetupPrepare",
+    method: "prepare",
+  });
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases }),
+    /recorded read-only desktop decision/u
+  );
 });
