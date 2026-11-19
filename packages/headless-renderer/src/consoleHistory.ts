@@ -23,7 +23,6 @@ class PanelHistory {
   errors: ConsoleHistoryEntry[] = [];
   droppedEntries = 0;
   droppedErrors = 0;
-  nextSeq = 1;
 }
 
 export class ConsoleHistoryStore {
