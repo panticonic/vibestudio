@@ -6270,30 +6270,39 @@ test("publication revision export rejects a review that omits a changed public e
   await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /exact changed public files/u);
 });
 
-test("delivery history export rejects a same-text message from a different channel", async (t) => {
+async function checkDeliveryReceiptRejection(t, id, verdict) {
   const { options, diagnostics, entry, save } = await fixture(t);
   const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
     path.resolve(import.meta.dirname, "..")
   );
   const cases = await loadLiveTeacherCases(checkouts);
-  const name = "delivery-history-live-identical-note-on-other-channel";
+  const name = `delivery-history-live-${id}`;
   const { assignment } = cases.get(name);
   const pins = JSON.parse(await readFile(options.pins, "utf8"));
   await writeFile(options.pins, JSON.stringify({ ...pins, workspace: "system" }));
   entry.test.name = name;
   const request = { goal: assignment.goal, operationId: "assigned-receipt" };
+  const foreign = verdict === "foreign-channel";
+  const senderMismatch = verdict === "receipt-mismatch";
   const receipt = { channelId: "original", messageId: "msg-1", senderId: "sender" };
-  const observation = { channelId: "other", receipt, retained: [], rendered: [] };
   const canonical = {
-    messageId: "msg-2",
+    messageId: senderMismatch ? "msg-1" : "msg-2",
     envelopeId: "envelope",
     sequence: 1,
-    senderId: "sender",
+    senderId: senderMismatch ? "observed-sender" : "sender",
     text: assignment.text,
+  };
+  const observation = {
+    channelId: foreign ? "other" : "original",
+    receipt,
+    retained: senderMismatch ? [canonical] : [],
+    rendered: senderMismatch ? [{
+      messageId: canonical.messageId, senderId: canonical.senderId, text: canonical.text,
+    }] : [],
   };
   const report = {
     observation,
-    origin: "foreign-channel",
+    origin: verdict,
     consumer: "unreviewed",
     verified: false,
   };
@@ -6305,7 +6314,7 @@ test("delivery history export rejects a same-text message from a different chann
     observed: observation,
     canonical,
     retryId: null,
-    decoyId: "msg-2",
+    decoyId: foreign ? "msg-2" : null,
     checks: { scope: true, nativeDelivery: true, retained: true, verdict: true },
   };
   const ref = (value) => {
@@ -6348,6 +6357,7 @@ test("delivery history export rejects a same-text message from a different chann
       call("runWorkflow", null, {}, null),
       review,
       call("checkOrigin", "reviewDeliveryHistory", { observation }, report.origin),
+      ...(senderMismatch ? [call("matchReceipt", "checkOrigin", { receipt, row: canonical }, verdict)] : []),
     ],
   };
   await save();
@@ -6361,7 +6371,17 @@ test("delivery history export rejects a same-text message from a different chann
     exportLiveTeacherWorkflow({ ...options, cases }),
     /exact origin and consumer decisions/u
   );
-});
+}
+
+test("delivery history export rejects a same-text message from a different channel", (t) =>
+  checkDeliveryReceiptRejection(t, "identical-note-on-other-channel", "foreign-channel")
+);
+test("delivery history export requires the sender on the native envelope", (t) =>
+  checkDeliveryReceiptRejection(t, "reconcile-sender-from-retained-envelope", "receipt-mismatch")
+);
+test("delivery history export rejects a receipt for an absent causal message", (t) =>
+  checkDeliveryReceiptRejection(t, "locate-message-from-reconnect-receipt", "missing-message")
+);
 
 test("Android audit export requires the native app observation and keeps workspace readiness unverified", async (t) => {
   const { options, diagnostics, entry, save } = await fixture(t);

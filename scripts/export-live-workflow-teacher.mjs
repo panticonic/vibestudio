@@ -723,7 +723,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { gmailComposeHistoryWorlds },
     { unitIdentityWorlds },
     { transcriptCursorWorlds },
-    { deliveryHistoryWorlds },
+    { deliveryHistoryWorlds, deliveryOriginByMode },
     { androidAuditWorlds },
     { androidInstallWorlds },
     { androidPairWorlds },
@@ -864,7 +864,11 @@ export async function loadLiveTeacherCases(checkouts) {
     cases.set(`android-audit-live-${assignment.id}`, { ...androidAuditWorkflow, assignment });
   }
   for (const assignment of deliveryHistoryWorlds) {
-    cases.set(`delivery-history-live-${assignment.id}`, { ...deliveryHistoryWorkflow, assignment });
+    cases.set(`delivery-history-live-${assignment.id}`, {
+      ...deliveryHistoryWorkflow,
+      assignment,
+      originVerdict: deliveryOriginByMode[assignment.mode],
+    });
   }
   for (const assignment of transcriptCursorWorlds) {
     cases.set(`transcript-cursor-live-${assignment.id}`, { ...transcriptCursorWorkflow, assignment });
@@ -3561,8 +3565,12 @@ function deliveryHistoryEvidence(execution, exercise, _scenario, workflow) {
   const comparison = child(review, "compareConsumer");
   const effect = review?.effects?.[0];
   const foreign = assignment.mode === "foreign";
-  const originVerdict = foreign ? "foreign-channel" : "matched";
-  const consumerVerdict = foreign ? "unreviewed" : "matched";
+  const missing = assignment.mode === "missing";
+  const senderMismatch = assignment.mode === "sender-mismatch";
+  const { originVerdict } = workflow;
+  const matched = originVerdict === "matched";
+  const consumerVerdict = matched ? "matched" : "unreviewed";
+  const expectsRow = !foreign && !missing;
   const receipt = observed?.receipt;
 
   requireEvidence(
@@ -3580,31 +3588,23 @@ function deliveryHistoryEvidence(execution, exercise, _scenario, workflow) {
         receipt?.senderId,
         receipt?.messageId,
         canonical?.envelopeId,
+        canonical?.messageId,
+        canonical?.senderId,
       ].every((value) => typeof value === "string" && !!value) &&
       Number.isSafeInteger(canonical.sequence) &&
       canonical.sequence > 0 &&
       canonical.text === assignment.text &&
-      canonical.senderId === receipt.senderId &&
+      ((canonical.senderId === receipt.senderId) === !senderMismatch) &&
       (assignment.mode === "retry" ? retryId === receipt.messageId : retryId === null) &&
-      (foreign
-        ? observed.channelId !== receipt.channelId &&
-          canonical.messageId === decoyId &&
-          typeof decoyId === "string" &&
-          !!decoyId &&
-          decoyId !== receipt.messageId &&
-          isDeepStrictEqual(observed.retained, []) &&
-          isDeepStrictEqual(observed.rendered, [])
-        : observed.channelId === receipt.channelId &&
-          canonical.messageId === receipt.messageId &&
-          decoyId === null &&
-          isDeepStrictEqual(observed.retained, [canonical]) &&
-          isDeepStrictEqual(observed.rendered, [
-            {
-              messageId: canonical.messageId,
-              senderId: canonical.senderId,
-              text: canonical.text,
-            },
-          ])) &&
+      ((observed.channelId !== receipt.channelId) === foreign) &&
+      ((canonical.messageId === receipt.messageId) === expectsRow) &&
+      (foreign ? canonical.messageId === decoyId && typeof decoyId === "string" && !!decoyId : decoyId === null) &&
+      isDeepStrictEqual(observed.retained, expectsRow ? [canonical] : []) &&
+      isDeepStrictEqual(observed.rendered, expectsRow ? [{
+        messageId: canonical.messageId,
+        senderId: canonical.senderId,
+        text: canonical.text,
+      }] : []) &&
       isDeepStrictEqual(report?.observation, observed) &&
       matchesValue(review?.inputs?.request, request) &&
       matchesValue(review.output, report) &&
@@ -3619,17 +3619,19 @@ function deliveryHistoryEvidence(execution, exercise, _scenario, workflow) {
   requireEvidence(
     report.origin === originVerdict &&
       report.consumer === consumerVerdict &&
-      report.verified === !foreign &&
+      report.verified === matched &&
       matchesValue(origin?.inputs?.observation, observed) &&
       matchesValue(origin.output, originVerdict) &&
-      (foreign
-        ? !match && !comparison
-        : matchesValue(match?.inputs?.receipt, receipt) &&
+      (expectsRow
+        ? matchesValue(match?.inputs?.receipt, receipt) &&
           matchesValue(match.inputs?.row, canonical) &&
-          matchesValue(match.output, originVerdict) &&
-          matchesValue(comparison?.inputs?.retained, canonical) &&
+          matchesValue(match.output, originVerdict)
+        : !match) &&
+      (matched
+        ? matchesValue(comparison?.inputs?.retained, canonical) &&
           matchesValue(comparison.inputs?.rendered, observed.rendered) &&
-          matchesValue(comparison.output, consumerVerdict)),
+          matchesValue(comparison.output, consumerVerdict)
+        : !comparison),
     "Delivery history needs the exact origin and consumer decisions"
   );
   return {
