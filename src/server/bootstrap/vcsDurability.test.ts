@@ -196,7 +196,7 @@ describe("wireVcsDurability", () => {
     expect(manager.ensureDurableObjectEntity).toHaveBeenCalledOnce();
     expect(publishWorkspaceSourceEntity).toHaveBeenCalledOnce();
   });
-  it.each(["installed", "before-freeze"] as const)(
+  it.each(["installed", "before-freeze", "older-runtime"] as const)(
     "resumes %s participant history before asynchronous activation",
     async (resumeAt) => {
     const workspaceId = "workspace-1";
@@ -224,6 +224,8 @@ describe("wireVcsDurability", () => {
           return installed ? receipt : null;
         case "readHistoryReplayFreeze":
           return resumeAt === "installed" ? freeze : null;
+        case "supportsHistoryReplay":
+          return resumeAt !== "older-runtime";
         case "beginHistoryReplayFreeze":
           expect(input).toEqual(freeze);
           return { ...plan, generation };
@@ -268,6 +270,15 @@ describe("wireVcsDurability", () => {
     await services.find((service) => service.name === "vcsAttach")?.start?.(resolve);
     expect(readWorkspaceHistoryOwner).toHaveBeenCalledWith(targetId);
     expect(readProtectedMainEventId).toHaveBeenCalledTimes(resumeAt === "installed" ? 0 : 1);
+    if (resumeAt !== "installed") {
+      expect(dispatch).toHaveBeenCalledWith(canonical, "supportsHistoryReplay");
+    }
+    if (resumeAt === "older-runtime") {
+      expect(dispatch.mock.calls.some(([, method]) => method === "beginHistoryReplayFreeze")).toBe(false);
+      expect(workspaceVcs.attachParticipantHistory).not.toHaveBeenCalled();
+      expect(sequence).toEqual(["initialization"]);
+      return;
+    }
     expect(dispatch).toHaveBeenCalledWith(source, "beginHistoryReplayFreeze", freeze);
     expect(dispatch.mock.calls.some(([, method]) => method === "stageHistoryReplayStep"))
       .toBe(resumeAt === "before-freeze");

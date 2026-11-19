@@ -71,6 +71,13 @@ async function restoreParticipantHistory(
   const held = await readWorkspaceHistoryReplayFreeze(dispatch, legacy);
   const expectedMainEventId = receipt?.eventId ?? deps.readProtectedMainEventId();
   if (!receipt && !held && !expectedMainEventId) return;
+  if (!receipt && !held) {
+    const supportsReplay = await dispatch.dispatch(canonical, "supportsHistoryReplay");
+    if (supportsReplay !== true) {
+      console.warn("[Vcs] Participant history migration requires a runtime with scoped queries");
+      return;
+    }
+  }
   // The durable system-owned canonical lifetime is also the reservation
   // for migration. Startup can resume a stop between that reservation and
   // the source freeze using the exact protected event of this workspace.
