@@ -211,6 +211,24 @@ const clientAdmissionWorkflow = {
   root: "reviewClientAdmission",
   evidence: clientAdmissionEvidence,
 };
+const tourRehearsalWorkflow = {
+  family: "personal-live-tour-rehearsal",
+  workspace: "personal",
+  namespace: "vibestudio:tour",
+  group: "authorized-presentation-and-restoration",
+  validator: { template: "system-testing", path: "skills/system-testing/tour-rehearsal-managed.ts" },
+  root: "rehearseTour",
+  evidence: tourRehearsalEvidence,
+};
+const buildPerformanceWorkflow = {
+  family: "system-live-build-performance",
+  workspace: "system",
+  namespace: "vibestudio:performance",
+  group: "native-build-cache-and-panel-payload",
+  validator: { template: "system-testing", path: "skills/system-testing/build-performance-managed.ts" },
+  root: "reviewBuildPerformance",
+  evidence: buildPerformanceEvidence,
+};
 const logCursorWorkflow = {
   family: "system-live-saved-log-cursor",
   workspace: "system",
@@ -589,6 +607,8 @@ export async function loadLiveTeacherCases(checkouts) {
     { phoneSetupUnavailable },
     { managedClientAdmissionWorlds },
     { managedLogCursorWorlds },
+    { buildPerformanceWorlds },
+    { tourRehearsalWorlds },
     { managedEvalRecoveryWorlds },
     { managedPdfLayoutWorlds },
     { managedDictationWorlds },
@@ -644,6 +664,8 @@ export async function loadLiveTeacherCases(checkouts) {
       "phone-setup-world.ts",
       "client-admission-worlds.ts",
       "log-cursor-worlds.ts",
+      "build-performance-worlds.ts",
+      "tour-rehearsal-worlds.ts",
       "eval-recovery-worlds.ts",
       "pdf-layout-worlds.ts",
       "offline-dictation-worlds.ts",
@@ -695,6 +717,12 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of managedClientAdmissionWorlds) {
     cases.set(`client-admission-live-${assignment.id}`, { ...clientAdmissionWorkflow, assignment });
+  }
+  for (const assignment of tourRehearsalWorlds) {
+    cases.set(`tour-rehearsal-live-${assignment.id}`, { ...tourRehearsalWorkflow, assignment });
+  }
+  for (const assignment of buildPerformanceWorlds) {
+    cases.set(`build-performance-live-${assignment.id}`, { ...buildPerformanceWorkflow, assignment });
   }
   for (const assignment of managedLogCursorWorlds) {
     cases.set(`log-cursor-live-${assignment.id}`, { ...logCursorWorkflow, assignment });
@@ -2700,6 +2728,180 @@ function clientAdmissionEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: contextId, source, host, abi: workingAbi },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function tourRehearsalEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.tourRehearsal;
+  const { caseId, panelId, contextId, request, start, visited, restored, checks } = fixture ?? {};
+  const { assignment } = workflow;
+  const unmatchedTopics = assignment.unmatched ?? [];
+  const held = unmatchedTopics.length > 0;
+  const report = exercise.report;
+  const records = exercise.calls.map(({ record }) => record);
+  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const children = (parent, name) => parent
+    ? records.filter((record) =>
+        record.parent_call_id === parent.call_id && record.definition.name === name)
+    : [];
+  const [rehearsal] = children(root, "rehearseTour");
+  const [planning] = children(rehearsal, "planRehearsal");
+  const [route] = children(rehearsal, "reviewStops");
+  const [restoration] = children(rehearsal, "verifyRestoration");
+  const effects = records.flatMap(({ effects }) => effects ?? []);
+  const effectMatches = (effect, method, args, result) =>
+    effect?.service === "tourRehearsal" && effect.method === method && !effect.error &&
+    matchesValue(effect.args, args) && matchesValue(effect.result, result);
+  const id = request?.operationId;
+  const observed = (frame, scene, notes, progress) =>
+    frame?.storedScene === scene && frame.storedNotes === notes &&
+    frame.notesVisible === notes && frame.progress === progress &&
+    frame.eyebrow === start.deck.find((item) => item.id === scene)?.eyebrow &&
+    typeof frame.heading === "string" && frame.heading.length > 0;
+
+  requireEvidence(
+    fixture?.passed === true &&
+      ["initial", "plan", "visits", "restoration", "outcome"].every((key) => checks?.[key] === true) &&
+      caseId === assignment.id && typeof panelId === "string" && panelId.length > 0 &&
+      typeof contextId === "string" && contextId === execution.provenance?.contextId &&
+      typeof id === "string" && id.length > 0 &&
+      request.goal === assignment.goal && request.restore === assignment.restore &&
+      isDeepStrictEqual(request.topics, assignment.topics) &&
+      Array.isArray(start?.deck) && isDeepStrictEqual(start.allowed, assignment.allowed) &&
+      observed(start.frame, assignment.initial.scene, assignment.initial.notes, assignment.initial.progress) &&
+      isDeepStrictEqual(report?.start, start) &&
+      matchesValue(rehearsal?.inputs?.request, request) && matchesValue(rehearsal.output, report) &&
+      effectMatches(rehearsal.effects?.[0], "observe", [id], start),
+    "Tour rehearsal requires the owned panel and its initial rendered frame"
+  );
+  const stops = assignment.expected.map(({ scene }, i) => ({
+    topic: assignment.topics[i],
+    scene: start.deck.find((item) => item.id === scene),
+    notes: assignment.notes,
+  }));
+  const resolutions = children(planning, "resolveTourTopic");
+  const plan = { stops, unmatchedTopics };
+  requireEvidence(
+    matchesValue(planning?.inputs?.start, start) &&
+      matchesValue(planning.output, plan) && isDeepStrictEqual(report.plan, plan) &&
+      resolutions.length === assignment.topics.length && assignment.topics.every((topic) => {
+        const resolution = resolutions.find((call) => matchesValue(call.inputs?.topic, topic));
+        return matchesValue(resolution?.output, stops.find((stop) => stop.topic === topic)?.scene ?? null);
+      }),
+    "Tour rehearsal requires ordered topic decisions grounded in the authorized deck"
+  );
+  const verifications = children(route, "verifyTourStop");
+  requireEvidence(
+    Array.isArray(visited) && visited.length === (held ? 0 : stops.length) &&
+      effects.length === 1 + visited.length + Number(assignment.restore) &&
+      report.outcome === (held ? "held" : "rehearsed") &&
+      report.visits.length === visited.length && verifications.length === visited.length &&
+      (held ? !route : matchesValue(route?.inputs?.plan, plan) && matchesValue(route.output, report.visits)) &&
+      visited.every(({ scene, notes, frame }, i) => {
+        const stop = stops[i];
+        const visit = report.visits[i];
+        const verification = verifications.find((call) => matchesValue(call.inputs?.stop, stop));
+        return scene === stop.scene.id && notes === stop.notes &&
+          observed(frame, scene, notes, assignment.expected[i].progress) &&
+          effectMatches(route.effects?.[i], "visit", [id, scene, notes], frame) &&
+          isDeepStrictEqual(visit, { stop, readback: { stage: "verified", frame } }) &&
+          matchesValue(verification?.inputs?.frame, frame) &&
+          matchesValue(verification.output, visit.readback);
+      }) &&
+      (assignment.restore
+        ? isDeepStrictEqual(restored, start.frame) &&
+          effectMatches(rehearsal.effects?.[1], "restore", [id], restored) &&
+          matchesValue(restoration?.inputs?.frame, restored) &&
+          isDeepStrictEqual(report.restoration, { frame: restored, stage: "verified" }) &&
+          matchesValue(restoration.output, report.restoration)
+        : restored === undefined && report.restoration === null && !restoration),
+    "Tour rehearsal needs each exact live stop and any authorized restoration"
+  );
+  return {
+    world: { context_id: contextId, panel_id: panelId },
+    checks,
+    evidence: { workspace: { panelId, contextId }, cdp: { fixture } },
+  };
+}
+
+function buildPerformanceEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.buildPerformance;
+  const { request, receipt, checks } = fixture ?? {};
+  const { goal, initialBudgetBytes } = workflow.assignment;
+  const report = exercise.report;
+  const records = exercise.calls.map(({ record }) => record);
+  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const child = (parent, name) => parent && records.find(
+    (record) => record.parent_call_id === parent.call_id && record.definition.name === name
+  );
+  const review = child(root, "reviewBuildPerformance");
+  const assess = child(review, "assessBuildRun");
+  const payloadReview = child(review, "reviewPayload");
+  const followup = child(review, "chooseFollowup");
+  const effects = records.flatMap(({ effects }) => effects ?? []);
+  const effect = review?.effects?.[0];
+  const runtime = receipt?.targets?.find(({ target }) => target === "runtime");
+  const payload = runtime?.payload;
+  const contextId = execution.provenance?.contextId;
+  requireEvidence(
+    fixture?.passed === true &&
+      ["native", "observation", "judgments"].every((key) => checks?.[key] === true) &&
+      typeof contextId === "string" && contextId.length > 0 &&
+      request?.goal === goal && request.initialBudgetBytes === initialBudgetBytes &&
+      typeof request.operationId === "string" && request.operationId.length > 0 &&
+      receipt?.status === "ok" &&
+      typeof receipt.source === "string" && receipt.source.startsWith("panels/") &&
+      typeof receipt.stateHash === "string" && receipt.stateHash.length > 0 &&
+      typeof runtime?.buildKey === "string" && runtime.buildKey.length > 0 &&
+      receipt.repeat?.sameBuildKeys === true &&
+      Number.isFinite(receipt.repeat.elapsedMs) && receipt.repeat.elapsedMs >= 0 &&
+      matchesValue(review?.inputs?.request, request) &&
+      matchesValue(review.output, report) &&
+      effects.length === 1 &&
+      effect?.service === "buildPerformance" && effect.method === "observe" && !effect.error &&
+      matchesValue(effect.args, [request.operationId]) && matchesValue(effect.result, receipt),
+    "Build performance review requires the assigned native profile and verified repeat keys"
+  );
+  const phaseNames = { bundlingMs: "bundling", validationMs: "validation", otherMs: "other" };
+  const timings = Object.entries(receipt.first.phases ?? {}).sort((a, b) => b[1] - a[1]);
+  const state = receipt.first.cacheState === "built-during-profile" ? "built" : receipt.first.cacheState;
+  const measured = state === "built" && timings[0]?.[1] > 0;
+  const phase = measured
+    ? timings[0][1] === timings[1]?.[1] ? "tied" : phaseNames[timings[0][0]]
+    : "unavailable";
+  const phaseCall = child(assess, "identifyPhase");
+  const contributor = child(payloadReview, "chooseInitialContributor");
+  const largest = payload?.largestInitialInputs.reduce(
+    (best, item) => !best || item.bytes > best.bytes ? item : best, null
+  );
+  const budget = initialBudgetBytes === undefined ? "unassigned"
+    : payload?.initialBytes > initialBudgetBytes ? "over" : "within";
+  requireEvidence(
+    isDeepStrictEqual(report?.observation, receipt) &&
+      ["built", "preexisting", "unknown"].includes(state) &&
+      isDeepStrictEqual(report.execution, { state, repeat: "verified", phase }) &&
+      matchesValue(assess?.inputs?.observation, receipt) &&
+      matchesValue(assess.output, report.execution) &&
+      (measured
+        ? matchesValue(phaseCall?.inputs?.times, receipt.first.phases) && matchesValue(phaseCall.output, phase)
+        : !phaseCall) &&
+      payload?.initialBytes > 0 && payload.totalBytes >= payload.initialBytes &&
+      isDeepStrictEqual(report.payload, { budget, largestInitialInput: largest }) &&
+      matchesValue(payloadReview?.inputs?.payload, payload) &&
+      matchesValue(payloadReview.output, report.payload) &&
+      (largest
+        ? matchesValue(contributor?.inputs?.contributors, payload.largestInitialInputs) && matchesValue(contributor.output, largest)
+        : !contributor) &&
+      report.next?.action === (budget === "over" ? "reduce-initial-payload" : "record-baseline") &&
+      typeof report.next.reason === "string" && report.next.reason.trim() &&
+      matchesValue(followup?.inputs?.observation, receipt) &&
+      matchesValue(followup.output, report.next),
+    "Build performance review requires the measured phase and initial payload decisions"
+  );
+  return {
+    world: { context_id: contextId, state_hash: receipt.stateHash, build_key: runtime.buildKey },
     checks,
     evidence: { workspace: { fixture } },
   };
