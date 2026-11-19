@@ -408,8 +408,8 @@ export async function loadLiveTeacherCases(checkouts) {
   for (const { id, checks, codes } of managedGoogleSetupWorlds) {
     cases.set(`google-setup-live-${id}`, { ...googleSetupWorkflow, caseId: id, checks, codes });
   }
-  for (const { id, checks, expected } of managedNewsWorlds) {
-    cases.set(`news-live-${id}`, { ...newsWorkflow, caseId: id, checks, expected });
+  for (const { id, checks, expected, repair } of managedNewsWorlds) {
+    cases.set(`news-live-${id}`, { ...newsWorkflow, caseId: id, checks, expected, repair });
   }
   for (const {
     id,
@@ -1511,6 +1511,26 @@ function googleSetupEvidence(execution, exercise, _scenario, workflow) {
   };
 }
 
+function newsCadenceMatches(read, intent) {
+  switch (intent.kind) {
+    case "poll":
+      return read.poll?.intervalMs === intent.intervalMs;
+    case "interval":
+      return read.briefing?.kind === "interval" && read.briefing.intervalMs === intent.intervalMs;
+    case "daily":
+      return (
+        read.briefing?.kind === "daily" &&
+        read.briefing.at === intent.at &&
+        read.briefing.timezone === intent.timezone
+      );
+    case "pause":
+    case "resume":
+      return read.owner?.paused === (intent.kind === "pause");
+    default:
+      return false;
+  }
+}
+
 function newsEvidence(execution, exercise, _scenario, workflow) {
   const fixture = execution.diagnostics.managedNews;
   const verification = fixture?.verification;
@@ -1568,6 +1588,54 @@ function newsEvidence(execution, exercise, _scenario, workflow) {
       }),
     "News findings must match the assigned channel observations and Missions owners"
   );
+  if (workflow.repair) {
+    const { index, write } = workflow.repair;
+    const { before, receipt } = verification.repair ?? {};
+    const after = observed[index];
+    const intent = workflow.checks[index].intent;
+    const child = (parent, name) =>
+      parent &&
+      exercise.calls.find(
+        ({ record }) =>
+          record.parent_call_id === parent.callId &&
+          record.outcome === "done" &&
+          record.definition?.name === name
+      );
+    const root = exercise.calls.find(({ callId }) => callId === exercise.rootCallIds[0]);
+    const skill =
+      root?.record.definition?.name === workflow.root ? root : child(root, workflow.root);
+    const live = child(skill, "reviewLiveNews");
+    const reconcile = child(live, "reconcileCadence");
+    requireEvidence(
+      child(live, "readNewsState") &&
+        child(reconcile, "reviewSchedule") &&
+        child(reconcile, "chooseCadenceChange") &&
+        child(live, "reviewSchedule"),
+      "News cadence reconciliation must capture the observation, decision and final review calls"
+    );
+    requireEvidence(
+      verification.checks?.matchesRepair === true &&
+        before?.kind === "schedule" &&
+        JSON.stringify(before.intent) === JSON.stringify(intent) &&
+        typeof before.owner?.id === "string" &&
+        typeof after.owner?.id === "string" &&
+        before.owner.id !== after.owner.id &&
+        before.poll?.id === after.poll?.id &&
+        before.briefing?.id === after.briefing?.id &&
+        (!write || (!newsCadenceMatches(before, intent) && newsCadenceMatches(after, intent))) &&
+        (write
+          ? typeof receipt?.id === "string" &&
+            receipt.id.length > 0 &&
+            JSON.stringify(receipt.change) === JSON.stringify(intent)
+          : receipt?.id === null && receipt.change === null) &&
+        (receipt.change?.kind === "poll" || before.poll?.intervalMs === after.poll?.intervalMs) &&
+        (["daily", "interval"].includes(receipt.change?.kind) ||
+          JSON.stringify(before.briefing) === JSON.stringify(after.briefing)) &&
+        (["pause", "resume"].includes(receipt.change?.kind) ||
+          before.owner.paused === after.owner.paused),
+      "News cadence repair must preserve owner identities and include the assigned write readback"
+    );
+  }
   return {
     world: {
       context_id: fixture.contextId,

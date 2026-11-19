@@ -1497,14 +1497,15 @@ test("News export rejects findings that cite a different schedule owner", async 
     path.resolve(import.meta.dirname, "..")
   );
   const cases = await loadLiveTeacherCases(checkouts);
-  entry.test.name = "news-live-baseline-dual-cadence";
+  entry.test.name = "news-live-reconcile-quieter-poll";
   const world = cases.get(entry.test.name);
   const run = diagnostics.natlangTeacher;
   run.report = {
     status: "ready",
     findings: [
-      { code: "poll-confirmed", evidenceIds: ["poll-owner"] },
       { code: "briefing-confirmed", evidenceIds: ["briefing-owner"] },
+      { code: "poll-confirmed", evidenceIds: ["poll-owner"] },
+      { code: "resume-confirmed", evidenceIds: ["reader"] },
     ],
   };
   run.programPath = "skills/vibestudio-workflows/runWorkflow.nl";
@@ -1513,13 +1514,39 @@ test("News export rejects findings that cite a different schedule owner", async 
   const skill = structuredClone(leaf);
   skill.callId = skill.summary.call_id = "skill";
   skill.record.definition.name = "reviewNews";
-  leaf.record.parent_call_id = "skill";
+  skill.record.outcome = "done";
+  leaf.record.parent_call_id = "live";
+  leaf.record.definition.name = "readNewsState";
+  leaf.record.outcome = "done";
   run.calls.push(skill);
+  for (const [id, name, parent] of [
+    ["live", "reviewLiveNews", "skill"],
+    ["reconcile", "reconcileCadence", "live"],
+    ["before", "reviewSchedule", "reconcile"],
+    ["choose", "chooseCadenceChange", "reconcile"],
+    ["after", "reviewSchedule", "live"],
+  ]) {
+    const call = structuredClone(leaf);
+    call.callId = call.summary.call_id = id;
+    call.record.definition.name = name;
+    call.record.parent_call_id = parent;
+    run.calls.push(call);
+  }
   diagnostics.managedNews = {
     contextId: "ctx",
     verification: {
       passed: true,
-      checks: { matchesReport: true, matchesState: true },
+      checks: { matchesReport: true, matchesState: true, matchesRepair: true },
+      repair: {
+        before: {
+          kind: "schedule",
+          intent: world.checks[1].intent,
+          owner: { id: "initial", paused: false },
+          poll: { id: "poll-owner", intervalMs: 1_800_000 },
+          briefing: { id: "briefing-owner", kind: "interval", intervalMs: 86_400_000 },
+        },
+        receipt: { change: world.checks[1].intent, id: "write" },
+      },
       caseId: world.caseId,
       assignment: {
         contextId: "ctx",
@@ -1530,9 +1557,9 @@ test("News export rejects findings that cite a different schedule owner", async 
       observed: world.checks.map(({ intent }) => ({
         kind: "schedule",
         intent,
-        owner: { id: "reader" },
-        poll: { id: "poll-owner" },
-        briefing: { id: "briefing-owner" },
+        owner: { id: "reader", paused: false },
+        poll: { id: "poll-owner", intervalMs: 7_200_000 },
+        briefing: { id: "briefing-owner", kind: "interval", intervalMs: 86_400_000 },
       })),
     },
   };
@@ -1540,11 +1567,34 @@ test("News export rejects findings that cite a different schedule owner", async 
   await writeFile(options.pins, JSON.stringify({ ...pinned, workspace: "news" }));
   await save();
   await exportLiveTeacherWorkflow({ ...options, cases });
+  const choose = run.calls.find(({ callId }) => callId === "choose");
+  choose.record.parent_call_id = "live";
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-detached-choice` }),
+    /News cadence reconciliation must capture/u
+  );
+  choose.record.parent_call_id = "reconcile";
   run.report.findings[1].evidenceIds = ["another-reader"];
   await save();
   await assert.rejects(
     exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-different-owner` }),
     /News findings must match the assigned channel observations and Missions owners/u
+  );
+  run.report.findings[1].evidenceIds = ["poll-owner"];
+  const cadence = diagnostics.managedNews.verification.observed[1].poll;
+  cadence.intervalMs = 1_800_000;
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-unchanged-poll` }),
+    /News cadence repair must preserve owner identities/u
+  );
+  cadence.intervalMs = 7_200_000;
+  diagnostics.managedNews.verification.repair.receipt.id = null;
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-missing-write` }),
+    /News cadence repair must preserve owner identities/u
   );
 });
 

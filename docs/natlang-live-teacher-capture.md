@@ -70,7 +70,10 @@ as routing precedence, event ordering and queue admission. Content worlds includ
 inventory migration, consent, event logistics, and dataset release and recall. Operations worlds vary
 restoration and recovery readiness, approval changes, rejected gates, and continuation from durable state.
 Messaging worlds exercise addressed local delivery and holding an ambiguous recipient in synthetic owned channels.
-News cases review reader setup, saved and archive views, and changes to polling and briefing cadence.
+News cases review reader setup, saved and archive views, and polling and briefing cadence.
+Cadence reconciliation cases also authorize one bounded schedule intent. The program checks the
+current state, decides whether to apply the intent, then reads both exact Missions owners again.
+The oracle and exporter check the write receipt, owner identities, and untouched schedule settings.
 Each case joins the installed News worker on its own channel and checks its readback against the exact Missions
 schedule records. The `news-managed-oracle-qualification` system test exercises the installed worker and
 readback without a model.
