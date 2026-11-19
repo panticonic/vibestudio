@@ -196,7 +196,9 @@ describe("wireVcsDurability", () => {
     expect(manager.ensureDurableObjectEntity).toHaveBeenCalledOnce();
     expect(publishWorkspaceSourceEntity).toHaveBeenCalledOnce();
   });
-  it("reattaches already installed participant history before asynchronous activation", async () => {
+  it.each(["installed", "before-freeze"] as const)(
+    "resumes %s participant history before asynchronous activation",
+    async (resumeAt) => {
     const workspaceId = "workspace-1";
     const source = { source: "workers/workspace-source", className: "GadWorkspaceDO", objectKey: "workspace" };
     const canonical = { ...source, className: "GadHistoryDO", objectKey: "canonical" };
@@ -215,14 +217,30 @@ describe("wireVcsDurability", () => {
       head: "installed-head", eventId: main.eventId, contexts: [],
       frozenPlanDigest: sha256HexSyncText(canonicalJson({ source, freeze, plan, generation })),
     };
+    let installed = resumeAt === "installed";
     const dispatch = vi.fn(async (_target: typeof source, method: string, input: unknown) => {
-      if (method === "readHistoryReplayReceipt") return receipt;
-      if (method === "readHistoryReplayFreeze") return freeze;
-      if (method === "beginHistoryReplayFreeze") {
-        expect(input).toEqual(freeze);
-        return { ...plan, generation };
+      switch (method) {
+        case "readHistoryReplayReceipt":
+          return installed ? receipt : null;
+        case "readHistoryReplayFreeze":
+          return resumeAt === "installed" ? freeze : null;
+        case "beginHistoryReplayFreeze":
+          expect(input).toEqual(freeze);
+          return { ...plan, generation };
+        case "exportHistoryReplayStep":
+          expect(input).toEqual(main);
+          return { step: { kind: "event", record: { eventId: main.eventId } } };
+        case "stageHistoryReplayStep":
+          return { head: receipt.head };
+        case "exportHistoryReplayPlan":
+          return plan;
+        case "finishHistoryReplay":
+          expect(input).toEqual(receipt);
+          installed = true;
+          return { head: receipt.head };
+        default:
+          throw new Error(`Bootstrap unexpectedly tried ${method}`);
       }
-      throw new Error(`Bootstrap unexpectedly tried ${method}`);
     });
     const sequence: string[] = [];
     const workspaceVcs = {
@@ -239,7 +257,7 @@ describe("wireVcsDurability", () => {
       })),
     } as unknown as RuntimeManager;
     const readWorkspaceHistoryOwner = vi.fn(async () => ({ contextId }));
-    const readProtectedMainEventId = vi.fn(() => "since-published");
+    const readProtectedMainEventId = vi.fn(() => resumeAt === "installed" ? "since-published" : main.eventId);
     const listWorkspaceHistorySessionOwners = vi.fn(async () => []);
     const { services } = captureServices({
       workspaceVcs, workspaceId, workspaceSourceProvider: source,
@@ -249,7 +267,10 @@ describe("wireVcsDurability", () => {
       ({ doDispatch: { dispatch }, runtimeManager })[name as "doDispatch" | "runtimeManager"] as D | undefined;
     await services.find((service) => service.name === "vcsAttach")?.start?.(resolve);
     expect(readWorkspaceHistoryOwner).toHaveBeenCalledWith(targetId);
-    expect(readProtectedMainEventId).not.toHaveBeenCalled();
+    expect(readProtectedMainEventId).toHaveBeenCalledTimes(resumeAt === "installed" ? 0 : 1);
+    expect(dispatch).toHaveBeenCalledWith(source, "beginHistoryReplayFreeze", freeze);
+    expect(dispatch.mock.calls.some(([, method]) => method === "stageHistoryReplayStep"))
+      .toBe(resumeAt === "before-freeze");
     expect(workspaceVcs.attachParticipantHistory).toHaveBeenCalledWith({
       dispatch: { dispatch }, canonical, infrastructureContextId: contextId,
       listReplayedSessionOwners: listWorkspaceHistorySessionOwners,

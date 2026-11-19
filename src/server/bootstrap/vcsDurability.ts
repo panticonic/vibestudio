@@ -68,11 +68,19 @@ async function restoreParticipantHistory(
     throw new Error("The runtime prepared a different canonical participant history");
   await deps.publishWorkspaceSourceEntity({ ...canonical, contextId, ...prepared });
   const receipt = await readWorkspaceHistoryReplayReceipt(dispatch, canonical);
-  const freeze = await readWorkspaceHistoryReplayFreeze(dispatch, legacy);
-  if (!receipt && !freeze) return;
+  const held = await readWorkspaceHistoryReplayFreeze(dispatch, legacy);
+  const expectedMainEventId = receipt?.eventId ?? deps.readProtectedMainEventId();
+  if (!receipt && !held && !expectedMainEventId) return;
+  // The durable system-owned canonical lifetime is also the reservation
+  // for migration. Startup can resume a stop between that reservation and
+  // the source freeze using the exact protected event of this workspace.
+  const freeze = held ?? (!receipt && expectedMainEventId ? {
+    operationId: WORKSPACE_PARTICIPANT_HISTORY_MIGRATION,
+    expectedMainEventId,
+  } : null);
   if (
     freeze?.operationId !== WORKSPACE_PARTICIPANT_HISTORY_MIGRATION ||
-    freeze.expectedMainEventId !== (receipt?.eventId ?? deps.readProtectedMainEventId())
+    freeze.expectedMainEventId !== expectedMainEventId
   ) {
     throw new Error("Participant history startup requires the original held migration");
   }
