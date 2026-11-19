@@ -101,6 +101,7 @@ test("authored template worlds flow into the collector without losing original s
       ["build-performance-worlds", "buildPerformanceWorlds", []],
       ["tour-rehearsal-worlds", "tourRehearsalWorlds", []],
       ["explorer-probe-worlds", "explorerTextWorlds", []],
+      ["gmail-compose-history-worlds", "gmailComposeHistoryWorlds", []],
       ["eval-recovery-worlds", "managedEvalRecoveryWorlds", []],
       ["pdf-layout-worlds", "managedPdfLayoutWorlds", []],
       ["offline-dictation-worlds", "managedDictationWorlds", []],
@@ -2942,6 +2943,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["build-performance-worlds", "export const buildPerformanceWorlds = [];"],
       ["tour-rehearsal-worlds", "export const tourRehearsalWorlds = [];"],
       ["explorer-probe-worlds", "export const explorerTextWorlds = [];"],
+      ["gmail-compose-history-worlds", "export const gmailComposeHistoryWorlds = [];"],
       ["eval-recovery-worlds", "export const managedEvalRecoveryWorlds = [];"],
       ["pdf-layout-worlds", "export const managedPdfLayoutWorlds = [];"],
       ["offline-dictation-worlds", "export const managedDictationWorlds = [];"],
@@ -5904,4 +5906,78 @@ test("Explorer export rejects a scratch byte count that disagrees with native te
   probe.record.output = ref(report);
   await save();
   await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /exact native file and blob receipts/u);
+});
+
+test("Gmail compose export requires the native delivery history and reconciliation decision", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  const name = "gmail-compose-history-live-reconcile-uncertain-delivery";
+  const { assignment } = cases.get(name);
+  const pins = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(options.pins, JSON.stringify({ ...pins, workspace: "google-workspace" }));
+  entry.test.name = name;
+  entry.execution.provenance.channelId = "assigned-channel";
+  const request = { goal: assignment.goal, operationId: "assigned-history" };
+  const seed = {
+    caseId: assignment.id, contextId: "ctx", channelId: "assigned-channel", messageId: "compose",
+    lineage: [1, 3, 5].map((seq) => ({ id: `event-${seq}`, seq })),
+  };
+  const events = seed.lineage.map((item, i) => ({
+    ...item, event: i ? "update" : "start", state: {
+      status: i ? assignment.updates[i - 1].status : assignment.initial.status,
+      recipientPresent: true, alias: "default", draftId: null,
+      mimeIdentity: true, sentIdentity: false,
+    },
+  }));
+  const receipt = { channelId: seed.channelId, messageId: seed.messageId, events };
+  const decision = { action: "reconcile-delivery", reason: "Check the existing MIME identity." };
+  const evidenceIds = [events[0].id, events.at(-1).id];
+  const report = { receipt, decision, evidenceIds };
+  diagnostics.gmailComposeHistory = {
+    passed: true, seed, request, received: receipt,
+    checks: { channel: true, lineage: true, disposition: true, evidence: true },
+  };
+  const ref = (value) => {
+    const text = JSON.stringify(value);
+    return { complete: true, hash: createHash("sha256").update(text).digest("hex"), bytes: Buffer.byteLength(text) };
+  };
+  const prototype = diagnostics.natlangTeacher.calls[0];
+  const call = (name, parent, inputs, output, effects = []) => ({
+    callId: name,
+    summary: { ...prototype.summary, call_id: name },
+    record: {
+      ...prototype.record,
+      call_id: name,
+      parent_call_id: parent,
+      definition: { name },
+      outcome: "done",
+      inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+      output: ref(output),
+      effects,
+    },
+  });
+  const history = call("inspectComposeHistory", "runWorkflow", { request }, report, [{
+    service: "gmailComposeHistory", method: "read", args: ref([request.operationId]), result: ref(receipt),
+  }]);
+  diagnostics.natlangTeacher = {
+    ...diagnostics.natlangTeacher,
+    programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+    rootCallIds: ["runWorkflow"],
+    report,
+    calls: [
+      call("runWorkflow", null, {}, null), history,
+      call("assessComposeState", "inspectComposeHistory", { events }, decision),
+      call("checkDelivery", "assessComposeState", { state: events.at(-1).state }, decision),
+      call("citeComposeHistory", "inspectComposeHistory", { events }, evidenceIds),
+    ],
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  evidenceIds[1] = "other-channel-event";
+  history.record.output = ref(report);
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /exact lineage and appropriate recovery/u);
 });

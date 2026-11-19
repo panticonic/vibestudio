@@ -214,6 +214,13 @@ client, a mobile variant on the wrong runtime and a local incompatible ABI.
 Run `client-admission-oracle-qualification` for model-free verification. The
 workflow inspects the platform contract without launching a device client.
 
+Gmail compose history reviews native events from an isolated Google Workspace
+channel. Cases cover retained draft identity, conflicting identity, and a
+delivery awaiting reconciliation. The runner publishes synthetic compose
+history inside the test workspace and the workflow reads it back. The check
+does not call Gmail. Run `gmail-compose-history-oracle-qualification` for the
+model-free check.
+
 Explorer text probes compare the Personal workspace blobstore with bytes
 read from an owned scratch file. The cases check byte counts, CRLF
 preservation, and repeat-store identity. The runner verifies scratch cleanup.
