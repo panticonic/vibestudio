@@ -12,8 +12,10 @@ const privateWorkspaceBlobsTable = `CREATE TABLE private_workspace_blobs (
   scope TEXT NOT NULL CHECK(scope IN ('content', 'manifest', 'state'))
 ) STRICT`;
 
+const workspaceBlobReplayTable = "CREATE TABLE workspace_blob_replays (plan_digest TEXT PRIMARY KEY) STRICT";
+
 const schema: CanonicalSqliteSchema = {
-  version: 2,
+  version: 3,
   objects: [{
     type: "table",
     name: "blob_uploads",
@@ -26,6 +28,10 @@ const schema: CanonicalSqliteSchema = {
     type: "table",
     name: "private_workspace_blobs",
     sql: privateWorkspaceBlobsTable,
+  }, {
+    type: "table",
+    name: "workspace_blob_replays",
+    sql: workspaceBlobReplayTable,
   }],
 };
 
@@ -58,7 +64,10 @@ function withStore<T>(file: string, action: (db: DatabaseSync) => T): T {
     db.exec("PRAGMA busy_timeout = 5000");
     openCanonicalSqliteDatabase(db, schema, {
       description: `blob upload registry in ${file}`,
-      migrations: [{ fromVersion: 1, toVersion: 2, migrate: (db) => db.exec(privateWorkspaceBlobsTable) }],
+      migrations: [
+        { fromVersion: 1, toVersion: 2, migrate: (db) => db.exec(privateWorkspaceBlobsTable) },
+        { fromVersion: 2, toVersion: 3, migrate: (db) => db.exec(workspaceBlobReplayTable) },
+      ],
     });
     return action(db);
   } finally {
@@ -125,4 +134,19 @@ export function hasPrivateWorkspaceBlobs(blobsDir: string): boolean {
   return fs.existsSync(file) && withStore(file, (db) =>
     db.prepare("SELECT 1 FROM private_workspace_blobs LIMIT 1").get() !== undefined
   );
+}
+
+
+export function workspaceReplayBlobScopesReady(blobsDir: string, planDigest: string): boolean {
+  const file = databasePath(blobsDir);
+  return fs.existsSync(file) && withStore(file, (db) =>
+    db.prepare("SELECT 1 FROM workspace_blob_replays WHERE plan_digest = ?").get(planDigest) !== undefined
+  );
+}
+
+export function finishWorkspaceReplayBlobScopes(blobsDir: string, planDigest: string): void {
+  fs.mkdirSync(blobsDir, { recursive: true });
+  withStore(databasePath(blobsDir), (db) => {
+    db.prepare("INSERT OR IGNORE INTO workspace_blob_replays(plan_digest) VALUES (?)").run(planDigest);
+  });
 }

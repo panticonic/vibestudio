@@ -2,6 +2,11 @@ import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import { compareUtf16CodeUnits, sha256HexSyncText } from "@vibestudio/content-addressing";
 import { vcsStateNodeRefSchema, type VcsStateNodeRef } from "@vibestudio/service-schemas/vcs";
 import { z } from "zod";
+import {
+  finishWorkspaceReplayBlobScopes,
+  markPrivateWorkspaceBlobs,
+  workspaceReplayBlobScopesReady,
+} from "../storage/blobUploads.js";
 import type { DODispatch } from "../doDispatch.js";
 import type { WorkspaceSourceProviderRef } from "../workspaceSourceProvider.js";
 
@@ -72,6 +77,35 @@ export async function readWorkspaceHistoryReplayReceipt(
   return replayReceiptSchema
     .nullable()
     .parse(await dispatch.dispatch(destination, "readHistoryReplayReceipt"));
+}
+
+const replayContentPageSize = 1_024;
+const replayContentPage = z.array(z.string().regex(/^[0-9a-f]{64}$/u)).max(replayContentPageSize);
+
+/** Mark private bytes before the first admission. Each completed page is safe to repeat. */
+export async function installWorkspaceReplayBlobScopes(input: {
+  dispatch: Pick<DODispatch, "dispatch">;
+  destination: WorkspaceSourceProviderRef;
+  blobsDir: string;
+  planDigest: string;
+}): Promise<void> {
+  const { dispatch, destination, blobsDir, planDigest } = input;
+  if (workspaceReplayBlobScopesReady(blobsDir, planDigest)) return;
+  let after: string | null = null;
+  for (;;) {
+    const hashes = replayContentPage.parse(
+      await dispatch.dispatch(destination, "readHistoryReplayPrivateContent", { planDigest, after })
+    );
+    let previous: string = after ?? "";
+    for (const hash of hashes) {
+      if (hash <= previous) throw new Error("Workspace replay content returned an inconsistent page");
+      previous = hash;
+    }
+    markPrivateWorkspaceBlobs(blobsDir, hashes);
+    if (hashes.length < replayContentPageSize) break;
+    after = previous;
+  }
+  finishWorkspaceReplayBlobScopes(blobsDir, planDigest);
 }
 
 const replayOwnersSchema = z.array(z.object({

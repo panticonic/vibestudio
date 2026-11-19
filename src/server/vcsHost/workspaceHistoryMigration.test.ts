@@ -1,5 +1,9 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { migrateWorkspaceHistory } from "./workspaceHistoryMigration.js";
+import { privateWorkspaceBlobScopes, workspaceReplayBlobScopesReady } from "../storage/blobUploads.js";
+import { installWorkspaceReplayBlobScopes, migrateWorkspaceHistory } from "./workspaceHistoryMigration.js";
 
 const source = {
   source: "workers/workspace-source",
@@ -83,4 +87,38 @@ it("keeps a replay staged if the source advances before installation", async () 
     migrateWorkspaceHistory({ dispatch: { dispatch }, source, destination })
   ).rejects.toThrow("Workspace source advanced during replay");
   expect(dispatch.mock.calls.some(([, method]) => method === "finishHistoryReplay")).toBe(false);
+});
+
+
+it("resumes private replay content registration and skips rereads after a durable finish", async () => {
+  const blobsDir = await mkdtemp(path.join(os.tmpdir(), "workspace-replay-blobs-"));
+  try {
+    const planDigest = "a".repeat(64);
+    const firstPage = Array.from({ length: 1_024 }, (_, i) => i.toString(16).padStart(64, "0"));
+    const lastHash = "b".repeat(64);
+    let failNextPage = true;
+    const dispatch = vi.fn(async (target, method, input) => {
+      expect(target).toEqual(destination);
+      expect(method).toBe("readHistoryReplayPrivateContent");
+      expect(input.planDigest).toBe(planDigest);
+      if (input.after === null) return firstPage;
+      expect(input.after).toBe(firstPage.at(-1));
+      if (failNextPage) {
+        failNextPage = false;
+        throw new Error("Interrupted after the first page");
+      }
+      return [lastHash];
+    });
+    const install = () => installWorkspaceReplayBlobScopes({ dispatch: { dispatch }, destination, blobsDir, planDigest });
+    await expect(install()).rejects.toThrow("Interrupted after the first page");
+    expect(privateWorkspaceBlobScopes(blobsDir, [firstPage[0]!, lastHash]).size).toBe(1);
+    expect(workspaceReplayBlobScopesReady(blobsDir, planDigest)).toBe(false);
+    await install();
+    expect(privateWorkspaceBlobScopes(blobsDir, [...firstPage, lastHash]).size).toBe(1_025);
+    expect(workspaceReplayBlobScopesReady(blobsDir, planDigest)).toBe(true);
+    await install();
+    expect(dispatch).toHaveBeenCalledTimes(4);
+  } finally {
+    await rm(blobsDir, { force: true, recursive: true });
+  }
 });

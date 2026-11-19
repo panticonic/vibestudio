@@ -147,6 +147,7 @@ import {
 } from "./workspaceHistoryHost.js";
 import type { WorkspaceRootTemplateBootstrap } from "../workspaceRootTemplateBootstrap.js";
 import {
+  installWorkspaceReplayBlobScopes,
   readWorkspaceHistoryReplayReceipt, registerWorkspaceHistoryReplayOwners,
 } from "./workspaceHistoryMigration.js";
 import { retainedBlobDigests, withBlobContentLock } from "../storage/blobRetentions.js";
@@ -722,6 +723,12 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           givenOwners.delete(contextId);
         }
         if (givenOwners.size > 0) throw new Error("Workspace history did not record all replay owners");
+      }
+      if (receipt?.frozenPlanDigest) {
+        await installWorkspaceReplayBlobScopes({
+          dispatch: source.dispatch, destination: source.canonical,
+          blobsDir: this.deps.blobsDir, planDigest: receipt.frozenPlanDigest,
+        });
       }
       this.participantHistorySource = {
         dispatch: source.dispatch,
