@@ -102,6 +102,10 @@ Repeated views of the same reason count once, and a recorded counteraction can r
 equivalent change. The exporter verifies the decision and the cited live evidence.
 The release-readiness dossier joins two skill trees in one call. It requires observed recovery after a real worker restart
 and verified cleanup before the project skill can prepare and commit the evidence dossier.
+Publication preflight uses a locally built website and a real preview panel capture. It checks
+approval for the exact destination, provider, and environment, and distinguishes audience labels
+present only in the website package from labels observed in the reviewed panel. Controlled delivery
+faults exercise missing HTML and changed manifests. The checks cover review and publication status.
 Integration handoffs combine the workspace integration and scratch evidence skills. The scratch
 binding opens only after the VCS oracle verifies the integration. Some questions require
 citations from multiple resulting files. If those files lack a required decision, such as a

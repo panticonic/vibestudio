@@ -65,7 +65,13 @@ test("authored template worlds flow into the collector without losing original s
       [
         "publication-preflight-worlds",
         "managedPublicationWorlds",
-        [{ id: "caption", expectedBlockers: ["missing-presentation"] }],
+        [
+          {
+            id: "caption",
+            expectedBlockers: ["missing-presentation"],
+            expectedVisual: "Checklist",
+          },
+        ],
       ],
       [
         "pdf-intake-worlds",
@@ -307,6 +313,45 @@ test("authored template worlds flow into the collector without losing original s
   const preflight = cases.get("publication-preflight-live-caption");
   assert.equal(preflight.root, "preflightPublication");
   assert.deepEqual(preflight.expectedBlockers, ["missing-presentation"]);
+  assert.equal(preflight.expectedVisual, "Checklist");
+  const publicationVerification = {
+    caseId: preflight.caseId,
+    passed: true,
+    checks: {
+      protectedHeadUnchanged: true,
+      exactPanelCapture: true,
+      localArtifactRepeatable: true,
+      singleReadback: true,
+      verifiedDisposition: true,
+    },
+    seedRevision: "before",
+    panelAttempt: "panel-attempt",
+    artifactDigest: `sha256:${"a".repeat(64)}`,
+    publicPaths: ["index.html", "vibestudio-build.json"],
+    visual: "Checklist",
+  };
+  const publicationExecution = {
+    provenance: { contextId: "owned" },
+    diagnostics: {
+      managedPublication: { contextId: "owned", verification: publicationVerification },
+    },
+  };
+  const publicationReport = {
+    status: "blocked",
+    blockers: ["missing-presentation"],
+    visual: "Checklist",
+  };
+  assert.ok(preflight.evidence(publicationExecution, { report: publicationReport }, "", preflight));
+  assert.throws(
+    () =>
+      preflight.evidence(
+        publicationExecution,
+        { report: { ...publicationReport, visual: "Timeline" } },
+        "",
+        preflight
+      ),
+    /exact local artifact/
+  );
   const scratch = cases.get("scratch-handoff-live-review");
   assert.equal(scratch.root, "assembleHandoff");
   assert.equal(scratch.expectedStatus, "staged");

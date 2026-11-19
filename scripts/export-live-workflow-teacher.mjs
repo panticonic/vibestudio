@@ -477,11 +477,12 @@ export async function loadLiveTeacherCases(checkouts) {
       ...managedPdfExpectation(world),
     });
   }
-  for (const { id, expectedBlockers } of managedPublicationWorlds) {
+  for (const { id, expectedBlockers, expectedVisual } of managedPublicationWorlds) {
     cases.set(`publication-preflight-live-${id}`, {
       ...publicationPreflightWorkflow,
       caseId: id,
       expectedBlockers,
+      expectedVisual,
     });
   }
   for (const { id, status } of managedAutomationWorlds) {
@@ -1655,6 +1656,9 @@ function publicationPreflightEvidence(execution, exercise, _scenario, workflow) 
       /^sha256:[a-f0-9]{64}$/u.test(verification.artifactDigest) &&
       verification.publicPaths?.includes("index.html") &&
       verification.publicPaths?.includes("vibestudio-build.json") &&
+      (!workflow.expectedVisual ||
+        (verification.visual === workflow.expectedVisual &&
+          report?.visual === workflow.expectedVisual)) &&
       report?.status === (workflow.expectedBlockers.length ? "blocked" : "ready-for-review") &&
       Array.isArray(report.blockers) &&
       JSON.stringify([...report.blockers].sort()) ===
