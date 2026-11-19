@@ -45,6 +45,8 @@ export const WorkspaceChildChronologPrincipalResultSchema = z.object({
   pkcs8Hex: z.string().regex(/^(?:[a-f0-9]{2}){1,256}$/u),
 }).strict();
 
+export const WorkspaceChildChronologPublicPrincipalSchema = WorkspaceChildChronologPrincipalResultSchema.pick({ publicKey: true });
+
 export const WorkspaceChildAgentCredentialRevokeInputSchema = z
   .object({ agentId: z.string().min(1) })
   .strict();
@@ -232,6 +234,9 @@ export interface WorkspaceChildHubPort {
   chronologPrincipal(input: z.infer<typeof WorkspaceChildChronologPrincipalInputSchema>,
     options?: { signal?: AbortSignal },
   ): Promise<z.infer<typeof WorkspaceChildChronologPrincipalResultSchema>>;
+  chronologPublicPrincipal(input: z.infer<typeof WorkspaceChildChronologPrincipalInputSchema>,
+    options?: { signal?: AbortSignal },
+  ): Promise<z.infer<typeof WorkspaceChildChronologPublicPrincipalSchema>>;
   /** Non-revoked principals this workspace attested (for startup reconciliation). */
   listClientPrincipals(input: { attesterWorkspaceId: string }): Promise<ClientPrincipalRow[]>;
   attestClientPrincipal(input: WorkspaceChildClientPrincipalAttestation): Promise<void>;
@@ -290,6 +295,7 @@ export function createWorkspaceChildHubPort(
     route:
       | "agent-credential/mint"
       | "chronolog/principal"
+      | "chronolog/public-principal"
       | "agent-credential/revoke"
       | "agent-credential/revoke-entity"
       | "client-principal/attest"
@@ -337,6 +343,10 @@ export function createWorkspaceChildHubPort(
     chronologPrincipal: (input, options) => post(
       "chronolog/principal", WorkspaceChildChronologPrincipalInputSchema,
       WorkspaceChildChronologPrincipalResultSchema, input, options,
+    ),
+    chronologPublicPrincipal: (input, options) => post(
+      "chronolog/public-principal", WorkspaceChildChronologPrincipalInputSchema,
+      WorkspaceChildChronologPublicPrincipalSchema, input, options,
     ),
     createWorkspace: (input) =>
       post(

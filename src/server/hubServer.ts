@@ -1653,7 +1653,7 @@ async function handleInternalRoute(
       sendJson(res, 200, result);
       return;
     }
-    if (route === "chronolog/principal") {
+    if (route === "chronolog/principal" || route === "chronolog/public-principal") {
       const body = WorkspaceChildChronologPrincipalInputSchema.parse(rawBody);
       const subject = requireTargetUser(state, { userId: body.userId });
       const caller: HubSubject = {
@@ -1670,7 +1670,7 @@ async function handleInternalRoute(
       requireLiveHubSubject(state, caller);
       assertWorkspaceMember(state, caller, boundWorkspaceId);
       res.setHeader("Cache-Control", "no-store");
-      sendJson(res, 200, principal);
+      sendJson(res, 200, route === "chronolog/principal" ? principal : { publicKey: principal.publicKey });
       return;
     }
     if (route === "client-principal/attest") {

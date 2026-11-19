@@ -40,6 +40,7 @@ const INHERITED_TOPOLOGY_ENV = [
   "CELLD_EGRESS_SECRET",
   "CELLD_EGRESS_SECRET_FILE",
   "CELLD_INSPECTOR_ADDR",
+  "CELLD_P2P_KEY_FILE",
   "CELLD_SECRETS_KEY",
   "CELLD_SECRETS_KEY_FILE",
   "S3_ENDPOINT",
@@ -415,6 +416,9 @@ export class CelldNode {
       env: {
         ...this.baseEnv(),
         CELLD_SECRETS_KEY_FILE: this.secretsKeyFile,
+        // Every workspace keeps its own Iroh identity across process restarts.
+        // celld opens this private key only when a deployment declares P2P.
+        CELLD_P2P_KEY_FILE: path.join(this.options.stateDir, "p2p.key"),
         // The default per-isolate heap (128 MB, Cloudflare's) is below what the
         // eval kernel and the agent runtime need together in one isolate; the
         // workerd runtime had no such cap. Measured on the system-test lanes: the
