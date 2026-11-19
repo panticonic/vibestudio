@@ -96,6 +96,7 @@ test("authored template worlds flow into the collector without losing original s
         ],
       ],
       ["phone-setup-world", "phoneSetupUnavailable", null],
+      ["problem-draft-worlds", "managedProblemDraftWorlds", []],
       ["agentic-change-worlds", "managedAgenticChangeWorlds", []],
       ["gad-review-worlds", "managedGadReviewWorlds", []],
       ["terminal-check-worlds", "managedTerminalCheckWorlds", []],
@@ -2920,6 +2921,7 @@ test("workspace integration binds conflict source and verified state without bro
     [
       ["content-project-worlds", "export const contentProjectWorlds = [];"],
       ["phone-setup-world", "export const phoneSetupUnavailable = undefined;"],
+      ["problem-draft-worlds", "export const managedProblemDraftWorlds = [];"],
       ["agentic-change-worlds", "export const managedAgenticChangeWorlds = [];"],
       ["gad-review-worlds", "export const managedGadReviewWorlds = [];"],
       ["terminal-check-worlds", "export const managedTerminalCheckWorlds = [];"],
@@ -3795,4 +3797,162 @@ test("agentic change export joins the captured source revision and its planning 
     exportLiveTeacherWorkflow({ ...options, cases }),
     /exact workspace revision/u
   );
+});
+
+test("local problem export requires persisted narrative and rejects a stale draft write", async (t) => {
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  for (const suffix of ["save-wrong-sort", "continue-workspace-error", "hold-stale-draft"]) {
+    const { options, diagnostics, entry, save } = await fixture(t);
+    const name = `problem-draft-live-${suffix}`;
+    const { assignment } = cases.get(name);
+    const pins = JSON.parse(await readFile(options.pins, "utf8"));
+    await writeFile(options.pins, JSON.stringify({ ...pins, workspace: "examples" }));
+    entry.test.name = name;
+    const { goal, account, defect, mode } = assignment;
+    const held = mode === "stale";
+    const opening = mode === "new";
+    const request = { goal, operationId: "assignment" };
+    const draft = { id: "draft", revision: 2, existingSections: opening ? [] : ["symptom"] };
+    const review = {
+      goal,
+      consent: "save",
+      account,
+      draft: opening
+        ? null
+        : {
+            id: draft.id,
+            revision: draft.revision,
+            basisRevision: held ? 1 : 2,
+            userEdits: false,
+          },
+      evidence: [],
+      frozen: null,
+    };
+    const source = { review, draft: opening ? null : draft };
+    const sections = [
+      ...(opening
+        ? [
+            {
+              section: "symptom",
+              claims: "unverified",
+              markdown: [account.goal, account.observed, account.expected].join("\n"),
+            },
+          ]
+        : []),
+      {
+        section: "verification",
+        claims: "unverified",
+        markdown: "Repeat the assigned operation. " + account.expected,
+      },
+    ];
+    const write = { id: draft.id, revision: 3, sectionIds: sections.map(({ section }) => section) };
+    const saved = held ? null : { ...write, sections };
+    const next = held ? "refresh-own-edit" : "keep-local";
+    const decision = opening ? "prepare-local-draft" : next;
+    const report = { defect, status: held ? "held" : "saved-local", next, saved };
+    diagnostics.managedProblemDraft = {
+      caseId: assignment.id,
+      contextId: "ctx",
+      request,
+      source,
+      created: opening ? draft : null,
+      saved,
+      passed: true,
+      checks: {
+        source: true,
+        result: true,
+        opening: true,
+        retention: true,
+        persisted: true,
+        localOnly: true,
+      },
+    };
+    const ref = (value) => {
+      const text = JSON.stringify(value);
+      return {
+        complete: true,
+        hash: createHash("sha256").update(text).digest("hex"),
+        bytes: Buffer.byteLength(text),
+      };
+    };
+    const prototype = diagnostics.natlangTeacher.calls[0];
+    const call = (name, parent, inputs, output, effects = []) => ({
+      callId: name,
+      summary: { ...prototype.summary, call_id: name },
+      record: {
+        ...prototype.record,
+        call_id: name,
+        parent_call_id: parent,
+        definition: { name },
+        outcome: "done",
+        inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+        output: ref(output),
+        effects,
+      },
+    });
+    const effect = (service, method, args, result) => ({
+      service,
+      method,
+      args: ref(args),
+      result: ref(result),
+    });
+    const append = call("appendDraft", "saveProblemDraft", { draft, sections }, write, [
+      effect("problemDraftAppend", "append", [draft, sections], write),
+    ]);
+    diagnostics.natlangTeacher = {
+      ...diagnostics.natlangTeacher,
+      programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+      rootCallIds: ["runWorkflow"],
+      report,
+      calls: [
+        call("runWorkflow", null, {}, null),
+        call("saveProblemDraft", "runWorkflow", { request }, report),
+        call("readDraft", "saveProblemDraft", { operationId: request.operationId }, source, [
+          effect("problemDraftRead", "observe", [request.operationId], source),
+        ]),
+        call("reviewProblem", "saveProblemDraft", { request: review }, { defect, next: decision }),
+        call("classifyDefect", "reviewProblem", { evidence: account }, defect),
+        call("qualifyEvidence", "reviewProblem", { request: review }, {}),
+        call("chooseDraftAction", "reviewProblem", { request: review, defect }, decision),
+        ...(opening
+          ? [
+              call("openDraft", "saveProblemDraft", { operationId: request.operationId }, draft, [
+                effect("problemDraftOpen", "create", [request.operationId], draft),
+              ]),
+              call("writeSymptom", "composeNarrative", { account }, sections[0]),
+            ]
+          : []),
+        ...(!held
+          ? [
+              call(
+                "composeNarrative",
+                "saveProblemDraft",
+                { account, existingSections: draft.existingSections },
+                sections
+              ),
+              call("writeVerification", "composeNarrative", { account }, sections.at(-1)),
+              append,
+              call("confirmDraft", "saveProblemDraft", { write }, saved, [
+                effect("problemDraftRead", "confirm", [write], saved),
+              ]),
+            ]
+          : []),
+      ],
+    };
+    await save();
+    await exportLiveTeacherWorkflow({ ...options, cases });
+    if (held) {
+      diagnostics.natlangTeacher.calls.push(append);
+    } else {
+      append.record.effects[0].args = ref([{ ...draft, revision: 1 }, sections]);
+    }
+    await save();
+    await assert.rejects(
+      exportLiveTeacherWorkflow({ ...options, cases }),
+      held ? /stale problem draft/u : /owned append/u
+    );
+  }
 });

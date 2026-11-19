@@ -203,6 +203,15 @@ const terminalCheckWorkflow = {
   root: "runTerminalChecks",
   evidence: terminalCheckEvidence,
 };
+const problemDraftWorkflow = {
+  family: "workspace-live-problem-draft",
+  workspace: "examples",
+  namespace: "vibestudio:problem-reporting",
+  group: "local-manual-draft-revision-and-narrative",
+  validator: { template: "system-testing", path: "skills/system-testing/problem-draft-managed.ts" },
+  root: "saveProblemDraft",
+  evidence: problemDraftEvidence,
+};
 const agenticChangeWorkflow = {
   family: "workspace-live-agentic-change",
   workspace: "examples",
@@ -445,6 +454,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedSessionReplayWorlds = [] },
     { managedTestkitCleanupWorlds = [] },
     { phoneSetupUnavailable },
+    { managedProblemDraftWorlds },
     { managedAgenticChangeWorlds },
     { managedGadReviewWorlds },
     { managedTerminalCheckWorlds },
@@ -486,6 +496,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "session-replay-worlds.ts",
       "testkit-cleanup-worlds.ts",
       "phone-setup-world.ts",
+      "problem-draft-worlds.ts",
       "agentic-change-worlds.ts",
       "gad-review-worlds.ts",
       "terminal-check-worlds.ts",
@@ -522,6 +533,9 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of managedTerminalCheckWorlds) {
     cases.set(`terminal-check-live-${assignment.id}`, { ...terminalCheckWorkflow, assignment });
+  }
+  for (const assignment of managedProblemDraftWorlds) {
+    cases.set(`problem-draft-live-${assignment.id}`, { ...problemDraftWorkflow, assignment });
   }
   for (const assignment of managedAgenticChangeWorlds) {
     cases.set(`agentic-change-live-${assignment.id}`, { ...agenticChangeWorkflow, assignment });
@@ -2346,6 +2360,145 @@ function terminalCheckEvidence(execution, exercise, _scenario, workflow) {
   return {
     world: { context_id: contextId, process_checks: checks.map(({ id }) => id) },
     checks: { ...fixture.checks, exactExecutionTree: true },
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function problemDraftEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedProblemDraft;
+  const { caseId, contextId, request, source, created, saved, checks } = fixture ?? {};
+  const { id, goal, account, mode, defect } = workflow.assignment;
+  const result = exercise.report;
+  const records = exercise.calls.map(({ record }) => record);
+  const child = (parent, name) =>
+    parent &&
+    records.find((call) => call.parent_call_id === parent.call_id && call.definition.name === name);
+  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const save = child(root, "saveProblemDraft");
+  const read = child(save, "readDraft");
+  const review = child(save, "reviewProblem");
+  const classification = child(review, "classifyDefect");
+  const selection = child(review, "chooseDraftAction");
+  const open = child(save, "openDraft");
+  const compose = child(save, "composeNarrative");
+  const append = child(save, "appendDraft");
+  const confirm = child(save, "confirmDraft");
+  const effect = (call, service, method) => {
+    const [entry] = call?.effects ?? [];
+    return (
+      call?.effects?.length === 1 &&
+      entry?.service === service &&
+      entry.method === method &&
+      !entry.error &&
+      entry
+    );
+  };
+  const observed = effect(read, "problemDraftRead", "observe");
+  const decision =
+    mode === "stale" ? "refresh-own-edit" : mode === "new" ? "prepare-local-draft" : "keep-local";
+  const authored = (a, b) => Boolean(a?.complete && isDeepStrictEqual(a, b));
+  requireEvidence(
+    caseId === id &&
+      typeof contextId === "string" &&
+      contextId === execution.provenance?.contextId &&
+      request?.goal === goal &&
+      typeof request.operationId === "string" &&
+      fixture.passed === true &&
+      ["source", "result", "opening", "retention", "persisted", "localOnly"].every(
+        (key) => checks?.[key] === true
+      ) &&
+      isDeepStrictEqual(source?.review?.account, account) &&
+      source.review.consent === "save" &&
+      result?.defect === defect &&
+      matchesValue(save?.inputs?.request, request) &&
+      matchesValue(save.output, result) &&
+      matchesValue(observed?.args, [request.operationId]) &&
+      matchesValue(observed.result, source) &&
+      matchesValue(read.output, source) &&
+      matchesValue(review?.inputs?.request, source.review) &&
+      matchesValue(classification?.inputs?.evidence, account) &&
+      matchesValue(classification.output, defect) &&
+      child(review, "qualifyEvidence") &&
+      matchesValue(selection?.inputs?.request, source.review) &&
+      matchesValue(selection.inputs.defect, defect) &&
+      matchesValue(selection.output, decision),
+    "Problem draft must use the exact observed account and shared defect review"
+  );
+
+  if (mode === "stale") {
+    requireEvidence(
+      result.status === "held" &&
+        result.next === "refresh-own-edit" &&
+        saved === null &&
+        created === null &&
+        result.saved === null &&
+        source.draft?.revision > source.review.draft?.basisRevision &&
+        records.flatMap(({ effects }) => effects ?? []).length === 1 &&
+        !open &&
+        !compose &&
+        !append &&
+        !confirm,
+      "A stale problem draft must remain unchanged and unsubmitted"
+    );
+  } else {
+    const opened = effect(open, "problemDraftOpen", "create");
+    const appended = effect(append, "problemDraftAppend", "append");
+    const confirmed = effect(confirm, "problemDraftRead", "confirm");
+    const { id: draftId, revision, sectionIds, sections } = saved ?? {};
+    const write = { id: draftId, revision, sectionIds };
+    requireEvidence(
+      result.status === "saved-local" &&
+        result.next === "keep-local" &&
+        isDeepStrictEqual(result.saved, saved) &&
+        typeof draftId === "string" &&
+        Number.isSafeInteger(revision) &&
+        Array.isArray(sectionIds) &&
+        Array.isArray(sections) &&
+        sectionIds.length === sections.length &&
+        matchesValue(compose?.inputs?.account, account) &&
+        matchesValue(compose.inputs.existingSections, source.draft?.existingSections ?? []) &&
+        matchesValue(compose.output, sections) &&
+        matchesValue(child(compose, "writeVerification")?.output, sections.at(-1)) &&
+        authored(append?.inputs?.sections, compose.output) &&
+        matchesValue(appended?.result, write) &&
+        matchesValue(append.output, write) &&
+        matchesValue(confirm?.inputs?.write, write) &&
+        matchesValue(confirmed?.args, [write]) &&
+        matchesValue(confirmed.result, saved) &&
+        matchesValue(confirm.output, saved) &&
+        sections.at(-1)?.claims === "unverified" &&
+        sections.at(-1)?.section === "verification" &&
+        sections.at(-1)?.markdown.includes(account.expected) &&
+        records.flatMap(({ effects }) => effects ?? []).length === (mode === "new" ? 4 : 3) &&
+        (mode === "new"
+          ? source.draft === null &&
+            matchesValue(child(compose, "writeSymptom")?.output, sections[0]) &&
+            sections.length === 2 &&
+            sections[0]?.section === "symptom" &&
+            sections[0].claims === (account.reproduced ? "observed" : "unverified") &&
+            [account.goal, account.observed, account.expected].every((text) =>
+              sections[0].markdown.includes(text)
+            ) &&
+            matchesValue(opened?.args, [request.operationId]) &&
+            created?.id === draftId &&
+            created.revision < revision &&
+            matchesValue(opened.result, created) &&
+            matchesValue(open.output, created) &&
+            matchesValue(append.inputs.draft, created) &&
+            matchesValue(appended.args, [created, sections])
+          : created === null &&
+            source.draft?.id === draftId &&
+            source.draft.revision < revision &&
+            sections.length === 1 &&
+            !open &&
+            matchesValue(append.inputs.draft, source.draft) &&
+            matchesValue(appended.args, [source.draft, sections])),
+      "Saved problem draft must bind the composed narrative to an owned append and exact local readback"
+    );
+  }
+  return {
+    world: { context_id: contextId, draft_id: saved?.id ?? source.draft?.id, mode },
+    checks,
     evidence: { workspace: { fixture } },
   };
 }

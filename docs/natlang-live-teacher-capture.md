@@ -206,6 +206,13 @@ then binds the interpretation to the latest user message's ID, sequence, and tex
 The exporter checks the nested calls and their exact readbacks. The model-free
 qualification is `gad-review-oracle-qualification`.
 
+Local problem report cases exercise the workspace's real manual report store.
+The shared workflow classifies the account, authors a local narrative,
+appends at the observed revision and verifies the saved sections. Cases cover
+a new report, continuation preserving an existing symptom and a stale revision
+that must remain untouched. Run `problem-draft-oracle-qualification` for the
+model-free write, readback and scope checks.
+
 Agentic change planning cases read installed source guides at the managed workspace's
 immutable working head. The shared Natlang workflow delegates ownership, retained
 history, builds and canary planning to separate functions. The cases cover a chat
