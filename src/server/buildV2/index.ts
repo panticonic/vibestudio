@@ -528,6 +528,10 @@ export interface BuildSystemV2 {
     unitPath: string, ref?: string, sourceState?: ExecutionSourceStateRef
   ): Promise<RuntimeImageBinding>;
 
+  withExactBuildSource<T>(
+    stateHash: string, sourceState: ExecutionSourceStateRef, operation: () => Promise<T>
+  ): Promise<T>;
+
   /** Build an npm package as a CJS library bundle for sandbox use. */
   getBuildNpm(specifier: string, version: string, externals?: string[]): Promise<BuildBundleResult>;
 
@@ -2620,6 +2624,8 @@ export async function initBuildSystemV2(
     resolveTestSuite,
     getUnitIcon,
     bindRuntimeImage,
+    withExactBuildSource: (stateHash, sourceState, operation) =>
+      store.withExactSource(stateHash, sourceState, operation),
 
     async prepareTypecheck(unitPath, requestedRef) {
       if (retiringDependencies) throw new Error("Build system is retiring");

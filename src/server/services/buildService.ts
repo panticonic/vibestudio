@@ -2,11 +2,12 @@ import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { PanelPlacementHint } from "@vibestudio/shared/types";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
-import { buildMethods, type BuildUnitCatalogEntry } from "@vibestudio/service-schemas/build";
+import { buildMethods, type BuildBundleResult, type BuildUnitCatalogEntry } from "@vibestudio/service-schemas/build";
 import { BUILDABLE_UNIT_DIRS } from "@vibestudio/workspace-contracts/sourceDirs";
 import type { BuildSystemV2 } from "../buildV2/index.js";
 import { buildSourcemapForNode } from "../buildV2/builder.js";
-import type { StoredBuildResult } from "../buildV2/buildStore.js";
+import type { BuildResult, StoredBuildResult } from "../buildV2/buildStore.js";
+import type { ExecutionSourceStateRef } from "@vibestudio/shared/execution/retention";
 
 export interface ResolvedPanelMetadata {
   source: string;
@@ -60,11 +61,25 @@ export function createBuildService(deps: {
   listUnits: () => BuildUnitCatalogEntry[] | Promise<BuildUnitCatalogEntry[]>;
   getCallerContextId: (callerId: string) => string | null;
   canReadBuild?: (ctx: ServiceContext, build: StoredBuildResult) => Promise<boolean>;
+  resolveContextBuildSource?: (
+    ctx: ServiceContext, contextId: string
+  ) => Promise<{ stateHash: string; semanticState: ExecutionSourceStateRef } | null>;
 }): ServiceDefinition {
   const visibleBuild = async (ctx: ServiceContext, key: string) => {
     const build = await deps.buildSystem.getBuildByKey(key);
     return build && (!deps.canReadBuild || await deps.canReadBuild(ctx, build)) ? build : null;
   };
+  async function atBuildRef<T>(
+    ctx: ServiceContext, ref: string | undefined, operation: (selected?: string) => Promise<T>
+  ): Promise<T> {
+    if (!ref?.startsWith("ctx:") || !deps.resolveContextBuildSource) return operation(ref);
+    const source = await deps.resolveContextBuildSource(ctx, ref.slice(4));
+    return source
+      ? deps.buildSystem.withExactBuildSource(
+          source.stateHash, source.semanticState, () => operation(source.stateHash)
+        )
+      : operation(ref);
+  }
   const artifactHandle = (build: StoredBuildResult) => ({
     buildKey: build.buildKey,
     sourceStateHash: build.sourceStateHash,
@@ -85,31 +100,30 @@ export function createBuildService(deps: {
     methods: buildMethods,
     handler: defineServiceHandler("build", buildMethods, {
       listUnits: () => deps.listUnits(),
-      getBuild: (_ctx, [unit, ref, options]) => {
+      getBuild: (ctx, [unit, ref, options]) => atBuildRef<BuildResult | BuildBundleResult>(ctx, ref, (selected) => {
         const bs = deps.buildSystem;
         return options?.library
-          ? bs.getBuild(unit, ref, {
+          ? bs.getBuild(unit, selected, {
               ...options,
               library: true,
             })
-          : bs.getBuild(unit, ref, {
+          : bs.getBuild(unit, selected, {
               ...options,
               library: false,
             });
-      },
+      }),
       getBuildArtifacts: async (ctx, [key]) => {
         const build = await visibleBuild(ctx, key);
         if (!build) return null;
         return artifactHandle(build);
       },
-      buildWebsite: async (_ctx, [unit, ref]) => {
+      buildWebsite: async (ctx, [unit, ref]) => {
         if (!ref.startsWith("ctx:") && !ref.startsWith("state:")) {
           throw new Error("Website builds require an exact ctx: or state: reference");
         }
-        const build = await deps.buildSystem.getStoredBuild(unit, ref, {
-          library: false,
-          website: true,
-        });
+        const build = await atBuildRef(ctx, ref, (selected) =>
+          deps.buildSystem.getStoredBuild(unit, selected, { library: false, website: true })
+        );
         return artifactHandle(build);
       },
       readBuildArtifact: async (ctx, [key, artifactPath]) => {
@@ -126,13 +140,14 @@ export function createBuildService(deps: {
           },
         });
       },
-      getTestArtifact: (_ctx, [unit, ref, selection]) =>
-        deps.buildSystem.getTestArtifact(unit, ref, selection),
-      resolveTestSuite: (_ctx, [unit, ref, suite]) =>
-        deps.buildSystem.resolveTestSuite(unit, ref, suite),
+      getTestArtifact: (ctx, [unit, ref, selection]) =>
+        atBuildRef(ctx, ref, (selected) => deps.buildSystem.getTestArtifact(unit, selected ?? ref, selection)),
+      resolveTestSuite: (ctx, [unit, ref, suite]) =>
+        atBuildRef(ctx, ref, (selected) => deps.buildSystem.resolveTestSuite(unit, selected ?? ref, suite)),
       getBuildNpm: (_ctx, [specifier, version, externals]) =>
         deps.buildSystem.getBuildNpm(specifier, version, externals),
-      prepareTypecheck: (_ctx, [unit, ref]) => deps.buildSystem.prepareTypecheck(unit, ref),
+      prepareTypecheck: (ctx, [unit, ref]) =>
+        atBuildRef(ctx, ref, (selected) => deps.buildSystem.prepareTypecheck(unit, selected)),
       getBuildMetadata: async (ctx, [key, options]) => {
         const bs = deps.buildSystem;
         const build = await visibleBuild(ctx, key);
@@ -147,9 +162,9 @@ export function createBuildService(deps: {
         const diagnostics = bs.getUnitDiagnostics(build.metadata.name) ?? undefined;
         return diagnostics && diagnostics.length > 0 ? { ...metadata, diagnostics } : metadata;
       },
-      getBuildReport: (_ctx, [unit, ref, options]) =>
-        deps.buildSystem.getBuildReport(unit, ref, undefined, options),
-      getPerformanceProfile: async (_ctx, [unit, ref, options]) => {
+      getBuildReport: (ctx, [unit, ref, options]) =>
+        atBuildRef(ctx, ref, (selected) => deps.buildSystem.getBuildReport(unit, selected, undefined, options)),
+      getPerformanceProfile: (ctx, [unit, ref, options]) => atBuildRef(ctx, ref, async (selected) => {
         const startedAt = Date.now();
         const firstStartedAt = performance.now();
         const phases = { bundlingMs: 0, validationMs: 0, otherMs: 0 };
@@ -160,7 +175,7 @@ export function createBuildService(deps: {
           phases[phase] += now - phaseStartedAt;
           phaseStartedAt = now;
         };
-        const report = await deps.buildSystem.getBuildReport(unit, ref, (progress) => {
+        const report = await deps.buildSystem.getBuildReport(unit, selected, (progress) => {
           finishPhase();
           phase = progress.phase === "bundling" ? "bundlingMs" : "validationMs";
         });
@@ -213,7 +228,7 @@ export function createBuildService(deps: {
         let verifiedCacheRun: { elapsedMs: number; sameBuildKeys: boolean } | undefined;
         if (options?.verifyCache !== false && report.status === "ok") {
           const warmStartedAt = performance.now();
-          const cached = await deps.buildSystem.getBuildReport(unit, ref);
+          const cached = await deps.buildSystem.getBuildReport(unit, selected);
           const firstKeys = report.builds.map((build) => build.buildKey ?? null);
           const cachedKeys = cached.builds.map((build) => build.buildKey ?? null);
           verifiedCacheRun = {
@@ -233,7 +248,7 @@ export function createBuildService(deps: {
           report,
           targets,
         };
-      },
+      }),
       getEffectiveVersion: (_ctx, [unit]) => deps.buildSystem.getEffectiveVersion(unit),
       inspectBuildProvenance: async (_ctx, [source]) => {
         const bs = deps.buildSystem;
@@ -321,10 +336,8 @@ export function createBuildService(deps: {
       getPanelMetadata: (ctx, [unit, ref]) => {
         const contextId =
           ctx.caller.agentBinding?.contextId ?? deps.getCallerContextId(ctx.caller.runtime.id);
-        return resolvePanelMetadata(
-          deps.buildSystem,
-          unit,
-          ref ?? (contextId ? `ctx:${contextId}` : undefined)
+        return atBuildRef(ctx, ref ?? (contextId ? `ctx:${contextId}` : undefined), (selected) =>
+          resolvePanelMetadata(deps.buildSystem, unit, selected)
         );
       },
       listSkills: () =>

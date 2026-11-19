@@ -319,6 +319,32 @@ describe("build service extension diagnostics", () => {
     });
   });
 
+  it("compiles a context build at its caller's sealed revision", async () => {
+    const buildSystem = makeBuildSystem();
+    vi.mocked(buildSystem.getBuild).mockResolvedValue({ bundle: "module.exports = {};" } as never);
+    const withExactBuildSource = vi.fn(
+      async (_stateHash: string, _sourceState: unknown, operation: () => Promise<unknown>) => operation()
+    );
+    Object.assign(buildSystem, { withExactBuildSource });
+    const source = {
+      stateHash: "state:private",
+      semanticState: { kind: "application", applicationId: "private" },
+    } as const;
+    const resolveContextBuildSource = vi.fn(async () => source);
+    const service = createBuildService({
+      buildSystem, listUnits: () => [], getCallerContextId: () => null, resolveContextBuildSource,
+    });
+    const ctx = { caller: createVerifiedCaller("owner", "shell") };
+    await expect(service.handler(ctx, "getBuild", [
+      "@workspace-packages/example", "ctx:working", { library: true, libraryTarget: "worker" },
+    ])).resolves.toEqual({ bundle: "module.exports = {};" });
+    expect(resolveContextBuildSource).toHaveBeenCalledWith(ctx, "working");
+    expect(withExactBuildSource).toHaveBeenCalledWith(source.stateHash, source.semanticState, expect.any(Function));
+    expect(buildSystem.getBuild).toHaveBeenCalledWith("@workspace-packages/example", source.stateHash, {
+      library: true, libraryTarget: "worker",
+    });
+  });
+
   it("returns compact build metadata by default", async () => {
     const buildSystem = makeBuildSystem();
     const service = createBuildService({

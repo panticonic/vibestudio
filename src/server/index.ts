@@ -2940,6 +2940,14 @@ async function main() {
         return createBuildService({
           buildSystem,
           getCallerContextId: (callerId) => callerBuildContextId(entityCache, callerId),
+          resolveContextBuildSource: (ctx, contextId) => {
+            if (!workspaceVcs.participantHistoryAttached) return Promise.resolve(null);
+            const callerContext = ctx.caller.agentBinding?.contextId ??
+              callerBuildContextId(entityCache, ctx.caller.runtime.id);
+            if (callerContext !== contextId)
+              throw Object.assign(new Error("Build context is outside the caller's working copy"), { code: "EACCES" });
+            return workspaceVcs.resolveCallerContextState(contextId, ctx.caller, ctx.signal);
+          },
           canReadBuild: async (ctx, build) =>
             build.sourceStateHash === null || await workspaceVcs.participantBuildStateReachable(
               build.metadata.sourceState,
