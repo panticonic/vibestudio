@@ -97,6 +97,7 @@ test("authored template worlds flow into the collector without losing original s
       ],
       ["phone-setup-world", "phoneSetupUnavailable", null],
       ["client-admission-worlds", "managedClientAdmissionWorlds", []],
+      ["git-bridge-review-worlds", "managedGitBridgeReviewWorlds", []],
       ["vcs-delivery-worlds", "managedVcsDeliveryWorlds", []],
       ["web-brief-worlds", "managedWebBriefWorlds", []],
       ["architecture-boundary-worlds", "managedArchitectureBoundaryWorlds", []],
@@ -2929,6 +2930,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["content-project-worlds", "export const contentProjectWorlds = [];"],
       ["phone-setup-world", "export const phoneSetupUnavailable = undefined;"],
       ["client-admission-worlds", "export const managedClientAdmissionWorlds = [];"],
+      ["git-bridge-review-worlds", "export const managedGitBridgeReviewWorlds = [];"],
       ["vcs-delivery-worlds", "export const managedVcsDeliveryWorlds = [];"],
       ["web-brief-worlds", "export const managedWebBriefWorlds = [];"],
       ["architecture-boundary-worlds", "export const managedArchitectureBoundaryWorlds = [];"],
@@ -4984,4 +4986,127 @@ test("VCS delivery export checks the original revision read and the nested decis
   decision.record.output = ref("already-current");
   await save();
   await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /exact next step/u);
+});
+
+test("Git Bridge export rejects stale remote facts and a substituted candidate decision", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  const name = "git-bridge-review-live-draft-awaiting-semantic-publication";
+  const { assignment } = cases.get(name);
+  const pins = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(options.pins, JSON.stringify({ ...pins, workspace: "examples" }));
+  entry.test.name = name;
+  const { goal, repository, direction, source, next } = assignment;
+  const request = { goal, repository, direction, operationId: "assigned-bridge-read" };
+  const upstream = {
+    state: "local-only",
+    remote: null,
+    branch: null,
+    autoPush: false,
+    candidate: null,
+    observation: null,
+  };
+  const semantic = {
+    contextId: "ctx",
+    current: true,
+    mainEventId: "workspace-event:main",
+    working: { kind: "application", applicationId: "application:working" },
+    clean: false,
+    relation: "at",
+    workingRepositoryId: "repo:review",
+    mainRepositoryId: "repo:review",
+  };
+  const view = { repository, upstream, semantic };
+  const upstreamReview = {
+    freshness: "absent",
+    consequence: "The repository has no configured upstream.",
+  };
+  const semanticReview = {
+    source: { state: source, explanation: "Protected main lacks the draft application." },
+    integration: { candidate: null, explanation: "The bridge returned no pending import." },
+  };
+  const action = { next, reason: "Review and publish the draft semantically before export." };
+  const report = { view, upstreamReview, semanticReview, ...action };
+  diagnostics.managedGitBridgeReview = {
+    caseId: assignment.id,
+    contextId: "ctx",
+    request,
+    passed: true,
+    observed: view,
+    checks: { contextPreserved: true, semantic: true, upstream: true, report: true },
+  };
+  const ref = (value) => {
+    const text = JSON.stringify(value);
+    return {
+      complete: true,
+      hash: createHash("sha256").update(text).digest("hex"),
+      bytes: Buffer.byteLength(text),
+    };
+  };
+  const prototype = diagnostics.natlangTeacher.calls[0];
+  const call = (name, parent, inputs, output, effects = []) => ({
+    callId: name,
+    summary: { ...prototype.summary, call_id: name },
+    record: {
+      ...prototype.record,
+      call_id: name,
+      parent_call_id: parent,
+      definition: { name },
+      outcome: "done",
+      inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+      output: ref(output),
+      effects,
+    },
+  });
+  const observe = {
+    service: "gitBridgeReviewRead",
+    method: "observe",
+    args: ref([request.operationId]),
+    result: ref(view),
+  };
+  const candidate = call(
+    "reviewCandidate",
+    "reviewSemantic",
+    { candidate: null },
+    semanticReview.integration
+  );
+  diagnostics.natlangTeacher = {
+    ...diagnostics.natlangTeacher,
+    programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+    rootCallIds: ["runWorkflow"],
+    report,
+    calls: [
+      call("runWorkflow", null, {}, null),
+      call("reviewGitBridge", "runWorkflow", { request }, report, [observe]),
+      call("reviewUpstream", "reviewGitBridge", { direction, upstream }, upstreamReview),
+      call("checkFreshness", "reviewUpstream", { upstream }, upstreamReview.freshness),
+      call(
+        "interpretTransfer",
+        "reviewUpstream",
+        { direction, upstream },
+        upstreamReview.consequence
+      ),
+      call("reviewSemantic", "reviewGitBridge", { semantic }, semanticReview),
+      call("reviewPublicationBasis", "reviewSemantic", { semantic }, semanticReview.source),
+      candidate,
+      call("chooseBridgeStep", "reviewGitBridge", { view }, action),
+    ],
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+
+  observe.result = ref({ ...view, upstream: { ...upstream, observation: { at: 123, behind: 2 } } });
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /exact actual upstream/u);
+
+  observe.result = ref(view);
+  candidate.record.output = ref({
+    ...semanticReview.integration,
+    candidate: { eventId: "different" },
+  });
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /nested upstream/u);
 });

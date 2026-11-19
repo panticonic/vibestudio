@@ -211,6 +211,18 @@ const clientAdmissionWorkflow = {
   root: "reviewClientAdmission",
   evidence: clientAdmissionEvidence,
 };
+const gitBridgeReviewWorkflow = {
+  family: "workspace-live-git-bridge-review",
+  workspace: "examples",
+  namespace: "vibestudio:git-bridge",
+  group: "unconfigured-upstream-and-semantic-export-basis",
+  validator: {
+    template: "system-testing",
+    path: "skills/system-testing/git-bridge-review-managed.ts",
+  },
+  root: "reviewGitBridge",
+  evidence: gitBridgeReviewEvidence,
+};
 const vcsDeliveryWorkflow = {
   family: "workspace-live-semantic-vcs-delivery",
   workspace: "examples",
@@ -528,6 +540,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedTestkitCleanupWorlds = [] },
     { phoneSetupUnavailable },
     { managedClientAdmissionWorlds },
+    { managedGitBridgeReviewWorlds },
     { deliveryRepository, managedVcsDeliveryWorlds },
     { managedWebBriefWorlds },
     { managedArchitectureBoundaryWorlds },
@@ -577,6 +590,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "testkit-cleanup-worlds.ts",
       "phone-setup-world.ts",
       "client-admission-worlds.ts",
+      "git-bridge-review-worlds.ts",
       "vcs-delivery-worlds.ts",
       "web-brief-worlds.ts",
       "architecture-boundary-worlds.ts",
@@ -623,6 +637,12 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of managedClientAdmissionWorlds) {
     cases.set(`client-admission-live-${assignment.id}`, { ...clientAdmissionWorkflow, assignment });
+  }
+  for (const assignment of managedGitBridgeReviewWorlds) {
+    cases.set(`git-bridge-review-live-${assignment.id}`, {
+      ...gitBridgeReviewWorkflow,
+      assignment,
+    });
   }
   for (const assignment of managedVcsDeliveryWorlds) {
     cases.set(`vcs-delivery-live-${assignment.id}`, {
@@ -2607,6 +2627,107 @@ function clientAdmissionEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: contextId, source, host, abi: workingAbi },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function gitBridgeReviewEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedGitBridgeReview;
+  const { caseId, contextId, request, observed, checks } = fixture ?? {};
+  const { id, goal, repository, direction, draft, source, next } = workflow.assignment;
+  const report = exercise.report;
+  const records = exercise.calls.map(({ record }) => record);
+  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const child = (parent, name) =>
+    parent &&
+    records.find(
+      (record) => record.parent_call_id === parent.call_id && record.definition.name === name
+    );
+  const review = child(root, "reviewGitBridge");
+  const upstream = child(review, "reviewUpstream");
+  const semantic = child(review, "reviewSemantic");
+  const freshness = child(upstream, "checkFreshness");
+  const consequences = child(upstream, "interpretTransfer");
+  const basis = child(semantic, "reviewPublicationBasis");
+  const integration = child(semantic, "reviewCandidate");
+  const decision = child(review, "chooseBridgeStep");
+  const effects = records.flatMap(({ effects }) => effects ?? []);
+  const effect = review?.effects?.[0];
+  requireEvidence(
+    fixture?.passed === true &&
+      caseId === id &&
+      contextId === execution.provenance?.contextId &&
+      typeof contextId === "string" &&
+      request?.goal === goal &&
+      request.repository === repository &&
+      request.direction === direction &&
+      typeof request.operationId === "string" &&
+      request.operationId.length > 0 &&
+      ["contextPreserved", "semantic", "upstream", "report"].every(
+        (key) => checks?.[key] === true
+      ) &&
+      isDeepStrictEqual(observed, report?.view) &&
+      matchesValue(review?.inputs?.request, request) &&
+      matchesValue(review.output, report) &&
+      effects.length === 1 &&
+      effect?.service === "gitBridgeReviewRead" &&
+      effect.method === "observe" &&
+      !effect.error &&
+      matchesValue(effect.args, [request.operationId]) &&
+      matchesValue(effect.result, observed),
+    "Git Bridge review requires the exact actual upstream and semantic observation"
+  );
+
+  const state = observed.semantic;
+  requireEvidence(
+    observed.repository === repository &&
+      state?.current === true &&
+      state.contextId === contextId &&
+      state.clean === !draft &&
+      state.relation === "at" &&
+      typeof state.mainEventId === "string" &&
+      (draft
+        ? state.working?.kind === "application"
+        : state.working?.kind === "event" && state.working.eventId === state.mainEventId) &&
+      (source === "protected"
+        ? typeof state.mainRepositoryId === "string" &&
+          state.mainRepositoryId === state.workingRepositoryId
+        : state.mainRepositoryId === null && state.workingRepositoryId === null) &&
+      isDeepStrictEqual(observed.upstream, {
+        state: "local-only",
+        remote: null,
+        branch: null,
+        autoPush: false,
+        candidate: null,
+        observation: null,
+      }),
+    "Git Bridge review requires the assigned repository's protected basis and live local-only status"
+  );
+  requireEvidence(
+    report.next === next &&
+      typeof report.reason === "string" &&
+      report.reason.trim() &&
+      report.upstreamReview?.freshness === "absent" &&
+      typeof report.upstreamReview?.consequence === "string" &&
+      report.upstreamReview.consequence.trim() &&
+      report.semanticReview?.source?.state === source &&
+      report.semanticReview?.integration?.candidate === null &&
+      matchesValue(upstream?.inputs?.direction, direction) &&
+      matchesValue(upstream?.inputs?.upstream, observed.upstream) &&
+      matchesValue(upstream.output, report.upstreamReview) &&
+      matchesValue(freshness?.output, "absent") &&
+      matchesValue(consequences?.output, report.upstreamReview.consequence) &&
+      matchesValue(semantic?.inputs?.semantic, state) &&
+      matchesValue(semantic.output, report.semanticReview) &&
+      matchesValue(basis?.output, report.semanticReview.source) &&
+      matchesValue(integration?.output, report.semanticReview.integration) &&
+      matchesValue(decision?.inputs?.view, observed) &&
+      matchesValue(decision.output, { next, reason: report.reason }),
+    "Git Bridge review requires the nested upstream, semantic basis, and next-step decisions"
+  );
+  return {
+    world: { context_id: contextId, repository, direction },
     checks,
     evidence: { workspace: { fixture } },
   };

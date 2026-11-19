@@ -214,6 +214,12 @@ client, a mobile variant on the wrong runtime and a local incompatible ABI.
 Run `client-admission-oracle-qualification` for model-free verification. The
 workflow inspects the platform contract without launching a device client.
 
+Git Bridge review joins the installed provider's upstream status with the
+working and protected-main repository identities. The managed cases exercise
+an unconfigured upstream with a protected source, a local draft that needs
+semantic publication, and an absent project assigned for import. Run
+`git-bridge-review-oracle-qualification` for the model-free check.
+
 Semantic VCS delivery reviews a caller-assigned file at the live working head,
 committed event and protected main. The tasks cover a draft, a clean commit
 ahead of main, and an unchanged assigned file in a dirty context. Run
