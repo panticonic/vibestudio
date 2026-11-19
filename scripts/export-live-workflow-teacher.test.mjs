@@ -1162,7 +1162,9 @@ test("session replay export rejects a replaced message and a missing retry check
   for (const [name, parent] of [
     ["readCheckpoint", leaf.callId],
     ["inspectCheckpoint", leaf.callId],
-    ["matchesChannel", "inspectCheckpoint"],
+    ["reviewSessionTest", "inspectCheckpoint"],
+    ["reviewSession", "reviewSessionTest"],
+    ["checkContinuation", "reviewSession"],
     ["preservesReplay", "inspectCheckpoint"],
     ["classifyRetry", "inspectCheckpoint"],
     ["matchAcceptedIdentity", "classifyRetry"],
@@ -1185,6 +1187,20 @@ test("session replay export rejects a replaced message and a missing retry check
     before: [row],
     after: [{ ...row }],
   };
+  const ref = (value) => {
+    const text = JSON.stringify(value);
+    return { complete: true, hash: createHash("sha256").update(text).digest("hex"), bytes: Buffer.byteLength(text) };
+  };
+  const verdict = { decision: "confirmed", finding: "continuation-stable", evidenceIds: [receipt] };
+  for (const name of ["reviewSessionTest", "reviewSession", "checkContinuation"]) {
+    run.calls.find(({ callId }) => callId === name).record.output = ref(verdict);
+  }
+  const continuation = run.calls.find(({ callId }) => callId === "checkContinuation").record;
+  continuation.inputs = { evidence: ref({
+    kind: "continuation", receipt, originalChannel: checkpoint.originalChannel,
+    replayChannel: checkpoint.replayChannel, originalKey: checkpoint.original.key,
+    retryKey: checkpoint.retry.key, originalMessage: row.id, replayedMessages: [row.id], retryMessage: row.id,
+  }) };
   run.report = {
     findings: [
       {
@@ -1214,6 +1230,13 @@ test("session replay export rejects a replaced message and a missing retry check
     /accepted retry and preserved transcripts/u
   );
   checkpoint.after[0].text = row.text;
+  continuation.output = ref({ ...verdict, finding: "retry-key-changed" });
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-changed-session-verdict` }),
+    /replay inspection and its nested decision calls/u
+  );
+  continuation.output = ref(verdict);
   run.calls.pop();
   await save();
   await assert.rejects(

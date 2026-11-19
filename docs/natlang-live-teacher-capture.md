@@ -215,7 +215,11 @@ recall calls and the comparison judgment.
 Headless session cases reconnect to owned channels and compare the fresh client transcript
 with the durable message log. They check preserved order, accepted retry identities,
 first-write-wins content, distinct submissions, and wrong-channel continuations. Each
-checkpoint is inspected by the shared workflow's nested replay-review stages.
+checkpoint goes through the shared session reviewer before the replay stages
+check the preserved transcript and classify the retry. The two composed cases
+follow several reconnects through the same channels. Run
+`session-replay-composed-qualification` for the model-free check.
+
 The runtime catalog retains the method allowlist for explicitly supplied workflow services.
 Their generated model declarations come from the owning template's TypeScript signatures.
 The generation check verifies catalog membership for every configured skill's service scopes.

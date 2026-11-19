@@ -2006,14 +2006,39 @@ function liveSessionReplayEvidence(execution, exercise, _scenario, workflow) {
   const review = children(exercise.rootCallIds[0], "reviewLiveReplay")[0];
   const inspections = children(review?.callId, "inspectCheckpoint");
   const inspectionBranch = (call, index) => {
-    const action = assignment.steps[index].action;
-    if (children(call.callId, "matchesChannel").length !== 1) return false;
-    if (action.startsWith("other-channel")) return true;
-    const [retry] = children(call.callId, "classifyRetry");
+    const { action } = assignment.steps[index];
+    const { receipt, originalChannel, replayChannel, original, retry, before } = evidence[index];
+    const foreign = action.startsWith("other-channel");
+    const [session] = children(call.callId, "reviewSessionTest");
+    const [routing] = session ? children(session.callId, "reviewSession") : [];
+    const [continuation] = routing ? children(routing.callId, "checkContinuation") : [];
+    const projection = {
+      kind: "continuation", receipt, originalChannel, replayChannel, originalKey: original.key,
+      retryKey: retry?.key ?? original.key, originalMessage: original.messageId,
+      replayedMessages: before.map(({ id }) => id), retryMessage: retry?.messageId ?? null,
+    };
+    const [decision, finding] = foreign
+      ? ["unobserved", "replay-channel-mismatch"]
+      : action === "append"
+        ? ["revise", "retry-key-changed"]
+        : action === "inspect"
+          ? ["waiting", "retry-terminal-unobserved"]
+          : ["confirmed", "continuation-stable"];
+    const sharedVerdict = { decision, finding, evidenceIds: [receipt] };
+    if (
+      !matchesValue(continuation?.record.inputs?.evidence, projection) ||
+      ![session, routing, continuation].every(({ record }) =>
+        matchesValue(record.output, sharedVerdict)
+      )
+    )
+      return false;
+    const [classified] = children(call.callId, "classifyRetry");
+    const integrity = children(call.callId, "preservesReplay");
+    if (foreign) return !classified && integrity.length === 0;
     return (
-      children(call.callId, "preservesReplay").length === 1 &&
-      retry &&
-      (action === "inspect" || children(retry.callId, "matchAcceptedIdentity").length === 1)
+      integrity.length === 1 &&
+      classified &&
+      (action === "inspect" || children(classified.callId, "matchAcceptedIdentity").length === 1)
     );
   };
   requireEvidence(
