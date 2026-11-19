@@ -304,6 +304,7 @@ export interface RuntimeSemanticContexts {
     sourceContextId: string;
     targetContextId: string;
     ownerContextId?: string;
+    retainForRuntime?: boolean;
   }): Promise<VcsStateNodeRef | null>;
   /** Exact semantic state pointer without materializing a native projection. */
   resolveWorkingState(contextId: string): Promise<VcsStateNodeRef>;
@@ -2188,6 +2189,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         // source working frontier and can then diverge independently.
         const participantFork = await deps.semanticContexts.forkParticipantContext?.({
           caller: semanticCaller, sourceContextId: srcCtx, targetContextId: targetCtx,
+          retainForRuntime: true,
           ...(semanticOwner ? { ownerContextId: semanticOwner } : {}),
         });
         if (!existingContexts.has(targetCtx)) {
@@ -2637,6 +2639,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     const admitted = await deps.semanticContexts.forkParticipantContext?.({
       caller, sourceContextId: args.parentContextId, targetContextId: contextId,
       ownerContextId: caller.agentBinding?.contextId ?? args.parentContextId,
+      retainForRuntime: true,
     });
     if (!admitted) await deps.semanticContexts.forkContext(args.parentContextId, contextId);
     await deps.contextFolders.ensureContextFolder(contextId);

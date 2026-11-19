@@ -443,40 +443,97 @@ function participantStorage(canonical: WorkspaceSourceProviderRef, participantId
   return { owner, targetId };
 }
 
+function runtimeForkParticipant(contextId: string) {
+  return canonicalJson(["runtime-context-fork-seed", contextId]);
+}
+
+const runtimeForkSchema = historyForkSeed.omit({ branch: true }).extend({
+  sourceContextId: z.string().min(1), author: z.string().regex(/^work-[a-f0-9]{64}$/u),
+}).strict();
+
+async function readWorkspaceRuntimeFork(source: WorkspaceHistorySource, contextId: string) {
+  return runtimeForkSchema.nullable().parse(await source.dispatch.dispatch(source.canonical, "readHistoryRuntimeFork", { contextId }));
+}
+
 /** The host has verified authority over the source and admitted the destination lifetime. */
 export async function forkWorkspaceParticipantContext(input: WorkspaceHistoryParticipant & {
   contextId: string;
   child: { caller: VerifiedCaller; ownerContextId: string; contextId: string };
   blobsDir: string;
+  retainForRuntime?: boolean;
 }): Promise<VcsStateNodeRef> {
-  const { dispatch, canonical, owner, child } = input;
+  const { dispatch, canonical, child, blobsDir } = input;
   const fromParticipant = requireWorkspaceParticipantOwner(input);
   if (!input.contextId || !child.contextId || child.contextId === input.contextId) {
     throw new Error("Workspace fork requires distinct source and target contexts");
   }
-  const participantId = workspaceParticipantIdentity(child.caller, child.ownerContextId);
+  const targetParticipant = workspaceParticipantIdentity(child.caller, child.ownerContextId);
+  const targetOwnerContextId = targetParticipant === fromParticipant
+    ? input.ownerContextId ?? child.ownerContextId : child.ownerContextId;
+  if (input.retainForRuntime) {
+    const retainedParticipant = runtimeForkParticipant(child.contextId);
+    const author = input.owner.objectKey;
+    let capture = await readWorkspaceRuntimeFork(input, child.contextId);
+    if (!capture) {
+      const { head, state } = await transferWorkspaceHistoryFork({
+        dispatch, canonical, blobsDir, sourceContextId: input.contextId, sourceParticipant: fromParticipant,
+        targetContextId: child.contextId, targetOwnerContextId: child.contextId, targetParticipant: retainedParticipant,
+      });
+      capture = { sourceContextId: input.contextId, author, head, state };
+      await dispatch.dispatch(canonical, "recordHistoryRuntimeFork", { contextId: child.contextId, ...capture });
+    }
+    if (capture.sourceContextId !== input.contextId || capture.author !== author)
+      throw new Error("Runtime workspace fork belongs to a different participant or context");
+    const seed = await transferWorkspaceHistoryFork({
+      dispatch, canonical, blobsDir, sourceContextId: child.contextId, sourceParticipant: retainedParticipant,
+      targetContextId: child.contextId, targetOwnerContextId, targetParticipant, capture,
+    });
+    return seed.state;
+  }
+  const seed = await transferWorkspaceHistoryFork({
+    dispatch, canonical, blobsDir, sourceContextId: input.contextId, sourceParticipant: fromParticipant,
+    targetContextId: child.contextId, targetOwnerContextId, targetParticipant,
+  });
+  return seed.state;
+}
+
+async function transferWorkspaceHistoryFork(input: WorkspaceHistorySource & {
+  sourceContextId: string;
+  sourceParticipant: string;
+  targetContextId: string;
+  targetOwnerContextId: string;
+  targetParticipant: string;
+  blobsDir: string;
+  capture?: z.infer<typeof runtimeForkSchema>;
+}) {
+  const { dispatch, canonical, targetParticipant: participantId, targetContextId, targetOwnerContextId } = input;
   const target = participantStorage(canonical, participantId);
-  const fromPeer = participantStorage(canonical, fromParticipant).targetId;
+  const source = participantStorage(canonical, input.sourceParticipant);
+  if (source.targetId === target.targetId && input.sourceContextId === targetContextId) {
+    throw new Error("Workspace history cannot fork a participant branch into itself");
+  }
   const reservation = reservationSchema.parse(await dispatch.dispatch(canonical, "reserveHistoryParticipant", {
-    participantId,
-    contextId: participantId === fromParticipant ? input.ownerContextId : child.ownerContextId,
-    workingContextId: child.contextId,
+    participantId, contextId: targetOwnerContextId, workingContextId: targetContextId,
   }));
   if (reservation.targetId !== target.targetId)
     throw new Error("Workspace fork reserved a different storage peer");
-  const request = { parentContextId: input.contextId, childContextId: child.contextId, childPeer: target.targetId };
+  const request = { parentContextId: input.sourceContextId, childContextId: targetContextId, childPeer: target.targetId };
   return withBlobContentLock(input.blobsDir, async () => {
     const { seed, token } = z.object({
       seed: historyForkSeed,
       token: z.string().min(1).nullable(),
-    }).strict().parse(await dispatch.dispatch(owner, "offerHistoryContextFork", request));
+    }).strict().parse(await dispatch.dispatch(source.owner, "offerHistoryContextFork", request));
+    const capture = input.capture;
+    if (capture && (seed.head !== capture.head || canonicalJson(seed.state) !== canonicalJson(capture.state))) {
+      throw new Error("Runtime workspace fork did not offer its captured revision");
+    }
     const accepted = historyForkSeed.parse(await dispatch.dispatch(target.owner, "acceptHistoryContextFork", {
-      participantId, origin: reservation.origin, request, seed, token, fromPeer,
+      participantId, origin: reservation.origin, request, seed, token, fromPeer: source.targetId,
     }));
     if (canonicalJson(accepted) !== canonicalJson(seed))
       throw new Error("Workspace fork accepted a different revision");
-    await dispatch.dispatch(owner, "finishHistoryContextFork", { request, seed });
-    return seed.state;
+    await dispatch.dispatch(source.owner, "finishHistoryContextFork", { request, seed });
+    return seed;
   });
 }
 
@@ -1036,6 +1093,7 @@ export async function openWorkspaceParticipantContext(input: {
   contextId: string;
   replayedWorkingHead?: string;
   signal?: AbortSignal;
+  runtimeFork?: { sourceContextIds: readonly string[]; blobsDir: string };
 }): Promise<{ owner: WorkspaceSourceProviderRef; workingHead: string }> {
   const { dispatch, canonical, caller, ownerContextId, contextId } = input;
   if (!ownerContextId || !contextId)
@@ -1043,6 +1101,15 @@ export async function openWorkspaceParticipantContext(input: {
   const participantId = workspaceParticipantIdentity(caller, ownerContextId);
   const { owner, targetId } = participantStorage(canonical, participantId);
   input.signal?.throwIfAborted();
+  if (input.runtimeFork?.sourceContextIds.length) {
+    const capture = await readWorkspaceRuntimeFork(input, contextId);
+    if (capture && input.runtimeFork.sourceContextIds.includes(capture.sourceContextId)) {
+      await transferWorkspaceHistoryFork({ dispatch, canonical, blobsDir: input.runtimeFork.blobsDir,
+        sourceContextId: contextId, sourceParticipant: runtimeForkParticipant(contextId),
+        targetContextId: contextId, targetOwnerContextId: ownerContextId, targetParticipant: participantId, capture,
+      });
+    }
+  }
   const reservation = reservationSchema.parse(
     await dispatch.dispatch(canonical, "reserveHistoryParticipant", {
       participantId,

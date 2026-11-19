@@ -1845,6 +1845,26 @@ async function main() {
     refs: protectedRefStore,
     rootTemplateBootstrap,
     initialContentState: bootstrapStateHash,
+    runtimeForkSources: async (caller, contextId) => {
+      const entityId = caller.agentBinding?.entityId ?? caller.runtime.id;
+      const record = entityCache.resolve(entityId);
+      if (!record || record.contextId !== contextId || record.status === "retired" ||
+          (!record.cloneProvenance && (!caller.agentBinding || !record.parentId))) return [];
+      const store = ensureEntityStore(container.get<import("./doDispatch.js").DODispatch>("doDispatch"));
+      const clone = record.cloneProvenance;
+      if (clone) {
+        const edges = await store.listContextEdgesByChild(clone.operationContextId);
+        return edges.some((edge) => edge.kind === "lineage" && edge.cloneDefinition?.members.some(
+          ({ source, targetId }) => targetId === record.id && source.id === clone.sourceEntityId &&
+            source.contextId === clone.sourceContextId && source.authoritySessionId === clone.sourceAuthoritySessionId,
+        ) && edge.cloneDefinition.contexts.some(
+          ({ sourceContextId, targetContextId }) => sourceContextId === clone.sourceContextId && targetContextId === contextId,
+        )) ? [clone.sourceContextId] : [];
+      }
+      const edges = await store.listContextEdgesByChild(contextId);
+      return edges.flatMap((edge) => edge.kind === "lifecycle" && edge.ownerEntityId === record.parentId
+        ? [edge.ownerContextId] : []);
+    },
     // Public context bindings contain durable identities only. Reachability is
     // resolved from the caller's current hub/session credential.
     workspaceId,
@@ -4728,7 +4748,7 @@ async function main() {
             forkContext: async (sourceContextId, targetContextId) => {
               await workspaceVcs.forkContext(sourceContextId, targetContextId);
             },
-            forkParticipantContext: ({ caller, sourceContextId, targetContextId, ownerContextId = sourceContextId }) => {
+            forkParticipantContext: ({ caller, sourceContextId, targetContextId, ownerContextId = sourceContextId, retainForRuntime }) => {
               if (!workspaceVcs.participantHistoryAttached) return Promise.resolve(null);
               if (!caller) {
                 throw new Error("The verified caller must own the workspace context being forked");
@@ -4736,6 +4756,7 @@ async function main() {
               return workspaceVcs.forkParticipantContext({
                 parent: { caller, contextId: sourceContextId, ownerContextId },
                 child: { caller, contextId: targetContextId, ownerContextId },
+                ...(retainForRuntime ? { retainForRuntime: true } : {}),
               });
             },
             resolveWorkingState: (contextId) =>

@@ -3330,8 +3330,9 @@ describe("runtimeService.cloneContext", () => {
     const cloned = (await service.handler({ caller }, "cloneContext", input)) as CloneResult;
     expect(forkParticipantContext).toHaveBeenCalledWith({
       caller, sourceContextId: "participant-root", targetContextId: cloned.contextId, ownerContextId: "participant-root",
+      retainForRuntime: true,
     });
-    expect(forkParticipantContext.mock.invocationCallOrder[0]).toBeLessThan(cloneDurableStorage.mock.invocationCallOrder[0]!);
+    expect(forkParticipantContext.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(cloneDurableStorage).mock.invocationCallOrder[0]!);
     expect(forkContext).not.toHaveBeenCalled();
     expect(await service.handler({ caller }, "cloneContext", input)).toEqual(cloned);
     expect(forkParticipantContext).toHaveBeenCalledOnce();

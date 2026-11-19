@@ -288,6 +288,8 @@ export interface WorkspaceVcsDeps {
   refs: ProtectedRefStore;
   /** Exact acquired content used until the first protected semantic publication. */
   initialContentState?: string;
+  /** Exact source contexts attested by the admitted runtime creation record. */
+  runtimeForkSources?: (caller: VerifiedCaller, contextId: string) => Promise<readonly string[]>;
   /** The only pre-userland template path: acquire one exact root for first publication. */
   rootTemplateBootstrap?: Pick<
     WorkspaceRootTemplateBootstrap,
@@ -1105,9 +1107,12 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     }
     const replayed = source.replayedWorkingHeads.get(input.contextId);
     const participantId = workspaceParticipantIdentity(input.caller, input.ownerContextId);
+    const forkSources = input.contextId === input.ownerContextId
+      ? await this.deps.runtimeForkSources?.(input.caller, input.contextId) : undefined;
     const reservation = await openWorkspaceParticipantContext({
       ...source, ...input,
       ...(replayed?.participantId === participantId ? { replayedWorkingHead: replayed.head } : {}),
+      ...(forkSources?.length ? { runtimeFork: { sourceContextIds: forkSources, blobsDir: this.deps.blobsDir } } : {}),
     });
     return {
       dispatch: source.dispatch, canonical: source.canonical, ...reservation,
@@ -1119,6 +1124,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   async forkParticipantContext(input: {
     parent: { caller: VerifiedCaller; contextId: string; ownerContextId?: string };
     child: { caller: VerifiedCaller; contextId: string; ownerContextId: string };
+    retainForRuntime?: boolean;
   }): Promise<VcsStateNodeRef> {
     const { parent, child } = input;
     if (parent.contextId === child.contextId) {
@@ -1135,7 +1141,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         throw new Error("Workspace participant context has retired");
       }
       const scope = await this.openAdmittedParticipantScope(source, { ...parent, ownerContextId });
-      return forkWorkspaceParticipantContext({ ...scope, child, blobsDir: this.deps.blobsDir });
+      return forkWorkspaceParticipantContext({
+        ...scope, child, blobsDir: this.deps.blobsDir,
+        ...(input.retainForRuntime ? { retainForRuntime: true } : {}),
+      });
     });
   }
 
