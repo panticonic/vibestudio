@@ -128,7 +128,9 @@ import {
   reviewWorkspaceParticipantMerge,
   retireWorkspaceParticipantContext,
   transferWorkspaceParticipant,
+  workspaceMainStateReachable,
   workspaceParticipantCatalog,
+  workspaceParticipantReferencesReachable,
   type WorkspaceHistoryParticipant,
   type WorkspaceHistorySource,
 } from "./workspaceHistoryHost.js";
@@ -684,6 +686,28 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     if (!source) throw new Error("Participant workspace history is unavailable");
     const main = await readWorkspaceCanonicalMain(source);
     return { kind: "event" as const, eventId: main.eventId };
+  }
+
+  async participantBuildStateReachable(
+    state: import("@vibestudio/shared/execution/retention").ExecutionSourceStateRef | null | undefined,
+    caller: VerifiedCaller,
+    contextId: string | null,
+    signal?: AbortSignal
+  ): Promise<boolean> {
+    const source = this.participantHistorySource;
+    if (!source) return true;
+    if (!state) return false;
+    if (state.kind === "bootstrap-snapshot") {
+      return state.snapshotHash === this.deps.initialContentState;
+    }
+    if (await workspaceMainStateReachable(source, state)) return true;
+    if (!contextId) return false;
+    const scope = await this.openParticipantScope({
+      caller, contextId, ownerContextId: contextId, ...(signal ? { signal } : {}),
+    });
+    return Boolean(scope && await workspaceParticipantReferencesReachable({
+      ...scope, contextIds: [contextId], references: [{ kind: "state-node", value: state }],
+    }));
   }
 
   async openParticipantScope(input: {

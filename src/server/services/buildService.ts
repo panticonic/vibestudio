@@ -1,4 +1,5 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { PanelPlacementHint } from "@vibestudio/shared/types";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { buildMethods, type BuildUnitCatalogEntry } from "@vibestudio/service-schemas/build";
@@ -58,7 +59,12 @@ export function createBuildService(deps: {
   buildSystem: BuildSystemV2;
   listUnits: () => BuildUnitCatalogEntry[] | Promise<BuildUnitCatalogEntry[]>;
   getCallerContextId: (callerId: string) => string | null;
+  canReadBuild?: (ctx: ServiceContext, build: StoredBuildResult) => Promise<boolean>;
 }): ServiceDefinition {
+  const visibleBuild = async (ctx: ServiceContext, key: string) => {
+    const build = await deps.buildSystem.getBuildByKey(key);
+    return build && (!deps.canReadBuild || await deps.canReadBuild(ctx, build)) ? build : null;
+  };
   const artifactHandle = (build: StoredBuildResult) => ({
     buildKey: build.buildKey,
     sourceStateHash: build.sourceStateHash,
@@ -91,8 +97,8 @@ export function createBuildService(deps: {
               library: false,
             });
       },
-      getBuildArtifacts: async (_ctx, [key]) => {
-        const build = await deps.buildSystem.getBuildByKey(key);
+      getBuildArtifacts: async (ctx, [key]) => {
+        const build = await visibleBuild(ctx, key);
         if (!build) return null;
         return artifactHandle(build);
       },
@@ -106,8 +112,8 @@ export function createBuildService(deps: {
         });
         return artifactHandle(build);
       },
-      readBuildArtifact: async (_ctx, [key, artifactPath]) => {
-        const build = await deps.buildSystem.getBuildByKey(key);
+      readBuildArtifact: async (ctx, [key, artifactPath]) => {
+        const build = await visibleBuild(ctx, key);
         if (!build) throw new Error(`Unknown immutable build: ${key}`);
         const artifact = build.artifacts.find((candidate) => candidate.path === artifactPath);
         if (!artifact) throw new Error(`Build ${key} has no artifact ${artifactPath}`);
@@ -127,9 +133,9 @@ export function createBuildService(deps: {
       getBuildNpm: (_ctx, [specifier, version, externals]) =>
         deps.buildSystem.getBuildNpm(specifier, version, externals),
       prepareTypecheck: (_ctx, [unit, ref]) => deps.buildSystem.prepareTypecheck(unit, ref),
-      getBuildMetadata: async (_ctx, [key, options]) => {
+      getBuildMetadata: async (ctx, [key, options]) => {
         const bs = deps.buildSystem;
-        const build = await bs.getBuildByKey(key);
+        const build = await visibleBuild(ctx, key);
         if (!build) return null;
         const metadata =
           options?.includeExecutableModules === true

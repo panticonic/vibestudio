@@ -2940,6 +2940,13 @@ async function main() {
         return createBuildService({
           buildSystem,
           getCallerContextId: (callerId) => callerBuildContextId(entityCache, callerId),
+          canReadBuild: async (ctx, build) =>
+            build.sourceStateHash === null || await workspaceVcs.participantBuildStateReachable(
+              build.metadata.sourceState,
+              ctx.caller,
+              ctx.caller.agentBinding?.contextId ?? callerBuildContextId(entityCache, ctx.caller.runtime.id),
+              ctx.signal,
+            ),
           listUnits: () =>
             listBuildUnitCatalog({
               buildSystem,

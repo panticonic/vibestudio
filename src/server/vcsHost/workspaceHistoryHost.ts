@@ -308,6 +308,15 @@ export interface WorkspaceHistorySource {
   canonical: WorkspaceSourceProviderRef;
 }
 
+export async function workspaceMainStateReachable(
+  source: WorkspaceHistorySource,
+  state: VcsStateNodeRef
+): Promise<boolean> {
+  return z.boolean().parse(
+    await source.dispatch.dispatch(source.canonical, "readHistoryMainStateVisibility", { state }),
+  );
+}
+
 export interface WorkspaceHistoryParticipant extends WorkspaceHistorySource {
   owner: WorkspaceSourceProviderRef;
   caller: VerifiedCaller;

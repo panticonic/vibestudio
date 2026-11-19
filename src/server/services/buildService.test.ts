@@ -341,6 +341,28 @@ describe("build service extension diagnostics", () => {
     expect(metadata).not.toHaveProperty("executableModules");
   });
 
+  it("keeps metadata, inventory and bytes behind the same build visibility check", async () => {
+    const buildSystem = makeBuildSystem();
+    const service = createBuildService({
+      buildSystem,
+      listUnits: () => [],
+      getCallerContextId: () => null,
+      canReadBuild: async (ctx) => ctx.caller.runtime.id === "owner",
+    });
+    const stranger = { caller: createVerifiedCaller("stranger", "shell") };
+    for (const method of ["getBuildMetadata", "getBuildArtifacts"]) {
+      await expect(service.handler(stranger, method, ["build-key"])).resolves.toBeNull();
+    }
+    await expect(
+      service.handler(stranger, "readBuildArtifact", ["build-key", "bundle.js"])
+    ).rejects.toThrow(/Unknown immutable build/u);
+    expect(buildSystem.readBuildArtifactBytes).not.toHaveBeenCalled();
+    const owner = { caller: createVerifiedCaller("owner", "shell") };
+    await expect(service.handler(owner, "getBuildArtifacts", ["build-key"])).resolves.toMatchObject({
+      buildKey: "build-key",
+    });
+  });
+
   it("returns the executable source inventory only when explicitly requested", async () => {
     const buildSystem = makeBuildSystem();
     const service = createBuildService({
