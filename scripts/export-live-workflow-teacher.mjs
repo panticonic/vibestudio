@@ -211,6 +211,15 @@ const clientAdmissionWorkflow = {
   root: "reviewClientAdmission",
   evidence: clientAdmissionEvidence,
 };
+const pdfLayoutWorkflow = {
+  family: "workspace-live-pdf-layout",
+  workspace: "examples",
+  namespace: "vibestudio:pdf-ingest",
+  group: "embedded-fragments-and-reading-order",
+  validator: { template: "system-testing", path: "skills/system-testing/pdf-layout-managed.ts" },
+  root: "reviewPdfLayout",
+  evidence: pdfLayoutEvidence,
+};
 const dictationWorkflow = {
   family: "workspace-live-offline-dictation",
   workspace: "examples",
@@ -561,6 +570,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedTestkitCleanupWorlds = [] },
     { phoneSetupUnavailable },
     { managedClientAdmissionWorlds },
+    { managedPdfLayoutWorlds },
     { managedDictationWorlds },
     { managedNativeSuiteWorlds },
     { managedGitBridgeReviewWorlds },
@@ -613,6 +623,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "testkit-cleanup-worlds.ts",
       "phone-setup-world.ts",
       "client-admission-worlds.ts",
+      "pdf-layout-worlds.ts",
       "offline-dictation-worlds.ts",
       "native-suite-worlds.ts",
       "git-bridge-review-worlds.ts",
@@ -662,6 +673,9 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of managedClientAdmissionWorlds) {
     cases.set(`client-admission-live-${assignment.id}`, { ...clientAdmissionWorkflow, assignment });
+  }
+  for (const assignment of managedPdfLayoutWorlds) {
+    cases.set(`pdf-layout-live-${assignment.id}`, { ...pdfLayoutWorkflow, assignment });
   }
   for (const assignment of managedDictationWorlds) {
     cases.set(`offline-dictation-live-${assignment.id}`, { ...dictationWorkflow, assignment });
@@ -2658,6 +2672,95 @@ function clientAdmissionEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: contextId, source, host, abi: workingAbi },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function pdfLayoutEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedPdfLayout;
+  const { caseId, contextId, request, observed, checks } = fixture ?? {};
+  const { id, goal, kind, rows, order } = workflow.assignment;
+  const report = exercise.report;
+  const records = exercise.calls.map(({ record }) => record);
+  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const child = (parent, name) =>
+    parent &&
+    records.find(
+      (record) => record.parent_call_id === parent.call_id && record.definition.name === name
+    );
+  const review = child(root, "reviewPdfLayout");
+  const layout = child(review, "inspectLayout");
+  const geometry = child(layout, "describeGeometry");
+  const classification = child(layout, "classifyLayout");
+  const reading = child(review, "resolveReadingOrder");
+  const arrangement = child(reading, "arrangeFragments");
+  const effects = records.flatMap(({ effects }) => effects ?? []);
+  const inspected = review?.effects?.[0];
+  requireEvidence(
+    fixture?.passed === true &&
+      caseId === id &&
+      contextId === execution.provenance?.contextId &&
+      typeof contextId === "string" &&
+      request?.goal === goal &&
+      typeof request.operationId === "string" &&
+      request.operationId.length > 0 &&
+      ["source", "geometry", "reading"].every((key) => checks?.[key] === true) &&
+      observed?.pageNumber === 1 &&
+      observed.width === 500 &&
+      observed.height === 200 &&
+      /^[a-f0-9]{64}$/u.test(observed.digest) &&
+      report?.digest === observed.digest &&
+      report.pageNumber === 1 &&
+      Array.isArray(observed.rows) &&
+      observed.rows.every(Array.isArray) &&
+      isDeepStrictEqual(
+        observed.rows.map((row) => row.map(({ text }) => text)),
+        rows
+      ) &&
+      matchesValue(review?.inputs?.request, request) &&
+      matchesValue(review.output, report) &&
+      effects.length === 1 &&
+      inspected?.service === "pdfLayoutRead" &&
+      inspected.method === "inspect" &&
+      !inspected.error &&
+      matchesValue(inspected.args, [request.operationId]) &&
+      matchesValue(inspected.result, observed),
+    "PDF layout requires the exact observed page and original fragment receipt"
+  );
+  const entries = observed.rows.flatMap((row, rowIndex) =>
+    row.map((fragment, fragmentIndex) => ({ row: rowIndex, fragment: fragmentIndex, ...fragment }))
+  );
+  const ordered = order.map((text) => entries.find((entry) => entry.text === text));
+  const locations = ordered.map(({ row, fragment }) => ({ row, fragment }));
+  requireEvidence(
+    entries.every(
+      ({ row, fragment, bounds }) =>
+        Array.isArray(bounds) &&
+        bounds.length === 4 &&
+        bounds.every(Number.isFinite) &&
+        bounds[0] === 24 + fragment * 226 &&
+        bounds[1] < 34 + row * 20 &&
+        bounds[1] >= 16 + row * 20 &&
+        bounds[2] > 0 &&
+        bounds[3] > 0
+    ) &&
+      report.layout?.kind === kind &&
+      typeof report.layout.basis === "string" &&
+      report.layout.basis.trim() &&
+      report.reading?.status === "ordered" &&
+      isDeepStrictEqual(report.reading.entries, ordered) &&
+      matchesValue(layout?.inputs?.page, observed) &&
+      matchesValue(layout.output, report.layout) &&
+      matchesValue(geometry?.inputs?.page, observed) &&
+      matchesValue(classification?.output, report.layout) &&
+      matchesValue(reading?.inputs?.page, observed) &&
+      matchesValue(reading.output, report.reading) &&
+      matchesValue(arrangement?.output, locations),
+    "PDF layout needs the correct reading order over the original geometry"
+  );
+  return {
+    world: { context_id: contextId, digest: observed.digest, page: observed.pageNumber },
     checks,
     evidence: { workspace: { fixture } },
   };

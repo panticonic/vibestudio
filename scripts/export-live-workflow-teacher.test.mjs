@@ -97,6 +97,7 @@ test("authored template worlds flow into the collector without losing original s
       ],
       ["phone-setup-world", "phoneSetupUnavailable", null],
       ["client-admission-worlds", "managedClientAdmissionWorlds", []],
+      ["pdf-layout-worlds", "managedPdfLayoutWorlds", []],
       ["offline-dictation-worlds", "managedDictationWorlds", []],
       ["native-suite-worlds", "managedNativeSuiteWorlds", []],
       ["git-bridge-review-worlds", "managedGitBridgeReviewWorlds", []],
@@ -2932,6 +2933,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["content-project-worlds", "export const contentProjectWorlds = [];"],
       ["phone-setup-world", "export const phoneSetupUnavailable = undefined;"],
       ["client-admission-worlds", "export const managedClientAdmissionWorlds = [];"],
+      ["pdf-layout-worlds", "export const managedPdfLayoutWorlds = [];"],
       ["offline-dictation-worlds", "export const managedDictationWorlds = [];"],
       ["native-suite-worlds", "export const managedNativeSuiteWorlds = [];"],
       ["git-bridge-review-worlds", "export const managedGitBridgeReviewWorlds = [];"],
@@ -5311,4 +5313,94 @@ test("dictation export preserves measured audio and the live worker decision", a
     exportLiveTeacherWorkflow({ ...options, cases }),
     /nested capture and readiness/u
   );
+});
+
+test("PDF layout export binds reading order to the actual fragment boxes", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  const name = "pdf-layout-live-parallel-narrative-columns";
+  const { assignment } = cases.get(name);
+  const pins = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(options.pins, JSON.stringify({ ...pins, workspace: "examples" }));
+  entry.test.name = name;
+  const { goal, kind, rows, order } = assignment;
+  const request = { goal, operationId: "assigned-pdf-layout" };
+  const page = {
+    digest: "a".repeat(64),
+    pageNumber: 1,
+    width: 500,
+    height: 200,
+    rows: rows.map((row, y) =>
+      row.map((text, x) => ({ text, bounds: [24 + x * 226, 18 + y * 20, 70, 12] }))
+    ),
+  };
+  const fragments = page.rows.flatMap((row, y) =>
+    row.map((part, x) => ({ row: y, fragment: x, ...part }))
+  );
+  const ordered = order.map((text) => fragments.find((part) => part.text === text));
+  const locations = ordered.map(({ row, fragment }) => ({ row, fragment }));
+  const layout = { kind, basis: "Parallel note headings and aligned fragment starts." };
+  const reading = { status: "ordered", entries: ordered };
+  const report = { digest: page.digest, pageNumber: 1, layout, reading };
+  diagnostics.managedPdfLayout = {
+    caseId: assignment.id,
+    contextId: "ctx",
+    request,
+    passed: true,
+    observed: page,
+    checks: { source: true, geometry: true, reading: true },
+  };
+  const ref = (value) => {
+    const text = JSON.stringify(value);
+    return {
+      complete: true,
+      hash: createHash("sha256").update(text).digest("hex"),
+      bytes: Buffer.byteLength(text),
+    };
+  };
+  const prototype = diagnostics.natlangTeacher.calls[0];
+  const call = (name, parent, inputs, output, effects = []) => ({
+    callId: name,
+    summary: { ...prototype.summary, call_id: name },
+    record: {
+      ...prototype.record,
+      call_id: name,
+      parent_call_id: parent,
+      definition: { name },
+      outcome: "done",
+      inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+      output: ref(output),
+      effects,
+    },
+  });
+  const inspected = {
+    service: "pdfLayoutRead",
+    method: "inspect",
+    args: ref([request.operationId]),
+    result: ref(page),
+  };
+  const arrangement = call("arrangeFragments", "resolveReadingOrder", { page, layout }, locations);
+  diagnostics.natlangTeacher = {
+    ...diagnostics.natlangTeacher,
+    programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+    rootCallIds: ["runWorkflow"],
+    report,
+    calls: [
+      call("runWorkflow", null, {}, null),
+      call("reviewPdfLayout", "runWorkflow", { request }, report, [inspected]),
+      call("inspectLayout", "reviewPdfLayout", { page, goal }, layout),
+      call("describeGeometry", "inspectLayout", { page }, layout.basis),
+      call("classifyLayout", "inspectLayout", { goal }, layout),
+      call("resolveReadingOrder", "reviewPdfLayout", { page, layout }, reading),
+      arrangement,
+    ],
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  arrangement.record.output = ref(fragments.map(({ row, fragment }) => ({ row, fragment })));
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /correct reading order/u);
 });

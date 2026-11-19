@@ -214,6 +214,12 @@ client, a mobile variant on the wrong runtime and a local incompatible ABI.
 Run `client-admission-oracle-qualification` for model-free verification. The
 workflow inspects the platform contract without launching a device client.
 
+PDF layout review runs the installed PDF extension over an assigned document
+snapshot. The cases distinguish row-major tables, column-major narratives,
+and a single sequence, then check exact fragment coordinates and text. Run
+`pdf-layout-oracle-qualification` to check the original page geometry without
+model calls.
+
 Offline dictation review observes the installed local speech worker and checks
 the caller's assigned recording. The managed cases cover absent audio, a
 sample outside the normalized range, and a 31-second multi-window recording.
