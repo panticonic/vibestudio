@@ -203,6 +203,18 @@ const terminalCheckWorkflow = {
   root: "runTerminalChecks",
   evidence: terminalCheckEvidence,
 };
+const authorityReviewWorkflow = {
+  family: "workspace-live-authority-review",
+  workspace: "examples",
+  namespace: "vibestudio:capabilities",
+  group: "actual-preflight-exact-resource-ceiling",
+  validator: {
+    template: "system-testing",
+    path: "skills/system-testing/authority-review-managed.ts",
+  },
+  root: "reviewAuthority",
+  evidence: authorityReviewEvidence,
+};
 const problemDraftWorkflow = {
   family: "workspace-live-problem-draft",
   workspace: "examples",
@@ -454,6 +466,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedSessionReplayWorlds = [] },
     { managedTestkitCleanupWorlds = [] },
     { phoneSetupUnavailable },
+    { managedAuthorityReviewWorlds },
     { managedProblemDraftWorlds },
     { managedAgenticChangeWorlds },
     { managedGadReviewWorlds },
@@ -496,6 +509,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "session-replay-worlds.ts",
       "testkit-cleanup-worlds.ts",
       "phone-setup-world.ts",
+      "authority-review-worlds.ts",
       "problem-draft-worlds.ts",
       "agentic-change-worlds.ts",
       "gad-review-worlds.ts",
@@ -533,6 +547,9 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of managedTerminalCheckWorlds) {
     cases.set(`terminal-check-live-${assignment.id}`, { ...terminalCheckWorkflow, assignment });
+  }
+  for (const assignment of managedAuthorityReviewWorlds) {
+    cases.set(`authority-review-live-${assignment.id}`, { ...authorityReviewWorkflow, assignment });
   }
   for (const assignment of managedProblemDraftWorlds) {
     cases.set(`problem-draft-live-${assignment.id}`, { ...problemDraftWorkflow, assignment });
@@ -2360,6 +2377,132 @@ function terminalCheckEvidence(execution, exercise, _scenario, workflow) {
   return {
     world: { context_id: contextId, process_checks: checks.map(({ id }) => id) },
     checks: { ...fixture.checks, exactExecutionTree: true },
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function authorityReviewEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedAuthorityReview;
+  const { caseId, contextId, request, observations, checks } = fixture ?? {};
+  const { id, goal, operations, ceiling, outside } = workflow.assignment;
+  const expectedRequest = {
+    goal,
+    operations: operations.map(({ id, label }) => ({ id, label })),
+    ceiling,
+  };
+  const protectedLeaves = [
+    ...new Set(operations.flatMap(({ protectedResources }) => protectedResources)),
+  ].map((resourceKey) => ({ capability: "external.open", resourceKey }));
+  const report = exercise.report;
+  const calls = exercise.calls.map(({ record }) => record);
+  const children = (parent, name) =>
+    parent
+      ? calls.filter(
+          (record) => record.parent_call_id === parent.call_id && record.definition.name === name
+        )
+      : [];
+  const root = calls.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const [review] = children(root, "reviewAuthority");
+  const operationCalls = children(review, "reviewOperation");
+  const [combination] = children(review, "combineCeiling");
+  const [collection] = children(combination, "collectProtected");
+  requireEvidence(
+    caseId === id &&
+      typeof contextId === "string" &&
+      contextId === execution.provenance?.contextId &&
+      fixture.passed === true &&
+      ["assigned", "reviews", "ceiling", "decision"].every((key) => checks?.[key] === true) &&
+      isDeepStrictEqual(request, expectedRequest) &&
+      matchesValue(review?.inputs?.request, request) &&
+      matchesValue(review.output, report) &&
+      Array.isArray(observations) &&
+      observations.length === operations.length &&
+      Array.isArray(report?.reviews) &&
+      report.reviews.length === operations.length &&
+      operationCalls.length === operations.length &&
+      calls.flatMap(({ effects }) => effects ?? []).length === operations.length &&
+      isDeepStrictEqual(report.protectedLeaves, protectedLeaves) &&
+      matchesValue(combination?.inputs?.reviews, report.reviews) &&
+      matchesValue(collection?.inputs?.reviews, report.reviews) &&
+      matchesValue(collection.output, report.protectedLeaves),
+    "Authority review must use the assigned preflight calls and consolidate only exact protected resources"
+  );
+
+  const expectedHeld = [];
+  let awaitingAcquisition = false;
+  for (const [index, operation] of operations.entries()) {
+    const observation = observations[index];
+    const item = report.reviews[index];
+    const expectedOutside = outside.includes(operation.id)
+      ? operation.protectedResources.map((resourceKey) => ({
+          capability: "external.open",
+          resourceKey,
+        }))
+      : [];
+    const disposition = expectedOutside.length
+      ? "outside-ceiling"
+      : observation.decision === "denied"
+        ? "host-denied"
+        : observation.decision === "acquirable"
+          ? "needs-acquisition"
+          : "eligible";
+    if (disposition === "outside-ceiling" || disposition === "host-denied")
+      expectedHeld.push(operation.id);
+    if (disposition === "needs-acquisition") awaitingAcquisition = true;
+    const stage = operationCalls.find((candidate) =>
+      matchesValue(candidate.inputs?.operationId, operation.id)
+    );
+    const [preflight] = children(stage, "preflight");
+    const [findOutside] = children(stage, "findOutside");
+    const [decide] = children(stage, "decideDisposition");
+    const [effect] = preflight?.effects ?? [];
+    requireEvidence(
+      observation.operationId === operation.id &&
+        ["allowed", "acquirable", "denied"].includes(observation.decision) &&
+        isDeepStrictEqual(
+          observation.leaves
+            .filter(({ tier }) => tier !== "open")
+            .map(({ capability, resourceKey, tier }) => ({ capability, resourceKey, tier })),
+          operation.protectedResources.map((resourceKey) => ({
+            capability: "external.open",
+            resourceKey,
+            tier: "gated",
+          }))
+        ) &&
+        isDeepStrictEqual(item?.observation, observation) &&
+        isDeepStrictEqual(item.outside, expectedOutside) &&
+        item.disposition === disposition &&
+        matchesValue(stage?.inputs?.ceiling, ceiling) &&
+        matchesValue(stage.output, item) &&
+        matchesValue(preflight?.inputs?.operationId, operation.id) &&
+        matchesValue(preflight.output, observation) &&
+        preflight.effects?.length === 1 &&
+        effect?.service === "assignedAuthorityRead" &&
+        effect.method === "preflight" &&
+        !effect.error &&
+        matchesValue(effect.args, [operation.id]) &&
+        matchesValue(effect.result, observation) &&
+        matchesValue(findOutside?.inputs?.leaves, observation.leaves) &&
+        matchesValue(findOutside.inputs.ceiling, ceiling) &&
+        matchesValue(findOutside.output, item.outside) &&
+        matchesValue(decide?.inputs?.decision, observation.decision) &&
+        matchesValue(decide.inputs.outside, item.outside) &&
+        matchesValue(decide.output, disposition),
+      "Authority review must join each disposition to its exact live preflight and caller scope"
+    );
+  }
+  const status = expectedHeld.length
+    ? "held"
+    : awaitingAcquisition
+      ? "needs-acquisition"
+      : "eligible";
+  requireEvidence(
+    isDeepStrictEqual(report.held, expectedHeld) && report.status === status,
+    "Authority review summary must preserve every held and pending operation"
+  );
+  return {
+    world: { context_id: contextId, operations: operations.map(({ id }) => id) },
+    checks,
     evidence: { workspace: { fixture } },
   };
 }

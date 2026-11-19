@@ -206,6 +206,11 @@ then binds the interpretation to the latest user message's ID, sequence, and tex
 The exporter checks the nested calls and their exact readbacks. The model-free
 qualification is `gad-review-oracle-qualification`.
 
+The authority review cases call the real host preflight without invoking
+the reviewed operations. They check an open read, exact-origin consolidation
+across distinct URLs and refusal to extend the caller's scope. Run
+`authority-review-oracle-qualification` for the model-free live check.
+
 Local problem report cases exercise the workspace's real manual report store.
 The shared workflow classifies the account, authors a local narrative,
 appends at the observed revision and verifies the saved sections. Cases cover

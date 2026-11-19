@@ -96,6 +96,7 @@ test("authored template worlds flow into the collector without losing original s
         ],
       ],
       ["phone-setup-world", "phoneSetupUnavailable", null],
+      ["authority-review-worlds", "managedAuthorityReviewWorlds", []],
       ["problem-draft-worlds", "managedProblemDraftWorlds", []],
       ["agentic-change-worlds", "managedAgenticChangeWorlds", []],
       ["gad-review-worlds", "managedGadReviewWorlds", []],
@@ -2921,6 +2922,7 @@ test("workspace integration binds conflict source and verified state without bro
     [
       ["content-project-worlds", "export const contentProjectWorlds = [];"],
       ["phone-setup-world", "export const phoneSetupUnavailable = undefined;"],
+      ["authority-review-worlds", "export const managedAuthorityReviewWorlds = [];"],
       ["problem-draft-worlds", "export const managedProblemDraftWorlds = [];"],
       ["agentic-change-worlds", "export const managedAgenticChangeWorlds = [];"],
       ["gad-review-worlds", "export const managedGadReviewWorlds = [];"],
@@ -3955,4 +3957,118 @@ test("local problem export requires persisted narrative and rejects a stale draf
       held ? /stale problem draft/u : /owned append/u
     );
   }
+});
+
+test("authority export rejects an origin substitution in live preflight evidence", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  const name = "authority-review-live-distinct-origins";
+  const { assignment } = cases.get(name);
+  const pins = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(options.pins, JSON.stringify({ ...pins, workspace: "examples" }));
+  entry.test.name = name;
+  const { operations, ceiling, goal } = assignment;
+  const request = { goal, operations: operations.map(({ id, label }) => ({ id, label })), ceiling };
+  const protectedLeaf = (resourceKey) => ({ capability: "external.open", resourceKey });
+  const observations = operations.map(({ id, protectedResources }) => ({
+    operationId: id,
+    decision: "acquirable",
+    leaves: protectedResources.map((resourceKey) => ({
+      ...protectedLeaf(resourceKey),
+      tier: "gated",
+      status: "acquirable",
+    })),
+  }));
+  const summary = {
+    status: "held",
+    held: ["support"],
+    protectedLeaves: ["https://calendar.example", "https://help.example"].map(protectedLeaf),
+  };
+  const reviews = observations.map((observation) => {
+    const held = observation.operationId === "support";
+    return {
+      observation,
+      outside: held ? [protectedLeaf("https://help.example")] : [],
+      disposition: held ? "outside-ceiling" : "needs-acquisition",
+    };
+  });
+  const report = { ...summary, reviews };
+  diagnostics.managedAuthorityReview = {
+    caseId: assignment.id,
+    contextId: "ctx",
+    request,
+    observations,
+    passed: true,
+    checks: { assigned: true, reviews: true, ceiling: true, decision: true },
+  };
+  const ref = (value) => {
+    const text = JSON.stringify(value);
+    return {
+      complete: true,
+      hash: createHash("sha256").update(text).digest("hex"),
+      bytes: Buffer.byteLength(text),
+    };
+  };
+  const prototype = diagnostics.natlangTeacher.calls[0];
+  const call = (callId, name, parent, inputs, output, effects = []) => ({
+    callId,
+    summary: { ...prototype.summary, call_id: callId },
+    record: {
+      ...prototype.record,
+      call_id: callId,
+      parent_call_id: parent,
+      definition: { name },
+      outcome: "done",
+      inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+      output: ref(output),
+      effects,
+    },
+  });
+  diagnostics.natlangTeacher = {
+    ...diagnostics.natlangTeacher,
+    programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+    rootCallIds: ["runWorkflow"],
+    report,
+    calls: [
+      call("runWorkflow", "runWorkflow", null, {}, null),
+      call("review", "reviewAuthority", "runWorkflow", { request }, report),
+      ...reviews.flatMap((result) => {
+        const { observation, disposition, outside } = result;
+        const { operationId, decision, leaves } = observation;
+        return [
+          call(operationId, "reviewOperation", "review", { operationId, ceiling }, result),
+          call(`read-${operationId}`, "preflight", operationId, { operationId }, observation, [
+            {
+              service: "assignedAuthorityRead",
+              method: "preflight",
+              args: ref([operationId]),
+              result: ref(observation),
+            },
+          ]),
+          call(`scope-${operationId}`, "findOutside", operationId, { leaves, ceiling }, outside),
+          call(
+            `decide-${operationId}`,
+            "decideDisposition",
+            operationId,
+            { decision, outside },
+            disposition
+          ),
+        ];
+      }),
+      call("combine", "combineCeiling", "review", { reviews }, summary),
+      call("collect", "collectProtected", "combine", { reviews }, report.protectedLeaves),
+    ],
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  const support = diagnostics.natlangTeacher.calls.find(({ callId }) => callId === "read-support");
+  support.record.effects[0].result = ref({
+    ...observations.at(-1),
+    leaves: [{ ...observations.at(-1).leaves[0], resourceKey: "https://calendar.example" }],
+  });
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /exact live preflight/u);
 });
