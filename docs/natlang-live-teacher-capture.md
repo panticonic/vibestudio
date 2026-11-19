@@ -180,6 +180,12 @@ as above. The host consumes the final successful deployment receipt and rechecks
 identity before assigning the device route. The caller can supply invite material through
 `pairingFor`. The already-running path uses the same handoff and can create a new device
 profile or reopen a previously paired profile.
+The Examples terminal cases execute exact caller-assigned process plans through the
+native shell extension. They cover literal argv, an intentional pipeline, unsuccessful
+exit status, output truncation, and held dependent checks. Export joins each bounded
+result to the exact selection, execution, and classification calls. Run
+`terminal-check-oracle-qualification` for a model-free live check.
+
 The Examples GAD cases run `gad/reviewChannel` against owned live conversations.
 Triage separates sound durable integrity from an empty roster and checks the exact
 roster follow-up. Recap waits for both assigned headless messages to be published,

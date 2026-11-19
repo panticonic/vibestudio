@@ -179,6 +179,18 @@ const authoringWorkflow = {
   root: "reviewProgram",
   evidence: authoringEvidence,
 };
+const terminalCheckWorkflow = {
+  family: "workspace-live-terminal-checks",
+  workspace: "examples",
+  namespace: "vibestudio:terminal",
+  group: "assigned-process-dependencies",
+  validator: {
+    template: "system-testing",
+    path: "skills/system-testing/terminal-check-managed.ts",
+  },
+  root: "runTerminalChecks",
+  evidence: terminalCheckEvidence,
+};
 const gadReviewWorkflow = {
   family: "workspace-live-gad-review",
   workspace: "examples",
@@ -410,6 +422,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedTestkitCleanupWorlds = [] },
     { phoneSetupUnavailable },
     { managedGadReviewWorlds },
+    { managedTerminalCheckWorlds },
     { managedMemoryWorlds },
     { managedSetupWorlds },
     { managedChecklistWorlds },
@@ -448,6 +461,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "testkit-cleanup-worlds.ts",
       "phone-setup-world.ts",
       "gad-review-worlds.ts",
+      "terminal-check-worlds.ts",
       "verified-memory-worlds.ts",
       "onboarding-worlds.ts",
       "checklist-worlds.ts",
@@ -472,6 +486,9 @@ export async function loadLiveTeacherCases(checkouts) {
     })
   );
   const cases = new Map(originalCases);
+  for (const assignment of managedTerminalCheckWorlds) {
+    cases.set(`terminal-check-live-${assignment.id}`, { ...terminalCheckWorkflow, assignment });
+  }
   for (const assignment of managedGadReviewWorlds) {
     cases.set(`gad-review-live-${assignment.id}`, { ...gadReviewWorkflow, assignment });
   }
@@ -2053,6 +2070,136 @@ function matchesValue(ref, value) {
   if (!ref?.complete || value === undefined) return false;
   const bytes = JSON.stringify(value);
   return ref.bytes === Buffer.byteLength(bytes) && ref.hash === hash(bytes);
+}
+
+function terminalCheckEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedTerminalChecks;
+  const { contextId, request, plan, results } = fixture ?? {};
+  const report = exercise.report;
+  const { id, goal, checks } = workflow.assignment;
+  const expectedPlan = checks.map(({ id, purpose, prerequisites, intent }) => ({
+    id,
+    purpose,
+    prerequisites,
+    mode: intent.kind,
+  }));
+  const expectedEffects = new Map(
+    checks.filter((check) => check.expected).map((check) => [check.id, check])
+  );
+  const held = checks.filter((check) => !check.expected).map(({ id }) => id);
+  requireEvidence(
+    typeof contextId === "string" &&
+      contextId === execution.provenance?.contextId &&
+      fixture.caseId === id &&
+      fixture.passed === true &&
+      ["plan", "processes", "report"].every((name) => fixture.checks?.[name] === true) &&
+      request?.goal === goal &&
+      /^[a-f0-9-]{36}$/u.test(request.operationId) &&
+      plan?.receipt === request.operationId + ":plan" &&
+      isDeepStrictEqual(plan.checks, expectedPlan) &&
+      report?.assignmentReceipt === plan.receipt &&
+      isDeepStrictEqual(report.held, held) &&
+      Array.isArray(results) &&
+      results.length === expectedEffects.size &&
+      Array.isArray(report.outcomes) &&
+      report.outcomes.length === results.length,
+    "Terminal checks must use the exact assigned process plan and held dependencies"
+  );
+  const passed = new Set();
+  requireEvidence(
+    results.every((result, index) => {
+      const check = expectedEffects.get(result?.id);
+      const expected = check?.expected;
+      if (!expected || !check.prerequisites.every((id) => passed.has(id))) return false;
+      expectedEffects.delete(result.id);
+      if (expected.status === "passed") passed.add(result.id);
+      return (
+        result.receipt === request.operationId + ":check:" + result.id &&
+        result.status === "complete" &&
+        result.exitCode === expected.exitCode &&
+        result.stdout === expected.stdout &&
+        result.stderr === "" &&
+        result.timedOut === false &&
+        result.truncated === (expected.status === "output-truncated") &&
+        report.outcomes[index]?.status === expected.status &&
+        isDeepStrictEqual(report.outcomes[index].result, result)
+      );
+    }),
+    "Terminal checks must preserve the bounded live results and gate dependent effects"
+  );
+  const calls = exercise.calls.map(({ record }) => record);
+  const review = calls.find(
+    (record) =>
+      record.parent_call_id === exercise.rootCallIds[0] &&
+      record.definition.name === "runTerminalChecks" &&
+      record.outcome === "done"
+  );
+  const children = (name) =>
+    review
+      ? calls.filter(
+          (record) =>
+            record.parent_call_id === review.call_id &&
+            record.definition.name === name &&
+            record.outcome === "done"
+        )
+      : [];
+  const [initial] = children("readAssignedChecks");
+  const choices = children("selectNextCheck");
+  const executions = children("performCheck");
+  const classifications = children("classifyResult");
+  const effect = (call, service, method, args, value) => {
+    const [effect] = call?.effects ?? [];
+    return (
+      call?.effects?.length === 1 &&
+      effect?.service === service &&
+      effect.method === method &&
+      !effect.error &&
+      matchesValue(effect.args, args) &&
+      matchesValue(effect.result, value) &&
+      matchesValue(call.output, value)
+    );
+  };
+  const chose = (index, choice) =>
+    choices.some(
+      (call) =>
+        matchesValue(call.inputs?.goal, goal) &&
+        matchesValue(call.inputs?.checks, plan.checks) &&
+        matchesValue(call.inputs?.outcomes, report.outcomes.slice(0, index)) &&
+        matchesValue(call.output, choice)
+    );
+  requireEvidence(
+    matchesValue(review?.inputs?.request, request) &&
+      matchesValue(review.output, report) &&
+      calls.length === 4 + 3 * results.length &&
+      children("readAssignedChecks").length === 1 &&
+      choices.length === results.length + 1 &&
+      executions.length === results.length &&
+      classifications.length === results.length &&
+      effect(initial, "terminalCheckRead", "observe", [request.operationId], plan) &&
+      results.every(
+        (result, index) =>
+          chose(index, result.id) &&
+          executions.some((call) =>
+            effect(call, "terminalCheckRun", "execute", [plan.receipt, result.id], result)
+          ) &&
+          classifications.some(
+            (call) =>
+              matchesValue(call.inputs?.result, result) &&
+              matchesValue(call.output, report.outcomes[index].status)
+          )
+      ) &&
+      chose(results.length, null) &&
+      calls.every(
+        (record) =>
+          record.effects?.length === (record === initial || executions.includes(record) ? 1 : 0)
+      ),
+    "Terminal checks must record every selection, exact execution and result classification"
+  );
+  return {
+    world: { context_id: contextId, process_checks: checks.map(({ id }) => id) },
+    checks: { ...fixture.checks, exactExecutionTree: true },
+    evidence: { workspace: { fixture } },
+  };
 }
 
 function gadReviewEvidence(execution, exercise, _scenario, workflow) {

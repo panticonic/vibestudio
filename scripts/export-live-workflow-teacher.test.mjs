@@ -97,6 +97,7 @@ test("authored template worlds flow into the collector without losing original s
       ],
       ["phone-setup-world", "phoneSetupUnavailable", null],
       ["gad-review-worlds", "managedGadReviewWorlds", []],
+      ["terminal-check-worlds", "managedTerminalCheckWorlds", []],
       ["local-messaging/worlds", "localMessagingWorlds", [{ id: "audience-hold" }]],
       [
         "provenance-history-worlds",
@@ -2918,6 +2919,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["content-project-worlds", "export const contentProjectWorlds = [];"],
       ["phone-setup-world", "export const phoneSetupUnavailable = undefined;"],
       ["gad-review-worlds", "export const managedGadReviewWorlds = [];"],
+      ["terminal-check-worlds", "export const managedTerminalCheckWorlds = [];"],
       [
         "owned-operations-worlds",
         "export const ownedOperationsWorlds = [], ownedOperationsComposedWorlds = [];",
@@ -3429,4 +3431,131 @@ test("GAD export rejects a stale recap and a roster follow-up from a different s
       /GAD (roster triage|recap)/u
     );
   }
+});
+
+test("terminal export rejects substituted check arguments and a missing decision to hold", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  const id = "terminal-check-live-pipeline-bounded-output";
+  const { assignment } = cases.get(id);
+  const pins = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(options.pins, JSON.stringify({ ...pins, workspace: "examples" }));
+  entry.test.name = id;
+  const operationId = "01234567-89ab-4cde-8fab-0123456789ab";
+  const request = { goal: assignment.goal, operationId };
+  const plan = {
+    receipt: operationId + ":plan",
+    checks: assignment.checks.map(({ id, purpose, prerequisites, intent }) => ({
+      id,
+      purpose,
+      prerequisites,
+      mode: intent.kind,
+    })),
+  };
+  const outcomes = assignment.checks
+    .filter((check) => check.expected)
+    .map(({ id, expected }) => ({
+      result: {
+        receipt: operationId + ":check:" + id,
+        id,
+        status: "complete",
+        exitCode: expected.exitCode,
+        stdout: expected.stdout,
+        stderr: "",
+        timedOut: false,
+        truncated: expected.status === "output-truncated",
+      },
+      status: expected.status,
+    }));
+  const report = { assignmentReceipt: plan.receipt, outcomes, held: ["compare"] };
+  diagnostics.managedTerminalChecks = {
+    contextId: "ctx",
+    caseId: assignment.id,
+    request,
+    plan,
+    results: outcomes.map(({ result }) => result),
+    passed: true,
+    checks: { plan: true, processes: true, report: true },
+  };
+  const ref = (value) => {
+    const text = JSON.stringify(value);
+    return {
+      complete: true,
+      hash: createHash("sha256").update(text).digest("hex"),
+      bytes: Buffer.byteLength(text),
+    };
+  };
+  const prototype = diagnostics.natlangTeacher.calls[0];
+  const call = (callId, name, parent, inputs, output, effects = []) => ({
+    callId,
+    summary: { ...prototype.summary, call_id: callId },
+    record: {
+      ...prototype.record,
+      call_id: callId,
+      parent_call_id: parent,
+      definition: { name },
+      outcome: "done",
+      inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+      output: ref(output),
+      effects,
+    },
+  });
+  const checkEffect = (service, method, args, value) => ({
+    service,
+    method,
+    args: ref(args),
+    result: ref(value),
+  });
+  const choice = (index, selected) =>
+    call(
+      "choice-" + index,
+      "selectNextCheck",
+      "terminal",
+      { goal: assignment.goal, checks: plan.checks, outcomes: outcomes.slice(0, index) },
+      selected
+    );
+  diagnostics.natlangTeacher = {
+    ...diagnostics.natlangTeacher,
+    programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+    rootCallIds: ["runWorkflow"],
+    report,
+    calls: [
+      call("runWorkflow", "runWorkflow", null, {}, null),
+      call("terminal", "runTerminalChecks", "runWorkflow", { request }, report),
+      call("plan", "readAssignedChecks", "terminal", { operationId }, plan, [
+        checkEffect("terminalCheckRead", "observe", [operationId], plan),
+      ]),
+      ...outcomes.flatMap(({ result, status }, i) => [
+        choice(i, result.id),
+        call(
+          "execution-" + i,
+          "performCheck",
+          "terminal",
+          { assignmentReceipt: plan.receipt, checkId: result.id },
+          result,
+          [checkEffect("terminalCheckRun", "execute", [plan.receipt, result.id], result)]
+        ),
+        call("classification-" + i, "classifyResult", "terminal", { result }, status),
+      ]),
+      choice(outcomes.length, null),
+    ],
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  const manifest = JSON.parse(await readFile(path.join(options.out, "manifest.json"), "utf8"));
+  assert.deepEqual(manifest.world.process_checks, ["pipeline", "sequence", "compare"]);
+
+  const execution = diagnostics.natlangTeacher.calls.find(({ callId }) => callId === "execution-1");
+  const effect = execution.record.effects[0];
+  const original = effect.args;
+  effect.args = ref([plan.receipt, "compare"]);
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /record every selection/u);
+  effect.args = original;
+  diagnostics.natlangTeacher.calls.pop();
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /record every selection/u);
 });
