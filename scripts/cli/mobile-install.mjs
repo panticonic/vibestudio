@@ -16,7 +16,7 @@ import {
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { parseAndroidDeviceAbi, resolveAdbInstallTarget } from "./lib/mobile-android.mjs";
-import { buildAndroidApp, internalAndroidApkPath } from "./lib/mobile-native-android.mjs";
+import { buildAndroidApp, internalAndroidApkPath, launchAndroidApp } from "./lib/mobile-native-android.mjs";
 import { bootedIosSimulator, iosBuildTarget } from "./lib/mobile-ios.mjs";
 import { readIosSigningConfig } from "./lib/mobile-ios-signing.mjs";
 import { flagValue } from "./lib/args.mjs";
@@ -504,18 +504,12 @@ async function main() {
   }
 
   if (options.launch) {
-    await run(
+    console.log(await launchAndroidApp({
+      cwd: repoRoot,
       adbPath,
-      adbArgs(options.device, [
-        "shell",
-        "monkey",
-        "-p",
-        options.packageName,
-        "-c",
-        "android.intent.category.LAUNCHER",
-        "1",
-      ])
-    );
+      device: options.device,
+      packageName: options.packageName,
+    }));
   }
 }
 

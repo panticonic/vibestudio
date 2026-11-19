@@ -220,6 +220,19 @@ const publicationRevisionWorkflow = {
   root: "reviewPublicationRevision",
   evidence: publicationRevisionEvidence,
 };
+const androidInstallWorkflow = {
+  family: "system-live-android-development-install",
+  workspace: "system",
+  namespace: "vibestudio:mobile-system-testing",
+  group: "assigned-android-development-install",
+  validator: {
+    template: "system-testing",
+    path: "skills/system-testing/android-install-managed.ts",
+  },
+  root: "runMobileScenario",
+  evidence: androidInstallEvidence,
+};
+
 const androidAuditWorkflow = {
   family: "system-live-android-runtime-audit",
   workspace: "system",
@@ -685,6 +698,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { transcriptCursorWorlds },
     { deliveryHistoryWorlds },
     { androidAuditWorlds },
+    { androidInstallWorlds },
     { publicationRevisionWorlds },
     { managedEvalRecoveryWorlds },
     { managedPdfLayoutWorlds },
@@ -749,6 +763,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "transcript-cursor-worlds.ts",
       "delivery-history-worlds.ts",
       "android-audit-worlds.ts",
+      "android-install-worlds.ts",
       "publication-revision-worlds.ts",
       "eval-recovery-worlds.ts",
       "pdf-layout-worlds.ts",
@@ -804,6 +819,9 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of publicationRevisionWorlds) {
     cases.set(`publication-revision-live-${assignment.id}`, { ...publicationRevisionWorkflow, assignment });
+  }
+  for (const assignment of androidInstallWorlds) {
+    cases.set(`android-install-live-${assignment.id}`, { ...androidInstallWorkflow, assignment });
   }
   for (const assignment of androidAuditWorlds) {
     cases.set(`android-audit-live-${assignment.id}`, { ...androidAuditWorkflow, assignment });
@@ -2924,6 +2942,175 @@ function publicationRevisionEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: contextId, source, artifact_digest: observed.candidate.artifactDigest },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function androidInstallEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.androidInstall;
+  const {
+    caseId,
+    contextId,
+    request,
+    owned,
+    inventory,
+    install,
+    readback,
+    before,
+    after,
+    checks,
+  } = fixture ?? {};
+  const { assignment } = workflow;
+  const report = exercise.report;
+  const records = exercise.calls.map(({ record }) => record);
+  const root = records.find(
+    ({ call_id }) => call_id === exercise.rootCallIds[0],
+  );
+  const child = (parent, name) =>
+    parent &&
+    records.find(
+      (record) =>
+        record.parent_call_id === parent.call_id &&
+        record.definition.name === name,
+    );
+  const scenario = child(root, "runMobileScenario");
+  const setup = child(scenario, "reviewSetup");
+  const discovery = child(setup, "readInventory");
+  const select = child(setup, "selectTarget");
+  const develop = child(scenario, "exerciseDevelopment");
+  const deploy = child(develop, "installApp");
+  const app = child(develop, "readInstalledApp");
+  const explain = child(scenario, "explainBlocker");
+  const shouldInstall = assignment.mode === "install";
+  const foreground = assignment.mode !== "foreground-hold";
+  const missing = owned === "emulator-5554" ? "emulator-5556" : "emulator-5554";
+  const target = assignment.mode === "target-hold" ? missing : owned;
+  const blocker = foreground ? "no-device" : "foreground-required";
+  const expectedDevice = shouldInstall
+    ? { status: "ready", deviceId: owned }
+    : { status: "blocked", blocker };
+  const effectMatches = (record, service, method, args, result) =>
+    record?.effects?.length === 1 &&
+    record.effects[0].service === service &&
+    record.effects[0].method === method &&
+    !record.effects[0].error &&
+    matchesValue(record.effects[0].args, args) &&
+    matchesValue(record.effects[0].result, result);
+  const appAbsent = (snapshot) =>
+    snapshot?.installed === false &&
+    snapshot.bundleActive === false &&
+    snapshot.rendering === false &&
+    snapshot.screenshotCaptured === false &&
+    snapshot.screenshotBytes === 0;
+  const ready = (observed) =>
+    observed?.installed === true &&
+    observed.bundleActive === true &&
+    observed.rendering === true &&
+    Number.isSafeInteger(observed.screenshotBytes) &&
+    observed.screenshotBytes > 0 &&
+    observed.issues?.length === 0;
+
+  requireEvidence(
+    fixture?.passed === true &&
+      ["inventory", "execution", "device", "report"].every(
+        (key) => checks?.[key] === true,
+      ) &&
+      caseId === assignment.id &&
+      typeof contextId === "string" &&
+      contextId === execution.provenance?.contextId &&
+      /^emulator-[1-9][0-9]+$/u.test(owned ?? "") &&
+      request?.goal === assignment.goal &&
+      typeof request.workspace === "string" &&
+      !!request.workspace &&
+      request.deviceId === target &&
+      request.scenario === "development" &&
+      request.authority === "execute" &&
+      request.reset === false &&
+      appAbsent(before) &&
+      isDeepStrictEqual(inventory, {
+        workspace: request.workspace,
+        provider: null,
+        foreground,
+        tooling: true,
+        devices: shouldInstall ? [{ id: owned, state: "ready" }] : [],
+      }) &&
+      matchesValue(scenario?.inputs?.request, request) &&
+      matchesValue(scenario.output, report) &&
+      matchesValue(setup?.inputs?.request, request) &&
+      matchesValue(setup.output, expectedDevice) &&
+      matchesValue(discovery?.output, inventory) &&
+      effectMatches(discovery, "mobileInventory", "read", [], inventory) &&
+      (foreground
+        ? matchesValue(select?.inputs?.devices, inventory.devices) &&
+          matchesValue(select.inputs?.requested, target) &&
+          matchesValue(select.output, expectedDevice)
+        : !select) &&
+      records.flatMap(({ effects }) => effects ?? []).length ===
+        (shouldInstall ? 3 : 1),
+    "Android installation needs the exact workspace, inventory and assigned-device decision",
+  );
+  const packageName = "app.vibestudio.mobile.internal";
+  requireEvidence(
+    shouldInstall
+      ? isDeepStrictEqual(install, {
+          deviceId: owned,
+          packageName,
+          reset: false,
+        }) &&
+          readback?.deviceId === owned &&
+          readback.packageName === packageName &&
+          ready(readback) &&
+          ready(after) &&
+          after.screenshotCaptured === true &&
+          isDeepStrictEqual(report, {
+            status: "development-ready",
+            deviceId: owned,
+            receipt: install,
+            readback,
+          }) &&
+          matchesValue(develop?.inputs?.deviceId, owned) &&
+          matchesValue(develop.output, report) &&
+          matchesValue(deploy?.inputs?.deviceId, owned) &&
+          matchesValue(deploy.output, install) &&
+          effectMatches(
+            deploy,
+            "mobileDevelopment",
+            "install",
+            [owned],
+            install,
+          ) &&
+          matchesValue(app?.inputs?.deviceId, owned) &&
+          matchesValue(app.inputs?.packageName, packageName) &&
+          matchesValue(app.output, readback) &&
+          effectMatches(
+            app,
+            "mobileApp",
+            "verify",
+            [owned, packageName],
+            readback,
+          ) &&
+          !explain
+      : install === null &&
+          readback === null &&
+          isDeepStrictEqual(after, before) &&
+          report.status === "blocked" &&
+          report.blocker === blocker &&
+          report.deviceId === target &&
+          typeof report.next === "string" &&
+          !!report.next.trim() &&
+          !develop &&
+          matchesValue(explain?.inputs?.deviceId, target) &&
+          matchesValue(explain.inputs?.blocker, blocker) &&
+          matchesValue(explain.output, report),
+    "Android installation needs one native install and readback, or a verified hold without effects",
+  );
+  return {
+    world: {
+      context_id: contextId,
+      workspace_id: request.workspace,
+      device_id: target,
+    },
     checks,
     evidence: { workspace: { fixture } },
   };

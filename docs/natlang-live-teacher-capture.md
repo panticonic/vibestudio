@@ -102,6 +102,13 @@ with a ready emulator present. The model receives the assigned coordinate only.
 App installation, process presence, device screenshot capture, and workspace
 readiness are distinct observations.
 
+Android development install cases use the existing mobile system-test program
+and native Mobile Debug source install. Make a single ready disposable emulator
+available with the internal app absent. The install case launches the build
+and verifies its package, process and device image. The two hold cases require
+unchanged device state. All three use the host-attested test authority and the
+managed Android device resource. The run is separate from pairing.
+
 Panel health cases inspect an owned workspace renderer through CDP. The outcome records the
 exact ordered DOM markers and retained console sequence. Recovery requires fresh evidence from
 the same panel after the assigned state change.

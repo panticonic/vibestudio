@@ -43,6 +43,12 @@ export function readAndroidDeviceAbi(options: {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<string>;
+export function launchAndroidApp(options: {
+  cwd?: string;
+  adbPath?: string;
+  device?: string;
+  packageName: string;
+}): Promise<string>;
 export function buildAndroidApp(options: {
   appRoot: string;
   variant?: "internal" | "release";

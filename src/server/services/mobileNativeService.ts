@@ -10,6 +10,7 @@ import {
   buildAndroidApp,
   hasCompleteAndroidSourceProject,
   internalAndroidApkPath,
+  launchAndroidApp,
   listAdbDevices,
   pickAndroidDevice,
   readAndroidDeviceAbi,
@@ -161,7 +162,7 @@ export function createMobileNativeService(deps: { appRoot: string }): ServiceDef
       },
       launchAndroid: async (_ctx, [input]) => {
         const packageName = input?.packageName ?? INTERNAL_ANDROID_PACKAGE;
-        await runAdb(input?.device, ["shell", "monkey", "-p", packageName, "1"]);
+        await launchAndroidApp({ cwd: root, device: input?.device, packageName });
       },
       launchIos: async (_ctx, [input]) => {
         requireMac("launch iOS apps");

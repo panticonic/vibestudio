@@ -114,7 +114,7 @@ export function runNativeCapture(command, args, options = {}) {
     child.stdout?.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
     child.stderr?.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
     child.on("error", reject);
-    child.on("exit", (code) => {
+    child.on("close", (code) => {
       const result = {
         exitCode: code,
         stdout: Buffer.concat(stdout),
@@ -192,6 +192,41 @@ export async function readAndroidDeviceAbi(options) {
   const abi = result.stdout.toString("utf8").trim();
   validateAndroidArchitectures([abi]);
   return abi;
+}
+
+/** Join Activity Manager's launch before callers inspect the app. */
+export async function launchAndroidApp({ cwd, adbPath = "adb", device, packageName }) {
+  if (!/^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$/u.test(packageName)) {
+    throw Object.assign(new Error("An Android application ID is required"), { code: "EANDROID_LAUNCH" });
+  }
+  const launcherIntent = [
+    "-a", "android.intent.action.MAIN",
+    "-c", "android.intent.category.LAUNCHER",
+  ];
+  const resolved = await runNativeCapture(
+    adbPath,
+    adbArgs(device, ["shell", "cmd", "package", "resolve-activity", "--brief", ...launcherIntent, "-p", packageName]),
+    { cwd, errorCode: "EANDROID_LAUNCH" }
+  );
+  const prefix = packageName + "/";
+  const activity = resolved.stdout.toString("utf8").trim().split(/\r?\n/u)
+    .find((line) => line.startsWith(prefix) && /^\.?[a-zA-Z0-9_$]+(?:\.[a-zA-Z0-9_$]+)*$/u.test(line.slice(prefix.length)));
+  if (!activity) {
+    throw Object.assign(new Error(`No launcher activity was resolved for ${packageName}`), { code: "EANDROID_LAUNCH" });
+  }
+  const result = await runNativeCapture(
+    adbPath,
+    adbArgs(device, ["shell", "am", "start", "-W", ...launcherIntent, "-n", "'" + activity + "'"]),
+    { cwd, errorCode: "EANDROID_LAUNCH" }
+  );
+  const output = result.stdout.toString("utf8").trim();
+  if (!/^Status:\s*ok\s*$/mu.test(output)) {
+    const detail = [output, result.stderr.trim()].filter(Boolean).join("\n");
+    throw Object.assign(new Error(detail || "Android returned no successful launch status"), {
+      code: "EANDROID_LAUNCH",
+    });
+  }
+  return output;
 }
 
 export async function buildAndroidApp(options) {

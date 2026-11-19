@@ -106,6 +106,7 @@ test("authored template worlds flow into the collector without losing original s
       ["transcript-cursor-worlds", "transcriptCursorWorlds", []],
       ["delivery-history-worlds", "deliveryHistoryWorlds", []],
       ["android-audit-worlds", "androidAuditWorlds", []],
+      ["android-install-worlds", "androidInstallWorlds", []],
       ["publication-revision-worlds", "publicationRevisionWorlds", []],
       ["eval-recovery-worlds", "managedEvalRecoveryWorlds", []],
       ["pdf-layout-worlds", "managedPdfLayoutWorlds", []],
@@ -2953,6 +2954,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["transcript-cursor-worlds", "export const transcriptCursorWorlds = [];"],
       ["delivery-history-worlds", "export const deliveryHistoryWorlds = [];"],
       ["android-audit-worlds", "export const androidAuditWorlds = [];"],
+      ["android-install-worlds", "export const androidInstallWorlds = [];"],
       ["publication-revision-worlds", "export const publicationRevisionWorlds = [];"],
       ["eval-recovery-worlds", "export const managedEvalRecoveryWorlds = [];"],
       ["pdf-layout-worlds", "export const managedPdfLayoutWorlds = [];"],
@@ -6427,5 +6429,138 @@ test("Android audit export requires the native app observation and keeps workspa
   await assert.rejects(
     exportLiveTeacherWorkflow({ ...options, cases }),
     /exact package and image evidence/u,
+  );
+});
+
+test("Android installation hold rejects an attempted effect against the other ready emulator", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, ".."),
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  const name = "android-install-live-hold-absent-install-target";
+  const { assignment } = cases.get(name);
+  const pins = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(
+    options.pins,
+    JSON.stringify({ ...pins, workspace: "system" }),
+  );
+  entry.test.name = name;
+  const request = {
+    goal: assignment.goal,
+    workspace: "owned-workspace",
+    deviceId: "emulator-5554",
+    scenario: "development",
+    authority: "execute",
+    reset: false,
+  };
+  const inventory = {
+    workspace: request.workspace,
+    provider: null,
+    foreground: true,
+    tooling: true,
+    devices: [],
+  };
+  const setup = { status: "blocked", blocker: "no-device" };
+  const report = {
+    ...setup,
+    deviceId: request.deviceId,
+    next: "Connect the assigned emulator.",
+  };
+  const before = {
+    installed: false,
+    bundleActive: false,
+    rendering: false,
+    screenshotCaptured: false,
+    screenshotBytes: 0,
+    issues: ["The internal app is absent."],
+  };
+  const owned = "emulator-5576";
+  diagnostics.androidInstall = {
+    passed: true,
+    contextId: "ctx",
+    caseId: assignment.id,
+    owned,
+    request,
+    inventory,
+    before,
+    after: before,
+    install: null,
+    readback: null,
+    checks: { inventory: true, execution: true, device: true, report: true },
+  };
+  const ref = (value) => {
+    const text = JSON.stringify(value);
+    return {
+      complete: true,
+      hash: createHash("sha256").update(text).digest("hex"),
+      bytes: Buffer.byteLength(text),
+    };
+  };
+  const prototype = diagnostics.natlangTeacher.calls[0];
+  const call = (name, parent, inputs, output, effects = []) => ({
+    callId: name,
+    summary: { ...prototype.summary, call_id: name },
+    record: {
+      ...prototype.record,
+      call_id: name,
+      parent_call_id: parent,
+      definition: { name },
+      outcome: "done",
+      inputs: Object.fromEntries(
+        Object.entries(inputs).map(([key, value]) => [key, ref(value)]),
+      ),
+      output: ref(output),
+      effects,
+    },
+  });
+  const explain = call(
+    "explainBlocker",
+    "runMobileScenario",
+    {
+      deviceId: request.deviceId,
+      blocker: report.blocker,
+    },
+    report,
+  );
+  diagnostics.natlangTeacher = {
+    ...diagnostics.natlangTeacher,
+    programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+    rootCallIds: ["runWorkflow"],
+    report,
+    calls: [
+      call("runWorkflow", null, {}, null),
+      call("runMobileScenario", "runWorkflow", { request }, report),
+      call("reviewSetup", "runMobileScenario", { request }, setup),
+      call("readInventory", "reviewSetup", {}, inventory, [
+        {
+          service: "mobileInventory",
+          method: "read",
+          args: ref([]),
+          result: ref(inventory),
+        },
+      ]),
+      call(
+        "selectTarget",
+        "reviewSetup",
+        { devices: [], requested: request.deviceId },
+        setup,
+      ),
+      explain,
+    ],
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+
+  explain.record.effects.push({
+    service: "mobileDevelopment",
+    method: "install",
+    args: ref([owned]),
+    error: "denied",
+  });
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases }),
+    /assigned-device decision/u,
   );
 });
