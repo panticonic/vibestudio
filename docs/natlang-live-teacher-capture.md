@@ -79,7 +79,10 @@ schedule records. The `news-managed-oracle-qualification` system test exercises 
 readback without a model.
 Google Workspace setup cases join Drive readiness to the installed welcome panel. They verify the
 account and permission owner links, the Gmail launch gate across reload, and layout at the assigned widths.
-The smoke runs in a fresh workspace before external Google account setup.
+The smoke runs in a fresh workspace before external Google account setup. The choice journeys use
+the installed panel to switch app scope and browser preference, reload, and check the rendered
+guidance. The nested comparison checks the choice that changed, the choice that carried forward,
+and the disabled Connect Google and Open Gmail controls.
 Local model comparison cases query the installed local-model extension twice. The workflow assesses the
 assigned candidates against tool and context requirements and offers a fresh or fork handoff only for a
 qualifying local model. The comparison has only inventory access.

@@ -1428,13 +1428,13 @@ test("local model comparison export rejects a handoff that skips the first eligi
   );
 });
 
-test("Google setup export binds the measured viewport to the authored check", async (t) => {
+test("Google setup export binds live choice transitions and the measured viewport", async (t) => {
   const { options, diagnostics, entry, save } = await fixture(t);
   const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
     path.resolve(import.meta.dirname, "..")
   );
   const cases = await loadLiveTeacherCases(checkouts);
-  entry.test.name = "google-setup-live-narrow-owner-review";
+  entry.test.name = "google-setup-live-mobile-choice-readback";
   const world = cases.get(entry.test.name);
   const run = diagnostics.natlangTeacher;
   const receipts = world.checks.map((check, index) => ({
@@ -1448,6 +1448,17 @@ test("Google setup export binds the measured viewport to the authored check", as
     overflow: false,
     viewportWidth: check.width ?? null,
   }));
+  const initialChoice = {
+    scope: "gmail",
+    opening: "external",
+    guidance: "gmail",
+    connectEnabled: false,
+    gmailEnabled: false,
+  };
+  receipts[1].controls = {
+    before: initialChoice,
+    after: { ...initialChoice, scope: "workspace", guidance: "workspace" },
+  };
   run.report = {
     status: "action-needed",
     action: "open-setup",
@@ -1465,8 +1476,23 @@ test("Google setup export binds the measured viewport to the authored check", as
   const skill = structuredClone(leaf);
   skill.callId = skill.summary.call_id = "skill";
   skill.record.definition.name = "guideGoogleWorkspace";
+  skill.record.outcome = "done";
   leaf.record.parent_call_id = "skill";
+  leaf.record.definition.name = "reviewSetupJourney";
+  leaf.record.outcome = "done";
   run.calls.push(skill);
+  for (const [id, name, parent] of [
+    ["panel", "reviewSetupPanel", leaf.callId],
+    ["observe", "observeSetupPanel", "panel"],
+    ["choices", "inspectSetupChoices", "panel"],
+    ["compare", "compareSetupChoices", "choices"],
+  ]) {
+    const call = structuredClone(leaf);
+    call.callId = call.summary.call_id = id;
+    call.record.definition.name = name;
+    call.record.parent_call_id = parent;
+    run.calls.push(call);
+  }
   diagnostics.managedGoogleSetup = {
     contextId: "ctx",
     verification: {
@@ -1488,6 +1514,20 @@ test("Google setup export binds the measured viewport to the authored check", as
   await assert.rejects(
     exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-different-viewport` }),
     /Google setup findings must match the assigned panel and account observations/u
+  );
+  receipts[0].viewportWidth = 390;
+  receipts[1].controls.after.connectEnabled = true;
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-opened-consent` }),
+    /Google setup findings must match the assigned panel and account observations/u
+  );
+  receipts[1].controls.after.connectEnabled = false;
+  run.calls.find(({ callId }) => callId === "compare").record.parent_call_id = "panel";
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-detached-choice` }),
+    /Google setup choice journeys must capture/u
   );
 });
 

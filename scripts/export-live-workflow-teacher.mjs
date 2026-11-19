@@ -1457,6 +1457,33 @@ function localComparisonEvidence(execution, exercise, _scenario, workflow) {
   };
 }
 
+function googleSetupChoiceMatches(receipt, previous, check) {
+  const { before, after } = receipt.controls ?? {};
+  if (
+    !before ||
+    !after ||
+    before.scope !== (previous?.scope ?? "gmail") ||
+    before.opening !== (previous?.opening ?? "external") ||
+    [before, after].some(
+      (state) =>
+        state.guidance !== state.scope ||
+        state.connectEnabled !== false ||
+        state.gmailEnabled !== false
+    )
+  )
+    return false;
+  switch (check.kind) {
+    case "scope-choice":
+      return after.scope === check.scope && after.opening === before.opening;
+    case "browser-choice":
+      return after.scope === before.scope && after.opening === check.opening;
+    case "choice-reload":
+      return after.scope === "gmail" && after.opening === "external";
+    default:
+      return false;
+  }
+}
+
 function googleSetupEvidence(execution, exercise, _scenario, workflow) {
   const fixture = execution.diagnostics.managedGoogleSetup;
   const verification = fixture?.verification;
@@ -1500,10 +1527,45 @@ function googleSetupEvidence(execution, exercise, _scenario, workflow) {
           return row.accountOwner === true && row.permissionsOwner === true;
         if (check.kind === "viewport")
           return row.viewportWidth === check.width && row.overflow === false;
-        return row.inheritedLaunch === (check.afterReload ? false : null);
+        if (check.kind === "launch-gate")
+          return row.inheritedLaunch === (check.afterReload ? false : null);
+        const previous = receipts
+          .slice(0, index)
+          .findLast(
+            (observed) =>
+              observed.controls ||
+              (observed.check.kind === "launch-gate" && observed.check.afterReload)
+          );
+        return googleSetupChoiceMatches(row, previous?.controls?.after, check);
       }),
     "Google setup findings must match the assigned panel and account observations"
   );
+  const choiceCount = workflow.checks.filter(({ kind }) =>
+    ["scope-choice", "browser-choice", "choice-reload"].includes(kind)
+  ).length;
+  if (choiceCount > 0) {
+    const children = (parent, name) =>
+      parent
+        ? exercise.calls.filter(
+            ({ record }) =>
+              record.parent_call_id === parent.callId &&
+              record.outcome === "done" &&
+              record.definition?.name === name
+          )
+        : [];
+    const root = exercise.calls.find(({ callId }) => callId === exercise.rootCallIds[0]);
+    const skill =
+      root?.record.definition?.name === workflow.root ? root : children(root, workflow.root)[0];
+    const journey = children(skill, "reviewSetupJourney")[0];
+    const panel = children(journey, "reviewSetupPanel")[0];
+    const choices = children(panel, "inspectSetupChoices");
+    requireEvidence(
+      children(panel, "observeSetupPanel").length === 1 &&
+        choices.length === choiceCount &&
+        choices.every((choice) => children(choice, "compareSetupChoices").length === 1),
+      "Google setup choice journeys must capture the observation and each nested comparison"
+    );
+  }
   return {
     world: { context_id: fixture.contextId, panel_id: verification.panelId },
     checks: verification.checks,
