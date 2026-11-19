@@ -149,6 +149,17 @@ const presentationWorkflow = {
   root: "preparePresentation",
   evidence: presentationEvidence,
 };
+const testkitCleanupWorkflow = {
+  family: "workspace-testkit-cleanup",
+  namespace: "vibestudio:session-test",
+  group: "live-testkit-deferred-inventory",
+  validator: {
+    template: "system-testing",
+    path: "skills/system-testing/testkit-cleanup-managed.ts",
+  },
+  root: "reviewLiveCleanup",
+  evidence: liveTestkitCleanupEvidence,
+};
 const sessionReplayWorkflow = {
   family: "workspace-headless-session-replay",
   namespace: "vibestudio:session-test",
@@ -379,6 +390,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedPanelHealthWorlds },
     { managedAuthoringWorlds },
     { managedSessionReplayWorlds = [] },
+    { managedTestkitCleanupWorlds = [] },
     { managedMemoryWorlds },
     { managedSetupWorlds },
     { managedChecklistWorlds },
@@ -414,6 +426,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "panel-health-worlds.ts",
       "authoring-worlds.ts",
       "session-replay-worlds.ts",
+      "testkit-cleanup-worlds.ts",
       "verified-memory-worlds.ts",
       "onboarding-worlds.ts",
       "checklist-worlds.ts",
@@ -619,6 +632,9 @@ export async function loadLiveTeacherCases(checkouts) {
         afterStatus: expected.status,
       }),
     });
+  }
+  for (const assignment of managedTestkitCleanupWorlds) {
+    cases.set(`testkit-cleanup-live-${assignment.id}`, { ...testkitCleanupWorkflow, assignment });
   }
   for (const assignment of managedSessionReplayWorlds) {
     cases.set(`session-replay-live-${assignment.id}`, { ...sessionReplayWorkflow, assignment });
@@ -1239,6 +1255,101 @@ function presentationEvidence(execution, exercise, _scenario, workflow) {
   return {
     world: { context_id: fixture.contextId, panel_attempt: verification.panelAttempt },
     checks: verification.checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function liveTestkitCleanupEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedTestkitCleanup;
+  const { verification, contextId } = fixture ?? {};
+  const { assignment } = workflow;
+  const evidence = verification?.evidence;
+  const report = exercise.report;
+  const receipt = `${contextId}:testkit-cleanup`;
+  const { acquired, release, remaining } = evidence ?? {};
+  requireEvidence(
+    typeof contextId === "string" &&
+      contextId === execution.provenance?.contextId &&
+      verification?.caseId === assignment.id &&
+      verification.passed === true &&
+      verification.checks?.exactRead === true &&
+      verification.checks?.protectedUnchanged === true &&
+      verification.checks?.joinedReport === true &&
+      evidence?.protectedUnchanged === true &&
+      evidence.receipt === receipt &&
+      evidence.outcome === assignment.expected.outcome &&
+      Array.isArray(acquired) &&
+      acquired.length === assignment.plan.length &&
+      acquired.every(
+        (resource, index) =>
+          resource?.kind === assignment.plan[index].kind &&
+          typeof resource.id === "string" &&
+          resource.id.length
+      ) &&
+      new Set(acquired.map(({ id }) => id)).size === acquired.length &&
+      release?.kind === "testkit" &&
+      release.receipt === `${receipt}:deferred`,
+    "The live Testkit review must bind the owned suite and its acquired resources"
+  );
+  const { expected } = assignment;
+  const slots = new Map(assignment.plan.map(({ slot }, index) => [slot, acquired[index]]));
+  const registered = assignment.plan
+    .filter(({ cleanup }) => cleanup !== "unregistered")
+    .map(({ slot }) => slots.get(slot));
+  const failed = new Set(expected.failed.map((slot) => slots.get(slot).id));
+  const cleanupOrder = [...registered].reverse().map((resource) => ({
+    ...resource,
+    acknowledgement: failed.has(resource.id) ? "failed" : "released",
+  }));
+  requireEvidence(
+    isDeepStrictEqual(release.resources, registered) &&
+      isDeepStrictEqual(release.released, cleanupOrder) &&
+      isDeepStrictEqual(
+        remaining,
+        expected.remaining.map((slot) => slots.get(slot))
+      ) &&
+      Array.isArray(evidence.logs) &&
+      evidence.logs.filter((line) => typeof line === "string" && line.startsWith("cleanup failed:"))
+        .length === failed.size &&
+      (expected.outcome === "passed"
+        ? evidence.error === null
+        : expected.outcome === "timeout"
+          ? evidence.error?.includes("timed out")
+          : evidence.error?.startsWith("Assigned fixture failure")) &&
+      isDeepStrictEqual(report, {
+        receipt,
+        testOutcome: evidence.outcome,
+        release: {
+          decision: failed.size ? "revise" : "confirmed",
+          finding: expected.release,
+          evidenceIds: [release.receipt],
+        },
+        inventory: expected.inventory,
+        remainingIds: remaining.map(({ id }) => id),
+      }),
+    "The live Testkit report must match the terminal outcome, release acknowledgements and remaining inventory"
+  );
+  const child = (parent, name) =>
+    parent &&
+    exercise.calls.find(
+      ({ record }) =>
+        record.parent_call_id === parent &&
+        record.definition?.name === name &&
+        record.outcome === "done"
+    )?.callId;
+  const review = child(exercise.rootCallIds[0], "reviewLiveCleanup");
+  const inventory = child(review, "inspectInventory");
+  requireEvidence(
+    child(review, "readCleanup") &&
+      child(review, "readOutcome") &&
+      child(review, "checkTestkitRelease") &&
+      inventory &&
+      (!remaining.length || child(inventory, "matchRegistrations")),
+    "The live Testkit review must capture its outcome, release and nested inventory checks"
+  );
+  return {
+    world: { context_id: contextId, cleanup_receipt: receipt },
+    checks: { ...verification.checks, observedDeferredInventory: true },
     evidence: { workspace: { fixture } },
   };
 }

@@ -181,6 +181,7 @@ test("authored template worlds flow into the collector without losing original s
         ],
       ],
       ["session-replay-worlds", "managedSessionReplayWorlds", []],
+      ["testkit-cleanup-worlds", "managedTestkitCleanupWorlds", []],
       [
         "authoring-worlds",
         "managedAuthoringWorlds",
@@ -1007,6 +1008,91 @@ test("presentation export rejects a chart table that changes a plotted value", a
   await assert.rejects(
     exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-wrong-table` }),
     /demonstrate its assigned controls in the live browser/u
+  );
+});
+
+test("Testkit cleanup export separates LIFO acknowledgements from actual residue", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  entry.test.name = "testkit-cleanup-live-nonrecursive-cleanup";
+  const run = diagnostics.natlangTeacher;
+  const [root, skill] = run.calls;
+  run.programPath = "skills/vibestudio-workflows/runWorkflow.nl";
+  root.record.definition.name = "runWorkflow";
+  skill.record.definition.name = "reviewLiveCleanup";
+  skill.record.outcome = "done";
+  for (const [name, parent] of [
+    ["readCleanup", skill.callId],
+    ["readOutcome", skill.callId],
+    ["checkTestkitRelease", skill.callId],
+    ["inspectInventory", skill.callId],
+    ["matchRegistrations", "inspectInventory"],
+  ]) {
+    const call = structuredClone(skill);
+    call.callId = call.summary.call_id = name;
+    call.record.definition.name = name;
+    call.record.parent_call_id = parent;
+    run.calls.push(call);
+  }
+  const receipt = "ctx:testkit-cleanup";
+  const scratch = { id: "scratch-now", kind: "scratch" };
+  const worker = { id: "worker-now", kind: "worker" };
+  const release = {
+    kind: "testkit",
+    receipt: `${receipt}:deferred`,
+    resources: [scratch, worker],
+    released: [
+      { ...worker, acknowledgement: "released" },
+      { ...scratch, acknowledgement: "failed" },
+    ],
+  };
+  const evidence = {
+    receipt,
+    outcome: "passed",
+    error: null,
+    logs: ["cleanup failed: directory not empty"],
+    acquired: [scratch, worker],
+    release,
+    remaining: [scratch],
+    protectedUnchanged: true,
+  };
+  run.report = {
+    receipt,
+    testOutcome: "passed",
+    release: {
+      decision: "revise",
+      finding: "testkit-release-failed",
+      evidenceIds: [release.receipt],
+    },
+    inventory: "registered-residue",
+    remainingIds: [scratch.id],
+  };
+  diagnostics.managedTestkitCleanup = {
+    contextId: "ctx",
+    verification: {
+      caseId: "nonrecursive-cleanup",
+      passed: true,
+      evidence,
+      checks: { exactRead: true, protectedUnchanged: true, joinedReport: true },
+    },
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  release.released.reverse();
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-wrong-order` }),
+    /release acknowledgements and remaining inventory/u
+  );
+  release.released.reverse();
+  evidence.remaining = [];
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-missing-residue` }),
+    /release acknowledgements and remaining inventory/u
   );
 });
 
@@ -2843,6 +2929,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["presentation-worlds", "export const managedPresentationWorlds = [];"],
       ["authoring-worlds", "export const managedAuthoringWorlds = [];"],
       ["session-replay-worlds", "export const managedSessionReplayWorlds = [];"],
+      ["testkit-cleanup-worlds", "export const managedTestkitCleanupWorlds = [];"],
       ["verified-memory-worlds", "export const managedMemoryWorlds = [];"],
       ["onboarding-worlds", "export const managedSetupWorlds = [];"],
       ["checklist-worlds", "export const managedChecklistWorlds = [];"],
