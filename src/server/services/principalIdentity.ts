@@ -5,8 +5,22 @@ import {
   type CodeIdentityCallerKind,
 } from "@vibestudio/shared/principalKinds";
 import type { UserSubject } from "@vibestudio/identity/types";
+import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 
 import { isEvalHostRecord } from "@vibestudio/shared/evalRuntimeIdentity";
+
+/** The runtime whose context a live session executor is admitted to act in. */
+export function admittedEvalContextOwner(
+  entityCache: Pick<EntityCache, "resolveActive"> | undefined,
+  caller: VerifiedCaller
+): { runtimeId: string; contextId: string } | null {
+  const admission = caller.executionSession;
+  if (admission?.executor?.runtimeId !== caller.runtime.id) return null;
+  const executor = entityCache?.resolveActive(caller.runtime.id);
+  if (!executor?.parentId || !isEvalHostRecord(executor) ||
+      executor.contextId !== admission.contextId) return null;
+  return { runtimeId: executor.parentId, contextId: admission.contextId };
+}
 
 function evalOwner(record: {
   kind?: string;

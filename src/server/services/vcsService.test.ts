@@ -64,6 +64,7 @@ function service(options?: {
   result?: unknown;
   failure?: unknown;
   relayBinding?: { entityId: string; contextId: string; channelId: string };
+  resolveActive?: NonNullable<VcsServiceDeps["entityCache"]>["resolveActive"];
   referencesReachable?:
     | boolean
     | ((
@@ -136,10 +137,10 @@ function service(options?: {
     },
     entityCache: {
       resolveContext: () => options?.context ?? null,
-      resolveActive: (id: string) =>
+      resolveActive: options?.resolveActive ?? ((id: string) =>
         options?.relayBinding
           ? ({ id, status: "active", agentBinding: options.relayBinding } as never)
-          : null,
+          : null),
     },
     listOwnedContexts: async () => ({ contexts: options?.owned ?? [] }),
     ...(options?.testPolicyForContext
@@ -552,6 +553,36 @@ describe("canonical vcsService", () => {
         commandId: "command:discard-child",
       },
     ]);
+    expect(semanticCall).toHaveBeenCalledOnce();
+  });
+
+  it("recognizes the exact lifecycle owner through its live eval admission", async () => {
+    const callerId = "do:workers/session:SessionDO:executor";
+    const ownerId = "session:owner";
+    const { definition, semanticCall } = service({
+      context: "context:own",
+      resolveActive: (id) => id === callerId ? {
+        id, kind: "do", className: "SessionDO", key: "executor",
+        source: { repoPath: "workers/session", effectiveVersion: "build:one" },
+        contextId: "context:own", parentId: ownerId, createdAt: 1, status: "active",
+        cleanupComplete: true,
+      } : null,
+      owned: [{ contextId: "context:child", kind: "lifecycle", ownerEntityId: ownerId }],
+    });
+    const caller = createVerifiedCaller(callerId, "do");
+    const discardArgs = [{
+      contextId: "context:child", expectedWorkingHead: EVENT, commandId: "command:discard-child",
+    }];
+    const ctx = { caller, authorization: INTERNAL_AUTHORIZATION };
+    await expect(definition.handler(ctx, "discard", discardArgs)).rejects.toThrow(/outside the caller's authority/);
+    const admitted = (contextId: string) => ({
+      ...ctx, caller: {
+        ...caller,
+        executionSession: { contextId, executor: { runtimeId: callerId } } as NonNullable<typeof caller.executionSession>,
+      },
+    });
+    await expect(definition.handler(admitted("context:other"), "discard", discardArgs)).rejects.toThrow(/outside the caller's authority/);
+    await definition.handler(admitted("context:own"), "discard", discardArgs);
     expect(semanticCall).toHaveBeenCalledOnce();
   });
 

@@ -48,6 +48,7 @@ import {
   workspaceParticipantReferencesReachable,
 } from "../vcsHost/workspaceHistoryHost.js";
 import { isTrustedDeviceCaller } from "./clientTrust.js";
+import { admittedEvalContextOwner } from "./principalIdentity.js";
 import { requireReviewedSourceConsumer } from "./workspaceTemplateSourceService.js";
 
 export interface VcsServiceDeps {
@@ -251,13 +252,15 @@ async function authorizeContext(
   );
   if (operation === "write") {
     const ownerEntityIds = new Set([effectiveCallerId(ctx), ctx.caller.runtime.id]);
-    const exactLifecycleOwnership = owned.some(({ contexts }) =>
+    const evalOwner = admittedEvalContextOwner(deps.entityCache, ctx.caller);
+    const exactLifecycleOwnership = owned.some(({ root, contexts }) =>
       contexts.some(
         (entry) =>
           entry.contextId === contextId &&
           entry.kind === "lifecycle" &&
           entry.ownerEntityId != null &&
-          ownerEntityIds.has(entry.ownerEntityId)
+          (ownerEntityIds.has(entry.ownerEntityId) ||
+            (evalOwner?.contextId === root && evalOwner.runtimeId === entry.ownerEntityId))
       )
     );
     if (exactLifecycleOwnership) return;

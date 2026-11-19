@@ -20,7 +20,6 @@ import { createHash, randomUUID } from "node:crypto";
 import { deserializeRpcFailure } from "@vibestudio/rpc";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
-import { isEvalHostRecord } from "@vibestudio/shared/evalRuntimeIdentity";
 import { contextIdForTargetKey } from "@vibestudio/shared/runtime/contextIdentity";
 import type {
   PreparedAuthoritySelection,
@@ -75,6 +74,7 @@ import {
 import { isOpenPanelBrowserUrl } from "@vibestudio/shared/panelChrome";
 import type { WorkspaceEntityStore } from "../workspaceEntityStore.js";
 import { isTrustedDeviceCaller, isInteractiveClient } from "./clientTrust.js";
+import { admittedEvalContextOwner } from "./principalIdentity.js";
 import {
   prepareContextBoundarySelection,
   type ContextBoundaryAction,
@@ -2968,12 +2968,8 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
           if (!principal) return false;
           if (principal.runtime.id === input.ownerRuntimeId ||
               principal.agentBinding?.entityId === input.ownerRuntimeId) return true;
-          const admission = principal.executionSession;
-          if (admission?.contextId !== input.parentContextId ||
-              admission.executor.runtimeId !== principal.runtime.id) return false;
-          const executor = store.cache.resolveActive(principal.runtime.id);
-          return Boolean(executor && isEvalHostRecord(executor) &&
-            executor.parentId === input.ownerRuntimeId && executor.contextId === input.parentContextId);
+          const owner = admittedEvalContextOwner(store.cache, principal);
+          return owner?.runtimeId === input.ownerRuntimeId && owner.contextId === input.parentContextId;
         });
         return forkSemanticContext(input, caller);
       },
