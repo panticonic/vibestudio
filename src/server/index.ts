@@ -2601,6 +2601,10 @@ async function main() {
     };
   const buildCallerContext = (caller: VerifiedCaller) =>
     caller.agentBinding?.contextId ?? callerBuildContextId(entityCache, caller.runtime.id);
+  const participantDiscoveryContext = (caller: VerifiedCaller) =>
+    caller.nativeInvocation || caller.taskAuthority || caller.subject?.userId
+      ? buildCallerContext(caller)
+      : null;
   const buildContextOwner = (caller: VerifiedCaller, contextId: string) => {
     const evalOwner = admittedEvalContextOwner(entityCache, caller);
     return evalOwner?.contextId === contextId
@@ -6880,6 +6884,11 @@ async function main() {
       contextId?: string;
       contextPolicy?: "exact" | "initial";
       buildRef: string;
+      participant?: {
+        caller: VerifiedCaller;
+        sourceState: import("@vibestudio/shared/execution/contracts").ExecutionSourceStateRef;
+        signal?: AbortSignal;
+      };
     }
   ): Promise<void> => {
     const { source, className, objectKey, buildRef } = ref;
@@ -6892,14 +6901,34 @@ async function main() {
       }
     };
     const store = ensureEntityStore(doDispatch);
+    const assertParticipantExecution = async (record: EntityRecord): Promise<void> => {
+      if (!ref.participant) return;
+      const { caller, signal } = ref.participant;
+      const ownerContextId = participantDiscoveryContext(caller);
+      const buildSystem = container.get<import("./buildV2/index.js").BuildSystemV2>("buildSystem");
+      const build = record.activeBuildKey && record.activeExecutionDigest
+        ? await buildSystem?.getBuildByExecution(record.activeBuildKey, record.activeExecutionDigest)
+        : null;
+      const execution = build?.metadata.execution;
+      if (!execution || !await workspaceVcs.participantExecutionVisible(
+        execution, caller, ownerContextId, signal, await readableBuildContexts(caller, ownerContextId),
+      )) {
+        throw Object.assign(new Error("The active service execution is unavailable"), { code: "EACCES" });
+      }
+    };
     const existing = await store.resolveInvocationRecord(targetId);
     if (existing?.status === "active") {
       if (existing.activeBuildKey && existing.activeExecutionDigest && existing.activeAuthority) {
+        await assertParticipantExecution(existing);
         const ready = await durableObjectExecutionReadiness.ensureReady({
           source,
           className,
           objectKey,
         });
+        if (existing.activeBuildKey !== ready.activeBuildKey ||
+            existing.activeExecutionDigest !== ready.activeExecutionDigest) {
+          await assertParticipantExecution(ready);
+        }
         assertRequestedContext(ready);
         return;
       }
@@ -6916,6 +6945,7 @@ async function main() {
       key: objectKey,
       contextId,
       ref: buildRef,
+      ...(ref.participant ? { sourceState: ref.participant.sourceState } : {}),
     });
     const activation = declaredWorkspaceServiceActivationInput(
       { source, className, key: objectKey, contextId },
@@ -6926,6 +6956,7 @@ async function main() {
     const record = existing
       ? await store.advanceExecution(activation)
       : await store.activate(activation);
+    await assertParticipantExecution(record);
     assertRequestedContext(record);
   };
 
@@ -6981,10 +7012,20 @@ async function main() {
           // context of its own and resolving a creator-context service fails
           // outright. Kept as a fallback rather than a preference, so a caller
           // that already resolves keeps resolving exactly as before.
-          getCallerContextId: (callerId) => callerRuntimeContextId(entityCache, callerId),
-          loadContextDeclarations: async (contextId) => {
-            const stateHash = await workspaceVcs.resolveContextState(contextId);
-            return readWorkspaceDeclarationsFromState(workspaceVcs, workspaceId, stateHash);
+          getCallerContextId: (caller) => workspaceVcs.participantHistoryAttached
+            ? participantDiscoveryContext(caller)
+            : callerRuntimeContextId(entityCache, caller.runtime.id),
+          loadContextSource: async (contextId, ctx) => {
+            const exact = workspaceVcs.participantHistoryAttached
+              ? await workspaceVcs.resolveCallerContextState(contextId, ctx.caller, ctx.signal)
+              : null;
+            return {
+              buildRef: exact?.stateHash ?? `ctx:${contextId}`,
+              ...(exact ? { sourceState: exact.semanticState } : {}),
+              readDeclarations: async () => readWorkspaceDeclarationsFromState(
+                workspaceVcs, workspaceId, exact?.stateHash ?? await workspaceVcs.resolveContextState(contextId),
+              ),
+            };
           },
           canDiscoverCrossWorkspaceMethod: (ctx, { target, operation }) => {
             try {
@@ -7008,9 +7049,9 @@ async function main() {
               throw error;
             }
           },
-          prepareRuntimeImage: (source, buildRef) => {
+          prepareRuntimeImage: (source, buildRef, sourceState) => {
             void buildSystemInst
-              .bindRuntimeImage(source, buildRef)
+              .bindRuntimeImage(source, buildRef, sourceState)
               .catch((err: unknown) =>
                 console.warn(
                   `[Workers] Demand-driven preparation failed for ${source}:`,
@@ -7025,6 +7066,7 @@ async function main() {
             contextId,
             contextPolicy,
             buildRef,
+            participant,
           }) => {
             return activateDurableObjectEntity(doDispatch, runtimeManagerInst, {
               source,
@@ -7033,6 +7075,7 @@ async function main() {
               ...(contextId ? { contextId } : {}),
               ...(contextPolicy ? { contextPolicy } : {}),
               buildRef,
+              ...(participant ? { participant } : {}),
             });
           },
           resetDurableObjectStorage: (target, intent) =>
@@ -7718,10 +7761,15 @@ async function main() {
           workerRuntime: workerRuntimeSurface,
         },
         workspaceServicesForCaller: async (ctx) => {
-          const contextId = entityCache.resolveContext(ctx.caller.runtime.id);
-          const stateHash = contextId
-            ? await workspaceVcs.resolveContextState(contextId)
-            : (await workspaceVcs.ensureFresh()).stateHash;
+          const participant = workspaceVcs.participantHistoryAttached;
+          const contextId = participant
+            ? participantDiscoveryContext(ctx.caller)
+            : entityCache.resolveContext(ctx.caller.runtime.id);
+          const stateHash = !contextId
+            ? (await workspaceVcs.ensureFresh()).stateHash
+            : participant
+              ? (await workspaceVcs.resolveCallerContextState(contextId, ctx.caller, ctx.signal)).stateHash
+              : await workspaceVcs.resolveContextState(contextId);
           const cached = workspaceDocsByState.get(stateHash);
           if (cached) {
             rememberWorkspaceDocs(stateHash, cached);

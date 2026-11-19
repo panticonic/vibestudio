@@ -4,6 +4,7 @@ import {
   createVerifiedCaller,
   ServiceDispatcher,
   type ServiceContext,
+  type VerifiedCaller,
 } from "@vibestudio/shared/serviceDispatcher";
 import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import { authorizeVerifiedCaller } from "./authorityRuntime.js";
@@ -152,7 +153,8 @@ function createDeps() {
         })),
     },
     workspaceDecls,
-    getCallerContextId: (callerId: string) => {
+    getCallerContextId: (caller: VerifiedCaller) => {
+      const callerId = caller.runtime.id;
       if (callerId === ownedPanelCtx.caller.runtime.id) return "ctx-panel-owned";
       if (callerId.startsWith("do:")) return "ctx-do-caller";
       return null;
@@ -759,7 +761,7 @@ describe("workerService workspace service resolution", () => {
         createWorkerService({
           ...deps,
           getCallerContextId: () => "ctx-http",
-          loadContextDeclarations: async () => contextDecls,
+          loadContextSource: async () => ({ readDeclarations: async () => contextDecls, buildRef: "ctx:ctx-http" }),
           activateDurableObject,
           prepareRuntimeImage,
         } as never)
@@ -785,7 +787,7 @@ describe("workerService workspace service resolution", () => {
     }
   );
 
-  it("resolves services declared only in the caller context", async () => {
+  it.each([false, true])("resolves services declared only in the caller context (participant=%s)", async (participant) => {
     const deps = createDeps();
     const contextDecls: WorkspaceDeclarations = {
       singletons: new SingletonRegistry([
@@ -803,14 +805,21 @@ describe("workerService workspace service resolution", () => {
       ],
       routes: [],
     };
+    const sourceState = { kind: "application", applicationId: "application:private-poems" } as const;
+    const buildRef = participant ? `state:${"a".repeat(64)}` : "ctx:ctx-poems";
+    const loadContextSource = vi.fn(async (contextId: string, _ctx: ServiceContext) =>
+      contextId === "ctx-poems"
+        ? { readDeclarations: async () => contextDecls, buildRef, ...(participant ? { sourceState } : {}) }
+        : null);
     const activateDurableObject = vi.fn(async () => {});
+    const prepareRuntimeImage = vi.fn();
     const dispatcher = createTestServiceDispatcher();
     const service = createWorkerService({
       ...(deps as object),
-      getCallerContextId: (callerId: string) => (callerId === "panel-test" ? "ctx-poems" : null),
-      loadContextDeclarations: async (contextId: string) =>
-        contextId === "ctx-poems" ? contextDecls : null,
+      getCallerContextId: (caller: VerifiedCaller) => (caller.runtime.id === "panel-test" ? "ctx-poems" : null),
+      loadContextSource,
       activateDurableObject,
+      prepareRuntimeImage,
     } as never);
     dispatcher.registerService(service);
     dispatcher.markInitialized();
@@ -830,8 +839,15 @@ describe("workerService workspace service resolution", () => {
       className: "PoemStore",
       objectKey: "mother-poems",
       contextId: "ctx-poems",
-      buildRef: "ctx:ctx-poems",
+      buildRef,
+      ...(participant ? { participant: { caller: panelCtx.caller, sourceState } } : {}),
     });
+    expect(loadContextSource).toHaveBeenCalledWith("ctx-poems", expect.objectContaining({
+      caller: expect.objectContaining({ runtime: panelCtx.caller.runtime }),
+    }));
+    if (participant) expect(prepareRuntimeImage).toHaveBeenCalledWith(
+      "workers/poem-collection-store", buildRef, sourceState,
+    );
     const hostResolution = await service.resolveService(panelCtx, "poems.collection.v1");
     expect(hostResolution).toMatchObject({
       source: "workers/poem-collection-store",
@@ -843,7 +859,8 @@ describe("workerService workspace service resolution", () => {
       className: "PoemStore",
       objectKey: "mother-poems",
       contextId: "ctx-poems",
-      buildRef: "ctx:ctx-poems",
+      buildRef,
+      ...(participant ? { participant: { caller: panelCtx.caller, sourceState } } : {}),
     });
   });
 
@@ -870,7 +887,7 @@ describe("workerService workspace service resolution", () => {
       createWorkerService({
         ...(deps as object),
         getCallerContextId: () => "ctx-agent",
-        loadContextDeclarations: async () => contextDecls,
+        loadContextSource: async () => ({ readDeclarations: async () => contextDecls, buildRef: "ctx:ctx-agent" }),
       } as never)
     );
     dispatcher.markInitialized();
@@ -1010,9 +1027,9 @@ describe("workerService workspace service resolution", () => {
                 ]
               : deps.buildSystem.listBuildUnits(),
         },
-        getCallerContextId: (callerId: string) => (callerId === "panel-test" ? "ctx-poems" : null),
-        loadContextDeclarations: async (contextId: string) =>
-          contextId === "ctx-poems" ? contextDecls : null,
+        getCallerContextId: (caller: VerifiedCaller) => (caller.runtime.id === "panel-test" ? "ctx-poems" : null),
+        loadContextSource: async (contextId: string) =>
+          contextId === "ctx-poems" ? { readDeclarations: async () => contextDecls, buildRef: "ctx:ctx-poems" } : null,
         activateDurableObject,
       } as never)
     );
@@ -1063,7 +1080,7 @@ describe("workerService workspace service resolution", () => {
       createWorkerService({
         ...(deps as object),
         getCallerContextId: () => "ctx-agent",
-        loadContextDeclarations: async () => contextDecls,
+        loadContextSource: async () => ({ readDeclarations: async () => contextDecls, buildRef: "ctx:ctx-agent" }),
       } as never)
     );
     dispatcher.markInitialized();
