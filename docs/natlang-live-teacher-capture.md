@@ -76,6 +76,10 @@ Personal Browser library cases recover a visited link, organize persisted bookma
 an exact duplicate while keeping its assigned copy. The harness uses a fresh browser-data
 namespace and checks surviving bookmark metadata, visit history and an out-of-scope record.
 
+Channel roster cases use two owned VibeStudio channels with the same handles where appropriate.
+The program reuses the channel membership skill for each step, checks holds after conflicting
+identity evidence, and records the exact final rosters across both channels.
+
 Presentation cases build a managed VibeStudio preview and compare its browser output with
 the assigned source facts. Interactive cases also switch charts to their accessible data
 tables, toggle checklist items or exercise selection controls. The exporter checks the

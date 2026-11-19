@@ -119,6 +119,7 @@ test("authored template worlds flow into the collector without losing original s
       ["browser-library-worlds", "managedBrowserLibraryWorlds", []],
       ["browser-handoff-worlds", "managedBrowserHandoffWorlds", []],
       ["mission-planning-worlds", "managedMissionPlanningWorlds", []],
+      ["channel-roster-worlds", "managedChannelRosterWorlds", []],
       [
         "news-worlds",
         "managedNewsWorlds",
@@ -1789,6 +1790,96 @@ test("Spectrolite export rejects a preview from another canonical revision", asy
   );
 });
 
+test("channel roster export rejects a participant from the other channel", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  entry.test.name = "channel-roster-live-readonly-roster-inventory";
+  const { assignment } = cases.get(entry.test.name);
+  const run = diagnostics.natlangTeacher;
+  run.programPath = "skills/vibestudio-workflows/runWorkflow.nl";
+  const [root, leaf] = run.calls;
+  root.record.definition.name = "runWorkflow";
+  leaf.record.definition.name = "runRosterPlan";
+  leaf.record.outcome = "done";
+  const add = (id, name, parent) => {
+    const call = structuredClone(leaf);
+    call.callId = call.summary.call_id = id;
+    call.record.definition.name = name;
+    call.record.parent_call_id = parent;
+    run.calls.push(call);
+  };
+  const token = "e0ba1cee-4e51-415e-9d9d-2a672a584b2b";
+  const channelId = (name) => `natlang-roster-${token}-${name}`;
+  const member = (name, handle) =>
+    `do:workers/test-agent:TestAgentWorker:${handle}-${channelId(name)}`;
+  const initial = Object.fromEntries(
+    ["oncall", "review"].map((name) => [
+      name,
+      {
+        channelId: channelId(name),
+        contextId: "ctx",
+        messages: 0,
+        participants: assignment.starting.members
+          .filter(([channel]) => channel === name)
+          .map(([, handle]) => ({ id: member(name, handle), handle, type: "agent" })),
+      },
+    ])
+  );
+  const findings = [];
+  const activity = [];
+  const steps = assignment.steps.map(({ channel, handle, action, precondition }, index) => {
+    const id = `step-${index + 1}`;
+    const membership = `${id}-membership`;
+    add(`${id}-gate`, "checkPriorOutcome", leaf.callId);
+    add(membership, "manageChannelAgent", leaf.callId);
+    add(`${id}-choose`, "choose", membership);
+    add(`${id}-reconcile`, "reconcile", membership);
+    const value = {
+      state: precondition,
+      participantId: precondition === "member" ? member(channel, handle) : null,
+    };
+    activity.push({ id, kind: "read", value });
+    findings.push({ id, result: { status: "observed", ...value }, blockedBy: null });
+    return {
+      id,
+      request: { contextId: "ctx", channelId: channelId(channel), handle, action, options: null },
+    };
+  });
+  run.report = { findings };
+  const final = structuredClone(initial);
+  diagnostics.managedChannelRoster = {
+    contextId: "ctx",
+    verification: {
+      caseId: assignment.id,
+      contextId: "ctx",
+      initial,
+      final,
+      steps,
+      activity,
+      passed: true,
+      checks: {
+        initial: true,
+        exactOperations: true,
+        finalRoster: true,
+        isolatedChannels: true,
+        noMessages: true,
+        report: true,
+      },
+    },
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  final.review.participants[0].id = member("oncall", "reviewer");
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-swapped-channel` }),
+    /bind exact activities to the assigned live channel and participant/u
+  );
+});
+
 test("Mission planning export rejects a write carrying an earlier card revision", async (t) => {
   const { options, diagnostics, entry, save } = await fixture(t);
   const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
@@ -2421,6 +2512,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["browser-library-worlds", "export const managedBrowserLibraryWorlds = [];"],
       ["browser-handoff-worlds", "export const managedBrowserHandoffWorlds = [];"],
       ["mission-planning-worlds", "export const managedMissionPlanningWorlds = [];"],
+      ["channel-roster-worlds", "export const managedChannelRosterWorlds = [];"],
       ["google-setup-worlds", "export const managedGoogleSetupWorlds = [];"],
       ["provenance-history-worlds", "export const managedProvenanceHistoryWorlds = [];"],
       ["runtime-program-worlds", "export const managedRuntimeProgramWorlds = [];"],

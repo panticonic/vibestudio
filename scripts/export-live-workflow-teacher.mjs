@@ -270,6 +270,17 @@ const collectionWorkflow = {
   root: "organizeCollection",
   evidence: collectionEvidence,
 };
+const channelRosterWorkflow = {
+  family: "workspace-live-channel-roster",
+  namespace: "vibestudio:channel-roster",
+  group: "cross-channel-membership-reconciliation",
+  validator: {
+    template: "system-testing",
+    path: "skills/system-testing/channel-roster-managed.ts",
+  },
+  root: "runRosterPlan",
+  evidence: channelRosterEvidence,
+};
 const missionPlanningWorkflow = {
   family: "personal-live-mission-planning",
   workspace: "personal",
@@ -355,6 +366,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedBrowserLibraryWorlds, origin: browserLibraryOrigin },
     { managedBrowserHandoffWorlds },
     { managedMissionPlanningWorlds },
+    { managedChannelRosterWorlds },
     { managedGrimoireWorlds },
     { managedSpectroliteWorlds },
     { managedNewsWorlds },
@@ -387,6 +399,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "browser-library-worlds.ts",
       "browser-handoff-worlds.ts",
       "mission-planning-worlds.ts",
+      "channel-roster-worlds.ts",
       "grimoire-worlds.ts",
       "spectrolite-worlds.ts",
       "news-worlds.ts",
@@ -515,6 +528,13 @@ export async function loadLiveTeacherCases(checkouts) {
       caseId: id,
       request,
       expected,
+    });
+  }
+  for (const world of managedChannelRosterWorlds) {
+    cases.set(`channel-roster-live-${world.id}`, {
+      ...channelRosterWorkflow,
+      caseId: world.id,
+      assignment: world,
     });
   }
   for (const { id, request, expected } of managedMissionPlanningWorlds) {
@@ -2095,6 +2115,168 @@ function tendrilEvidence(execution, exercise, _scenario, workflow) {
       panel_id: presentation.slotId,
     },
     checks: verified.checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function channelRosterEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedChannelRoster;
+  const verification = fixture?.verification;
+  const { initial, final, steps, activity } = verification ?? {};
+  const { assignment } = workflow;
+  const plan = assignment.steps;
+  const findings = exercise.report?.findings;
+  const names = ["oncall", "review"];
+  const token =
+    typeof initial?.oncall?.channelId === "string"
+      ? /^natlang-roster-([0-9a-f-]{36})-oncall$/u.exec(initial.oncall.channelId)?.[1]
+      : null;
+  const sourceId = (name, handle) =>
+    `do:workers/test-agent:TestAgentWorker:${handle}-${initial[name].channelId}`;
+  const members = new Map(names.map((name) => [name, new Map()]));
+  for (const [name, handle] of assignment.starting.members ?? []) {
+    if (initial?.[name]) members.get(name).set(handle, sourceId(name, handle));
+  }
+  for (const [name, handle] of assignment.starting.conflicts ?? []) {
+    members
+      .get(name)
+      .set(
+        handle,
+        `do:workers/local-messaging-fixture:LocalMessagingProbeDO:natlang-roster-conflict-${token}-${name}-${handle}`
+      );
+  }
+  function exactRoster(roster) {
+    return names.every((name) => {
+      const view = roster?.[name];
+      const expected = members.get(name);
+      return (
+        view?.contextId === fixture.contextId &&
+        view.channelId === `natlang-roster-${token}-${name}` &&
+        view.messages === 0 &&
+        Array.isArray(view.participants) &&
+        view.participants.length === expected.size &&
+        new Set(view.participants.map(({ handle }) => handle)).size === expected.size &&
+        view.participants.every(
+          ({ id, handle, type }) => expected.get(handle) === id && type === "agent"
+        )
+      );
+    });
+  }
+  let cursor = 0;
+  const verifiedSteps = [];
+  requireEvidence(
+    typeof fixture?.contextId === "string" &&
+      fixture.contextId === execution.provenance?.contextId &&
+      verification?.contextId === fixture.contextId &&
+      verification.caseId === workflow.caseId &&
+      verification.passed === true &&
+      [
+        "initial",
+        "exactOperations",
+        "finalRoster",
+        "isolatedChannels",
+        "noMessages",
+        "report",
+      ].every((key) => verification.checks?.[key] === true) &&
+      typeof token === "string" &&
+      Array.isArray(steps) &&
+      steps.length === plan.length &&
+      Array.isArray(findings) &&
+      findings.length === plan.length &&
+      Array.isArray(activity) &&
+      exactRoster(initial) &&
+      plan.every(({ channel, handle, action, precondition, expected }, index) => {
+        const id = `step-${index + 1}`;
+        const { request } = steps[index] ?? {};
+        if (
+          steps[index]?.id !== id ||
+          request?.contextId !== fixture.contextId ||
+          request.channelId !== initial[channel].channelId ||
+          request.handle !== handle ||
+          request.action !== action ||
+          !isDeepStrictEqual(
+            request.options,
+            action === "attach"
+              ? { replay: false, response: "mentioned-strict", modelRef: null }
+              : null
+          )
+        )
+          return false;
+        if (expected === "blocked") {
+          const previous = verifiedSteps.findLast(
+            (step) => step.channel === channel && step.handle === handle
+          );
+          return (
+            previous &&
+            isDeepStrictEqual(findings[index], { id, result: null, blockedBy: previous.id })
+          );
+        }
+        verifiedSteps.push({ id, channel, handle });
+        const participantId = sourceId(channel, handle);
+        let state = precondition;
+        const read = () => ({
+          id,
+          kind: "read",
+          value: { state, participantId: state === "member" ? participantId : null },
+        });
+        if (!isDeepStrictEqual(activity[cursor++], read())) return false;
+        if (expected === "applied") {
+          state = action === "attach" ? "member" : "absent";
+          if (state === "member") members.get(channel).set(handle, participantId);
+          else members.get(channel).delete(handle);
+          if (
+            !isDeepStrictEqual(activity[cursor++], {
+              id,
+              kind: action,
+              value: {
+                outcome: "acknowledged",
+                participantId: state === "member" ? participantId : null,
+              },
+            }) ||
+            !isDeepStrictEqual(activity[cursor++], read())
+          )
+            return false;
+        }
+        return isDeepStrictEqual(findings[index], {
+          id,
+          blockedBy: null,
+          result: {
+            status: expected,
+            state,
+            participantId: state === "member" ? participantId : null,
+          },
+        });
+      }) &&
+      cursor === activity.length &&
+      exactRoster(final),
+    "Channel roster findings must bind exact activities to the assigned live channel and participant"
+  );
+
+  const children = (parent, name) =>
+    parent
+      ? exercise.calls.filter(
+          ({ record }) =>
+            record.parent_call_id === parent.callId &&
+            record.definition?.name === name &&
+            record.outcome === "done"
+        )
+      : [];
+  const root = exercise.calls.find(({ callId }) => callId === exercise.rootCallIds[0]);
+  const workflowRoot = children(root, workflow.root)[0];
+  const executions = children(workflowRoot, "manageChannelAgent");
+  requireEvidence(
+    children(workflowRoot, "checkPriorOutcome").length === plan.length &&
+      executions.length === verifiedSteps.length &&
+      executions.every(
+        (call) => children(call, "choose").length === 1 && children(call, "reconcile").length === 1
+      ) &&
+      executions.flatMap((call) => children(call, "change")).length ===
+        plan.filter(({ expected }) => expected === "applied").length,
+    "Channel roster capture must include the ordered membership, reconciliation and hold decisions"
+  );
+  return {
+    world: { context_id: fixture.contextId, channel_id: initial.oncall.channelId },
+    checks: verification.checks,
     evidence: { workspace: { fixture } },
   };
 }
