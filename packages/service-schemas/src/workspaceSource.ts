@@ -36,11 +36,31 @@ import {
   type MethodSchema,
   type ServiceMethodSchemas,
 } from "@vibestudio/shared/typedServiceClient";
-import { vcsFileLineageSchema, vcsMethods, vcsStateNodeRefSchema } from "./vcs.js";
+import { vcsFileLineageSchema, vcsMethods, vcsSearchHitSchema, vcsSearchInputSchema, vcsStateNodeRefSchema } from "./vcs.js";
 
 const readAccess = { sensitivity: "read" as const };
 const writeAccess = { sensitivity: "write" as const };
 const adminAccess = { sensitivity: "admin" as const };
+
+/** Host-only search carrier between independently stored facts and trajectories. */
+const historySearchCoordinate = z.string().min(1).max(512);
+const historySearchRevision = z.string().min(1).max(128);
+const historySearchCause = z.tuple([historySearchCoordinate, historySearchCoordinate, historySearchCoordinate]);
+export const HISTORY_SEARCH_CAUSE_LIMIT = 256;
+export const HistorySearchCausePageSchema = z.array(historySearchCause).max(HISTORY_SEARCH_CAUSE_LIMIT);
+export type HistorySearchCause = z.infer<typeof historySearchCause>;
+export const HistorySearchCauseRequestSchema = z.object({
+  revision: historySearchRevision, after: historySearchCause.nullable(),
+}).strict();
+export const HistorySearchBasisSchema = z.object({
+  revisions: z.array(historySearchRevision).min(1).max(514),
+  hits: z.array(vcsSearchHitSchema).max(50),
+  truncated: z.boolean(),
+}).strict();
+export const HistoryTrajectorySearchInputSchema = vcsSearchInputSchema.pick({ text: true, limit: true })
+  .extend({ causes: HistorySearchCausePageSchema }).strict();
+export type HistoryTrajectorySearchInput = z.infer<typeof HistoryTrajectorySearchInputSchema>;
+export const HistoryTrajectorySearchMatchesSchema = z.array(vcsSearchHitSchema).max(51);
 
 /** Exact coordinate returned by semantic context initialization and forking. */
 export const SemanticContextResultSchema = z

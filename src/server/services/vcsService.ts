@@ -73,6 +73,7 @@ export interface VcsServiceDeps {
     | "discardParticipantContext"
     | "publishParticipantContext"
     | "readParticipantFiles"
+    | "searchParticipantHistory"
     | "reviewParticipantMerge"
     | "mergeParticipantContext"
   >;
@@ -390,6 +391,12 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
         return readWorkspaceParticipantHistory({
           ...scope,
           history: vcsMethods.history.args.parse([input])[0],
+        });
+      case "search":
+        return workspace.searchParticipantHistory({
+          ...scope,
+          search: vcsMethods.search.args.parse([input])[0],
+          ...(ctx.signal ? { signal: ctx.signal } : {}),
         });
       case "compare":
         return workspace.reviewParticipantMerge({

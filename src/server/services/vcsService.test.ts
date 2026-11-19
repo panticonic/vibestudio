@@ -214,6 +214,9 @@ describe("canonical vcsService", () => {
       }),
       publishParticipantContext: vi.fn().mockResolvedValue(published),
       readParticipantFiles: vi.fn().mockResolvedValue([null]),
+      searchParticipantHistory: vi.fn().mockResolvedValue({
+        text: "retained provenance", indexMode: "scan", hits: [], truncated: false,
+      }),
       reviewParticipantMerge: vi.fn(),
       mergeParticipantContext: vi.fn(),
     };
@@ -287,6 +290,16 @@ describe("canonical vcsService", () => {
     dispatch.mockResolvedValueOnce(true).mockResolvedValueOnce(timeline);
     await expect(definition.handler(ctx, "history", [history])).resolves.toEqual(timeline);
     expect(dispatch).toHaveBeenCalledWith(owner, "readHistoryTimeline", { contextId: scope.contextId, history });
+
+    const search = { contextId: scope.contextId, text: "retained provenance", limit: 2 };
+    await expect(withChild.handler(ctx, "search", [
+      { ...search, visibilityContextIds: ["context:unrelated"] },
+    ])).resolves.toEqual({
+      text: search.text, indexMode: "scan", hits: [], truncated: false,
+    });
+    expect(workspace.searchParticipantHistory).toHaveBeenCalledWith({
+      ...scope, search: { ...search, visibilityContextIds: [childContext, scope.contextId] },
+    });
 
     const discard = {
       contextId: scope.contextId,

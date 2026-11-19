@@ -6,7 +6,13 @@ import type {
 import type { DODispatch } from "./doDispatch.js";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
-import { GadJsonRecordSchema, gadWireMethods } from "@vibestudio/service-schemas/workspaceSource";
+import {
+  GadJsonRecordSchema,
+  HistoryTrajectorySearchInputSchema,
+  HistoryTrajectorySearchMatchesSchema,
+  gadWireMethods,
+  type HistoryTrajectorySearchInput,
+} from "@vibestudio/service-schemas/workspaceSource";
 import { WorkspaceTemplateInstallationSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import {
@@ -114,6 +120,8 @@ export type WorkspaceSemanticPort = Pick<WorkspaceSemanticClient, SemanticWireMe
   appendLogEvent: WorkspaceSemanticClient["appendLogEvent"];
   getLogEvent: WorkspaceSemanticClient["getLogEvent"];
   inspectInvocationState: WorkspaceSemanticClient["inspectInvocationState"];
+  searchHistoryTrajectory(input: HistoryTrajectorySearchInput):
+    Promise<import("@vibestudio/service-schemas/vcs").VcsSearchHit[]>;
 };
 type RawWorkspaceSourceSemanticDispatchResult = Awaited<
   ReturnType<WorkspaceSemanticClient[SemanticWireMethodName]>
@@ -199,6 +207,9 @@ export function createWorkspaceSemanticPort(
     appendLogEvent: (input) => client.appendLogEvent(input),
     getLogEvent: (input) => client.getLogEvent(input),
     inspectInvocationState: (input) => client.inspectInvocationState(input),
+    searchHistoryTrajectory: async (input) => HistoryTrajectorySearchMatchesSchema.parse(
+      await dispatch.dispatch(provider, "searchHistoryTrajectory", HistoryTrajectorySearchInputSchema.parse(input)),
+    ),
   } satisfies WorkspaceSemanticPort;
 }
 
