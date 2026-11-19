@@ -149,6 +149,17 @@ const presentationWorkflow = {
   root: "preparePresentation",
   evidence: presentationEvidence,
 };
+const sessionReplayWorkflow = {
+  family: "workspace-headless-session-replay",
+  namespace: "vibestudio:session-test",
+  group: "headless-durable-retry",
+  validator: {
+    template: "system-testing",
+    path: "skills/system-testing/session-replay-managed.ts",
+  },
+  root: "reviewLiveReplay",
+  evidence: liveSessionReplayEvidence,
+};
 const authoringWorkflow = {
   family: "workspace-natlang-authoring",
   namespace: "vibestudio:natlang-authoring",
@@ -367,6 +378,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedPresentationWorlds },
     { managedPanelHealthWorlds },
     { managedAuthoringWorlds },
+    { managedSessionReplayWorlds = [] },
     { managedMemoryWorlds },
     { managedSetupWorlds },
     { managedChecklistWorlds },
@@ -401,6 +413,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "presentation-worlds.ts",
       "panel-health-worlds.ts",
       "authoring-worlds.ts",
+      "session-replay-worlds.ts",
       "verified-memory-worlds.ts",
       "onboarding-worlds.ts",
       "checklist-worlds.ts",
@@ -606,6 +619,9 @@ export async function loadLiveTeacherCases(checkouts) {
         afterStatus: expected.status,
       }),
     });
+  }
+  for (const assignment of managedSessionReplayWorlds) {
+    cases.set(`session-replay-live-${assignment.id}`, { ...sessionReplayWorkflow, assignment });
   }
   for (const { id, request, expected, candidate, baseline } of managedAuthoringWorlds) {
     const trackedScopes =
@@ -1223,6 +1239,163 @@ function presentationEvidence(execution, exercise, _scenario, workflow) {
   return {
     world: { context_id: fixture.contextId, panel_attempt: verification.panelAttempt },
     checks: verification.checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function liveSessionReplayEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedSessionReplay;
+  const { verification, contextId } = fixture ?? {};
+  const { assignment } = workflow;
+  const evidence = verification?.evidence;
+  const findings = exercise.report?.findings;
+  requireEvidence(
+    typeof contextId === "string" &&
+      contextId === execution.provenance?.contextId &&
+      verification?.caseId === assignment.id &&
+      verification.passed === true &&
+      verification.checks?.exactReadOrder === true &&
+      verification.checks?.reportMatchesReplay === true &&
+      Array.isArray(evidence) &&
+      evidence.length === assignment.steps.length &&
+      Array.isArray(findings) &&
+      findings.length === evidence.length,
+    "The live session replay must bind the assigned fixture and report"
+  );
+  const originalChannel = evidence[0]?.originalChannel;
+  const lanes = new Map();
+  const submitted = new Map();
+  let alternateChannel;
+  const validRows = (rows) =>
+    Array.isArray(rows) &&
+    rows.every(
+      (row) =>
+        typeof row?.id === "string" &&
+        row.id.length > 0 &&
+        typeof row.senderId === "string" &&
+        row.senderId.length > 0 &&
+        typeof row.text === "string"
+    ) &&
+    new Set(rows.map(({ id }) => id)).size === rows.length;
+  const matches = evidence.every((checkpoint, index) => {
+    const { receipt, original, retry, replayChannel, originBefore, before, after } = checkpoint;
+    const step = assignment.steps[index];
+    const foreign = step.action.startsWith("other-channel");
+    const attempted = step.action !== "inspect" && step.action !== "other-channel";
+    if (
+      receipt !== `${contextId}:replay:${index + 1}` ||
+      typeof originalChannel !== "string" ||
+      !originalChannel ||
+      checkpoint.originalChannel !== originalChannel ||
+      typeof replayChannel !== "string" ||
+      !replayChannel ||
+      (replayChannel !== originalChannel) !== foreign ||
+      (foreign && alternateChannel && replayChannel !== alternateChannel) ||
+      ![originBefore, before, after].every(validRows)
+    )
+      return false;
+    if (foreign) alternateChannel = replayChannel;
+    if (!lanes.has(originalChannel)) {
+      if (
+        !isDeepStrictEqual(
+          originBefore.map(({ text }) => text),
+          assignment.messages
+        )
+      )
+        return false;
+      lanes.set(originalChannel, originBefore);
+    }
+    if (!lanes.has(replayChannel)) {
+      if (before.length !== 1 || before[0].text !== assignment.messages[0]) return false;
+      lanes.set(replayChannel, before);
+    }
+    const originalRow = originBefore[step.original];
+    if (
+      !isDeepStrictEqual(originBefore, lanes.get(originalChannel)) ||
+      !isDeepStrictEqual(before, lanes.get(replayChannel)) ||
+      !originalRow ||
+      original?.messageId !== originalRow.id ||
+      original.text !== originalRow.text ||
+      original.key !== `source-${step.original}` ||
+      Boolean(retry) !== attempted
+    )
+      return false;
+    let expectedLength = before.length;
+    if (attempted) {
+      const key = step.action === "append" ? `additional-${index}` : original.key;
+      const text = step.text ?? original.text;
+      if (retry.key !== key || retry.text !== text || typeof retry.messageId !== "string")
+        return false;
+      const coordinate = replayChannel + "/" + key;
+      const prior =
+        !foreign && key === original.key ? original.messageId : submitted.get(coordinate);
+      if (prior) {
+        if (retry.messageId !== prior) return false;
+      } else {
+        const extra = after.at(-1);
+        if (
+          before.some(({ id }) => id === retry.messageId) ||
+          extra?.id !== retry.messageId ||
+          extra.text !== text ||
+          extra.senderId !== originalRow.senderId
+        )
+          return false;
+        expectedLength += 1;
+        submitted.set(coordinate, retry.messageId);
+      }
+    }
+    lanes.set(replayChannel, after);
+    return (
+      after.length === expectedLength &&
+      isDeepStrictEqual(after.slice(0, before.length), before) &&
+      isDeepStrictEqual(findings[index], {
+        receipt,
+        disposition: step.expected,
+        originalId: original.messageId,
+        retryId: retry?.messageId ?? null,
+        retainedIds: after.map(({ id }) => id),
+      })
+    );
+  });
+  requireEvidence(
+    matches,
+    "The live session report must match the accepted retry and preserved transcripts"
+  );
+
+  const children = (parent, name) =>
+    exercise.calls.filter(
+      ({ record }) =>
+        record.parent_call_id === parent &&
+        record.definition?.name === name &&
+        record.outcome === "done"
+    );
+  const review = children(exercise.rootCallIds[0], "reviewLiveReplay")[0];
+  const inspections = children(review?.callId, "inspectCheckpoint");
+  const inspectionBranch = (call, index) => {
+    const action = assignment.steps[index].action;
+    if (children(call.callId, "matchesChannel").length !== 1) return false;
+    if (action.startsWith("other-channel")) return true;
+    const [retry] = children(call.callId, "classifyRetry");
+    return (
+      children(call.callId, "preservesReplay").length === 1 &&
+      retry &&
+      (action === "inspect" || children(retry.callId, "matchAcceptedIdentity").length === 1)
+    );
+  };
+  requireEvidence(
+    review &&
+      children(review.callId, "readCheckpoint").length === evidence.length &&
+      inspections.length === evidence.length &&
+      inspections
+        .sort(
+          (left, right) => Date.parse(left.record.started_at) - Date.parse(right.record.started_at)
+        )
+        .every(inspectionBranch),
+    "The live session review must record each replay inspection and its nested decision calls"
+  );
+  return {
+    world: { context_id: contextId, owning_channel: originalChannel },
+    checks: { ...verification.checks, acceptedReplaySequence: true },
     evidence: { workspace: { fixture } },
   };
 }

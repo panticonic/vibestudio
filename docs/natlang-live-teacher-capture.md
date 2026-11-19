@@ -154,6 +154,10 @@ Personal memory comparisons call the existing verified recall skill once for eac
 revision. They retain both original quotations and independently observed endpoint outcomes,
 including when one revision has no recall lead or no source. The exporter requires both nested
 recall calls and the comparison judgment.
+Headless session cases reconnect to owned channels and compare the fresh client transcript
+with the durable message log. They check preserved order, accepted retry identities,
+first-write-wins content, distinct submissions, and wrong-channel continuations. Each
+checkpoint is inspected by the shared workflow's nested replay-review stages.
 Natlang authoring cases compile the candidate and baseline in the workspace. Service-scope
 reviews compare exact callable selectors, call-chain selectors, and explicit empty grants.
 The exporter binds the compiler scope readbacks to the inspected revisions and requires the

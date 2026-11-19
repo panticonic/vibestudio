@@ -180,6 +180,7 @@ test("authored template worlds flow into the collector without losing original s
           },
         ],
       ],
+      ["session-replay-worlds", "managedSessionReplayWorlds", []],
       [
         "authoring-worlds",
         "managedAuthoringWorlds",
@@ -1006,6 +1007,83 @@ test("presentation export rejects a chart table that changes a plotted value", a
   await assert.rejects(
     exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-wrong-table` }),
     /demonstrate its assigned controls in the live browser/u
+  );
+});
+
+test("session replay export rejects a replaced message and a missing retry check", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  entry.test.name = "session-replay-live-adjusted-cutoff-same-key";
+  const world = cases.get(entry.test.name).assignment;
+  const run = diagnostics.natlangTeacher;
+  run.programPath = "skills/vibestudio-workflows/runWorkflow.nl";
+  const [root, leaf] = run.calls;
+  root.record.definition.name = "runWorkflow";
+  leaf.record.definition.name = "reviewLiveReplay";
+  leaf.record.outcome = "done";
+  for (const [name, parent] of [
+    ["readCheckpoint", leaf.callId],
+    ["inspectCheckpoint", leaf.callId],
+    ["matchesChannel", "inspectCheckpoint"],
+    ["preservesReplay", "inspectCheckpoint"],
+    ["classifyRetry", "inspectCheckpoint"],
+    ["matchAcceptedIdentity", "classifyRetry"],
+  ]) {
+    const call = structuredClone(leaf);
+    call.callId = call.summary.call_id = name;
+    call.record.definition.name = name;
+    call.record.parent_call_id = parent;
+    run.calls.push(call);
+  }
+  const row = { id: "m1", senderId: "owned-client", text: world.messages[0] };
+  const receipt = "ctx:replay:1";
+  const checkpoint = {
+    receipt,
+    originalChannel: "owned-channel",
+    replayChannel: "owned-channel",
+    original: { key: "source-0", text: row.text, messageId: row.id },
+    retry: { key: "source-0", text: world.steps[0].text, messageId: row.id },
+    originBefore: [row],
+    before: [row],
+    after: [{ ...row }],
+  };
+  run.report = {
+    findings: [
+      {
+        receipt,
+        disposition: world.steps[0].expected,
+        originalId: row.id,
+        retryId: row.id,
+        retainedIds: [row.id],
+      },
+    ],
+  };
+  diagnostics.managedSessionReplay = {
+    contextId: "ctx",
+    verification: {
+      caseId: world.id,
+      passed: true,
+      checks: { exactReadOrder: true, reportMatchesReplay: true },
+      evidence: [checkpoint],
+    },
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  checkpoint.after[0].text = checkpoint.retry.text;
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-replaced-message` }),
+    /accepted retry and preserved transcripts/u
+  );
+  checkpoint.after[0].text = row.text;
+  run.calls.pop();
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-missing-retry-check` }),
+    /replay inspection and its nested decision calls/u
   );
 });
 
@@ -2764,6 +2842,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["pdf-intake-worlds", "export const managedPdfWorlds = [];"],
       ["presentation-worlds", "export const managedPresentationWorlds = [];"],
       ["authoring-worlds", "export const managedAuthoringWorlds = [];"],
+      ["session-replay-worlds", "export const managedSessionReplayWorlds = [];"],
       ["verified-memory-worlds", "export const managedMemoryWorlds = [];"],
       ["onboarding-worlds", "export const managedSetupWorlds = [];"],
       ["checklist-worlds", "export const managedChecklistWorlds = [];"],
