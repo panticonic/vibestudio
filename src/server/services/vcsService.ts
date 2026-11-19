@@ -493,14 +493,13 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           discard: vcsMethods.discard.args.parse([input])[0],
         });
       case "push":
-        if (epochTransition)
-          throw new Error("Participant publication requires an ordinary workspace revision");
         return workspace.publishParticipantContext({
           ...scope,
           push: vcsMethods.push.args.parse([input])[0],
           gateContext: {
             kind: "caller",
             caller: effectCaller,
+            ...(epochTransition ? { epochTransition: true } : {}),
             ...(ctx.signal ? { signal: ctx.signal } : {}),
           },
         });

@@ -1328,7 +1328,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       throw new Error("This publication requires the workspace installation lifecycle");
     }
     const publicationId = `participant-publication:${sha256HexSyncText(
-      canonicalJson({ owner, contextId: push.contextId, commandId: push.commandId })
+      canonicalJson({ owner, contextId: push.contextId, commandId: push.commandId,
+        ...(gateContext.epochTransition ? { epochTransition: true } : {}),
+      })
     )}`;
     return this.mutateProtectedMain(async () => {
       const recorded = await readWorkspacePublicationApproval({ dispatch, canonical, publicationId });
@@ -1359,6 +1361,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         if (prior.previousEventId !== push.expectedMainEventId ||
             prior.publishedEventId !== push.expectedCommittedEventId) {
           throw new Error("Workspace publication command names different events");
+        }
+        if (gateContext.epochTransition && this.deps.refs.readMainSemanticState()?.eventId !== prior.publishedEventId) {
+          throw new Error("The epoch transition is no longer the current workspace revision");
         }
         const canonicalPublication = recorded
           ? participant(recorded.approval.publication.previousHead, recorded.approval.publication.proposedHead)

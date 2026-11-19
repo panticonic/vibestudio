@@ -225,9 +225,11 @@ describe("canonical vcsService", () => {
       reviewParticipantMerge: vi.fn(),
       mergeParticipantContext: vi.fn(),
     };
-    const { definition, semanticCall, semanticPublishCall } = service({
+    const onEpochTransitionPublished = vi.fn();
+    const { definition, semanticCall, semanticPublishCall, semanticEpochTransitionPublishCall } = service({
       context: scope.contextId,
       participantWorkspace: workspace,
+      onEpochTransitionPublished,
     });
     await expect(
       definition.handler(ctx, "status", [{ contextId: "context:foreign" }])
@@ -396,8 +398,22 @@ describe("canonical vcsService", () => {
       push,
       gateContext: { kind: "caller", caller },
     });
+    expect(onEpochTransitionPublished).not.toHaveBeenCalled();
+    const epochPush = { ...push, commandId: "command:participant-epoch" };
+    const failure = new Error("foreign candidate rejected");
+    workspace.publishParticipantContext.mockRejectedValueOnce(failure);
+    await expect(definition.handler(ctx, "push", [{ ...epochPush, epochTransition: true }])).rejects.toBe(failure);
+    expect(onEpochTransitionPublished).not.toHaveBeenCalled();
+    await expect(definition.handler(ctx, "push", [{ ...epochPush, epochTransition: true }])).resolves.toEqual(published);
+    expect(workspace.publishParticipantContext).toHaveBeenLastCalledWith({
+      ...scope,
+      push: epochPush,
+      gateContext: { kind: "caller", caller, epochTransition: true },
+    });
+    expect(onEpochTransitionPublished).toHaveBeenCalledOnce();
     expect(semanticCall).not.toHaveBeenCalled();
     expect(semanticPublishCall).not.toHaveBeenCalled();
+    expect(semanticEpochTransitionPublishCall).not.toHaveBeenCalled();
   });
 
   it("keeps installation provenance restricted to reviewed source consumers", async () => {
