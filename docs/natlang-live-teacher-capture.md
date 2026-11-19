@@ -395,7 +395,10 @@ nested desktop decision and the absence of device effects. Its model-free qualif
 Testkit cleanup cases open real scratch directories, workers, panels, and CDP clients in an
 owned workspace. They retain deferred registration order and probe the remaining resources
 after Testkit finishes. The Natlang review reports test outcome, cleanup acknowledgements, and
-actual inventory separately.
+actual inventory separately. The shared session reviewer checks the exact release
+receipt, while the live workflow compares it with the remaining resources. Run
+`testkit-cleanup-multi-phase-qualification` in a managed System workspace to check
+the model-free setup, body and after-hook cases.
 Natlang authoring cases compile the candidate and baseline in the workspace. Service-scope
 reviews compare exact callable selectors, call-chain selectors, and explicit empty grants.
 The exporter binds the compiler scope readbacks to the inspected revisions and requires the

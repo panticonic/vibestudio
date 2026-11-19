@@ -1850,13 +1850,21 @@ function liveTestkitCleanupEvidence(execution, exercise, _scenario, workflow) {
     )?.callId;
   const review = child(exercise.rootCallIds[0], "reviewLiveCleanup");
   const inventory = child(review, "inspectInventory");
+  const session = child(review, "reviewSessionTest");
+  const teardown = child(session, "reviewRelease");
+  const testkit = child(teardown, "checkTestkitRelease");
+  const records = new Map(exercise.calls.map(({ callId, record }) => [callId, record]));
   requireEvidence(
     child(review, "readCleanup") &&
       child(review, "readOutcome") &&
-      child(review, "checkTestkitRelease") &&
+      matchesValue(records.get(teardown)?.inputs?.evidence, release) &&
+      matchesValue(records.get(testkit)?.inputs?.evidence, release) &&
+      [session, teardown, testkit].every(
+        (id) => matchesValue(records.get(id)?.output, exercise.report.release)
+      ) &&
       inventory &&
       (!remaining.length || child(inventory, "matchRegistrations")),
-    "The live Testkit review must capture its outcome, release and nested inventory checks"
+    "The live Testkit review must capture the exact session release path and nested inventory checks"
   );
   return {
     world: { context_id: contextId, cleanup_receipt: receipt },

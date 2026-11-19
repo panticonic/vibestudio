@@ -1058,7 +1058,9 @@ test("Testkit cleanup export separates LIFO acknowledgements from actual residue
   for (const [name, parent] of [
     ["readCleanup", skill.callId],
     ["readOutcome", skill.callId],
-    ["checkTestkitRelease", skill.callId],
+    ["reviewSessionTest", skill.callId],
+    ["reviewRelease", "reviewSessionTest"],
+    ["checkTestkitRelease", "reviewRelease"],
     ["inspectInventory", skill.callId],
     ["matchRegistrations", "inspectInventory"],
   ]) {
@@ -1101,6 +1103,15 @@ test("Testkit cleanup export separates LIFO acknowledgements from actual residue
     inventory: "registered-residue",
     remainingIds: [scratch.id],
   };
+  const ref = (value) => {
+    const text = JSON.stringify(value);
+    return { complete: true, hash: createHash("sha256").update(text).digest("hex"), bytes: Buffer.byteLength(text) };
+  };
+  const session = run.calls.find(({ callId }) => callId === "reviewSessionTest").record;
+  const teardown = run.calls.find(({ callId }) => callId === "reviewRelease").record;
+  const testkit = run.calls.find(({ callId }) => callId === "checkTestkitRelease").record;
+  teardown.inputs = testkit.inputs = { evidence: ref(release) };
+  session.output = teardown.output = testkit.output = ref(run.report.release);
   diagnostics.managedTestkitCleanup = {
     contextId: "ctx",
     verification: {
@@ -1112,6 +1123,13 @@ test("Testkit cleanup export separates LIFO acknowledgements from actual residue
   };
   await save();
   await exportLiveTeacherWorkflow({ ...options, cases });
+  testkit.parent_call_id = skill.callId;
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-bypassed-session-review` }),
+    /exact session release path/u
+  );
+  testkit.parent_call_id = "reviewRelease";
   release.released.reverse();
   await save();
   await assert.rejects(
