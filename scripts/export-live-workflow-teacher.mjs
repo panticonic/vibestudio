@@ -5643,6 +5643,10 @@ function agenticChangeEvidence(execution, exercise, _scenario, workflow) {
   const verification = child(planning, "planVerification");
   const builds = child(verification, "planBuilds");
   const canary = child(verification, "planCanary");
+  const selection = child(canary, "chooseSurface");
+  const probe = child(canary, "designProbe");
+  const cleanup = child(canary, "planCleanup");
+  const proposedProbe = { probe: plan?.canary?.probe, observations: plan?.canary?.observations };
   const [effect] = read?.effects ?? [];
   requireEvidence(
     typeof contextId === "string" &&
@@ -5685,6 +5689,15 @@ function agenticChangeEvidence(execution, exercise, _scenario, workflow) {
       matchesValue(canary?.inputs?.goal, goal) &&
       matchesValue(canary.inputs.builds, plan?.builds) &&
       matchesValue(canary.output, plan?.canary) &&
+      matchesValue(selection?.inputs?.goal, goal) &&
+      matchesValue(selection.inputs.builds, plan?.builds) &&
+      matchesValue(selection.output, surface) &&
+      matchesValue(probe?.inputs?.goal, goal) &&
+      matchesValue(probe.inputs.surface, surface) &&
+      matchesValue(probe.output, proposedProbe) &&
+      matchesValue(cleanup?.inputs?.surface, surface) &&
+      matchesValue(cleanup.inputs.probe, proposedProbe) &&
+      matchesValue(cleanup.output, plan?.canary?.cleanup) &&
       plan?.contextId === contextId &&
       plan.revision === source.revision &&
       plan.impact?.owner === owner &&

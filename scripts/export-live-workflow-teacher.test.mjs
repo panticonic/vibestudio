@@ -3827,6 +3827,7 @@ test("agentic change export joins the captured source revision and its planning 
     cleanup: ["Retire the canary channel"],
   };
   const report = { contextId: "ctx", revision: source.revision, impact, builds, canary };
+  const probe = { probe: canary.probe, observations: canary.observations };
   diagnostics.managedAgenticChange = {
     caseId: assignment.id,
     request,
@@ -3878,10 +3879,21 @@ test("agentic change export joins the captured source revision and its planning 
       call("planVerification", "planAgenticChange", { goal, impact }, { builds, canary }),
       call("planBuilds", "planVerification", { impact }, builds),
       call("planCanary", "planVerification", { goal, builds }, canary),
+      call("chooseSurface", "planCanary", { goal, builds }, canary.surface),
+      call("designProbe", "planCanary", { goal, surface: canary.surface }, probe),
+      call("planCleanup", "planCanary", { surface: canary.surface, probe }, canary.cleanup),
     ],
   };
   await save();
   await exportLiveTeacherWorkflow({ ...options, cases });
+  const cleanup = diagnostics.natlangTeacher.calls.find(({ callId }) => callId === "planCleanup");
+  cleanup.record.inputs.probe = ref({ ...probe, probe: "Reuse the parent agent." });
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-unrelated-cleanup` }),
+    /exact workspace revision/u
+  );
+  cleanup.record.inputs.probe = ref(probe);
   readback.result = ref({ ...source, revision: "workspace-event:foreign" });
   await save();
   await assert.rejects(
