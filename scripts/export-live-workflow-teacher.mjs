@@ -244,6 +244,14 @@ const grimoireWorkflow = {
   root: "reviewExample",
   evidence: grimoireEvidence,
 };
+const tendrilWorkflow = {
+  family: "workspace-tendril-presentation",
+  namespace: "vibestudio:tendrils",
+  group: "live-tendril-handoff-board",
+  validator: { template: "system-testing", path: "skills/system-testing/tendril-managed.ts" },
+  root: "runTendril",
+  evidence: tendrilEvidence,
+};
 const terminalChecklistWorkflow = {
   family: "workspace-terminal-checklist",
   namespace: "vibestudio:terminal-apps",
@@ -305,6 +313,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedMemoryWorlds },
     { managedSetupWorlds },
     { managedChecklistWorlds },
+    { managedTendrilWorlds },
     { managedGrimoireWorlds },
     { managedSpectroliteWorlds },
     { managedNewsWorlds },
@@ -332,6 +341,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "verified-memory-worlds.ts",
       "onboarding-worlds.ts",
       "checklist-worlds.ts",
+      "tendril-worlds.ts",
       "grimoire-worlds.ts",
       "spectrolite-worlds.ts",
       "news-worlds.ts",
@@ -444,6 +454,9 @@ export async function loadLiveTeacherCases(checkouts) {
       expectedDecisions: expected,
       expectedActions: actions.map((action) => action.toLowerCase()),
     });
+  }
+  for (const { id, request } of managedTendrilWorlds) {
+    cases.set(`tendril-live-${id}`, { ...tendrilWorkflow, caseId: id, request });
   }
   for (const { id, request, expected, keys } of managedChecklistWorlds) {
     cases.set(`terminal-checklist-live-${id}`, {
@@ -1823,6 +1836,98 @@ function grimoireEvidence(execution, exercise, _scenario, workflow) {
   return {
     world: { context_id: fixture.contextId, garden: verification.garden, case_id: workflow.caseId },
     checks: verification.checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function tendrilEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedTendril;
+  const verified = fixture?.verification;
+  const { presentation, observed } = verified ?? {};
+  const report = exercise.report;
+  const { steps } = workflow.request;
+  const fields = new Map();
+  const matchesFields = (rows) =>
+    Array.isArray(rows) &&
+    rows.length === fields.size &&
+    new Set(rows.map(({ key }) => key)).size === rows.length &&
+    rows.every(({ key, value }) => fields.has(key) && fields.get(key) === value);
+  requireEvidence(
+    typeof fixture?.contextId === "string" &&
+      fixture.contextId === execution.provenance?.contextId &&
+      verified?.contextId === fixture.contextId &&
+      verified.caseId === workflow.caseId &&
+      verified.passed === true &&
+      ["presentation", "baseline", "exactEffects", "report"].every(
+        (name) => verified.checks?.[name] === true
+      ) &&
+      typeof presentation?.deviceId === "string" &&
+      typeof presentation?.slotId === "string" &&
+      presentation.state === "presented" &&
+      report?.state === "verified" &&
+      isDeepStrictEqual(report.presentation, presentation) &&
+      Array.isArray(observed) &&
+      observed.length === steps.length + 1 &&
+      observed.every(
+        (page) =>
+          typeof page?.id === "string" && page.id.length > 0 && page.slotId === presentation.slotId
+      ) &&
+      new Set(observed.map(({ id }) => id)).size === observed.length &&
+      Array.isArray(report.findings) &&
+      report.findings.length === steps.length &&
+      observed[0].revision === 0 &&
+      observed[0].build === "board-v1" &&
+      matchesFields(observed[0].stored) &&
+      matchesFields(observed[0].displayed) &&
+      steps.every((step, index) => {
+        const before = observed[index];
+        const after = observed[index + 1];
+        const finding = report.findings[index];
+        const effect =
+          step.kind === "write" ? step.field : step.kind === "invoke" ? step.expected : null;
+        if (effect) fields.set(effect.key, effect.value);
+        return (
+          (step.kind !== "invoke" || before.exposed?.includes(step.name)) &&
+          after.build === before.build &&
+          after.revision === before.revision + Number(Boolean(effect)) &&
+          matchesFields(after.stored) &&
+          matchesFields(after.displayed) &&
+          finding?.status === "verified" &&
+          isDeepStrictEqual(finding.evidence, [before.id, after.id]) &&
+          isDeepStrictEqual(finding.page, after)
+        );
+      }),
+    "Tendril findings must bind each effect to displayed and durable state on the assigned slot"
+  );
+
+  const children = (parent, name) =>
+    parent
+      ? exercise.calls.filter(
+          ({ record }) =>
+            record.parent_call_id === parent.callId &&
+            record.outcome === "done" &&
+            record.definition?.name === name
+        )
+      : [];
+  const root = exercise.calls.find(({ callId }) => callId === exercise.rootCallIds[0]);
+  const skill =
+    root?.record.definition?.name === workflow.root ? root : children(root, workflow.root)[0];
+  const present = children(skill, "openPresentation")[0];
+  const run = children(skill, "runSteps")[0];
+  const live = children(run, "reviewLiveStep");
+  requireEvidence(
+    children(present, "selectTendrilDevice").length === 1 &&
+      live.length === steps.length &&
+      live.every((call) => children(call, "verifyLiveStep").length === 1),
+    "Tendril capture must include device selection and the verification of each nested live operation"
+  );
+  return {
+    world: {
+      context_id: fixture.contextId,
+      device_id: presentation.deviceId,
+      panel_id: presentation.slotId,
+    },
+    checks: verified.checks,
     evidence: { workspace: { fixture } },
   };
 }

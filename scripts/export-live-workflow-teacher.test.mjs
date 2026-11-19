@@ -114,6 +114,7 @@ test("authored template worlds flow into the collector without losing original s
         "managedGoogleSetupWorlds",
         [{ id: "sample", checks: [], codes: [] }],
       ],
+      ["tendril-worlds", "managedTendrilWorlds", []],
       [
         "news-worlds",
         "managedNewsWorlds",
@@ -1729,6 +1730,77 @@ test("Spectrolite export rejects a preview from another canonical revision", asy
   );
 });
 
+test("Tendril export rejects a durable change that the live page did not show", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  entry.test.name = "tendril-live-timer-clear";
+  const run = diagnostics.natlangTeacher;
+  const slotId = "owned-board";
+  const state = (minutes) => [{ key: "minutes", value: minutes }];
+  const observed = [null, 10, 0].map((value, index) => ({
+    id: `page-${index}`,
+    slotId,
+    build: "board-v1",
+    revision: index,
+    stored: value === null ? [] : state(value),
+    displayed: value === null ? [] : state(value),
+    exposed: ["clearTimer"],
+  }));
+  const presentation = { deviceId: "local:headless-host", slotId, state: "presented" };
+  run.report = {
+    state: "verified",
+    presentation,
+    findings: observed.slice(1).map((page, index) => ({
+      status: "verified",
+      evidence: [observed[index].id, page.id],
+      page: structuredClone(page),
+    })),
+  };
+  run.programPath = "skills/vibestudio-workflows/runWorkflow.nl";
+  const [root, leaf] = run.calls;
+  root.record.definition.name = "runWorkflow";
+  leaf.record.definition.name = "runTendril";
+  leaf.record.outcome = "done";
+  for (const [id, name, parent] of [
+    ["present", "openPresentation", leaf.callId],
+    ["select", "selectTendrilDevice", "present"],
+    ["steps", "runSteps", leaf.callId],
+    ["write", "reviewLiveStep", "steps"],
+    ["write-verify", "verifyLiveStep", "write"],
+    ["clear", "reviewLiveStep", "steps"],
+    ["clear-verify", "verifyLiveStep", "clear"],
+  ]) {
+    const call = structuredClone(leaf);
+    call.callId = call.summary.call_id = id;
+    call.record.definition.name = name;
+    call.record.parent_call_id = parent;
+    run.calls.push(call);
+  }
+  diagnostics.managedTendril = {
+    contextId: "ctx",
+    verification: {
+      contextId: "ctx",
+      caseId: "timer-clear",
+      presentation,
+      observed,
+      passed: true,
+      checks: { presentation: true, baseline: true, exactEffects: true, report: true },
+    },
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  observed[2].displayed = state(10);
+  run.report.findings[1].page.displayed = state(10);
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-stale-page` }),
+    /Tendril findings must bind each effect/u
+  );
+});
+
 test("terminal checklist export binds the report to a new PTY after restart", async (t) => {
   const { options, diagnostics, entry, save } = await fixture(t);
   const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
@@ -1900,6 +1972,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["grimoire-worlds", "export const managedGrimoireWorlds = [];"],
       ["spectrolite-worlds", "export const managedSpectroliteWorlds = [];"],
       ["news-worlds", "export const managedNewsWorlds = [];"],
+      ["tendril-worlds", "export const managedTendrilWorlds = [];"],
       ["google-setup-worlds", "export const managedGoogleSetupWorlds = [];"],
       ["provenance-history-worlds", "export const managedProvenanceHistoryWorlds = [];"],
       ["runtime-program-worlds", "export const managedRuntimeProgramWorlds = [];"],

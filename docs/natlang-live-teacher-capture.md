@@ -70,6 +70,10 @@ as routing precedence, event ordering and queue admission. Content worlds includ
 inventory migration, consent, event logistics, and dataset release and recall. Operations worlds vary
 restoration and recovery readiness, approval changes, rejected gates, and continuation from durable state.
 Messaging worlds exercise addressed local delivery and holding an ambiguous recipient in synthetic owned channels.
+Tendril board cases present the assigned panel on an online headless VibeStudio device. Their
+Natlang stages apply a sequence of shared-state changes and exposed page calls. The evidence joins
+the actual slot and device, rendered fields, durable revisions, and each nested verification.
+The system-test oracle checks the same surfaces without a model.
 News cases review reader setup, saved and archive views, and polling and briefing cadence.
 Cadence reconciliation cases also authorize one bounded schedule intent. The program checks the
 current state, decides whether to apply the intent, then reads both exact Missions owners again.
