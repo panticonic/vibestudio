@@ -120,6 +120,7 @@ test("authored template worlds flow into the collector without losing original s
       ["browser-handoff-worlds", "managedBrowserHandoffWorlds", []],
       ["mission-planning-worlds", "managedMissionPlanningWorlds", []],
       ["channel-roster-worlds", "managedChannelRosterWorlds", []],
+      ["panel-health-worlds", "managedPanelHealthWorlds", []],
       [
         "news-worlds",
         "managedNewsWorlds",
@@ -821,6 +822,90 @@ test("live panel export rejects a child from a different evaluation", async (t) 
   diagnostics.natlangTeacher.calls[1].summary.run_id = "other";
   await save();
   await assert.rejects(() => exportLiveTeacherWorkflow(options), /different EvalDO/);
+});
+
+test("panel health export rejects an old console record cited after recovery", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  entry.test.name = "panel-health-live-loading-to-ready";
+  const run = diagnostics.natlangTeacher;
+  run.programPath = "skills/vibestudio-workflows/runWorkflow.nl";
+  const [root, leaf] = run.calls;
+  root.record.definition.name = "runWorkflow";
+  leaf.record.definition.name = "reviewPanelHealth";
+  leaf.record.outcome = "done";
+  for (const [id, name, parent] of [
+    ["assess-first", "assessObservation", leaf.callId],
+    ["first-markers", "checkMarkers", "assess-first"],
+    ["first-logs", "checkDiagnostics", "assess-first"],
+    ["follow", "checkHealthChange", leaf.callId],
+    ["identity", "checkObservationIdentity", "follow"],
+    ["assess-later", "assessObservation", "follow"],
+    ["later-markers", "checkMarkers", "assess-later"],
+    ["later-logs", "checkDiagnostics", "assess-later"],
+  ]) {
+    const call = structuredClone(leaf);
+    call.callId = call.summary.call_id = id;
+    call.record.definition.name = name;
+    call.record.parent_call_id = parent;
+    run.calls.push(call);
+  }
+  const common = {
+    panelId: "owned-panel",
+    phase: "ready",
+    attemptId: "attempt",
+    buildKey: "build",
+    dropped: 0,
+  };
+  const first = {
+    ...common,
+    id: "first",
+    consoleThrough: 1,
+    markers: [{ id: "jobs", values: ["Loading"] }],
+    diagnostics: [],
+  };
+  const later = {
+    ...common,
+    id: "later",
+    consoleThrough: 2,
+    markers: [{ id: "jobs", values: ["Alpha", "Beta"] }],
+    diagnostics: [{ sequence: 2, level: "info", message: "panel-health: hydration completed" }],
+  };
+  run.report = {
+    initial: { state: "attention", blockers: ["marker/jobs"], evidence: ["first"] },
+    later: { state: "healthy", blockers: [], evidence: ["later"] },
+    outcome: "recovered",
+  };
+  diagnostics.managedPanelHealth = {
+    contextId: "ctx",
+    caseId: "loading-to-ready",
+    verification: {
+      contextId: "ctx",
+      caseId: "loading-to-ready",
+      panelId: "owned-panel",
+      passed: true,
+      observations: [first, later],
+      checks: {
+        exactOps: true,
+        initial: true,
+        followUp: true,
+        ownedPanel: true,
+        report: true,
+        protectedHeadUnchanged: true,
+      },
+    },
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  later.diagnostics[0].sequence = 1;
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-old-console-record` }),
+    /bind its findings to live DOM, retained diagnostic sequences and new evidence/u
+  );
 });
 
 test("presentation export ties the exact MDX to the managed browser readback", async (t) => {
@@ -2513,6 +2598,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["browser-handoff-worlds", "export const managedBrowserHandoffWorlds = [];"],
       ["mission-planning-worlds", "export const managedMissionPlanningWorlds = [];"],
       ["channel-roster-worlds", "export const managedChannelRosterWorlds = [];"],
+      ["panel-health-worlds", "export const managedPanelHealthWorlds = [];"],
       ["google-setup-worlds", "export const managedGoogleSetupWorlds = [];"],
       ["provenance-history-worlds", "export const managedProvenanceHistoryWorlds = [];"],
       ["runtime-program-worlds", "export const managedRuntimeProgramWorlds = [];"],

@@ -133,6 +133,14 @@ const pdfHandoffWorkflow = {
   skills: ["extractPdfEvidence", "assembleHandoff"],
   evidence: pdfHandoffEvidence,
 };
+const panelHealthWorkflow = {
+  family: "workspace-live-panel-health",
+  namespace: "vibestudio:panel-health",
+  group: "live-renderer-diagnostics-and-recovery",
+  validator: { template: "system-testing", path: "skills/system-testing/panel-health-managed.ts" },
+  root: "reviewPanelHealth",
+  evidence: panelHealthEvidence,
+};
 const presentationWorkflow = {
   family: "workspace-presentation",
   namespace: "vibestudio:visualize",
@@ -357,6 +365,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedPublicationWorlds },
     { managedPdfWorlds, managedPdfExpectation, managedPdfHandoffWorlds = [] },
     { managedPresentationWorlds },
+    { managedPanelHealthWorlds },
     { managedAuthoringWorlds },
     { managedMemoryWorlds },
     { managedSetupWorlds },
@@ -390,6 +399,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "publication-preflight-worlds.ts",
       "pdf-intake-worlds.ts",
       "presentation-worlds.ts",
+      "panel-health-worlds.ts",
       "authoring-worlds.ts",
       "verified-memory-worlds.ts",
       "onboarding-worlds.ts",
@@ -597,6 +607,13 @@ export async function loadLiveTeacherCases(checkouts) {
       caseId: id,
       comparedBaseline: request.compare,
       expectedStatus: expected.status,
+    });
+  }
+  for (const world of managedPanelHealthWorlds) {
+    cases.set(`panel-health-live-${world.id}`, {
+      ...panelHealthWorkflow,
+      caseId: world.id,
+      assignment: world,
     });
   }
   for (const { id, expected } of managedPresentationWorlds) {
@@ -1011,6 +1028,139 @@ function pdfHandoffEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: fixture.contextId, seed_revision: pdf.seedRevision },
+    checks: verification.checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function panelHealthEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedPanelHealth;
+  const verification = fixture?.verification;
+  const observations = verification?.observations;
+  const [first, later] = Array.isArray(observations) ? observations : [];
+  const { assignment } = workflow;
+  const report = exercise.report;
+  const observed = (observation, frame) => {
+    if (
+      !observation ||
+      typeof observation.id !== "string" ||
+      !observation.id ||
+      observation.panelId !== verification.panelId ||
+      observation.phase !== "ready" ||
+      typeof observation.attemptId !== "string" ||
+      !observation.attemptId ||
+      typeof observation.buildKey !== "string" ||
+      !observation.buildKey ||
+      observation.dropped !== 0 ||
+      !Number.isSafeInteger(observation.consoleThrough) ||
+      !Array.isArray(observation.markers) ||
+      !Array.isArray(observation.diagnostics)
+    )
+      return false;
+    const expected = new Map(
+      frame.markers
+        .filter(([id]) => assignment.markers.some(([marked]) => marked === id))
+        .map(([id, ...values]) => [id, values])
+    );
+    const ownedLogs = observation.diagnostics.filter(({ message }) =>
+      message?.startsWith("panel-health: ")
+    );
+    return (
+      observation.markers.length === expected.size &&
+      new Set(observation.markers.map(({ id }) => id)).size === expected.size &&
+      observation.markers.every(({ id, values }) => isDeepStrictEqual(values, expected.get(id))) &&
+      isDeepStrictEqual(
+        ownedLogs.map(({ level, message }) => ({ level, message })),
+        frame.logs
+      ) &&
+      observation.diagnostics.every(
+        (row, index, rows) =>
+          Number.isSafeInteger(row.sequence) &&
+          row.sequence > (rows[index - 1]?.sequence ?? 0) &&
+          row.sequence <= observation.consoleThrough &&
+          (row.level !== "error" ||
+            frame.logs.some((log) => log.level === "error" && log.message === row.message))
+      )
+    );
+  };
+  function assessment(observation, expected) {
+    const blockers = (expected.markers ?? []).map((id) => "marker/" + id);
+    for (const message of expected.errors ?? []) {
+      const row = observation.diagnostics.find(
+        (item) => item.level === "error" && item.message === message
+      );
+      if (!row) return null;
+      blockers.push("console/" + row.sequence);
+    }
+    if (expected.identity) blockers.push("observation-mismatch");
+    return { state: expected.state, blockers, evidence: [observation.id] };
+  }
+  const newEvidence =
+    first &&
+    later &&
+    (later.consoleThrough > first.consoleThrough ||
+      later.attemptId !== first.attemptId ||
+      later.buildKey !== first.buildKey ||
+      !isDeepStrictEqual(later.markers, first.markers));
+  requireEvidence(
+    typeof fixture?.contextId === "string" &&
+      fixture.contextId === execution.provenance?.contextId &&
+      fixture.caseId === workflow.caseId &&
+      verification?.contextId === fixture.contextId &&
+      verification.caseId === fixture.caseId &&
+      typeof verification.panelId === "string" &&
+      verification.passed === true &&
+      ["exactOps", "initial", "followUp", "ownedPanel", "report", "protectedHeadUnchanged"].every(
+        (key) => verification.checks?.[key] === true
+      ) &&
+      Array.isArray(observations) &&
+      observations.length === (assignment.later ? 2 : 1) &&
+      observed(first, assignment.initial) &&
+      (!assignment.later ||
+        (observed(later, assignment.later) &&
+          first.id !== later.id &&
+          later.consoleThrough >= first.consoleThrough &&
+          later.diagnostics.every((row) => row.sequence > first.consoleThrough) &&
+          Boolean(newEvidence) !== Boolean(assignment.expected.later.identity))) &&
+      isDeepStrictEqual(report, {
+        initial: assessment(first, assignment.expected.initial),
+        later: later ? assessment(later, assignment.expected.later) : null,
+        outcome: assignment.expected.outcome,
+      }),
+    "Panel health must bind its findings to live DOM, retained diagnostic sequences and new evidence"
+  );
+  const children = (parent, name) =>
+    parent
+      ? exercise.calls.filter(
+          ({ record }) =>
+            record.parent_call_id === parent.callId &&
+            record.definition?.name === name &&
+            record.outcome === "done"
+        )
+      : [];
+  const root = exercise.calls.find(({ callId }) => callId === exercise.rootCallIds[0]);
+  const skill = children(root, workflow.root)[0];
+  const starts = children(skill, "assessObservation");
+  const follow = children(skill, "checkHealthChange");
+  const assessed = [...starts, ...follow.flatMap((call) => children(call, "assessObservation"))];
+  requireEvidence(
+    starts.length === 1 &&
+      follow.length === Number(Boolean(later)) &&
+      follow.every((call) => children(call, "checkObservationIdentity").length === 1) &&
+      assessed.length === (later && !assignment.expected.later.identity ? 2 : 1) &&
+      assessed.every(
+        (call) =>
+          children(call, "checkMarkers").length === 1 &&
+          children(call, "checkDiagnostics").length === 1
+      ),
+    "Panel health capture must include live marker, diagnostic and recovery checks"
+  );
+  return {
+    world: {
+      context_id: fixture.contextId,
+      panel_id: verification.panelId,
+      panel_attempt: (later ?? first).attemptId,
+    },
     checks: verification.checks,
     evidence: { workspace: { fixture } },
   };
