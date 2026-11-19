@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { openCanonicalSqliteDatabase, type CanonicalSqliteSchema } from "@vibestudio/sqlite";
 import { verifiedInteractiveSession } from "../services/principalIdentity.js";
+import type { WorkspaceStateRef } from "@vibestudio/shared/vcs/workspaceProjection";
 
 export type WorkspaceBlobScope = "content" | "manifest" | "state";
 
@@ -13,9 +14,15 @@ const privateWorkspaceBlobsTable = `CREATE TABLE private_workspace_blobs (
 ) STRICT`;
 
 const workspaceBlobReplayTable = "CREATE TABLE workspace_blob_replays (plan_digest TEXT PRIMARY KEY) STRICT";
+const workspaceBlobPlacementTable = `CREATE TABLE workspace_blob_placements (
+  digest TEXT NOT NULL,
+  state_kind TEXT NOT NULL CHECK(state_kind IN ('event', 'application')),
+  state_id TEXT NOT NULL,
+  PRIMARY KEY (digest, state_kind, state_id)
+) STRICT`;
 
 const schema: CanonicalSqliteSchema = {
-  version: 3,
+  version: 4,
   objects: [{
     type: "table",
     name: "blob_uploads",
@@ -32,6 +39,10 @@ const schema: CanonicalSqliteSchema = {
     type: "table",
     name: "workspace_blob_replays",
     sql: workspaceBlobReplayTable,
+  }, {
+    type: "table",
+    name: "workspace_blob_placements",
+    sql: workspaceBlobPlacementTable,
   }],
 };
 
@@ -67,6 +78,7 @@ function withStore<T>(file: string, action: (db: DatabaseSync) => T): T {
       migrations: [
         { fromVersion: 1, toVersion: 2, migrate: (db) => db.exec(privateWorkspaceBlobsTable) },
         { fromVersion: 2, toVersion: 3, migrate: (db) => db.exec(workspaceBlobReplayTable) },
+        { fromVersion: 3, toVersion: 4, migrate: (db) => db.exec(workspaceBlobPlacementTable) },
       ],
     });
     return action(db);
@@ -127,6 +139,58 @@ export function privateWorkspaceBlobScopes(
       String(row["digest"]), row["scope"] as WorkspaceBlobScope,
     ])
   ));
+}
+
+/** Record the exact semantic placement before its new tree objects enter the CAS. */
+export function recordWorkspaceBlobPlacements(
+  blobsDir: string,
+  state: WorkspaceStateRef,
+  objects: readonly { digest: string; scope: "manifest" | "state" }[],
+): void {
+  if (objects.length === 0) return;
+  fs.mkdirSync(blobsDir, { recursive: true });
+  withStore(databasePath(blobsDir), (db) => {
+    const values = JSON.stringify(objects);
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.prepare(
+        `INSERT OR IGNORE INTO private_workspace_blobs(digest, scope)
+           SELECT value ->> 'digest', value ->> 'scope' FROM json_each(?)`
+      ).run(values);
+      db.prepare(
+        `INSERT OR IGNORE INTO workspace_blob_placements(digest, state_kind, state_id)
+           SELECT value ->> 'digest', ?, ? FROM json_each(?)`
+      ).run(state.kind, state.kind === "event" ? state.eventId : state.applicationId, values);
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  });
+}
+
+export function workspaceBlobPlacements(
+  blobsDir: string,
+  digests: readonly string[],
+): Map<string, WorkspaceStateRef[]> {
+  const file = databasePath(blobsDir);
+  const result = new Map<string, WorkspaceStateRef[]>();
+  if (digests.length === 0 || !fs.existsSync(file)) return result;
+  return withStore(file, (db) => {
+    const rows = db.prepare(
+      `SELECT digest, state_kind, state_id FROM json_each(?)
+         JOIN workspace_blob_placements ON digest = value`
+    ).all(JSON.stringify(digests));
+    for (const { digest, state_kind: kind, state_id: id } of rows) {
+      const key = String(digest);
+      const refs = result.get(key) ?? [];
+      refs.push(kind === "event"
+        ? { kind, eventId: String(id) }
+        : { kind: "application", applicationId: String(id) });
+      result.set(key, refs);
+    }
+    return result;
+  });
 }
 
 export function hasPrivateWorkspaceBlobs(blobsDir: string): boolean {

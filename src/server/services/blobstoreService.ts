@@ -31,6 +31,7 @@ import {
   EMPTY_STATE_HASH,
   MAX_TREE_PATH_SEGMENTS,
   MAX_TREE_PATH_UTF8_BYTES,
+  canonicalJson,
   compareUtf16CodeUnits,
   splitTreePath,
   utf8ByteLength,
@@ -63,9 +64,12 @@ import {
   hasPrivateWorkspaceBlobs,
   markPrivateWorkspaceBlobs,
   privateWorkspaceBlobScopes,
+  recordWorkspaceBlobPlacements,
   type WorkspaceBlobScope,
   recordBlobUpload,
+  workspaceBlobPlacements,
 } from "../storage/blobUploads.js";
+import type { WorkspaceStateRef } from "@vibestudio/shared/vcs/workspaceProjection";
 import { sendJson, sendText } from "../hostCore/httpResponses.js";
 
 const log = createDevLogger("BlobstoreService");
@@ -79,6 +83,7 @@ export interface BlobstoreServiceDeps {
   blobsDir: string;
   recordParticipantUploads?: () => boolean;
   canReadPrivateContent?: (digest: string, context?: ServiceContext) => Promise<boolean>;
+  canReadWorkspacePlacement?: (state: WorkspaceStateRef, context?: ServiceContext) => Promise<boolean>;
 }
 
 export interface BlobStat {
@@ -590,9 +595,13 @@ async function putTreeObject(
   ref: string,
   scope: "manifest" | "state",
   containsPrivateContent: boolean,
+  placement?: WorkspaceStateRef,
 ) {
   const digest = treeHashDigest(ref);
-  if (containsPrivateContent && !await pathExists(blobPath(blobsDir, digest))) {
+  if (placement && (!await pathExists(blobPath(blobsDir, digest)) ||
+      privateWorkspaceBlobScopes(blobsDir, [digest]).has(digest))) {
+    recordWorkspaceBlobPlacements(blobsDir, placement, [{ digest, scope }]);
+  } else if (containsPrivateContent && !await pathExists(blobPath(blobsDir, digest))) {
     markPrivateWorkspaceBlobs(blobsDir, [digest], scope);
   }
   return putBytes(blobsDir, Buffer.from(object.canonicalText, "utf8"));
@@ -610,7 +619,7 @@ async function putTreeObject(
 export async function putTree(
   blobsDir: string,
   entriesInput: ManifestHashEntry[],
-  opts?: { root?: boolean }
+  opts?: { root?: boolean; placement?: WorkspaceStateRef }
 ): Promise<{ treeHash: string; stateHash?: string }> {
   // Project to the exact hashed shape so unknown extra keys from the wire can
   // never leak into (and silently perturb) the content address.
@@ -645,7 +654,7 @@ export async function putTree(
     blobsDir, encoded.entries.map(treeEntryDigest),
   ).size > 0;
   const { digest } = await putTreeObject(
-    blobsDir, encoded, encoded.treeHash, "manifest", containsPrivateContent,
+    blobsDir, encoded, encoded.treeHash, "manifest", containsPrivateContent, opts?.placement,
   );
   if (digest !== treeHashDigest(encoded.treeHash)) {
     throw new Error(
@@ -665,7 +674,7 @@ export async function putTree(
 
   const state = encodeStateNode(encoded.treeHash);
   const stateWrite = await putTreeObject(
-    blobsDir, state, state.stateHash, "state", containsPrivateContent,
+    blobsDir, state, state.stateHash, "state", containsPrivateContent, opts.placement,
   );
   if (stateWrite.digest !== treeHashDigest(state.stateHash)) {
     throw new Error(
@@ -701,7 +710,7 @@ export async function hasTreeObject(blobsDir: string, hash: string): Promise<boo
 export async function mirrorWorktreeTree(
   blobsDir: string,
   files: WorktreeHashFile[],
-  opts?: { expectStateHash?: string }
+  opts?: { expectStateHash?: string; placement?: WorkspaceStateRef }
 ): Promise<{ stateHash: string; treeHash: string; written: number }> {
   const encoded = encodeWorktreeTree(files);
   if (opts?.expectStateHash !== undefined && encoded.stateHash !== opts.expectStateHash) {
@@ -712,8 +721,19 @@ export async function mirrorWorktreeTree(
   }
   // Fast path: the state node is written last (below), so its presence means
   // the full tree was already mirrored.
-  if (await hasTreeObject(blobsDir, encoded.stateHash)) {
+  const alreadyMirrored = await hasTreeObject(blobsDir, encoded.stateHash);
+  if (!opts?.placement && alreadyMirrored) {
     return { stateHash: encoded.stateHash, treeHash: encoded.rootTreeHash, written: 0 };
+  }
+  if (opts?.placement) {
+    const objects = [
+      ...encoded.nodes.map(({ treeHash }) => ({ digest: treeHashDigest(treeHash), scope: "manifest" as const })),
+      { digest: treeHashDigest(encoded.stateHash), scope: "state" as const },
+    ];
+    const scoped = privateWorkspaceBlobScopes(blobsDir, objects.map(({ digest }) => digest));
+    const placements = objects.filter(({ digest }) => scoped.has(digest) || !fs.existsSync(blobPath(blobsDir, digest)));
+    recordWorkspaceBlobPlacements(blobsDir, opts.placement, placements);
+    if (alreadyMirrored) return { stateHash: encoded.stateHash, treeHash: encoded.rootTreeHash, written: 0 };
   }
   const privateDigests = new Set(privateWorkspaceBlobScopes(
     blobsDir, files.map((file) => file.contentHash),
@@ -900,7 +920,8 @@ export class MerkleTreeComposer {
   }
 
   async composeStateGrafts(
-    grafts: readonly MerkleTreeGraft[]
+    grafts: readonly MerkleTreeGraft[],
+    placement?: WorkspaceStateRef,
   ): Promise<{ stateHash: string; treeHash: string }> {
     const startedAt = performance.now();
     const normalized = grafts.map((graft) => ({
@@ -972,7 +993,7 @@ export class MerkleTreeComposer {
 
     const scaffoldFailures: unknown[] = [];
     const scaffoldWrites = new AsyncSemaphore(MERKLE_SCAFFOLD_WRITE_CONCURRENCY);
-    const treeHash = await this.writeScaffold(trie, scaffoldWrites, scaffoldFailures);
+    const treeHash = await this.writeScaffold(trie, scaffoldWrites, scaffoldFailures, placement);
     if (scaffoldFailures.length === 1) throw scaffoldFailures[0];
     if (scaffoldFailures.length > 1) {
       throw new AggregateError(scaffoldFailures, "Merkle scaffold publication failed", {
@@ -987,6 +1008,7 @@ export class MerkleTreeComposer {
     const stateWrite = await putTreeObject(
       this.blobsDir, state, state.stateHash, "state",
       privateWorkspaceBlobScopes(this.blobsDir, [treeHashDigest(treeHash)]).size > 0,
+      placement,
     );
     if (stateWrite.digest !== treeHashDigest(state.stateHash)) {
       throw new Error(
@@ -1088,7 +1110,8 @@ export class MerkleTreeComposer {
   private async writeScaffold(
     node: GraftTrie,
     writes: AsyncSemaphore,
-    failures: unknown[]
+    failures: unknown[],
+    placement?: WorkspaceStateRef,
   ): Promise<string | null> {
     if (node.graftRootHash !== undefined) {
       if (node.children.size !== 0) {
@@ -1098,7 +1121,7 @@ export class MerkleTreeComposer {
     }
     const children = [...node.children];
     const childResults = await Promise.allSettled(
-      children.map(([, child]) => this.writeScaffold(child, writes, failures))
+      children.map(([, child]) => this.writeScaffold(child, writes, failures, placement))
     );
     const entries: ManifestHashEntry[] = [];
     let childFailed = false;
@@ -1114,7 +1137,7 @@ export class MerkleTreeComposer {
     }
     if (childFailed) return null;
     try {
-      return await writes.run(async () => (await putTree(this.blobsDir, entries)).treeHash);
+      return await writes.run(async () => (await putTree(this.blobsDir, entries, { placement })).treeHash);
     } catch (error) {
       failures.push(error);
       return null;
@@ -2371,11 +2394,28 @@ export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithR
       ...closure.treeDigests, ...closure.contentDigests,
     ]);
     const files = new Set(closure.contentDigests);
+    const placements = workspaceBlobPlacements(deps.blobsDir, closure.treeDigests);
+    const visible = new Map<string, boolean>();
     for (const [digest, scope] of digests) {
-      // Tree-derived scopes follow their leaves; arbitrary private bytes used
-      // as a tree must still be authorized as file content.
       if ((scope === "content" || files.has(digest)) &&
         !await deps.canReadPrivateContent?.(digest, ctx)) return false;
+      const refs = placements.get(digest);
+      if (refs) {
+        let admitted = false;
+        for (const state of refs) {
+          const key = canonicalJson(state);
+          let readable = visible.get(key);
+          if (readable === undefined) {
+            readable = await deps.canReadWorkspacePlacement?.(state, ctx) === true;
+            visible.set(key, readable);
+          }
+          if (readable) {
+            admitted = true;
+            break;
+          }
+        }
+        if (!admitted) return false;
+      }
     }
     return true;
   };

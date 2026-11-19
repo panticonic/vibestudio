@@ -10,6 +10,7 @@ import { normalizeRepositoryPath } from "./paths.js";
 import { discoverRepos, type DiscoveredRepo } from "@vibestudio/shared/runtime/repoDiscovery";
 import { collectTreeFiles, type ContentProjectionStore } from "./contentProjectionStore.js";
 import { withBlobContentLock } from "../storage/blobRetentions.js";
+import type { WorkspaceStateRef } from "@vibestudio/shared/vcs/workspaceProjection";
 
 export interface WorkspaceRepositoriesDeps {
   blobsDir: string;
@@ -72,9 +73,10 @@ export class WorkspaceRepositories {
 
   /** Compose an exact repository set supplied by the semantic authority. */
   async contentView(
-    repositories: Array<{ repoPath: string; stateHash: string }>
+    repositories: Array<{ repoPath: string; stateHash: string }>,
+    placement?: WorkspaceStateRef,
   ): Promise<{ stateHash: string }> {
-    return { stateHash: await this.compose(repositories) };
+    return { stateHash: await this.compose(repositories, placement) };
   }
 
   /** Reachable CAS objects held only by cached composed views, for GC rooting. */
@@ -123,7 +125,8 @@ export class WorkspaceRepositories {
   }
 
   async workspaceViewWithReposAt(
-    overrides: Array<{ repoPath: string; stateHash: string | null }>
+    overrides: Array<{ repoPath: string; stateHash: string | null }>,
+    placement?: WorkspaceStateRef,
   ): Promise<string> {
     const overrideByRepo = new Map<string, string | null>();
     for (const override of overrides) {
@@ -135,7 +138,7 @@ export class WorkspaceRepositories {
     for (const [repoPath, stateHash] of overrideByRepo) {
       if (stateHash) repos.push({ repoPath, stateHash });
     }
-    return this.compose(repos);
+    return this.compose(repos, placement);
   }
 
   private collectMainStates(): Array<{ repoPath: string; stateHash: string }> {
@@ -145,7 +148,10 @@ export class WorkspaceRepositories {
       .map((record) => ({ repoPath: record.repoPath, stateHash: record.contentRoot }));
   }
 
-  private async compose(repos: Array<{ repoPath: string; stateHash: string }>): Promise<string> {
+  private async compose(
+    repos: Array<{ repoPath: string; stateHash: string }>,
+    placement?: WorkspaceStateRef,
+  ): Promise<string> {
     const normalized = repos.map((repo) => ({
       repoPath: normalizeRepositoryPath(repo.repoPath),
       stateHash: repo.stateHash,
@@ -155,7 +161,7 @@ export class WorkspaceRepositories {
       .sort()
       .join("\n");
     const cached = this.composedViewCache.get(key);
-    if (cached) {
+    if (!placement && cached) {
       if (await this.cachedViewIsResolvable(key, cached)) return cached;
       this.composedViewCache.delete(key);
     }
@@ -165,8 +171,10 @@ export class WorkspaceRepositories {
     // scaffold cannot be swept after the operation has started rebuilding it.
     return withBlobContentLock(this.deps.blobsDir, async () => {
       const current = this.composedViewCache.get(key);
-      if (current && (await this.cachedViewIsResolvable(key, current))) return current;
-      if (current) this.composedViewCache.delete(key);
+      if (!placement && current) {
+        if (await this.cachedViewIsResolvable(key, current)) return current;
+        this.composedViewCache.delete(key);
+      }
 
       const compositionStartedAt = performance.now();
       const mirrors = await Promise.allSettled(
@@ -183,7 +191,8 @@ export class WorkspaceRepositories {
       }
       const mirrorsCompletedAt = performance.now();
       const { stateHash } = await this.composer.composeStateGrafts(
-        normalized.map((repo) => ({ path: repo.repoPath, stateHash: repo.stateHash }))
+        normalized.map((repo) => ({ path: repo.repoPath, stateHash: repo.stateHash })),
+        placement,
       );
       const compositionCompletedAt = performance.now();
       if (compositionCompletedAt - compositionStartedAt >= 100) {

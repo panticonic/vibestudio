@@ -123,6 +123,7 @@ import {
   observeAppliedWorkspacePublication,
   openWorkspaceParticipantContext,
   workspaceHistoryFileContentVisible,
+  workspaceHistoryPlacementInContexts,
   workspaceParticipantIdentity,
   putPreparedWorkspaceContent,
   readWorkspaceCanonicalMain,
@@ -778,27 +779,43 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     return this.participantHistorySource !== null;
   }
 
-  async canReadPrivateWorkspaceBlob(input: {
+  async canReadPrivateWorkspaceBlob(input: ({
     contentHash: string;
+  } | {
+    placement: VcsStateNodeRef;
+  }) & {
     context?: ServiceContext;
     ownerContextId?: string | null;
     readOwnedContextIds?: () => Promise<readonly string[]>;
     isActive: (owner: WorkspaceSourceProviderRef) => Promise<boolean>;
   }): Promise<boolean> {
-    const { contentHash, context, ownerContextId } = input;
-    if (context && hasBlobUploads(this.deps.blobsDir, blobUploadPrincipal(context), [contentHash])) {
+    const { context, ownerContextId } = input;
+    if ("contentHash" in input && context &&
+        hasBlobUploads(this.deps.blobsDir, blobUploadPrincipal(context), [input.contentHash])) {
       return true;
     }
     const source = this.participantHistorySource;
     if (!source) return false;
     const published = this.deps.refs.readMainSemanticState();
-    if (published && await workspaceHistoryFileContentVisible(source, source.canonical, contentHash, {
-      kind: "published", expectedEventId: published.eventId,
-    })) return true;
+    if (published) {
+      const visible = "placement" in input
+        ? await workspaceMainStateReachable(source, input.placement, published.eventId)
+        : await workspaceHistoryFileContentVisible(source, source.canonical, input.contentHash, {
+            kind: "published", expectedEventId: published.eventId,
+          });
+      if (visible) return true;
+    }
     if (!context || !ownerContextId) return false;
     const participantId = workspaceParticipantIdentity(context.caller, ownerContextId);
     const owner = { ...source.canonical, objectKey: `work-${sha256HexSyncText(participantId)}` };
     if (!await input.isActive(owner)) return false;
+    if ("placement" in input) {
+      const contextIds = await input.readOwnedContextIds?.() ?? [];
+      return workspaceHistoryPlacementInContexts(
+        source, owner, [ownerContextId, ...contextIds], input.placement,
+      );
+    }
+    const { contentHash } = input;
     const visibleIn = (contextId: string) =>
       workspaceHistoryFileContentVisible(source, owner, contentHash, { kind: "context", contextId });
     if (await visibleIn(ownerContextId)) return true;
@@ -1780,8 +1797,11 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     if (!Array.isArray(repositories)) {
       throw new Error("publication effect lacks exact repository manifests");
     }
+    const publishedEventId = String(effect.payload["publishedEventId"] ?? "");
+    if (!publishedEventId) throw new Error("publication effect lacks its published event identity");
+    const placement = canonical ? { kind: "event" as const, eventId: publishedEventId } : undefined;
     const roots = await this.materializer.contentRoots(
-      repositories as WorkspaceMaterializationRepository[]
+      repositories as WorkspaceMaterializationRepository[], placement,
     );
     const contentRootsCompletedAt = performance.now();
     const current = this.deps.refs.listMains();
@@ -1792,8 +1812,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       .sort(compareUtf16CodeUnits);
     let candidateWorkspaceState: Promise<string> | undefined;
     let candidateStateMs = 0;
-    const publishedEventId = String(effect.payload["publishedEventId"] ?? "");
-    if (!publishedEventId) throw new Error("publication effect lacks its published event identity");
     // BuildV2 seals execution identity while the ref gate validates this
     // candidate. Register the already-committed semantic event before the gate
     // asks for a build, rather than teaching the build store to accept an
@@ -1806,7 +1824,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
             changedPaths.map((repoPath) => ({
               repoPath,
               stateHash: targetByPath.get(repoPath) ?? null,
-            }))
+            })),
+            placement,
           );
           this.semanticStateByContent.set(stateHash, {
             kind: "event",
@@ -2505,12 +2524,13 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   private async realizeContextContent(
-    command: Pick<ContextMaterializationCommand, "targetState" | "repositories" | "blobs">
+    command: Pick<ContextMaterializationCommand, "targetState" | "repositories" | "blobs">,
+    placement?: VcsStateNodeRef,
   ) {
     const roots = await this.materializer.planContentRoots(command.repositories);
     const realized = await Promise.allSettled(
       roots.map(async (root) => {
-        if (await hasTreeObject(this.deps.blobsDir, root.contentRoot)) return;
+        if (!placement && await hasTreeObject(this.deps.blobsDir, root.contentRoot)) return;
         const source = command.repositories.find(
           (
             repository
@@ -2519,7 +2539,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         );
         if (!source)
           throw new Error(`Exact context content has no source for ${root.repositoryId}`);
-        await this.materializer.realizePlannedRepository(source, command.blobs, root.contentRoot);
+        await this.materializer.realizePlannedRepository(source, command.blobs, root.contentRoot, placement);
       })
     );
     const failures = realized.flatMap((result) =>
@@ -2557,7 +2577,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     const projection = await readWorkspaceParticipantProjection(scope);
     const snapshot = await this.realizeContextContent({
       targetState: projection.state, repositories: projection.repositories, blobs: [],
-    });
+    }, projection.state);
     this.rememberContextContent(snapshot, key(projection.head));
     return snapshot;
   }
@@ -2627,7 +2647,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         targetState: state,
         repositories: selected,
         blobs: [],
-      }));
+      }), state);
       return { head, state, folder };
     });
   }
@@ -2849,7 +2869,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     contextId: string; workingHead: string;
   }, requestedHash?: string) {
     const { semanticState, repositories } = await this.participantContextContent(scope);
-    const { stateHash } = await this.repositories.contentView(repositories);
+    const { stateHash } = await this.repositories.contentView(repositories, semanticState);
     if (requestedHash === undefined || requestedHash === stateHash) {
       await rememberWorkspaceParticipantContentSource({ ...scope, stateHash, state: semanticState });
     }
@@ -2873,8 +2893,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         if (retained) {
           const snapshot = await this.realizeContextContent({
             targetState: retained.state, repositories: retained.repositories, blobs: [],
-          });
-          const content = await this.repositories.contentView(snapshot.repositories);
+          }, retained.state);
+          const content = await this.repositories.contentView(snapshot.repositories, retained.state);
           if (content.stateHash !== stateHash) throw new Error("Workspace build source proof has different content");
           return { stateHash, semanticState: retained.state };
         }

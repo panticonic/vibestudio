@@ -2081,6 +2081,48 @@ describe("blobstoreService", () => {
     });
   });
 
+  it("authorizes a rename through its exact tree placement independently of public file bytes", async () => {
+    const service = createBlobstoreService({
+      blobsDir,
+      canReadWorkspacePlacement: async (state, context) =>
+        state.kind === "event" || context?.caller.runtime.id === "writer",
+    });
+    const dispatcher = createTestServiceDispatcher();
+    dispatcher.registerService(service.definition);
+    dispatcher.markInitialized();
+    const author = { caller: createVerifiedCaller("writer", "worker") };
+    const reader = { caller: createVerifiedCaller("other-writer", "worker") };
+    const { digest } = await putBytes(blobsDir, Buffer.from("already shared"));
+    const files = [{ path: "src/private-name.txt", contentHash: digest, mode: 33188 }];
+    const tree = await mirrorWorktreeTree(blobsDir, files, {
+      placement: { kind: "application", applicationId: "rename" },
+    });
+    const view = await new MerkleTreeComposer(blobsDir).composeStateGrafts(
+      [{ path: "repos/private-repository", stateHash: tree.stateHash }],
+      { kind: "application", applicationId: "rename" },
+    );
+    await expect(dispatcher.dispatch(reader, "blobstore", "getText", [digest]))
+      .resolves.toBe("already shared");
+    for (const { stateHash, treeHash } of [tree, view]) {
+      for (const ref of [stateHash, treeHash]) {
+        const rawDigest = ref.split(":")[1]!;
+        await expect(dispatcher.dispatch(reader, "blobstore", "getText", [rawDigest])).resolves.toBeNull();
+        await expect(dispatcher.dispatch(reader, "blobstore", "getTree", [ref])).resolves.toBeNull();
+        await expect(dispatcher.dispatch(author, "blobstore", "has", [rawDigest])).resolves.toBe(true);
+      }
+    }
+    const published = { kind: "event" as const, eventId: "published-rename" };
+    expect(await mirrorWorktreeTree(blobsDir, files, { placement: published }))
+      .toEqual({ ...tree, written: 0 });
+    expect(await new MerkleTreeComposer(blobsDir).composeStateGrafts(
+      [{ path: "repos/private-repository", stateHash: tree.stateHash }], published,
+    )).toEqual(view);
+    await expect(dispatcher.dispatch(reader, "blobstore", "listTree", [view.stateHash, {}]))
+      .resolves.toMatchObject({ entries: expect.arrayContaining([
+        expect.objectContaining({ path: "repos/private-repository/src/private-name.txt", contentHash: digest }),
+      ]) });
+  });
+
   it("recognizes a byte upload only for its authenticated producer", async () => {
     const createDispatcher = () => {
       const service = createBlobstoreService({

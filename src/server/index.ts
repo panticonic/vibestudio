@@ -46,9 +46,11 @@ import {
   createHostCaller,
   createVerifiedCaller,
   verifiedInitiator,
+  type ServiceContext,
   type VerifiedCaller,
   type VerifiedCodeIdentity,
 } from "@vibestudio/shared/serviceDispatcher";
+import type { VcsStateNodeRef } from "@vibestudio/service-schemas/vcs";
 import {
   doTargetId,
   omitTrailingUndefined,
@@ -7949,24 +7951,29 @@ async function main() {
     );
 
     const blobsDir = layout.blobsDir;
+    const readScopedWorkspaceBlob = (
+      subject: { contentHash: string } | { placement: VcsStateNodeRef },
+      context?: ServiceContext,
+    ) => {
+      const caller = context?.caller;
+      const ownerContextId = caller ? participantDiscoveryContext(caller) : null;
+      return workspaceVcs.canReadPrivateWorkspaceBlob({
+        ...subject, context, ownerContextId,
+        readOwnedContextIds: () => caller
+          ? readableBuildContexts(caller, ownerContextId)
+          : Promise.resolve([]),
+        isActive: async (owner) => Boolean(await getEntityStore().resolveActiveRecord(canonicalEntityId({
+          kind: "do", source: owner.source, className: owner.className, key: owner.objectKey,
+        }))),
+      });
+    };
     container.registerManaged(
       serviceWithHttpRoutes(
         createBlobstoreService({
           blobsDir,
           recordParticipantUploads: () => workspaceVcs.participantHistoryAttached,
-          canReadPrivateContent: (contentHash, context) => {
-            const caller = context?.caller;
-            const ownerContextId = caller ? participantDiscoveryContext(caller) : null;
-            return workspaceVcs.canReadPrivateWorkspaceBlob({
-              contentHash, context, ownerContextId,
-              readOwnedContextIds: () => caller
-                ? readableBuildContexts(caller, ownerContextId)
-                : Promise.resolve([]),
-              isActive: async (owner) => Boolean(await getEntityStore().resolveActiveRecord(canonicalEntityId({
-                kind: "do", source: owner.source, className: owner.className, key: owner.objectKey,
-              }))),
-            });
-          },
+          canReadPrivateContent: (contentHash, context) => readScopedWorkspaceBlob({ contentHash }, context),
+          canReadWorkspacePlacement: (placement, context) => readScopedWorkspaceBlob({ placement }, context),
         }),
         routeRegistry
       )

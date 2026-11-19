@@ -399,11 +399,28 @@ export async function listWorkspaceHistoryRuntimeContexts(
 
 export async function workspaceMainStateReachable(
   source: WorkspaceHistorySource,
-  state: VcsStateNodeRef
+  state: VcsStateNodeRef,
+  expectedEventId?: string,
 ): Promise<boolean> {
   return z.boolean().parse(
-    await source.dispatch.dispatch(source.canonical, "readHistoryMainStateVisibility", { state }),
+    await source.dispatch.dispatch(source.canonical, "readHistoryMainStateVisibility", {
+      state, ...(expectedEventId === undefined ? {} : { expectedEventId }),
+    }),
   );
+}
+
+export async function workspaceHistoryPlacementInContexts(
+  source: WorkspaceHistorySource,
+  owner: WorkspaceSourceProviderRef,
+  contextIds: readonly string[],
+  state: VcsStateNodeRef,
+): Promise<boolean> {
+  const matchingContext = z.string().nullable().parse(
+    await source.dispatch.dispatch(owner, "readHistoryReferenceContext", {
+      contextIds: [...new Set(contextIds)], reference: state,
+    })
+  );
+  return matchingContext !== null && contextIds.includes(matchingContext);
 }
 
 export async function readWorkspaceHistoryTemplateInstallation(source: WorkspaceHistorySource, eventId: string) {
