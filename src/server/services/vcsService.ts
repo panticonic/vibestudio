@@ -69,6 +69,7 @@ export interface VcsServiceDeps {
     | "transferParticipantContext"
     | "revertParticipantContext"
     | "importParticipantSnapshot"
+    | "registerParticipantExternalDelta"
     | "saveParticipantContext"
     | "discardParticipantContext"
     | "publishParticipantContext"
@@ -465,6 +466,12 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
         return workspace.importParticipantSnapshot({
           ...common,
           snapshot: vcsMethods.importSnapshot.args.parse([input])[0],
+          uploadPrincipal: blobUploadPrincipal(ctx),
+        });
+      case "registerExternalDelta":
+        return workspace.registerParticipantExternalDelta({
+          ...common,
+          delta: vcsMethods.registerExternalDelta.args.parse([input])[0],
           uploadPrincipal: blobUploadPrincipal(ctx),
         });
       case "commit":

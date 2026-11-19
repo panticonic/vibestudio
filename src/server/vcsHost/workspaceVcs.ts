@@ -29,6 +29,8 @@ import type {
   VcsDiscardResult,
   VcsImportSnapshotInput,
   VcsImportSnapshotResult,
+  VcsExternalDeltaResult,
+  VcsRegisterExternalDeltaInput,
   VcsPushInput,
   VcsPushResult,
   VcsQueryInput,
@@ -44,7 +46,7 @@ import type {
 } from "@vibestudio/service-schemas/vcs";
 import { z } from "zod";
 import { vcsQueryResultSchema, vcsReadMemoryResultSchema, vcsTrajectoryInvocationRefSchema } from "@vibestudio/service-schemas/vcs";
-import { vcsCommitResultSchema, vcsDiscardResultSchema, vcsImportSnapshotResultSchema, vcsMethods, type VcsMethodName } from "@vibestudio/service-schemas/vcs";
+import { vcsCommitResultSchema, vcsDiscardResultSchema, vcsExternalDeltaResultSchema, vcsImportSnapshotResultSchema, vcsMethods, type VcsMethodName } from "@vibestudio/service-schemas/vcs";
 import type {
   ProtectedPublicationEvent,
   ProtectedPublicationFileChange,
@@ -1547,6 +1549,32 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     });
     await this.materializeParticipantContext({ dispatch, owner, contextId: snapshot.contextId });
     return result;
+  }
+
+  async registerParticipantExternalDelta(input: WorkspaceHistoryParticipant & {
+    head: string;
+    delta: VcsRegisterExternalDeltaInput;
+    cause: { parent: RpcCausalParent | null };
+    uploadPrincipal: string;
+  }): Promise<VcsExternalDeltaResult> {
+    requireWorkspaceParticipantOwner(input);
+    const { dispatch, owner, head, delta, cause, uploadPrincipal } = input;
+    const digests = [...new Set([...delta.oldFiles, ...delta.newFiles].map(({ contentHash }) => contentHash))]
+      .sort(compareUtf16CodeUnits);
+    return withBlobContentLock(this.deps.blobsDir, async () => {
+      if (!hasBlobUploads(this.deps.blobsDir, uploadPrincipal, digests)) {
+        throw new Error("External delta requires bytes supplied by the authenticated caller");
+      }
+      const observation = await this.observeContentHashes(digests, "descriptor");
+      const result = vcsExternalDeltaResultSchema.parse(
+        await dispatch.dispatch(owner, "registerHistoryExternalDelta", { head, delta, observation, cause })
+      );
+      if (result.repositoryId !== delta.repositoryId || result.repoPath !== delta.repoPath ||
+          result.oldSnapshot !== delta.oldSource.snapshot || result.newSnapshot !== delta.newSource.snapshot) {
+        throw new Error("Workspace history registered different external evidence");
+      }
+      return result;
+    });
   }
 
   async saveParticipantContext(input: WorkspaceHistoryParticipant & {
