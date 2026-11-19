@@ -34,6 +34,7 @@ import type { authorityMethods } from "./authority.js";
 import type { attachedHostsMethods } from "./attachedHosts.js";
 import type { developmentNativeMethods } from "./developmentNative.js";
 import type { desktopBrowserPrivacyPresentationMethods } from "./desktopBrowserPrivacyPresentation.js";
+import type { chronologMethods } from "./chronolog.js";
 import type { vcsMethods } from "./vcs.js";
 import type { developmentClientExecutorMethods } from "./developmentClientExecutor.js";
 import type { deviceDriverMethods } from "./deviceDriver.js";
@@ -112,6 +113,7 @@ export type MainRpcMethods = Methods<"governance", typeof governanceMethods> &
   Methods<"developmentNative", typeof developmentNativeMethods> &
   Methods<"desktopBrowserPrivacyPresentation", typeof desktopBrowserPrivacyPresentationMethods> &
   Methods<"vcs", typeof vcsMethods> &
+  Methods<"chronolog", typeof chronologMethods> &
   Methods<"developmentClientExecutor", typeof developmentClientExecutorMethods> &
   Methods<"deviceDriver", typeof deviceDriverMethods> &
   Methods<"shellBrowserPrivacy", typeof shellBrowserPrivacyMethods> &
@@ -196,6 +198,7 @@ const loaders = {
     (await import("./desktopBrowserPrivacyPresentation.js"))
       .desktopBrowserPrivacyPresentationMethods,
   vcs: async () => (await import("./vcs.js")).vcsMethods,
+  chronolog: async () => (await import("./chronolog.js")).chronologMethods,
   developmentClientExecutor: async () =>
     (await import("./developmentClientExecutor.js")).developmentClientExecutorMethods,
   deviceDriver: async () => (await import("./deviceDriver.js")).deviceDriverMethods,
