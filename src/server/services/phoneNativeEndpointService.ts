@@ -10,6 +10,7 @@ const PROVIDER_SOURCE = "workers/phone-provisioning";
 const PROVIDER_RUNTIME_PREFIX = `do:${PROVIDER_SOURCE}:PhoneProvisioningDO:`;
 
 interface ConnectedClient {
+  connectionId: string;
   caller: { runtime: { id: string; kind: string } };
   userId: string;
   clientLabel?: string;
@@ -24,7 +25,11 @@ interface ClientBridge {
 export interface PhoneNativeEndpointDeps {
   getUserConnections(userId: string): readonly ConnectedClient[];
   getClientBridge(callerId: string): ClientBridge | undefined;
-  hasClientMethod(callerId: string, method: string): boolean;
+  getClientMethodBridge(
+    callerId: string,
+    connectionId: string,
+    method: string
+  ): ClientBridge | undefined;
 }
 
 function requireProvider(ctx: ServiceContext): string {
@@ -87,22 +92,26 @@ export function createPhoneNativeEndpointService(deps: PhoneNativeEndpointDeps):
       if (method === "readiness") {
         const { deviceId } = args[0] as { deviceId: string };
         const clientId = `shell:${deviceId}`;
-        const connection = deps
+        const connections = deps
           .getUserConnections(userId)
-          .find(
+          .filter(
             (connection) =>
               connection.userId === userId &&
               connection.caller.runtime.kind === "shell" &&
               connection.caller.runtime.id === clientId &&
               connection.clientPlatform === "mobile"
           );
-        const bridge = connection && deps.getClientBridge(clientId);
-        if (!bridge)
+        if (!connections.length)
           return {
             status: "opening",
             message: "Waiting for the phone to connect. Keep it awake and online.",
           };
-        if (!deps.hasClientMethod(clientId, "mobileWorkspace.readiness")) {
+        const bridge = connections
+          .map(({ connectionId }) =>
+            deps.getClientMethodBridge(clientId, connectionId, "mobileWorkspace.readiness")
+          )
+          .find((endpoint) => endpoint !== undefined);
+        if (!bridge) {
           return { status: "opening", message: "Phone paired. Loading the workspace app…" };
         }
         return PhoneWorkspaceReadinessSchema.parse(

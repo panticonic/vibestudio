@@ -3732,9 +3732,20 @@ export class RpcServer {
     return this.connections.getPrimaryBridge(callerId);
   }
 
-  /** Whether the currently routed endpoint has published this ordinary RPC method. */
-  hasClientMethod(callerId: string, method: string): boolean {
-    const client = this.pickPrimary(callerId);
+  /** Resolve an ordinary method on one authenticated endpoint. */
+  getClientMethodBridge(
+    callerId: string,
+    connectionId: string,
+    method: string
+  ): RpcWireClient | undefined {
+    if (!this.hasClientMethod(callerId, method, connectionId)) return undefined;
+    return this.connections.getBridge(callerId, connectionId);
+  }
+
+  hasClientMethod(callerId: string, method: string, connectionId?: string): boolean {
+    const client = connectionId
+      ? this.getConnection(callerId, connectionId)
+      : this.pickPrimary(callerId);
     return Boolean(
       client &&
       this.endpointExposures

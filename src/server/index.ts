@@ -5929,8 +5929,8 @@ async function main() {
       await import("./services/phoneNativeEndpointService.js");
     container.registerRpc(
       createPhoneNativeEndpointService({
-        hasClientMethod: (callerId, method) =>
-          assertPresent(rpcServerForGateway).hasClientMethod(callerId, method),
+        getClientMethodBridge: (callerId, connectionId, method) =>
+          assertPresent(rpcServerForGateway).getClientMethodBridge(callerId, connectionId, method),
         getUserConnections: (userId) =>
           assertPresent(rpcServerForGateway).getUserConnections(userId),
         getClientBridge: (callerId) => assertPresent(rpcServerForGateway).getClientBridge(callerId),

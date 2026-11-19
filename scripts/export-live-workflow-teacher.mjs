@@ -220,6 +220,20 @@ const publicationRevisionWorkflow = {
   root: "reviewPublicationRevision",
   evidence: publicationRevisionEvidence,
 };
+const androidPairWorkflow = {
+  family: "system-live-android-pairing",
+  workspace: "system",
+  devices: ["desktop"],
+  namespace: "vibestudio:mobile-system-testing",
+  group: "desktop-android-pairing-and-workspace",
+  validator: {
+    template: "system-testing",
+    path: "skills/system-testing/android-pair-managed.ts",
+  },
+  root: "runMobileScenario",
+  evidence: androidPairEvidence,
+};
+
 const androidInstallWorkflow = {
   family: "system-live-android-development-install",
   workspace: "system",
@@ -699,6 +713,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { deliveryHistoryWorlds },
     { androidAuditWorlds },
     { androidInstallWorlds },
+    { androidPairWorlds },
     { publicationRevisionWorlds },
     { managedEvalRecoveryWorlds },
     { managedPdfLayoutWorlds },
@@ -764,6 +779,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "delivery-history-worlds.ts",
       "android-audit-worlds.ts",
       "android-install-worlds.ts",
+      "android-pair-worlds.ts",
       "publication-revision-worlds.ts",
       "eval-recovery-worlds.ts",
       "pdf-layout-worlds.ts",
@@ -819,6 +835,9 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of publicationRevisionWorlds) {
     cases.set(`publication-revision-live-${assignment.id}`, { ...publicationRevisionWorkflow, assignment });
+  }
+  for (const assignment of androidPairWorlds) {
+    cases.set(`android-pair-live-${assignment.id}`, { ...androidPairWorkflow, assignment });
   }
   for (const assignment of androidInstallWorlds) {
     cases.set(`android-install-live-${assignment.id}`, { ...androidInstallWorkflow, assignment });
@@ -2942,6 +2961,168 @@ function publicationRevisionEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: contextId, source, artifact_digest: observed.candidate.artifactDigest },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function androidPairEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.androidPair;
+  const {
+    caseId,
+    contextId,
+    request,
+    provider,
+    owned,
+    inventory,
+    receipt,
+    observed,
+    current,
+    checks,
+  } = fixture ?? {};
+  const { assignment } = workflow;
+  const report = exercise.report;
+  const records = exercise.calls.map(({ record }) => record);
+  const root = records.find(
+    ({ call_id }) => call_id === exercise.rootCallIds[0],
+  );
+  const child = (parent, name) =>
+    parent &&
+    records.find(
+      (record) =>
+        record.parent_call_id === parent.call_id &&
+        record.definition.name === name,
+    );
+  const scenario = child(root, "runMobileScenario");
+  const setup = child(scenario, "reviewSetup");
+  const discovery = child(setup, "readInventory");
+  const select = child(setup, "selectTarget");
+  const pair = child(scenario, "exercisePairing");
+  const provision = child(pair, "pairDevice");
+  const workspaceRead = child(pair, "readWorkspace");
+  const explain = child(scenario, "explainBlocker");
+  const shouldPair = assignment.mode === "pair";
+  const missing = assignment.mode === "missing";
+  const target = missing
+    ? owned === "emulator-5554"
+      ? "emulator-5556"
+      : "emulator-5554"
+    : owned;
+  const decision = missing
+    ? { status: "blocked", blocker: "no-device" }
+    : { status: "ready", deviceId: owned };
+  const effectMatches = (record, service, method, args, result) =>
+    record?.effects?.length === 1 &&
+    record.effects[0].service === service &&
+    record.effects[0].method === method &&
+    !record.effects[0].error &&
+    matchesValue(record.effects[0].args, args) &&
+    matchesValue(record.effects[0].result, result);
+
+  requireEvidence(
+    fixture?.passed === true &&
+      ["inventory", "pairing", "readiness", "report"].every(
+        (key) => checks?.[key] === true,
+      ) &&
+      caseId === assignment.id &&
+      typeof contextId === "string" &&
+      contextId === execution.provenance?.contextId &&
+      /^emulator-[1-9][0-9]+$/u.test(owned ?? "") &&
+      typeof provider === "string" &&
+      !!provider &&
+      request?.goal === assignment.goal &&
+      typeof request.workspace === "string" &&
+      !!request.workspace &&
+      request.deviceId === target &&
+      request.scenario === "pair" &&
+      request.reset === false &&
+      request.authority ===
+        (assignment.mode === "inspect" ? "inspect" : "execute") &&
+      isDeepStrictEqual(inventory, {
+        workspace: request.workspace,
+        provider,
+        foreground: true,
+        tooling: true,
+        devices: missing ? [] : [{ id: owned, state: "ready" }],
+      }) &&
+      matchesValue(scenario?.inputs?.request, request) &&
+      matchesValue(scenario.output, report) &&
+      matchesValue(setup?.inputs?.request, request) &&
+      matchesValue(setup.output, decision) &&
+      matchesValue(discovery?.output, inventory) &&
+      effectMatches(discovery, "mobileInventory", "read", [], inventory) &&
+      matchesValue(select?.inputs?.devices, inventory.devices) &&
+      matchesValue(select.inputs?.requested, target) &&
+      matchesValue(select.output, decision) &&
+      records.flatMap(({ effects }) => effects ?? []).length ===
+        (shouldPair ? 3 : 1),
+    "Android pairing needs the exact desktop discovery and assigned-device decision",
+  );
+
+  requireEvidence(
+    shouldPair
+      ? receipt?.provider === provider &&
+          receipt.workspace === request.workspace &&
+          receipt.attachedDevice === owned &&
+          receipt.install === "already-compatible" &&
+          typeof receipt.pairedDevice === "string" &&
+          !!receipt.pairedDevice &&
+          receipt.pairedDevice !== owned &&
+          observed?.pairedDevice === receipt.pairedDevice &&
+          observed.status === "ready" &&
+          typeof observed.message === "string" &&
+          !!observed.message &&
+          current?.status === "ready" &&
+          isDeepStrictEqual(report, {
+            status: "paired-ready",
+            deviceId: owned,
+            receipt,
+            readback: observed,
+          }) &&
+          matchesValue(pair?.inputs?.deviceId, owned) &&
+          matchesValue(pair.output, report) &&
+          matchesValue(provision?.inputs?.deviceId, owned) &&
+          matchesValue(provision.output, receipt) &&
+          effectMatches(provision, "mobilePairing", "pair", [owned], receipt) &&
+          matchesValue(
+            workspaceRead?.inputs?.pairedDevice,
+            receipt.pairedDevice,
+          ) &&
+          matchesValue(workspaceRead.output, observed) &&
+          effectMatches(
+            workspaceRead,
+            "mobileWorkspace",
+            "read",
+            [receipt.pairedDevice],
+            observed,
+          ) &&
+          !explain
+      : receipt === null &&
+          observed === null &&
+          current === null &&
+          !pair &&
+          (missing
+            ? report.status === "blocked" &&
+              report.blocker === "no-device" &&
+              report.deviceId === target &&
+              typeof report.next === "string" &&
+              !!report.next.trim() &&
+              matchesValue(explain?.inputs?.deviceId, target) &&
+              matchesValue(explain.inputs?.blocker, "no-device") &&
+              matchesValue(explain.output, report)
+            : isDeepStrictEqual(report, {
+                status: "target-ready",
+                deviceId: owned,
+              }) && !explain),
+    "Android pairing needs the matching paired-device readiness or a verified stop without pairing effects",
+  );
+  return {
+    world: {
+      context_id: contextId,
+      target,
+      provider,
+      workspace: request.workspace,
+    },
     checks,
     evidence: { workspace: { fixture } },
   };

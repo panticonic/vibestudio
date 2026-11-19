@@ -7397,6 +7397,8 @@ describe("website dynamic endpoint admission", () => {
     });
     await host.handleRpc(receiver, declaration, envelope);
     expect(server.hasClientMethod("panel:nav-b", "run")).toBe(true);
+    expect(server.hasClientMethod("panel:nav-b", "run", receiver.connectionId)).toBe(true);
+    expect(server.hasClientMethod("panel:nav-b", "run", "different-connection")).toBe(false);
     expect(server.hasClientMethod("panel:nav-b", "changed")).toBe(false);
     expect(receiver.ws.close).not.toHaveBeenCalled();
     expect(allowed()).toBe(true);

@@ -107,6 +107,7 @@ test("authored template worlds flow into the collector without losing original s
       ["delivery-history-worlds", "deliveryHistoryWorlds", []],
       ["android-audit-worlds", "androidAuditWorlds", []],
       ["android-install-worlds", "androidInstallWorlds", []],
+      ["android-pair-worlds", "androidPairWorlds", []],
       ["publication-revision-worlds", "publicationRevisionWorlds", []],
       ["eval-recovery-worlds", "managedEvalRecoveryWorlds", []],
       ["pdf-layout-worlds", "managedPdfLayoutWorlds", []],
@@ -2955,6 +2956,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["delivery-history-worlds", "export const deliveryHistoryWorlds = [];"],
       ["android-audit-worlds", "export const androidAuditWorlds = [];"],
       ["android-install-worlds", "export const androidInstallWorlds = [];"],
+      ["android-pair-worlds", "export const androidPairWorlds = [];"],
       ["publication-revision-worlds", "export const publicationRevisionWorlds = [];"],
       ["eval-recovery-worlds", "export const managedEvalRecoveryWorlds = [];"],
       ["pdf-layout-worlds", "export const managedPdfLayoutWorlds = [];"],
@@ -6562,5 +6564,146 @@ test("Android installation hold rejects an attempted effect against the other re
   await assert.rejects(
     exportLiveTeacherWorkflow({ ...options, cases }),
     /assigned-device decision/u,
+  );
+});
+
+test("Android pairing export joins readiness to the newly paired identity", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, ".."),
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  const name =
+    "android-pair-live-pair-compatible-emulator-and-verify-workspace";
+  const { assignment } = cases.get(name);
+  const pins = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(
+    options.pins,
+    JSON.stringify({ ...pins, workspace: "system" }),
+  );
+  entry.test.name = name;
+  const owned = "emulator-5576";
+  const provider = "owned-desktop";
+  const request = {
+    goal: assignment.goal,
+    workspace: "owned-system",
+    deviceId: owned,
+    scenario: "pair",
+    authority: "execute",
+    reset: false,
+  };
+  const inventory = {
+    workspace: request.workspace,
+    provider,
+    foreground: true,
+    tooling: true,
+    devices: [{ id: owned, state: "ready" }],
+  };
+  const decision = { status: "ready", deviceId: owned };
+  const receipt = {
+    provider,
+    workspace: request.workspace,
+    attachedDevice: owned,
+    pairedDevice: "new-hub-device",
+    install: "already-compatible",
+  };
+  const current = { status: "ready", message: "Workspace connected." };
+  const observed = { pairedDevice: receipt.pairedDevice, ...current };
+  const report = {
+    status: "paired-ready",
+    deviceId: owned,
+    receipt,
+    readback: observed,
+  };
+  diagnostics.androidPair = {
+    passed: true,
+    contextId: "ctx",
+    caseId: assignment.id,
+    request,
+    provider,
+    owned,
+    inventory,
+    receipt,
+    observed,
+    current,
+    checks: { inventory: true, pairing: true, readiness: true, report: true },
+  };
+  const ref = (value) => {
+    const text = JSON.stringify(value);
+    return {
+      complete: true,
+      hash: createHash("sha256").update(text).digest("hex"),
+      bytes: Buffer.byteLength(text),
+    };
+  };
+  const prototype = diagnostics.natlangTeacher.calls[0];
+  const call = (name, parent, inputs, output, effects = []) => ({
+    callId: name,
+    summary: { ...prototype.summary, call_id: name },
+    record: {
+      ...prototype.record,
+      call_id: name,
+      parent_call_id: parent,
+      definition: { name },
+      outcome: "done",
+      inputs: Object.fromEntries(
+        Object.entries(inputs).map(([key, value]) => [key, ref(value)]),
+      ),
+      output: ref(output),
+      effects,
+    },
+  });
+  const effect = (service, method, args, result) => [
+    { service, method, args: ref(args), result: ref(result) },
+  ];
+  const readback = call(
+    "readWorkspace",
+    "exercisePairing",
+    { pairedDevice: receipt.pairedDevice },
+    observed,
+    effect("mobileWorkspace", "read", [receipt.pairedDevice], observed),
+  );
+  diagnostics.natlangTeacher = {
+    ...diagnostics.natlangTeacher,
+    programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+    rootCallIds: ["runWorkflow"],
+    report,
+    calls: [
+      call("runWorkflow", null, {}, null),
+      call("runMobileScenario", "runWorkflow", { request }, report),
+      call("reviewSetup", "runMobileScenario", { request }, decision),
+      call(
+        "readInventory",
+        "reviewSetup",
+        {},
+        inventory,
+        effect("mobileInventory", "read", [], inventory),
+      ),
+      call(
+        "selectTarget",
+        "reviewSetup",
+        { devices: inventory.devices, requested: owned },
+        decision,
+      ),
+      call("exercisePairing", "runMobileScenario", { deviceId: owned }, report),
+      call(
+        "pairDevice",
+        "exercisePairing",
+        { deviceId: owned },
+        receipt,
+        effect("mobilePairing", "pair", [owned], receipt),
+      ),
+      readback,
+    ],
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+
+  readback.record.inputs.pairedDevice = ref(owned);
+  readback.record.effects[0].args = ref([owned]);
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases }),
+    /matching paired-device readiness/u,
   );
 });

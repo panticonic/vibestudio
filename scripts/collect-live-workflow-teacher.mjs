@@ -51,6 +51,7 @@ if (list) {
         workspace: workflow.workspace ?? "system",
         sourceGroups: workflowSourceGroups(workflow),
         requiresReview: Boolean(workflow.requiresReview),
+        ...(workflow.devices ? { devices: workflow.devices } : {}),
       })
     );
   process.exit(0);
@@ -169,7 +170,9 @@ for (const [workspace, group] of groups) {
       try {
         if (JSON.stringify(pinSources()) !== JSON.stringify(pinned))
           throw new Error("Source pins changed before starting the case");
+        const devices = liveTeacherCases.get(scenario).devices ?? [];
         const status = systemTest([
+          ...devices.flatMap((device) => ["--device", device]),
           "run",
           scenario,
           "--model",

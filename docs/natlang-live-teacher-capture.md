@@ -109,6 +109,18 @@ and verifies its package, process and device image. The two hold cases require
 unchanged device state. All three use the host-attested test authority and the
 managed Android device resource. The run is separate from pairing.
 
+Android pairing cases use an attached desktop driver on the same managed System
+account and one disposable Android emulator with a compatible Vibestudio app.
+Discovery is constrained to the assigned target. Pairing joins the real
+desktop provisioning receipt and waits for workspace readiness through the
+paired device identity. Inspection and an absent target have separate cases
+with no pairing effects. A fresh emulator is required for another pairing run.
+Teacher capture attaches the desktop driver for each pairing case. For the
+model-free check, run `android-pair-oracle-qualification` with `--device desktop`
+in the managed System workspace. Accept the disposable workspace's ordinary
+launch review on the phone when
+it appears. Workspace readiness remains pending while that review is open.
+
 Panel health cases inspect an owned workspace renderer through CDP. The outcome records the
 exact ordered DOM markers and retained console sequence. Recovery requires fresh evidence from
 the same panel after the assigned state change.

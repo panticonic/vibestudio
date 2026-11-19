@@ -26,19 +26,21 @@ describe("phone native endpoint", () => {
   it("exposes only typed phone calls to desktops on the initiating user's account", async () => {
     const call = vi.fn(async () => ({ ok: true }));
     const service = createPhoneNativeEndpointService({
-      hasClientMethod: () => true,
+      getClientMethodBridge: () => undefined,
       getUserConnections: (userId) =>
         userId === "alice"
           ? [
               {
                 caller: { runtime: { id: "shell:alice", kind: "shell" } },
                 userId,
+                connectionId: "desktop",
                 clientLabel: "Alice's desktop",
                 clientPlatform: "desktop",
               },
               {
                 caller: { runtime: { id: "headless:alice", kind: "headless" } },
                 userId,
+                connectionId: "desktop",
                 clientLabel: "Not a desktop shell",
                 clientPlatform: "desktop",
               },
@@ -68,7 +70,7 @@ describe("phone native endpoint", () => {
 
   it("rejects unapproved or differently sourced code before account routing", async () => {
     const service = createPhoneNativeEndpointService({
-      hasClientMethod: () => true,
+      getClientMethodBridge: () => undefined,
       getUserConnections: () => [],
       getClientBridge: () => undefined,
     });
@@ -88,22 +90,34 @@ describe("phone native endpoint", () => {
   });
   it("checks only the exact mobile connection on the initiating account", async () => {
     const call = vi.fn(async () => ({ status: "ready", message: "Workspace ready" }));
-    const hasClientMethod = vi.fn(() => false);
+    const bootstrap = { call: vi.fn(), stream: vi.fn() };
+    const workspace = { call, stream: vi.fn() };
+    const getClientMethodBridge = vi.fn<
+      Parameters<typeof createPhoneNativeEndpointService>[0]["getClientMethodBridge"]
+    >(() => undefined);
     const service = createPhoneNativeEndpointService({
-      hasClientMethod,
+      getClientMethodBridge,
       getUserConnections: () => [
         {
           caller: { runtime: { id: "shell:phone", kind: "shell" } },
           userId: "alice",
+          connectionId: "bootstrap",
+          clientPlatform: "mobile",
+        },
+        {
+          caller: { runtime: { id: "shell:phone", kind: "shell" } },
+          userId: "alice",
+          connectionId: "workspace",
           clientPlatform: "mobile",
         },
         {
           caller: { runtime: { id: "shell:other", kind: "shell" } },
           userId: "bob",
+          connectionId: "other",
           clientPlatform: "mobile",
         },
       ],
-      getClientBridge: () => ({ call, stream: vi.fn() }),
+      getClientBridge: () => bootstrap,
     });
     expect(
       await service.handler(context as never, "readiness", [{ deviceId: "other" }])
@@ -113,11 +127,19 @@ describe("phone native endpoint", () => {
       await service.handler(context as never, "readiness", [{ deviceId: "phone" }])
     ).toMatchObject({ status: "opening", message: "Phone paired. Loading the workspace app…" });
     expect(call).not.toHaveBeenCalled();
-    hasClientMethod.mockReturnValue(true);
+    getClientMethodBridge.mockImplementation((_caller, id) =>
+      id === "workspace" ? workspace : undefined
+    );
 
     expect(
       await service.handler(context as never, "readiness", [{ deviceId: "phone" }])
     ).toMatchObject({ status: "ready" });
     expect(call).toHaveBeenCalledWith("shell:phone", "mobileWorkspace.readiness", []);
+    expect(bootstrap.call).not.toHaveBeenCalled();
+    expect(getClientMethodBridge).not.toHaveBeenCalledWith(
+      "shell:other",
+      "other",
+      expect.anything()
+    );
   });
 });
