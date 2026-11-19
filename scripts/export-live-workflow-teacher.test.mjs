@@ -96,6 +96,7 @@ test("authored template worlds flow into the collector without losing original s
         ],
       ],
       ["phone-setup-world", "phoneSetupUnavailable", null],
+      ["gad-review-worlds", "managedGadReviewWorlds", []],
       ["local-messaging/worlds", "localMessagingWorlds", [{ id: "audience-hold" }]],
       [
         "provenance-history-worlds",
@@ -2916,6 +2917,7 @@ test("workspace integration binds conflict source and verified state without bro
     [
       ["content-project-worlds", "export const contentProjectWorlds = [];"],
       ["phone-setup-world", "export const phoneSetupUnavailable = undefined;"],
+      ["gad-review-worlds", "export const managedGadReviewWorlds = [];"],
       [
         "owned-operations-worlds",
         "export const ownedOperationsWorlds = [], ownedOperationsComposedWorlds = [];",
@@ -3244,4 +3246,187 @@ test("managed phone setup export binds the no-desktop outcome to the exact live 
     exportLiveTeacherWorkflow({ ...options, cases }),
     /recorded read-only desktop decision/u
   );
+});
+
+test("GAD export rejects a stale recap and a roster follow-up from a different snapshot", async (t) => {
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  for (const suffix of ["empty-roster", "latest-handoff-question"]) {
+    const { options, diagnostics, entry, save } = await fixture(t);
+    const id = `gad-review-live-${suffix}`;
+    const { assignment } = cases.get(id);
+    const pins = JSON.parse(await readFile(options.pins, "utf8"));
+    await writeFile(options.pins, JSON.stringify({ ...pins, workspace: "examples" }));
+    entry.test.name = id;
+    entry.execution.provenance.channelId = "owned";
+    const operationId = "01234567-89ab-4cde-8fab-0123456789ab";
+    const request = { goal: assignment.goal, view: assignment.view, operationId };
+    const seeded = assignment.messages.map((text, i) => ({
+      messageId: "message-" + i,
+      seq: i + 2,
+      text,
+    }));
+    const ref = (value) => {
+      const text = JSON.stringify(value);
+      return {
+        complete: true,
+        hash: createHash("sha256").update(text).digest("hex"),
+        bytes: Buffer.byteLength(text),
+      };
+    };
+    const prototype = diagnostics.natlangTeacher.calls[0];
+    const call = (name, parent, inputs, output) => ({
+      callId: name,
+      summary: { ...prototype.summary, call_id: name },
+      record: {
+        ...prototype.record,
+        call_id: name,
+        parent_call_id: parent,
+        definition: { name },
+        outcome: "done",
+        inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+        output: ref(output),
+        effects: [],
+      },
+    });
+    function addEffect(row, service, method, args, result) {
+      const effect = { service, method, args: ref(args), result: ref(result) };
+      row.record.effects.push(effect);
+      return effect;
+    }
+    let report;
+    let stages;
+    let invalidate;
+    const observations = { health: null, followUp: null, tail: null };
+    if (request.view === "triage") {
+      const kind = "empty-roster";
+      const finding = {
+        kind,
+        count: 1,
+        inspector: "inspectChannelRoster",
+        evidence: "No active participants",
+      };
+      const health = {
+        receipt: operationId + ":health",
+        channelId: "owned",
+        branchId: "main",
+        integrity: "ok",
+        activity: "idle",
+        findings: [finding],
+      };
+      const followUp = {
+        receipt: operationId + ":follow-up",
+        kind,
+        inspector: finding.inspector,
+        counters: [{ name: "activeParticipants", count: 0 }],
+      };
+      observations.health = health;
+      observations.followUp = followUp;
+      const judgment = { kind, urgency: "investigate" };
+      report = {
+        health: { evidence: health, status: "investigate", judgments: [judgment] },
+        followUp,
+        conversation: null,
+      };
+      const read = call("readHealth", "reviewHealth", { operationId }, health);
+      const follow = call(
+        "inspectFinding",
+        "reviewChannel",
+        { healthReceipt: health.receipt, kind },
+        followUp
+      );
+      addEffect(read, "gadHealth", "observe", [operationId], health);
+      const effect = addEffect(follow, "gadFollowUp", "inspect", [health.receipt, kind], followUp);
+      stages = [
+        call("reviewHealth", "reviewChannel", { operationId }, report.health),
+        read,
+        call("classifyFinding", "reviewHealth", { finding }, judgment),
+        call(
+          "chooseFollowUp",
+          "reviewChannel",
+          { health: report.health, goal: assignment.goal },
+          kind
+        ),
+        follow,
+      ];
+      invalidate = () => {
+        effect.args = ref(["stale-health", kind]);
+      };
+    } else {
+      const latest = seeded.at(-1);
+      const tail = {
+        receipt: operationId + ":tail",
+        channelId: "owned",
+        status: "observed",
+        standing: "awaiting-agent",
+        range: { fromSeq: 1, toSeq: latest.seq, envelopes: latest.seq },
+        latest: { seq: latest.seq, speaker: "user", text: latest.text },
+      };
+      observations.tail = tail;
+      report = {
+        health: null,
+        followUp: null,
+        conversation: {
+          evidence: tail,
+          meaning: "other",
+          note: "The handoff question is still unanswered.",
+        },
+      };
+      const read = call("readConversation", "reviewConversation", { operationId }, tail);
+      addEffect(read, "gadConversation", "read", [operationId], tail);
+      const interpreted = call(
+        "interpretLatest",
+        "reviewConversation",
+        { evidence: tail, goal: assignment.goal },
+        report.conversation
+      );
+      stages = [
+        call(
+          "reviewConversation",
+          "reviewChannel",
+          { operationId, goal: assignment.goal },
+          report.conversation
+        ),
+        read,
+        interpreted,
+      ];
+      invalidate = () => {
+        interpreted.record.inputs.evidence = ref({ ...tail, latest: seeded[0] });
+      };
+    }
+    diagnostics.managedGadReview = {
+      contextId: "ctx",
+      channelId: "owned",
+      caseId: suffix,
+      request,
+      seeded,
+      observations,
+      passed: true,
+      checks: { observations: true, report: true },
+    };
+    diagnostics.natlangTeacher = {
+      ...diagnostics.natlangTeacher,
+      programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+      rootCallIds: ["runWorkflow"],
+      report,
+      calls: [
+        call("runWorkflow", null, {}, null),
+        call("reviewChannel", "runWorkflow", { request }, report),
+        ...stages,
+      ],
+    };
+    await save();
+    await exportLiveTeacherWorkflow({ ...options, cases });
+    const manifest = JSON.parse(await readFile(path.join(options.out, "manifest.json"), "utf8"));
+    assert.equal(manifest.world.channel_id, "owned");
+    assert.equal(manifest.world.view, request.view);
+    invalidate();
+    await save();
+    await assert.rejects(
+      exportLiveTeacherWorkflow({ ...options, cases }),
+      /GAD (roster triage|recap)/u
+    );
+  }
 });

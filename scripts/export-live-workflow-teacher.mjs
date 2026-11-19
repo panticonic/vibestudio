@@ -179,6 +179,15 @@ const authoringWorkflow = {
   root: "reviewProgram",
   evidence: authoringEvidence,
 };
+const gadReviewWorkflow = {
+  family: "workspace-live-gad-review",
+  workspace: "examples",
+  namespace: "vibestudio:gad",
+  group: "owned-channel-health-and-transcript",
+  validator: { template: "system-testing", path: "skills/system-testing/gad-review-managed.ts" },
+  root: "reviewChannel",
+  evidence: gadReviewEvidence,
+};
 const phoneSetupWorkflow = {
   family: "system-live-phone-setup",
   namespace: "vibestudio:phone-setup",
@@ -400,6 +409,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedSessionReplayWorlds = [] },
     { managedTestkitCleanupWorlds = [] },
     { phoneSetupUnavailable },
+    { managedGadReviewWorlds },
     { managedMemoryWorlds },
     { managedSetupWorlds },
     { managedChecklistWorlds },
@@ -437,6 +447,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "session-replay-worlds.ts",
       "testkit-cleanup-worlds.ts",
       "phone-setup-world.ts",
+      "gad-review-worlds.ts",
       "verified-memory-worlds.ts",
       "onboarding-worlds.ts",
       "checklist-worlds.ts",
@@ -461,6 +472,9 @@ export async function loadLiveTeacherCases(checkouts) {
     })
   );
   const cases = new Map(originalCases);
+  for (const assignment of managedGadReviewWorlds) {
+    cases.set(`gad-review-live-${assignment.id}`, { ...gadReviewWorkflow, assignment });
+  }
   if (phoneSetupUnavailable) {
     const { id, goal, platform } = phoneSetupUnavailable;
     cases.set(id, { ...phoneSetupWorkflow, goal, platform });
@@ -2035,6 +2049,165 @@ function hostLogAuditEvidence(execution, exercise, _scenario, workflow) {
   };
 }
 
+function matchesValue(ref, value) {
+  if (!ref?.complete || value === undefined) return false;
+  const bytes = JSON.stringify(value);
+  return ref.bytes === Buffer.byteLength(bytes) && ref.hash === hash(bytes);
+}
+
+function gadReviewEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedGadReview;
+  const { contextId, channelId, request, seeded, observations } = fixture ?? {};
+  const { health, followUp, tail } = observations ?? {};
+  const report = exercise.report;
+  const { id, goal, view, messages } = workflow.assignment;
+  requireEvidence(
+    typeof contextId === "string" &&
+      contextId === execution.provenance?.contextId &&
+      typeof channelId === "string" &&
+      channelId === execution.provenance?.channelId &&
+      fixture.caseId === id &&
+      fixture.passed === true &&
+      fixture.checks?.observations === true &&
+      fixture.checks?.report === true &&
+      request?.goal === goal &&
+      request.view === view &&
+      /^[a-f0-9-]{36}$/u.test(request.operationId) &&
+      Array.isArray(seeded) &&
+      isDeepStrictEqual(
+        seeded.map(({ text }) => text),
+        messages
+      ),
+    "GAD review must use the assigned owned channel and its exact world"
+  );
+
+  const calls = exercise.calls.map(({ record }) => record);
+  const child = (parent, name) =>
+    parent &&
+    calls.find(
+      (record) =>
+        record.parent_call_id === parent.call_id &&
+        record.definition.name === name &&
+        record.outcome === "done"
+    );
+  const root = calls.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const review = child(root, "reviewChannel");
+  const checkEffect = (call, service, method, args, result) => {
+    const [effect] = call?.effects ?? [];
+    return (
+      call?.effects?.length === 1 &&
+      effect?.service === service &&
+      effect.method === method &&
+      !effect.error &&
+      matchesValue(effect.args, args) &&
+      matchesValue(effect.result, result)
+    );
+  };
+  const readbacks = [];
+  requireEvidence(
+    report !== null &&
+      typeof report === "object" &&
+      matchesValue(review?.inputs?.request, request) &&
+      matchesValue(review.output, report),
+    "GAD review must preserve the exact attached request and report"
+  );
+  if (view === "triage") {
+    const reviewedHealth = child(review, "reviewHealth");
+    const read = child(reviewedHealth, "readHealth");
+    const classified = child(reviewedHealth, "classifyFinding");
+    const chosen = child(review, "chooseFollowUp");
+    const inspected = child(review, "inspectFinding");
+    const kind = "empty-roster";
+    const judgments = [{ kind, urgency: "investigate" }];
+    requireEvidence(
+      calls.length === 7 &&
+        health?.channelId === channelId &&
+        typeof health.branchId === "string" &&
+        health.receipt === request.operationId + ":health" &&
+        health.integrity === "ok" &&
+        health.activity === "idle" &&
+        health.findings?.length === 1 &&
+        health.findings[0]?.kind === kind &&
+        health.findings[0].count === 1 &&
+        health.findings[0].inspector === "inspectChannelRoster" &&
+        followUp?.kind === kind &&
+        followUp?.receipt === request.operationId + ":follow-up" &&
+        followUp.inspector === "inspectChannelRoster" &&
+        followUp.counters?.some(
+          ({ name, count }) => name === "activeParticipants" && count === 0
+        ) &&
+        tail === null &&
+        report.conversation === null &&
+        report.health?.status === "investigate" &&
+        isDeepStrictEqual(report.health.evidence, health) &&
+        isDeepStrictEqual(report.health.judgments, judgments) &&
+        isDeepStrictEqual(report.followUp, followUp) &&
+        checkEffect(read, "gadHealth", "observe", [request.operationId], health) &&
+        matchesValue(read.output, health) &&
+        matchesValue(reviewedHealth.output, report.health) &&
+        matchesValue(classified?.inputs?.finding, health.findings[0]) &&
+        matchesValue(classified.output, judgments[0]) &&
+        matchesValue(chosen?.inputs?.health, report.health) &&
+        matchesValue(chosen.output, kind) &&
+        checkEffect(inspected, "gadFollowUp", "inspect", [health.receipt, kind], followUp) &&
+        matchesValue(inspected.output, followUp),
+      "GAD roster triage must join the observed finding to the exact bounded follow-up"
+    );
+    readbacks.push(read, inspected);
+  } else {
+    const recap = child(review, "reviewConversation");
+    const read = child(recap, "readConversation");
+    const interpreted = child(recap, "interpretLatest");
+    const latest = seeded.at(-1);
+    requireEvidence(
+      calls.length === 5 &&
+        health === null &&
+        followUp === null &&
+        seeded.every(
+          ({ messageId, seq }, i) =>
+            typeof messageId === "string" &&
+            messageId.length > 0 &&
+            Number.isSafeInteger(seq) &&
+            seq > (seeded[i - 1]?.seq ?? 0)
+        ) &&
+        new Set(seeded.map(({ messageId }) => messageId)).size === seeded.length &&
+        latest !== undefined &&
+        tail?.channelId === channelId &&
+        tail.receipt === request.operationId + ":tail" &&
+        tail.status === "observed" &&
+        tail.standing === "awaiting-agent" &&
+        Number.isSafeInteger(tail.range?.toSeq) &&
+        tail.range.fromSeq <= latest.seq &&
+        tail.range.toSeq >= latest.seq &&
+        tail.latest?.seq === latest.seq &&
+        tail.latest.speaker === "user" &&
+        tail.latest.text === latest.text &&
+        report.health === null &&
+        report.followUp === null &&
+        report.conversation?.meaning === "other" &&
+        typeof report.conversation.note === "string" &&
+        report.conversation.note.trim().length > 0 &&
+        isDeepStrictEqual(report.conversation.evidence, tail) &&
+        checkEffect(read, "gadConversation", "read", [request.operationId], tail) &&
+        matchesValue(read.output, tail) &&
+        matchesValue(interpreted?.inputs?.evidence, tail) &&
+        matchesValue(interpreted.output, report.conversation) &&
+        matchesValue(recap.output, report.conversation),
+      "GAD recap must interpret the exact latest published user question"
+    );
+    readbacks.push(read);
+  }
+  requireEvidence(
+    calls.every((record) => record.effects?.length === (readbacks.includes(record) ? 1 : 0)),
+    "GAD review contains activity outside the assigned read-only tool calls"
+  );
+  return {
+    world: { context_id: contextId, channel_id: channelId, view },
+    checks: { ...fixture.checks, exactReadbacks: true },
+    evidence: { workspace: { fixture } },
+  };
+}
+
 function phoneSetupEvidence(execution, exercise, scenario, workflow) {
   const fixture = execution.diagnostics.managedPhoneSetup;
   const observed = fixture?.observed;
@@ -2080,11 +2253,6 @@ function phoneSetupEvidence(execution, exercise, scenario, workflow) {
   const discovery = child(setup, "discoverPhone");
   const chosen = child(discovery, "chooseDesktop");
   const [observe] = assignment?.effects ?? [];
-  const matchesValue = (ref, value) => {
-    if (!ref?.complete) return false;
-    const bytes = JSON.stringify(value);
-    return ref.bytes === Buffer.byteLength(bytes) && ref.hash === hash(bytes);
-  };
   requireEvidence(
     calls.length === 5 &&
       [setup, assignment, discovery, chosen].every(Boolean) &&
