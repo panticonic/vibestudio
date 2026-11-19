@@ -165,6 +165,7 @@ export interface RuntimePreparationInput<S extends RuntimeEntityCreateSpec> {
   spec: S;
   key: string;
   contextId: string;
+  sourceAuthority?: { caller: VerifiedCaller; contextId: string };
   existingBuildKey?: string;
   parent?: {
     parentId: string;
@@ -1295,6 +1296,9 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
             : spec,
         key,
         contextId,
+        ...(sourceContextId
+          ? { sourceAuthority: { caller: actors.initiatingCaller, contextId: sourceContextId } }
+          : {}),
         ...(existing?.activeBuildKey ? { existingBuildKey: existing.activeBuildKey } : {}),
         parent: {
           parentId: caller.runtime.id,

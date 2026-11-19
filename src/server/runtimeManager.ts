@@ -29,7 +29,7 @@ import { stateLayout } from "./stateLayout.js";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import { createVerifiedCaller, type VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { FsService } from "./services/fsService.js";
-import type { ExecutionPublicationPort } from "@vibestudio/shared/execution/retention";
+import type { ExecutionPublicationPort, ExecutionSourceStateRef } from "@vibestudio/shared/execution/retention";
 import { canonicalEntityId, type EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import type { StoredBuildResult } from "./buildV2/buildStore.js";
 import { executionArtifactRefFromBuild } from "./executionRootProviders.js";
@@ -532,7 +532,7 @@ export interface RuntimeManagerDeps {
  * worker/build host.
  */
 export interface WorkerdWorkspaceProvider {
-  bindRuntimeImage(unitPath: string, ref?: string): Promise<RuntimeImageBinding>;
+  bindRuntimeImage(unitPath: string, ref?: string, sourceState?: ExecutionSourceStateRef): Promise<RuntimeImageBinding>;
   getBuildByKey(key: string): Promise<StoredBuildResult | null>;
   readBuildArtifactContent(
     build: Pick<StoredBuildResult, "dir">,
@@ -902,12 +902,17 @@ export class RuntimeManager {
   private async bindRuntimeImage(
     imageId: string,
     source: string,
-    scopeRef?: string
+    scopeRef?: string,
+    sourceState?: ExecutionSourceStateRef
   ): Promise<RuntimeImageRecord> {
     const binding = await this.requireWorkspaceProvider("runtime image binding").bindRuntimeImage(
       source,
-      scopeRef
+      scopeRef,
+      ...(sourceState ? [sourceState] as const : [])
     );
+    if (sourceState && canonicalJson(binding.artifact.sourceState.state) !== canonicalJson(sourceState)) {
+      throw new Error("Runtime build did not retain the selected participant revision");
+    }
     return this.persistRuntimeImage(imageId, binding, scopeRef);
   }
 
@@ -1065,6 +1070,7 @@ export class RuntimeManager {
   async ensureDurableObjectEntity(args: {
     source: string;
     ref?: string;
+    sourceState?: ExecutionSourceStateRef;
     className: string;
     key: string;
     contextId: string;
@@ -1087,6 +1093,7 @@ export class RuntimeManager {
     const scopeRef = entityScopeRef(args.ref, args.contextId);
     await this.ensureDOClass(args.source, args.className, {
       scopeRef,
+      sourceState: args.sourceState,
       objectKey: args.key,
       imageId: targetId,
       stateArgs: args.stateArgs,
@@ -1333,6 +1340,7 @@ export class RuntimeManager {
   async startWorker(args: {
     source: string;
     ref?: string;
+    sourceState?: ExecutionSourceStateRef;
     artifact?: { buildKey: string; executionDigest: string };
     key: string;
     contextId: string;
@@ -1434,7 +1442,7 @@ export class RuntimeManager {
       const [image] = await Promise.all([
         args.artifact
           ? Promise.resolve(this.bindExactWorkerImage(targetId, args.source, args.artifact))
-          : this.bindRuntimeImage(targetId, args.source, scopeRef),
+          : this.bindRuntimeImage(targetId, args.source, scopeRef, args.sourceState),
         this.ensureWorkerdRunning(),
       ]);
       instance.scopeRef = image.scopeRef;
@@ -2113,10 +2121,10 @@ export class RuntimeManager {
     className: string
   ): { repoPath: string; effectiveVersion: string } | null {
     const service = this.doServices.get(doServiceKey(source, className));
-    if (!service) {
+    if (!service?.imageId) {
       return null;
     }
-    const image = service.imageId ? this.runtimeImages.get(service.imageId) : null;
+    const image = this.runtimeImages.get(service.imageId);
     return {
       repoPath: service.source,
       effectiveVersion: image?.artifact.sourceState.effectiveVersion ?? service.buildKey,
@@ -2151,8 +2159,8 @@ export class RuntimeManager {
       if (binding) return binding.admission;
     }
     const service = this.doServices.get(doServiceKey(source, className));
-    if (!service || isInternalDOSource(source)) return null;
-    const image = service.imageId ? this.runtimeImages.get(service.imageId) : null;
+    if (!service?.imageId || isInternalDOSource(source)) return null;
+    const image = this.runtimeImages.get(service.imageId);
     if (!image) throw new Error(`Durable Object ${source}:${className} has no admitted image`);
     let admission = this.doAdmissions.get(image);
     if (!admission) {
@@ -2264,6 +2272,13 @@ export class RuntimeManager {
     return index;
   }
 
+  private doCatalogImage(source: string, className: string, objectKey: string) {
+    const object = this.doObjectBuilds.get(doObjectBuildKey(source, className, objectKey));
+    if (object) return this.sealedDoImages.get(object.imageId) ?? this.runtimeImages.get(object.imageId);
+    const service = this.doServices.get(doServiceKey(source, className));
+    return service?.imageId ? this.runtimeImages.get(service.imageId) : undefined;
+  }
+
   async resolveDoRpcMethodAuthority(
     source: string,
     className: string,
@@ -2277,12 +2292,11 @@ export class RuntimeManager {
     | null
   > {
     if (isInternalDOSource(source)) return null;
-    const objectBuild = this.doObjectBuilds.get(doObjectBuildKey(source, className, objectKey));
-    const service = this.doServices.get(doServiceKey(source, className));
-    const buildKey = objectBuild?.buildKey ?? service?.buildKey;
-    if (!buildKey) return null;
-    const build =
-      await this.requireWorkspaceProvider("direct DO authority").getBuildByKey(buildKey);
+    const artifact = this.doCatalogImage(source, className, objectKey)?.artifact;
+    if (!artifact) return null;
+    const build = await this.requireWorkspaceProvider("direct DO authority").getBuildByExecution(
+      artifact.buildKey, artifact.executionDigest
+    );
     if (!build || build.metadata.kind !== "worker") return null;
     const declaration = this.workspaceRpcCatalogIndex(build).get(`${className}\0${method}`) ?? null;
     return declaration && build.metadata.execution?.executionDigest
@@ -2299,12 +2313,12 @@ export class RuntimeManager {
     objectKey: string
   ): Promise<{ activeBuildKey: string | null; declaredMethods: string[] }> {
     if (isInternalDOSource(source)) return { activeBuildKey: null, declaredMethods: [] };
-    const objectBuild = this.doObjectBuilds.get(doObjectBuildKey(source, className, objectKey));
-    const service = this.doServices.get(doServiceKey(source, className));
-    const activeBuildKey = objectBuild?.buildKey ?? service?.buildKey ?? null;
-    if (!activeBuildKey) return { activeBuildKey, declaredMethods: [] };
-    const build =
-      await this.requireWorkspaceProvider("direct DO catalog").getBuildByKey(activeBuildKey);
+    const artifact = this.doCatalogImage(source, className, objectKey)?.artifact;
+    if (!artifact) return { activeBuildKey: null, declaredMethods: [] };
+    const { buildKey: activeBuildKey, executionDigest } = artifact;
+    const build = await this.requireWorkspaceProvider("direct DO catalog").getBuildByExecution(
+      activeBuildKey, executionDigest
+    );
     if (!build || build.metadata.kind !== "worker") {
       return { activeBuildKey, declaredMethods: [] };
     }
@@ -3656,6 +3670,7 @@ export class RuntimeManager {
     className: string,
     opts: {
       scopeRef?: string;
+      sourceState?: ExecutionSourceStateRef;
       objectKey?: string;
       imageId?: string;
       stateArgs?: unknown;
@@ -3670,37 +3685,44 @@ export class RuntimeManager {
       if (source.split("/").filter(Boolean).length !== 2)
         throw new Error(`DO source path must be exactly 2 segments, got: "${source}"`);
       const scopeRef = opts.scopeRef ?? service?.scopeRef;
+      if (opts.sourceState && !(scopeRef && opts.objectKey)) {
+        throw new Error("An exact participant runtime image requires a concrete Durable Object");
+      }
       const serviceImageId = `do-service:${serviceKey}`;
       // Resolve one immutable executable for this request. A new service and
       // its first concrete object share that exact binding, even if the source
       // head advances while activation is in flight.
-      if (!service || (scopeRef && opts.objectKey)) {
+      if (!service?.imageId || (scopeRef && opts.objectKey)) {
         const imageId =
           scopeRef && opts.objectKey
             ? (opts.imageId ??
               canonicalEntityId({ kind: "do", source, className, key: opts.objectKey }))
             : serviceImageId;
-        image = await this.bindRuntimeImage(imageId, source, scopeRef);
+        image = await this.bindRuntimeImage(imageId, source, scopeRef, opts.sourceState);
       }
-      if (!service) {
+      if (!service?.imageId && (!opts.sourceState || !service)) {
         const prepared = assertPresent(image);
-        const serviceImage =
-          prepared.id === serviceImageId
+        // Private concrete executions are never the default for a class.
+        const serviceImage = opts.sourceState
+          ? null
+          : prepared.id === serviceImageId
             ? prepared
             : this.persistRuntimeImage(serviceImageId, prepared, scopeRef);
         const sourceSanitized = source.replace(/[^a-zA-Z0-9_]/g, "_");
         service = {
-          buildKey: serviceImage.artifact.buildKey,
+          buildKey: prepared.artifact.buildKey,
           className,
-          imageId: serviceImage.id,
+          ...(serviceImage ? { imageId: serviceImage.id, scopeRef } : {}),
           serviceName: `do_${sourceSanitized}_${className.replace(/[^a-zA-Z0-9_]/g, "_")}`,
           source,
-          scopeRef,
         };
         this.doServices.set(serviceKey, service);
-        this.registerRoutesForDoClass(source, className);
-        this.registerDoEgressCaller(source, className, serviceImage);
+        if (serviceImage) {
+          this.registerRoutesForDoClass(source, className);
+          this.registerDoEgressCaller(source, className, serviceImage);
+        }
       }
+      if (!service) throw new Error(`Durable Object ${serviceKey} has no admitted class`);
       if (opts.objectKey) {
         const imageId = image?.id ?? service.imageId;
         if (!imageId) throw new Error(`Durable Object ${serviceKey} has no executable binding`);

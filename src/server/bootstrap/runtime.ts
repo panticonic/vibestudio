@@ -460,7 +460,8 @@ export function wireRuntimeCore(deps: WorkerdBootstrapDeps): void {
       const manager = assertPresent(resolve<RuntimeManager>("runtimeManager"));
       const buildSystem = assertPresent(resolve<BuildSystemV2>("buildSystem"));
       const provider: WorkerdWorkspaceProvider = {
-        bindRuntimeImage: (unitPath, ref) => buildSystem.bindRuntimeImage(unitPath, ref),
+        bindRuntimeImage: (unitPath, ref, sourceState) =>
+          buildSystem.bindRuntimeImage(unitPath, ref, sourceState),
         getBuildByKey: (key) => buildSystem.getBuildByKey(key),
         readBuildArtifactContent: (build, artifact) =>
           buildSystem.readBuildArtifactContent(build, artifact),

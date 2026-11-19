@@ -1996,6 +1996,34 @@ describe("RuntimeManager", () => {
       expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/new-do", "ctx:ctx-agent");
     });
 
+    it("keeps a participant's first DO image out of the class default", async () => {
+      const deps = createMockDeps();
+      const mgr = new RuntimeManager(deps);
+      const source = "workers/participant";
+      const className = "ParticipantDO";
+      const ref = "state:participant";
+      const artifact = runtimeArtifact(source, ref);
+      const sourceState = { kind: "event", eventId: `event:${source}:${ref}` } as const;
+      const prepared = await mgr.ensureDurableObjectEntity({
+        source, className, key: "private", contextId: "ctx-1", ref, sourceState,
+      });
+
+      expect(deps.bindRuntimeImage).toHaveBeenCalledWith(source, ref, sourceState);
+      expect(prepared.executionDigest).toBe(artifact.executionDigest);
+      expect(mgr.getDoAdmission(source, className, "private")).not.toBeNull();
+      expect(mgr.getDoAdmission(source, className, "public")).toBeNull();
+      expect(await mgr.describeDoRpcCatalog(source, className, "public")).toEqual({
+        activeBuildKey: null, declaredMethods: [],
+      });
+
+      await mgr.ensureDOClass(source, className, { scopeRef: "main" });
+      expect(deps.bindRuntimeImage).toHaveBeenLastCalledWith(source, "main");
+      expect(mgr.getDoAdmission(source, className, "public")).not.toBeNull();
+      expect(mgr.getDoAdmission(source, className, "private")?.props.image?.sourceRef).toBe(
+        artifact.sourceState.contentRoots[0]?.stateHash
+      );
+    });
+
     it("restores an internal entity directly from its sealed service identity", async () => {
       const deps = createMockDeps();
       const mgr = new RuntimeManager(deps);

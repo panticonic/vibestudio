@@ -4677,7 +4677,7 @@ async function main() {
             listContexts: (prefix) => workspaceVcs.listSemanticContexts(prefix),
           },
           hooks: {
-            prepare: (async ({ spec, key, contextId, existingBuildKey, parent }) => {
+            prepare: (async ({ spec, key, contextId, existingBuildKey, parent, sourceAuthority }) => {
               const targetId = canonicalEntityId({
                 kind: spec.kind,
                 source:
@@ -4706,7 +4706,18 @@ async function main() {
               }
 
               const source = spec.execution.source;
-              const ref = spec.execution.ref;
+              const requestedRef = spec.execution.ref;
+              const participantSource =
+                !existingBuildKey && !spec.execution.artifact &&
+                workspaceVcs.participantHistoryAttached && sourceAuthority &&
+                requestedRef === `ctx:${sourceAuthority.contextId}`
+                  ? await workspaceVcs.resolveCallerContextState(
+                      sourceAuthority.contextId,
+                      sourceAuthority.caller
+                    )
+                  : undefined;
+              const ref = participantSource?.stateHash ?? requestedRef;
+              const sourceState = participantSource?.semanticState;
               let prepared: {
                 effectiveVersion: string;
                 buildKey?: string;
@@ -4743,6 +4754,7 @@ async function main() {
                   prepared = await runtimeManager.ensureDurableObjectEntity({
                     source,
                     ref,
+                    sourceState,
                     className: spec.className,
                     key,
                     contextId,
@@ -4753,6 +4765,7 @@ async function main() {
                 prepared = await runtimeManager.startWorker({
                   source,
                   ref,
+                  sourceState,
                   ...(spec.execution.artifact ? { artifact: spec.execution.artifact } : {}),
                   key,
                   contextId,
@@ -4792,7 +4805,7 @@ async function main() {
                     authority: build.metadata.authority,
                   };
                 } else {
-                  const binding = await buildSystem.bindRuntimeImage(source, ref);
+                  const binding = await buildSystem.bindRuntimeImage(source, ref, sourceState);
                   prepared = {
                     effectiveVersion: binding.artifact.sourceState.effectiveVersion,
                     buildKey: binding.artifact.buildKey,
@@ -5648,8 +5661,8 @@ async function main() {
             const active = entityCache.resolveActive(targetId);
             const buildSystem =
               container.get<import("./buildV2/index.js").BuildSystemV2>("buildSystem");
-            const build = active?.activeBuildKey
-              ? await buildSystem?.getBuildByKey(active.activeBuildKey)
+            const build = active?.activeBuildKey && active.activeExecutionDigest
+              ? await buildSystem?.getBuildByExecution(active.activeBuildKey, active.activeExecutionDigest)
               : null;
             const catalogMethod =
               build && "metadata" in build && build.metadata.kind === "worker"
@@ -5659,13 +5672,17 @@ async function main() {
                 : undefined;
             const hostIntrinsic = isHostIntrinsicDirectMethod(method);
             if (!catalogMethod && !hostIntrinsic) {
-              const callerContextId = entityCache.resolveContext(caller.runtime.id);
+              const callerContextId = workspaceVcs.participantHistoryAttached
+                ? caller.agentBinding?.contextId ?? callerRuntimeContextId(entityCache, caller.runtime.id)
+                : entityCache.resolveContext(caller.runtime.id);
               let candidateStateHash: string | null = null;
               let candidateBuildKey: string | null = null;
               let candidateDeclaresMethod = false;
               if (callerContextId) {
                 try {
-                  candidateStateHash = await workspaceVcs.resolveContextState(callerContextId);
+                  candidateStateHash = workspaceVcs.participantHistoryAttached
+                    ? (await workspaceVcs.resolveCallerContextState(callerContextId, caller)).stateHash
+                    : await workspaceVcs.resolveContextState(callerContextId);
                   const candidateReport = buildSystem?.peekBuildReport?.(
                     source,
                     candidateStateHash
