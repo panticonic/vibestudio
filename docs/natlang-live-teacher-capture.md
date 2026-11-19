@@ -13,8 +13,9 @@ They are not recorded live effects or training examples.
 Use `pnpm natlang:tasks --coverage` to inspect the tracked skill documents, local
 Natlang sources, mounted callables, and managed and scoped case counts for each
 callable. The skill entries also show direct Markdown links to mounted Natlang
-programs elsewhere in the same template. Ambiguous or unresolved assignments are listed with their possible
-sources. The report shows source relationships. A co-located program or case
+programs elsewhere in the same template or in another configured template repository.
+Cross-template links identify a tracked callable on the repository's main branch.
+Ambiguous or unresolved assignments are listed with their possible sources. The report shows source relationships. A co-located program or case
 does not establish that every procedure in a skill is implemented or tested.
 
 The scale target uses the baseline of 316 entries in the managed system-test catalog at System-testing revision
@@ -163,8 +164,11 @@ checks skill order and binds the exact bookmark URL to the persisted note on the
 
 Personal Collection conductor cases organize real panel subtrees. The shared workflow resolves
 references against the latest tree, applies each accepted change, and verifies live titles,
-notes, parentage and sibling order. The outcome checks also cover ambiguous references,
-invalid destinations and preservation of an unrelated panel.
+notes, parentage and sibling order. Title and note verification checks the requested
+field and preservation of the rest of the observed tree. The outcome checks also cover
+ambiguous references and invalid destinations. Run
+`collection-field-readback-oracle-qualification` for the model-free case combining
+a group rename, panel move, and independent notes.
 
 Tendril board cases present the assigned panel on an online headless VibeStudio device. Their
 Natlang stages apply a sequence of shared-state changes and exposed page calls. The evidence joins

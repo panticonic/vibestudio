@@ -39,11 +39,22 @@ test("workflow coverage lists mounted entry points and leaves ambiguous cases un
         "`[Quoted command](../../skills/system/natlang/review.nl)`\n"
     ),
     write("system", "skills/local-only/read.nl"),
+    write(
+      "system",
+      "skills/cross-template/SKILL.md",
+      "[Base workflow](https://github.com/example/base/blob/main/skills/api/natlang/review.nl#use)\n" +
+        "[Outside repository](https://github.com/someone/base/blob/main/skills/vibestudio-workflows/runWorkflow/operate.nl)\n" +
+        "[Unrelated branch](https://github.com/example/base/blob/other/skills/vibestudio-workflows/runWorkflow/operate.nl)\n" +
+        "[Nested helper](https://github.com/example/base/blob/main/skills/api/natlang/review/lookup.nl)\n"
+    ),
   ]);
   for (const cwd of Object.values(checkouts)) {
     execFileSync("git", ["init", "-q"], { cwd });
     execFileSync("git", ["add", "."], { cwd });
   }
+  execFileSync("git", ["remote", "add", "origin", "git@github.com:example/base.git"], {
+    cwd: checkouts.base,
+  });
   const coverage = await inspectWorkflowCoverage(checkouts, [
     { id: "managed-direct", execution: "managed-workspace", operations: ["operate"] },
     { id: "managed-ambiguous", execution: "managed-workspace", operations: ["review"] },
@@ -89,6 +100,10 @@ test("workflow coverage lists mounted entry points and leaves ambiguous cases un
   assert.deepEqual(
     coverage.skills.find(({ source }) => source === "skills/system/SKILL.md").linkedCallables,
     []
+  );
+  assert.deepEqual(
+    coverage.skills.find(({ source }) => source === "skills/cross-template/SKILL.md").linkedCallables,
+    ["api/review"]
   );
   assert.deepEqual(
     coverage.unresolved.map(({ selector, candidates }) => [

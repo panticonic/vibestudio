@@ -7189,6 +7189,9 @@ function collectionEvidence(execution, exercise, _scenario, workflow) {
       placements.every((call) => children(call, "locateCollectionPanel").length > 0) &&
       applied.length === transitions.length &&
       applied.every((call) => children(call, "verifyCollectionChange").length === 1) &&
+      verified.every((call) =>
+        children(call, "verifyPlacement").length + children(call, "verifyFieldChange").length === 1
+      ) &&
       verified.filter((call) => children(call, "verifyPlacement").length === 1).length ===
         transitions.filter(({ mutation }) => isPlacement(mutation)).length,
     "Collection capture must include nested planning, target resolution and effect verification"

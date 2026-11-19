@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { pathToFileURL } from "node:url";
 import templateConfig from "../src/dev/developmentTemplateConfig.cjs";
 import {
   exportLiveTeacherWorkflow,
@@ -2603,6 +2604,33 @@ test("Browser library export rejects a bookmark from another origin", async (t) 
   );
 });
 
+test("Collection field verification rejects collateral changes in the refreshed tree", async () => {
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const { default: matchesFieldChange } = await import(pathToFileURL(path.join(
+    checkouts.personal, "skills/collection-conductor/organizeCollection/applyCollectionChange",
+    "verifyCollectionChange/verifyFieldChange/matchesFieldChange.ts"
+  )).href);
+  const before = {
+    rootId: "root", complete: true, id: "before",
+    nodes: [
+      { id: "root", parentId: null, title: "Collection", note: null, source: "about/collection", contextId: "ctx" },
+      { id: "agenda", parentId: "root", title: "Agenda", note: "First", source: "about/page", contextId: "ctx" },
+      { id: "review", parentId: "root", title: "Review", note: "Keep", source: "about/page", contextId: "ctx" },
+    ],
+  };
+  const mutation = { kind: "note", panelId: "agenda", text: "Updated" };
+  const after = structuredClone({ ...before, id: "after" });
+  after.nodes[1].note = mutation.text;
+  assert.equal(matchesFieldChange(before, after, mutation), true);
+  after.nodes[2].note = null;
+  assert.equal(matchesFieldChange(before, after, mutation), false);
+  after.nodes[2].note = before.nodes[2].note;
+  after.nodes.reverse();
+  assert.equal(matchesFieldChange(before, after, mutation), false);
+});
+
 test("Collection export rejects a held finding citing an unobserved panel tree", async (t) => {
   const { options, diagnostics, entry, save } = await fixture(t);
   const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
@@ -2625,6 +2653,7 @@ test("Collection export rejects a held finding citing an unobserved panel tree",
     ["locate-2", "locateCollectionPanel", "plan-2"],
     ["apply", "applyCollectionChange", leaf.callId],
     ["verify", "verifyCollectionChange", "apply"],
+    ["field", "verifyFieldChange", "verify"],
   ]) {
     const call = structuredClone(leaf);
     call.callId = call.summary.call_id = id;

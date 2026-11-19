@@ -8,17 +8,26 @@ const git = promisify(execFile);
 const shared = "skills/vibestudio-workflows";
 const operationName = (source) => path.posix.basename(source, ".nl");
 
-function linkedPrograms(markdown, source) {
+function githubRepository(remote) {
+  return /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/iu.exec(remote)?.[1].toLowerCase();
+}
+
+function linkedPrograms(markdown, source, template, templateByRepository) {
   const links = new Set();
   const nodes = [fromMarkdown(markdown)];
   while (nodes.length) {
     const node = nodes.pop();
     if (node.children) nodes.push(...node.children);
     if (node.type !== "link") continue;
-    const relative = node.url.split(/[?#]/u, 1)[0];
-    if (!relative.endsWith(".nl") || relative.startsWith("/") || relative.includes(":"))
-      continue;
-    links.add(path.posix.join(path.posix.dirname(source), relative));
+    const destination = node.url.split(/[?#]/u, 1)[0];
+    if (!destination.endsWith(".nl")) continue;
+    const remoteLink = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/blob\/main\/(.+)$/u.exec(destination);
+    if (remoteLink) {
+      const owner = templateByRepository.get(remoteLink[1].toLowerCase());
+      if (owner) links.add(JSON.stringify([owner, remoteLink[2]]));
+    } else if (!destination.startsWith("/") && !destination.includes(":")) {
+      links.add(JSON.stringify([template, path.posix.join(path.posix.dirname(source), destination)]));
+    }
   }
   return links;
 }
@@ -34,17 +43,35 @@ async function trackedSources(checkout) {
   return stdout.split("\0").filter(Boolean);
 }
 
+async function originRepository(checkout) {
+  try {
+    const { stdout } = await git("git", ["-C", checkout, "config", "--get", "remote.origin.url"]);
+    return githubRepository(stdout.trim());
+  } catch (error) {
+    if (error.code === 1) return undefined;
+    throw error;
+  }
+}
+
 /** Index source relationships. A nearby document or task does not establish behavior coverage. */
 export async function inspectWorkflowCoverage(checkouts, cases) {
   const manifest = JSON.parse(
     await readFile(path.join(checkouts.base, shared, "natlang.json"), "utf8")
   );
   const filesByTemplate = await Promise.all(
-    Object.entries(checkouts).map(async ([template, checkout]) => ({
-      template,
-      files: await trackedSources(checkout),
-    }))
+    Object.entries(checkouts).map(async ([template, checkout]) => {
+      const [files, repository] = await Promise.all([
+        trackedSources(checkout),
+        originRepository(checkout),
+      ]);
+      return { template, files, repository };
+    })
   );
+  const templateByRepository = new Map();
+  for (const { template, repository } of filesByTemplate) {
+    if (!repository) continue;
+    templateByRepository.set(repository, templateByRepository.has(repository) ? null : template);
+  }
   const mounts = [
     { domain: "", directory: shared + "/runWorkflow" },
     ...Object.entries(manifest.workspaceModules ?? {})
@@ -125,7 +152,9 @@ export async function inspectWorkflowCoverage(checkouts, cases) {
     const localSources = filesByTemplate.find((item) => item.template === template).files;
     const explicitLinks = linkedPrograms(
       await readFile(path.join(checkouts[template], source), "utf8"),
-      source
+      source,
+      template,
+      templateByRepository
     );
     return {
       template,
@@ -137,7 +166,7 @@ export async function inspectWorkflowCoverage(checkouts, cases) {
         .filter((entry) => entry.template === template && entry.source.startsWith(directory))
         .map(({ callable }) => callable),
       linkedCallables: callables
-        .filter((entry) => entry.template === template && explicitLinks.has(entry.source))
+        .filter((entry) => explicitLinks.has(JSON.stringify([entry.template, entry.source])))
         .map(({ callable }) => callable),
     };
   }));
