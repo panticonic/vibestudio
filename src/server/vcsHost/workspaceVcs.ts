@@ -1988,6 +1988,13 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       }
       return { ...fresh, initialized: true, timings };
     }
+    if (this.participantHistoryAttached) {
+      const started = performance.now();
+      const fresh = await this.ensureFresh();
+      timings.ensureFreshMs = performance.now() - started;
+      timings.totalMs = performance.now() - activationStartedAt;
+      return { ...fresh, initialized: false, timings };
+    }
     let spanStartedAt = performance.now();
     const state = await this.ensureContextOnce(contextId);
     timings.ensureContextAndMaterializationMs = performance.now() - spanStartedAt;

@@ -5,6 +5,8 @@ import { z } from "zod";
 import type { DODispatch } from "../doDispatch.js";
 import type { WorkspaceSourceProviderRef } from "../workspaceSourceProvider.js";
 
+export const WORKSPACE_PARTICIPANT_HISTORY_MIGRATION = "workspace-participant-history-v1";
+
 const headSchema = z.object({ head: z.string().min(1) }).strict();
 const replayReceiptSchema = headSchema
   .extend({

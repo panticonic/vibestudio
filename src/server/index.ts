@@ -7310,6 +7310,10 @@ async function main() {
       objectKey: semanticWorkspaceService.objectKey,
     },
     bootstrapStateHash: bootstrapStateHash,
+    readWorkspaceHistoryOwner: (targetId) =>
+      ensureEntityStore(container.get<import("./doDispatch.js").DODispatch>("doDispatch"))
+        .resolveRecord(targetId),
+    readProtectedMainEventId: () => protectedRefStore.readMainSemanticState()?.eventId ?? null,
     publishWorkspaceSourceEntity: async ({
       targetId,
       source,

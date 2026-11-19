@@ -1,3 +1,5 @@
+import { sha256HexSyncText } from "@vibestudio/content-addressing";
+import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import type { ManagedService } from "@vibestudio/shared/managedService";
 import { describe, expect, it, vi } from "vitest";
 import type { DODispatch } from "../doDispatch.js";
@@ -6,6 +8,7 @@ import type { WorkspaceSemanticPort } from "../workspaceSourceProvider.js";
 import type { RuntimeManager } from "../runtimeManager.js";
 import { wireVcsDurability, type VcsDurabilityBootstrapDeps } from "./vcsDurability.js";
 import { canonicalWorkspaceObjectContextId } from "./workspaceObjectIdentity.js";
+import { WORKSPACE_PARTICIPANT_HISTORY_MIGRATION } from "../vcsHost/workspaceHistoryMigration.js";
 
 function captureServices(overrides: Partial<VcsDurabilityBootstrapDeps> = {}): {
   services: ManagedService[];
@@ -29,6 +32,8 @@ function captureServices(overrides: Partial<VcsDurabilityBootstrapDeps> = {}): {
     workspaceId: "workspace-1",
     bootstrapStateHash: `state:${"d".repeat(64)}`,
     publishWorkspaceSourceEntity: vi.fn(async () => undefined),
+    readWorkspaceHistoryOwner: vi.fn(async () => null),
+    readProtectedMainEventId: vi.fn(() => null),
     activateSemanticWorkspace: vi.fn(async () => undefined),
     ...overrides,
   };
@@ -190,4 +195,62 @@ describe("wireVcsDurability", () => {
     expect(manager.ensureDurableObjectEntity).toHaveBeenCalledOnce();
     expect(publishWorkspaceSourceEntity).toHaveBeenCalledOnce();
   });
+  it("reattaches already installed participant history before asynchronous activation", async () => {
+    const workspaceId = "workspace-1";
+    const source = { source: "workers/workspace-source", className: "GadWorkspaceDO", objectKey: "workspace" };
+    const canonical = { ...source, className: "GadHistoryDO", objectKey: "canonical" };
+    const contextId = canonicalWorkspaceObjectContextId(workspaceId, {
+      source: canonical.source, className: canonical.className, key: canonical.objectKey,
+    });
+    const targetId = `do:${canonical.source}:${canonical.className}:${canonical.objectKey}`;
+    const main = { kind: "event", eventId: "installed-event" };
+    const plan = { main, contexts: [], steps: [main] };
+    const generation = "b882b7f0-0e3a-4ec3-9f6d-30ea541b14e1";
+    const freeze = {
+      operationId: WORKSPACE_PARTICIPANT_HISTORY_MIGRATION,
+      expectedMainEventId: main.eventId,
+    };
+    const receipt = {
+      head: "installed-head", eventId: main.eventId, contexts: [],
+      frozenPlanDigest: sha256HexSyncText(canonicalJson({ source, freeze, plan, generation })),
+    };
+    const dispatch = vi.fn(async (_target: typeof source, method: string, input: unknown) => {
+      if (method === "readHistoryReplayReceipt") return receipt;
+      if (method === "beginHistoryReplayFreeze") {
+        expect(input).toEqual(freeze);
+        return { ...plan, generation };
+      }
+      throw new Error(`Bootstrap unexpectedly tried ${method}`);
+    });
+    const sequence: string[] = [];
+    const workspaceVcs = {
+      attachGad: vi.fn(async () => undefined),
+      attachWorkspaceSourceProvider: vi.fn(),
+      attachParticipantHistory: vi.fn(async () => { sequence.push("participant"); }),
+      startSemanticInitialization: vi.fn(() => { sequence.push("initialization"); }),
+    } as unknown as WorkspaceVcs;
+    const runtimeManager = {
+      ensureDurableObjectEntity: vi.fn(async ({ source, className, key }) => ({
+        targetId: `do:${source}:${className}:${key}`, effectiveVersion: "a".repeat(64),
+        buildKey: "b".repeat(64), executionDigest: "c".repeat(64),
+        authority: { provides: [], requests: [] },
+      })),
+    } as unknown as RuntimeManager;
+    const readWorkspaceHistoryOwner = vi.fn(async () => ({ contextId }));
+    const readProtectedMainEventId = vi.fn(() => "since-published");
+    const { services } = captureServices({
+      workspaceVcs, workspaceId, workspaceSourceProvider: source,
+      readWorkspaceHistoryOwner, readProtectedMainEventId,
+    });
+    const resolve = <D>(name: string): D | undefined =>
+      ({ doDispatch: { dispatch }, runtimeManager })[name as "doDispatch" | "runtimeManager"] as D | undefined;
+    await services.find((service) => service.name === "vcsAttach")?.start?.(resolve);
+    expect(readWorkspaceHistoryOwner).toHaveBeenCalledWith(targetId);
+    expect(readProtectedMainEventId).not.toHaveBeenCalled();
+    expect(workspaceVcs.attachParticipantHistory).toHaveBeenCalledWith({
+      dispatch: { dispatch }, canonical, infrastructureContextId: contextId,
+    });
+    expect(sequence).toEqual(["participant", "initialization"]);
+  });
+
 });

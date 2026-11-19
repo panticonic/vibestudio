@@ -1,4 +1,5 @@
 import type { ServiceContainer } from "@vibestudio/shared/serviceContainer";
+import { canonicalEntityId } from "@vibestudio/shared/runtime/entitySpec";
 import { assertPresent } from "../../lintHelpers";
 import type { DODispatch } from "../doDispatch.js";
 import {
@@ -11,6 +12,11 @@ import type { RuntimeManager } from "../runtimeManager.js";
 import type { GcEpochCoordinator } from "../services/gcEpochCoordinator.js";
 import type { BuildSystemV2 } from "../buildV2/index.js";
 import type { ExecutionPublicationJournal } from "../executionPublicationJournal.js";
+import {
+  migrateWorkspaceHistory,
+  readWorkspaceHistoryReplayReceipt,
+  WORKSPACE_PARTICIPANT_HISTORY_MIGRATION,
+} from "../vcsHost/workspaceHistoryMigration.js";
 import { canonicalWorkspaceObjectContextId } from "./workspaceObjectIdentity.js";
 
 export interface VcsDurabilityBootstrapDeps {
@@ -32,7 +38,49 @@ export interface VcsDurabilityBootstrapDeps {
     authority: import("@vibestudio/shared/authorityManifest").UnitAuthorityManifest;
     contextId: string;
   }): Promise<void>;
+  readWorkspaceHistoryOwner(targetId: string): Promise<{ contextId: string } | null>;
+  readProtectedMainEventId(): string | null;
   activateSemanticWorkspace(workspaceVcs: WorkspaceVcs): Promise<void>;
+}
+
+/** Resume only the canonical history named by this workspace's durable runtime. */
+async function restoreParticipantHistory(
+  deps: VcsDurabilityBootstrapDeps,
+  dispatch: DODispatch,
+  runtime: RuntimeManager
+): Promise<void> {
+  const legacy = deps.workspaceSourceProvider;
+  const canonical = { ...legacy, className: "GadHistoryDO", objectKey: "canonical" };
+  const target = { source: canonical.source, className: canonical.className, key: canonical.objectKey };
+  const targetId = canonicalEntityId({ kind: "do", ...target });
+  const owner = await deps.readWorkspaceHistoryOwner(targetId);
+  if (!owner) return;
+  const contextId = canonicalWorkspaceObjectContextId(deps.workspaceId, target);
+  if (owner.contextId !== contextId) {
+    throw new Error("The canonical participant history has a different runtime lifetime");
+  }
+  const prepared = await runtime.ensureDurableObjectEntity({
+    ...target, ref: deps.bootstrapStateHash, contextId,
+  });
+  if (prepared.targetId !== targetId)
+    throw new Error("The runtime prepared a different canonical participant history");
+  await deps.publishWorkspaceSourceEntity({ ...canonical, contextId, ...prepared });
+  const receipt = await readWorkspaceHistoryReplayReceipt(dispatch, canonical);
+  const expectedMainEventId = receipt?.eventId ?? deps.readProtectedMainEventId();
+  if (!expectedMainEventId)
+    throw new Error("Participant history migration has no initialized source");
+  await migrateWorkspaceHistory({
+    dispatch,
+    source: legacy,
+    destination: canonical,
+    freeze: {
+      operationId: WORKSPACE_PARTICIPANT_HISTORY_MIGRATION,
+      expectedMainEventId,
+    },
+  });
+  await deps.workspaceVcs.attachParticipantHistory({
+    dispatch, canonical, infrastructureContextId: contextId,
+  });
 }
 
 /** Attach the semantic state machine, then initialize its host materialization. */
@@ -78,6 +126,8 @@ export function wireVcsDurability(deps: VcsDurabilityBootstrapDeps): void {
       console.log(
         `[Vcs] Attached manifest-declared workspace source provider (${gadRef.source}:${gadRef.className})`
       );
+      await restoreParticipantHistory(deps, doDispatch, runtimeManager);
+      if (deps.workspaceVcs.participantHistoryAttached) phaseComplete("installed participant history");
       deps.workspaceVcs.startSemanticInitialization(() =>
         deps.activateSemanticWorkspace(deps.workspaceVcs)
       );
