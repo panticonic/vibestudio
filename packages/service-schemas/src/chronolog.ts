@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ByteArraySchema } from "@vibestudio/shared/binary";
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import { StreamResponseSchema } from "@vibestudio/shared/streamResponse";
 import {
@@ -40,7 +41,7 @@ const value = z.union([
   z.string(),
   z.number().finite(),
   z.bigint(),
-  z.instanceof(Uint8Array),
+  ByteArraySchema,
   z.null(),
 ]);
 const groupQuery = z

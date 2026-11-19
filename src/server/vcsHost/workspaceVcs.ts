@@ -1,4 +1,5 @@
 import { deserializeRpcFailure } from "@vibestudio/rpc";
+import { ByteArraySchema } from "@vibestudio/shared/binary";
 import { intrinsicContentDescriptor } from "@vibestudio/content-addressing";
 import { blobUploadPrincipal, hasBlobUploads, markPrivateWorkspaceBlobs } from "../storage/blobUploads.js";
 /**
@@ -873,7 +874,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         senderId: canonicalEntityId({
           kind: "do", source: canonical.source, className: canonical.className, key: canonical.objectKey,
         }),
-        send: async (bytes) => z.instanceof(Uint8Array).parse(await input.request({ kind: "push", bytes })),
+        send: async (bytes) => ByteArraySchema.parse(await input.request({ kind: "push", bytes })),
       });
       try {
         const result = await dispatch.dispatch(canonical, "pushOutgoingHistory", {
