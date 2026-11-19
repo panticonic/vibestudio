@@ -211,6 +211,15 @@ const clientAdmissionWorkflow = {
   root: "reviewClientAdmission",
   evidence: clientAdmissionEvidence,
 };
+const tourRehearsalWorkflow = {
+  family: "personal-live-tour-rehearsal",
+  workspace: "personal",
+  namespace: "vibestudio:tour",
+  group: "authorized-presentation-and-restoration",
+  validator: { template: "system-testing", path: "skills/system-testing/tour-rehearsal-managed.ts" },
+  root: "rehearseTour",
+  evidence: tourRehearsalEvidence,
+};
 const buildPerformanceWorkflow = {
   family: "system-live-build-performance",
   workspace: "system",
@@ -599,6 +608,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedClientAdmissionWorlds },
     { managedLogCursorWorlds },
     { buildPerformanceWorlds },
+    { tourRehearsalWorlds },
     { managedEvalRecoveryWorlds },
     { managedPdfLayoutWorlds },
     { managedDictationWorlds },
@@ -655,6 +665,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "client-admission-worlds.ts",
       "log-cursor-worlds.ts",
       "build-performance-worlds.ts",
+      "tour-rehearsal-worlds.ts",
       "eval-recovery-worlds.ts",
       "pdf-layout-worlds.ts",
       "offline-dictation-worlds.ts",
@@ -706,6 +717,9 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of managedClientAdmissionWorlds) {
     cases.set(`client-admission-live-${assignment.id}`, { ...clientAdmissionWorkflow, assignment });
+  }
+  for (const assignment of tourRehearsalWorlds) {
+    cases.set(`tour-rehearsal-live-${assignment.id}`, { ...tourRehearsalWorkflow, assignment });
   }
   for (const assignment of buildPerformanceWorlds) {
     cases.set(`build-performance-live-${assignment.id}`, { ...buildPerformanceWorkflow, assignment });
@@ -2716,6 +2730,99 @@ function clientAdmissionEvidence(execution, exercise, _scenario, workflow) {
     world: { context_id: contextId, source, host, abi: workingAbi },
     checks,
     evidence: { workspace: { fixture } },
+  };
+}
+
+function tourRehearsalEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.tourRehearsal;
+  const { caseId, panelId, contextId, request, start, visited, restored, checks } = fixture ?? {};
+  const { assignment } = workflow;
+  const unmatchedTopics = assignment.unmatched ?? [];
+  const held = unmatchedTopics.length > 0;
+  const report = exercise.report;
+  const records = exercise.calls.map(({ record }) => record);
+  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const children = (parent, name) => parent
+    ? records.filter((record) =>
+        record.parent_call_id === parent.call_id && record.definition.name === name)
+    : [];
+  const [rehearsal] = children(root, "rehearseTour");
+  const [planning] = children(rehearsal, "planRehearsal");
+  const [route] = children(rehearsal, "reviewStops");
+  const [restoration] = children(rehearsal, "verifyRestoration");
+  const effects = records.flatMap(({ effects }) => effects ?? []);
+  const effectMatches = (effect, method, args, result) =>
+    effect?.service === "tourRehearsal" && effect.method === method && !effect.error &&
+    matchesValue(effect.args, args) && matchesValue(effect.result, result);
+  const id = request?.operationId;
+  const observed = (frame, scene, notes, progress) =>
+    frame?.storedScene === scene && frame.storedNotes === notes &&
+    frame.notesVisible === notes && frame.progress === progress &&
+    frame.eyebrow === start.deck.find((item) => item.id === scene)?.eyebrow &&
+    typeof frame.heading === "string" && frame.heading.length > 0;
+
+  requireEvidence(
+    fixture?.passed === true &&
+      ["initial", "plan", "visits", "restoration", "outcome"].every((key) => checks?.[key] === true) &&
+      caseId === assignment.id && typeof panelId === "string" && panelId.length > 0 &&
+      typeof contextId === "string" && contextId === execution.provenance?.contextId &&
+      typeof id === "string" && id.length > 0 &&
+      request.goal === assignment.goal && request.restore === assignment.restore &&
+      isDeepStrictEqual(request.topics, assignment.topics) &&
+      Array.isArray(start?.deck) && isDeepStrictEqual(start.allowed, assignment.allowed) &&
+      observed(start.frame, assignment.initial.scene, assignment.initial.notes, assignment.initial.progress) &&
+      isDeepStrictEqual(report?.start, start) &&
+      matchesValue(rehearsal?.inputs?.request, request) && matchesValue(rehearsal.output, report) &&
+      effectMatches(rehearsal.effects?.[0], "observe", [id], start),
+    "Tour rehearsal requires the owned panel and its initial rendered frame"
+  );
+  const stops = assignment.expected.map(({ scene }, i) => ({
+    topic: assignment.topics[i],
+    scene: start.deck.find((item) => item.id === scene),
+    notes: assignment.notes,
+  }));
+  const resolutions = children(planning, "resolveTourTopic");
+  const plan = { stops, unmatchedTopics };
+  requireEvidence(
+    matchesValue(planning?.inputs?.start, start) &&
+      matchesValue(planning.output, plan) && isDeepStrictEqual(report.plan, plan) &&
+      resolutions.length === assignment.topics.length && assignment.topics.every((topic) => {
+        const resolution = resolutions.find((call) => matchesValue(call.inputs?.topic, topic));
+        return matchesValue(resolution?.output, stops.find((stop) => stop.topic === topic)?.scene ?? null);
+      }),
+    "Tour rehearsal requires ordered topic decisions grounded in the authorized deck"
+  );
+  const verifications = children(route, "verifyTourStop");
+  requireEvidence(
+    Array.isArray(visited) && visited.length === (held ? 0 : stops.length) &&
+      effects.length === 1 + visited.length + Number(assignment.restore) &&
+      report.outcome === (held ? "held" : "rehearsed") &&
+      report.visits.length === visited.length && verifications.length === visited.length &&
+      (held ? !route : matchesValue(route?.inputs?.plan, plan) && matchesValue(route.output, report.visits)) &&
+      visited.every(({ scene, notes, frame }, i) => {
+        const stop = stops[i];
+        const visit = report.visits[i];
+        const verification = verifications.find((call) => matchesValue(call.inputs?.stop, stop));
+        return scene === stop.scene.id && notes === stop.notes &&
+          observed(frame, scene, notes, assignment.expected[i].progress) &&
+          effectMatches(route.effects?.[i], "visit", [id, scene, notes], frame) &&
+          isDeepStrictEqual(visit, { stop, readback: { stage: "verified", frame } }) &&
+          matchesValue(verification?.inputs?.frame, frame) &&
+          matchesValue(verification.output, visit.readback);
+      }) &&
+      (assignment.restore
+        ? isDeepStrictEqual(restored, start.frame) &&
+          effectMatches(rehearsal.effects?.[1], "restore", [id], restored) &&
+          matchesValue(restoration?.inputs?.frame, restored) &&
+          isDeepStrictEqual(report.restoration, { frame: restored, stage: "verified" }) &&
+          matchesValue(restoration.output, report.restoration)
+        : restored === undefined && report.restoration === null && !restoration),
+    "Tour rehearsal needs each exact live stop and any authorized restoration"
+  );
+  return {
+    world: { context_id: contextId, panel_id: panelId },
+    checks,
+    evidence: { workspace: { panelId, contextId }, cdp: { fixture } },
   };
 }
 

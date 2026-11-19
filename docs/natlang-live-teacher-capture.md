@@ -214,6 +214,12 @@ client, a mobile variant on the wrong runtime and a local incompatible ABI.
 Run `client-admission-oracle-qualification` for model-free verification. The
 workflow inspects the platform contract without launching a device client.
 
+Tour rehearsal drives a disposable instance of the Personal template's tour.
+It maps requested topics to authorized scenes, confirms the persisted scene
+and rendered frame, and verifies restoration where requested. The held case
+covers a route containing an unauthorized topic. Run
+`tour-rehearsal-oracle-qualification` for the live model-free check.
+
 Build performance review profiles a disposable System workspace panel with
 the native build service. Its cases interpret same-key repeat evidence and
 review initial payload against an assigned budget. Run

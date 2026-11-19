@@ -99,6 +99,7 @@ test("authored template worlds flow into the collector without losing original s
       ["client-admission-worlds", "managedClientAdmissionWorlds", []],
       ["log-cursor-worlds", "managedLogCursorWorlds", []],
       ["build-performance-worlds", "buildPerformanceWorlds", []],
+      ["tour-rehearsal-worlds", "tourRehearsalWorlds", []],
       ["eval-recovery-worlds", "managedEvalRecoveryWorlds", []],
       ["pdf-layout-worlds", "managedPdfLayoutWorlds", []],
       ["offline-dictation-worlds", "managedDictationWorlds", []],
@@ -2938,6 +2939,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["client-admission-worlds", "export const managedClientAdmissionWorlds = [];"],
       ["log-cursor-worlds", "export const managedLogCursorWorlds = [];"],
       ["build-performance-worlds", "export const buildPerformanceWorlds = [];"],
+      ["tour-rehearsal-worlds", "export const tourRehearsalWorlds = [];"],
       ["eval-recovery-worlds", "export const managedEvalRecoveryWorlds = [];"],
       ["pdf-layout-worlds", "export const managedPdfLayoutWorlds = [];"],
       ["offline-dictation-worlds", "export const managedDictationWorlds = [];"],
@@ -5719,4 +5721,102 @@ test("build performance export binds the handoff to measured payload and repeat 
   review.record.output = ref(report);
   await save();
   await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /verified repeat keys/u);
+});
+
+test("tour rehearsal export requires each rendered stop and the original restoration", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  const name = "tour-rehearsal-live-boundary-rehearsal-restore";
+  const { assignment } = cases.get(name);
+  const pins = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(options.pins, JSON.stringify({ ...pins, workspace: "personal" }));
+  entry.test.name = name;
+  const request = {
+    operationId: "assigned-tour", goal: assignment.goal, topics: assignment.topics, restore: true,
+  };
+  const deck = [
+    ["opening", "Make it yours"], ["continuum", "Apps meet agents"],
+    ["workspaces", "Capabilities & security"], ["websites", "Websites & apps"],
+    ["automations", "Automations"], ["closing", "Your first tool"],
+  ].map(([id, title], i) => ({ id, title, position: i + 1, eyebrow: `0${i + 1} · ${title}` }));
+  const frame = ({ scene, progress }, notes) => {
+    const item = deck.find(({ id }) => id === scene);
+    return {
+      storedScene: scene, storedNotes: notes, eyebrow: item.eyebrow,
+      heading: item.title, progress, notesVisible: notes,
+    };
+  };
+  const start = { deck, allowed: assignment.allowed, frame: frame(assignment.initial, false) };
+  const stops = assignment.expected.map(({ scene }, i) => ({
+    topic: assignment.topics[i], scene: deck.find(({ id }) => id === scene), notes: true,
+  }));
+  const plan = { stops, unmatchedTopics: [] };
+  const visited = assignment.expected.map((expected) => ({
+    scene: expected.scene, notes: true, frame: frame(expected, true),
+  }));
+  const restoration = { frame: structuredClone(start.frame), stage: "verified" };
+  const report = {
+    start, plan,
+    visits: visited.map(({ frame }, i) => ({ stop: stops[i], readback: { stage: "verified", frame } })),
+    restoration,
+    outcome: "rehearsed",
+  };
+  diagnostics.tourRehearsal = {
+    passed: true, caseId: assignment.id, contextId: "ctx", panelId: "assigned-panel",
+    request, start, visited, restored: restoration.frame,
+    checks: { initial: true, plan: true, visits: true, restoration: true, outcome: true },
+  };
+  const ref = (value) => {
+    const text = JSON.stringify(value);
+    return { complete: true, hash: createHash("sha256").update(text).digest("hex"), bytes: Buffer.byteLength(text) };
+  };
+  const prototype = diagnostics.natlangTeacher.calls[0];
+  const call = (name, parent, inputs, output, effects = [], id = name) => ({
+    callId: id,
+    summary: { ...prototype.summary, call_id: id },
+    record: {
+      ...prototype.record,
+      call_id: id,
+      parent_call_id: parent,
+      definition: { name },
+      outcome: "done",
+      inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+      output: ref(output),
+      effects,
+    },
+  });
+  const effect = (method, args, result) => ({
+    service: "tourRehearsal", method, args: ref(args), result: ref(result),
+  });
+  const review = call("rehearseTour", "runWorkflow", { request }, report, [
+    effect("observe", [request.operationId], start),
+    effect("restore", [request.operationId], restoration.frame),
+  ]);
+  diagnostics.natlangTeacher = {
+    ...diagnostics.natlangTeacher,
+    programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+    rootCallIds: ["runWorkflow"],
+    report,
+    calls: [
+      call("runWorkflow", null, {}, null),
+      review,
+      call("planRehearsal", "rehearseTour", { start }, plan),
+      ...stops.map(({ topic, scene }, i) => call("resolveTourTopic", "planRehearsal", { topic }, scene, [], `topic-${i}`)),
+      call("reviewStops", "rehearseTour", { plan }, report.visits,
+        visited.map(({ scene, notes, frame }) => effect("visit", [request.operationId, scene, notes], frame))),
+      ...report.visits.map(({ stop, readback }, i) =>
+        call("verifyTourStop", "reviewStops", { frame: readback.frame, stop }, readback, [], `stop-${i}`)),
+      call("verifyRestoration", "rehearseTour", { frame: restoration.frame }, restoration),
+    ],
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  restoration.frame.notesVisible = !start.frame.notesVisible;
+  review.record.effects[1].result = ref(restoration.frame);
+  review.record.output = ref(report);
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /authorized restoration/u);
 });
