@@ -96,6 +96,7 @@ test("authored template worlds flow into the collector without losing original s
         ],
       ],
       ["phone-setup-world", "phoneSetupUnavailable", null],
+      ["extension-release-worlds", "managedExtensionReleaseWorlds", []],
       ["authority-review-worlds", "managedAuthorityReviewWorlds", []],
       ["problem-draft-worlds", "managedProblemDraftWorlds", []],
       ["agentic-change-worlds", "managedAgenticChangeWorlds", []],
@@ -2922,6 +2923,7 @@ test("workspace integration binds conflict source and verified state without bro
     [
       ["content-project-worlds", "export const contentProjectWorlds = [];"],
       ["phone-setup-world", "export const phoneSetupUnavailable = undefined;"],
+      ["extension-release-worlds", "export const managedExtensionReleaseWorlds = [];"],
       ["authority-review-worlds", "export const managedAuthorityReviewWorlds = [];"],
       ["problem-draft-worlds", "export const managedProblemDraftWorlds = [];"],
       ["agentic-change-worlds", "export const managedAgenticChangeWorlds = [];"],
@@ -4071,4 +4073,144 @@ test("authority export rejects an origin substitution in live preflight evidence
   });
   await save();
   await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /exact live preflight/u);
+});
+
+test("extension release export rejects treating a local manifest change as the approved runtime", async (t) => {
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  for (const scenario of ["hold-unpublished-pdf-candidate", "hold-code-only-pdf-candidate"]) {
+    const { options, diagnostics, entry, save } = await fixture(t);
+    const name = "extension-release-live-" + scenario;
+    const { assignment } = cases.get(name);
+    const changesManifest = assignment.mode === "manifest-change";
+    const pins = JSON.parse(await readFile(options.pins, "utf8"));
+    await writeFile(options.pins, JSON.stringify({ ...pins, workspace: "examples" }));
+    entry.test.name = name;
+    const { goal, method, name: extension, source: pathInWorkspace, activation } = assignment;
+    const operationId = "release-assignment";
+    const request = { goal, operationId, method };
+    const source = {
+      operationId,
+      contextId: "ctx",
+      name: extension,
+      source: pathInWorkspace,
+      workingRevision: "application:candidate",
+      mainRevision: "workspace-event:published",
+      workingTree: "a".repeat(64),
+      publishedTree: "b".repeat(64),
+      working: {
+        hash: changesManifest ? "candidate-manifest" : "published-manifest",
+        activation,
+        methods: changesManifest ? ["probe", method] : ["probe"],
+      },
+      published: { hash: "published-manifest", activation, methods: ["probe"] },
+    };
+    const runtime = {
+      operationId,
+      name: extension,
+      source: pathInWorkspace,
+      status: "running",
+      activeEv: "published-build",
+      identity: "extension-live",
+      methods: ["probe"],
+      pendingApproval: null,
+      hasError: false,
+      dependencyUpdate: false,
+    };
+    const report = {
+      source: { observation: source, disposition: "unpublished-candidate" },
+      runtime: {
+        observation: runtime,
+        disposition: changesManifest ? "method-not-observed" : "live-method",
+      },
+      decision: "verify-and-publish-candidate",
+    };
+    diagnostics.managedExtensionRelease = {
+      caseId: assignment.id,
+      contextId: "ctx",
+      request,
+      source,
+      runtime,
+      passed: true,
+      checks: { source: true, runtime: true, unchanged: true, report: true },
+    };
+    const ref = (value) => {
+      const text = JSON.stringify(value);
+      return {
+        complete: true,
+        hash: createHash("sha256").update(text).digest("hex"),
+        bytes: Buffer.byteLength(text),
+      };
+    };
+    const prototype = diagnostics.natlangTeacher.calls[0];
+    const call = (name, parent, inputs, output, effects = []) => ({
+      callId: name,
+      summary: { ...prototype.summary, call_id: name },
+      record: {
+        ...prototype.record,
+        call_id: name,
+        parent_call_id: parent,
+        definition: { name },
+        outcome: "done",
+        inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+        output: ref(output),
+        effects,
+      },
+    });
+    const effect = (method, value) => ({
+      service: "extensionReleaseRead",
+      method,
+      args: ref([operationId]),
+      result: ref(value),
+    });
+    const readRuntime = call("readRuntime", "reviewRuntime", { operationId }, runtime, [
+      effect("runtime", runtime),
+    ]);
+    diagnostics.natlangTeacher = {
+      ...diagnostics.natlangTeacher,
+      programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+      rootCallIds: ["runWorkflow"],
+      report,
+      calls: [
+        call("runWorkflow", null, {}, null),
+        call("reviewExtensionRelease", "runWorkflow", { request }, report),
+        call("reviewSource", "reviewExtensionRelease", { operationId, method }, report.source),
+        call("readSource", "reviewSource", { operationId }, source, [effect("source", source)]),
+        call(
+          "assessSource",
+          "reviewSource",
+          { observation: source, method },
+          report.source.disposition
+        ),
+        call("reviewRuntime", "reviewExtensionRelease", { operationId, method }, report.runtime),
+        readRuntime,
+        call(
+          "assessRuntime",
+          "reviewRuntime",
+          { observation: runtime, method },
+          report.runtime.disposition
+        ),
+        call(
+          "chooseNext",
+          "reviewExtensionRelease",
+          { source: report.source, runtime: report.runtime },
+          report.decision
+        ),
+      ],
+    };
+    await save();
+    await exportLiveTeacherWorkflow({ ...options, cases });
+    readRuntime.record.effects[0].result = ref({
+      ...runtime,
+      activeEv: "local-candidate",
+      methods: ["probe", method],
+    });
+    await save();
+    await assert.rejects(
+      exportLiveTeacherWorkflow({ ...options, cases }),
+      /approved runtime readback/u
+    );
+  }
 });

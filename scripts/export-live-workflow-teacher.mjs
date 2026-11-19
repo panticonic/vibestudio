@@ -203,6 +203,18 @@ const terminalCheckWorkflow = {
   root: "runTerminalChecks",
   evidence: terminalCheckEvidence,
 };
+const extensionReleaseWorkflow = {
+  family: "workspace-live-extension-release",
+  workspace: "examples",
+  namespace: "vibestudio:extensiondev",
+  group: "working-published-and-approved-extension",
+  validator: {
+    template: "system-testing",
+    path: "skills/system-testing/extension-release-managed.ts",
+  },
+  root: "reviewExtensionRelease",
+  evidence: extensionReleaseEvidence,
+};
 const authorityReviewWorkflow = {
   family: "workspace-live-authority-review",
   workspace: "examples",
@@ -466,6 +478,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedSessionReplayWorlds = [] },
     { managedTestkitCleanupWorlds = [] },
     { phoneSetupUnavailable },
+    { managedExtensionReleaseWorlds },
     { managedAuthorityReviewWorlds },
     { managedProblemDraftWorlds },
     { managedAgenticChangeWorlds },
@@ -509,6 +522,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "session-replay-worlds.ts",
       "testkit-cleanup-worlds.ts",
       "phone-setup-world.ts",
+      "extension-release-worlds.ts",
       "authority-review-worlds.ts",
       "problem-draft-worlds.ts",
       "agentic-change-worlds.ts",
@@ -547,6 +561,12 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of managedTerminalCheckWorlds) {
     cases.set(`terminal-check-live-${assignment.id}`, { ...terminalCheckWorkflow, assignment });
+  }
+  for (const assignment of managedExtensionReleaseWorlds) {
+    cases.set(`extension-release-live-${assignment.id}`, {
+      ...extensionReleaseWorkflow,
+      assignment,
+    });
   }
   for (const assignment of managedAuthorityReviewWorlds) {
     cases.set(`authority-review-live-${assignment.id}`, { ...authorityReviewWorkflow, assignment });
@@ -2377,6 +2397,129 @@ function terminalCheckEvidence(execution, exercise, _scenario, workflow) {
   return {
     world: { context_id: contextId, process_checks: checks.map(({ id }) => id) },
     checks: { ...fixture.checks, exactExecutionTree: true },
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function extensionReleaseEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedExtensionRelease;
+  const { caseId, contextId, request, source, runtime, checks } = fixture ?? {};
+  const { id, goal, method, name, source: path, activation, mode } = workflow.assignment;
+  const report = exercise.report;
+  const calls = exercise.calls.map(({ record }) => record);
+  const child = (parent, name) =>
+    parent &&
+    calls.find((call) => call.parent_call_id === parent.call_id && call.definition.name === name);
+  const root = calls.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const review = child(root, "reviewExtensionRelease");
+  const sourceReview = child(review, "reviewSource");
+  const runtimeReview = child(review, "reviewRuntime");
+  const next = child(review, "chooseNext");
+
+  const verifiedRead = (stage, reader, scenarioName, methodName, observation, childReport) => {
+    const read = child(stage, reader);
+    const assessed = child(stage, scenarioName);
+    const [effect] = read?.effects ?? [];
+    return (
+      matchesValue(stage?.inputs?.operationId, request.operationId) &&
+      matchesValue(stage.inputs.method, method) &&
+      matchesValue(stage.output, childReport) &&
+      matchesValue(read?.inputs?.operationId, request.operationId) &&
+      matchesValue(read.output, observation) &&
+      read.effects?.length === 1 &&
+      effect?.service === "extensionReleaseRead" &&
+      effect.method === methodName &&
+      !effect.error &&
+      matchesValue(effect.args, [request.operationId]) &&
+      matchesValue(effect.result, observation) &&
+      matchesValue(assessed?.inputs?.observation, observation) &&
+      matchesValue(assessed.inputs.method, method) &&
+      matchesValue(assessed.output, childReport.disposition)
+    );
+  };
+
+  const staged = mode !== "published";
+  const sourceDisposition = staged ? "unpublished-candidate" : "published-method";
+  const runtimeDisposition =
+    runtime?.pendingApproval || runtime?.status === "pending-approval"
+      ? "waiting-approval"
+      : runtime?.status === "building"
+        ? "building"
+        : runtime?.status === "error" || runtime?.hasError
+          ? "failed"
+          : runtime?.status !== "running" || !runtime.identity || !runtime.activeEv
+            ? "cold"
+            : runtime.methods.includes(method)
+              ? "live-method"
+              : "method-not-observed";
+  const decision = staged
+    ? "verify-and-publish-candidate"
+    : {
+        "waiting-approval": "wait-for-approval",
+        building: "wait-for-build",
+        failed: "inspect-failure",
+        cold: "await-activation",
+        "live-method": "observed-live",
+        "method-not-observed": "inspect-active-contract",
+      }[runtimeDisposition];
+
+  requireEvidence(
+    caseId === id &&
+      typeof contextId === "string" &&
+      contextId === execution.provenance?.contextId &&
+      request?.goal === goal &&
+      request.method === method &&
+      typeof request.operationId === "string" &&
+      fixture.passed === true &&
+      ["source", "runtime", "unchanged", "report"].every((key) => checks?.[key] === true) &&
+      source?.operationId === request.operationId &&
+      source.contextId === contextId &&
+      source.name === name &&
+      source.source === path &&
+      runtime?.operationId === request.operationId &&
+      runtime.name === name &&
+      runtime.source === path &&
+      typeof source.working?.hash === "string" &&
+      typeof source.published?.hash === "string" &&
+      source.working.activation === activation &&
+      source.working.methods.includes(method) &&
+      /^[a-f0-9]{64}$/u.test(source.workingTree ?? "") &&
+      /^[a-f0-9]{64}$/u.test(source.publishedTree ?? "") &&
+      (staged
+        ? source.workingRevision !== source.mainRevision &&
+          source.workingTree !== source.publishedTree
+        : source.workingTree === source.publishedTree) &&
+      (mode === "manifest-change"
+        ? source.working.hash !== source.published.hash &&
+          !source.published.methods.includes(method) &&
+          !runtime.methods.includes(method)
+        : source.working.hash === source.published.hash &&
+          source.published.methods.includes(method)) &&
+      isDeepStrictEqual(report?.source?.observation, source) &&
+      isDeepStrictEqual(report?.runtime?.observation, runtime) &&
+      report.source.disposition === sourceDisposition &&
+      report.runtime.disposition === runtimeDisposition &&
+      report.decision === decision &&
+      matchesValue(review?.inputs?.request, request) &&
+      matchesValue(review.output, report) &&
+      calls.flatMap(({ effects }) => effects ?? []).length === 2 &&
+      verifiedRead(sourceReview, "readSource", "assessSource", "source", source, report.source) &&
+      verifiedRead(
+        runtimeReview,
+        "readRuntime",
+        "assessRuntime",
+        "runtime",
+        runtime,
+        report.runtime
+      ) &&
+      matchesValue(next?.inputs?.source, report.source) &&
+      matchesValue(next.inputs.runtime, report.runtime) &&
+      matchesValue(next.output, decision),
+    "Extension review must preserve the exact working and published manifest and the approved runtime readback"
+  );
+  return {
+    world: { context_id: contextId, extension: name, method, mode },
+    checks,
     evidence: { workspace: { fixture } },
   };
 }

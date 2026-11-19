@@ -206,6 +206,13 @@ then binds the interpretation to the latest user message's ID, sequence, and tex
 The exporter checks the nested calls and their exact readbacks. The model-free
 qualification is `gad-review-oracle-qualification`.
 
+Extension review cases reconcile the working and protected-main repository
+trees and manifests with the real host status and exposed methods. Two cases
+stage a manifest change or an implementation-only change in a disposable
+context and require the published source and active runtime to remain
+unchanged. Run
+`extension-release-oracle-qualification` for the model-free check.
+
 The authority review cases call the real host preflight without invoking
 the reviewed operations. They check an open read, exact-origin consolidation
 across distinct URLs and refusal to extend the caller's scope. Run
