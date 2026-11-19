@@ -33,6 +33,7 @@ function captureServices(overrides: Partial<VcsDurabilityBootstrapDeps> = {}): {
     bootstrapStateHash: `state:${"d".repeat(64)}`,
     publishWorkspaceSourceEntity: vi.fn(async () => undefined),
     readWorkspaceHistoryOwner: vi.fn(async () => null),
+    listWorkspaceHistorySessionOwners: vi.fn(async () => []),
     readProtectedMainEventId: vi.fn(() => null),
     activateSemanticWorkspace: vi.fn(async () => undefined),
     ...overrides,
@@ -239,9 +240,10 @@ describe("wireVcsDurability", () => {
     } as unknown as RuntimeManager;
     const readWorkspaceHistoryOwner = vi.fn(async () => ({ contextId }));
     const readProtectedMainEventId = vi.fn(() => "since-published");
+    const listWorkspaceHistorySessionOwners = vi.fn(async () => []);
     const { services } = captureServices({
       workspaceVcs, workspaceId, workspaceSourceProvider: source,
-      readWorkspaceHistoryOwner, readProtectedMainEventId,
+      readWorkspaceHistoryOwner, readProtectedMainEventId, listWorkspaceHistorySessionOwners,
     });
     const resolve = <D>(name: string): D | undefined =>
       ({ doDispatch: { dispatch }, runtimeManager })[name as "doDispatch" | "runtimeManager"] as D | undefined;
@@ -250,6 +252,7 @@ describe("wireVcsDurability", () => {
     expect(readProtectedMainEventId).not.toHaveBeenCalled();
     expect(workspaceVcs.attachParticipantHistory).toHaveBeenCalledWith({
       dispatch: { dispatch }, canonical, infrastructureContextId: contextId,
+      listReplayedSessionOwners: listWorkspaceHistorySessionOwners,
     });
     expect(sequence).toEqual(["participant", "initialization"]);
   });

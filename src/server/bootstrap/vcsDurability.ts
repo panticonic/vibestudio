@@ -40,6 +40,7 @@ export interface VcsDurabilityBootstrapDeps {
     contextId: string;
   }): Promise<void>;
   readWorkspaceHistoryOwner(targetId: string): Promise<{ contextId: string } | null>;
+  listWorkspaceHistorySessionOwners(contextIds: readonly string[]): Promise<Array<{ contextId: string; userId: string }>>;
   readProtectedMainEventId(): string | null;
   activateSemanticWorkspace(workspaceVcs: WorkspaceVcs): Promise<void>;
 }
@@ -80,6 +81,7 @@ async function restoreParticipantHistory(
   });
   await deps.workspaceVcs.attachParticipantHistory({
     dispatch, canonical, infrastructureContextId: contextId,
+    listReplayedSessionOwners: deps.listWorkspaceHistorySessionOwners,
   });
 }
 

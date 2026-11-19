@@ -7316,6 +7316,21 @@ async function main() {
       ).resolveRecord(targetId);
       return owner?.status === "active" && owner.ownerUserId === SYSTEM_SUBJECT.userId ? owner : null;
     },
+    listWorkspaceHistorySessionOwners: async (contextIds) => {
+      const store = getEntityStore();
+      const liveContexts = new Set((await store.listActive("session"))
+        .flatMap(({ contextId, ownerUserId }) => ownerUserId ? [contextId] : []));
+      const owners: Array<{ contextId: string; userId: string }> = [];
+      for (const contextId of contextIds) {
+        if (!liveContexts.has(contextId)) continue;
+        const records = await store.listByContext(contextId);
+        for (const record of records) {
+          if (record.ownerUserId && (record.kind === "session" || record.ownerUserId !== SYSTEM_SUBJECT.userId))
+            owners.push({ contextId, userId: record.ownerUserId });
+        }
+      }
+      return owners;
+    },
     readProtectedMainEventId: () => protectedRefStore.readMainSemanticState()?.eventId ?? null,
     publishWorkspaceSourceEntity: async ({
       targetId,

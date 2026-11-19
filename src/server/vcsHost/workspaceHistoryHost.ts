@@ -825,6 +825,10 @@ export async function mergeWorkspaceParticipantContext(input: WorkspaceHistoryPa
   return { head: reply.head, value: reply.value, result: reply.result };
 }
 
+export function workspaceInteractiveSessionParticipant(userId: string, contextId: string): string {
+  return canonicalJson(["interactive-session", userId, contextId]);
+}
+
 export function workspaceParticipantIdentity(caller: VerifiedCaller, ownerContextId: string | undefined): string {
   const invocation = caller.nativeInvocation;
   if (invocation) {
@@ -835,7 +839,7 @@ export function workspaceParticipantIdentity(caller: VerifiedCaller, ownerContex
   if (session && session.contextId === ownerContextId) {
     // The host reissues task grants for individual signed evals. Their edits
     // belong to the authenticated person's persistent session context.
-    return canonicalJson(["interactive-session", session.userId, session.contextId]);
+    return workspaceInteractiveSessionParticipant(session.userId, session.contextId);
   }
   if (caller.taskAuthority) return canonicalJson(["task-grant", caller.taskAuthority]);
   const userId = caller.subject?.userId;

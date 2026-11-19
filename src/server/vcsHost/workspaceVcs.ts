@@ -140,6 +140,7 @@ import {
   transferWorkspaceParticipant,
   revertWorkspaceParticipant,
   workspaceMainStateReachable,
+  workspaceInteractiveSessionParticipant,
   workspaceParticipantCatalog,
   workspaceParticipantReferencesReachable,
   type WorkspaceHistoryParticipant,
@@ -231,6 +232,9 @@ type ParticipantHistoryAttachment = WorkspaceHistorySource & {
   /** Physical allocations inherit this provider lifetime and cannot reenter their creating DO. */
   infrastructureContextId?: string;
   replayedContextOwners?: ReadonlyMap<string, { caller: VerifiedCaller; ownerContextId: string }>;
+  /** The runtime entity store supplies these durable user stamps at startup. */
+  listReplayedSessionOwners?: (contextIds: readonly string[]) =>
+    Promise<readonly { contextId: string; userId: string }[]>;
   destroyRetiredStorage?: (owner: WorkspaceSourceProviderRef) => Promise<void>;
 };
 
@@ -708,11 +712,41 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       if (!receipt && suppliedOwners.length > 0)
         throw new Error("Workspace replay owners require an installed receipt");
       if (receipt) {
-        const recordedOwners = await registerWorkspaceHistoryReplayOwners(
+        let recordedOwners = await registerWorkspaceHistoryReplayOwners(
           source.dispatch, source.canonical, suppliedOwners,
         );
-        const givenOwners = new Map(suppliedOwners.map(({ contextId, participantId }) => [contextId, participantId]));
         const tips = new Map(receipt.contexts.map(({ id, working }) => [id, working]));
+        const givenOwners = new Map(suppliedOwners.map(({ contextId, participantId }) => [contextId, participantId]));
+        if (receipt.frozenPlanDigest && source.listReplayedSessionOwners) {
+          const registered = new Set(recordedOwners.map(({ contextId }) => contextId));
+          const unowned = [...tips.keys()].filter((contextId) => !registered.has(contextId));
+          const candidates = new Map<string, Set<string>>();
+          const sessions = unowned.length ? await source.listReplayedSessionOwners(unowned) : [];
+          for (const { contextId, userId } of sessions) {
+            if (!tips.has(contextId) || registered.has(contextId)) continue;
+            const users = candidates.get(contextId) ?? new Set<string>();
+            users.add(userId);
+            candidates.set(contextId, users);
+          }
+          const additions = [...candidates].flatMap(([contextId, users]) => {
+            const [userId] = users;
+            return users.size === 1 && userId
+              ? [{ contextId, participantId: workspaceInteractiveSessionParticipant(userId, contextId) }]
+              : [];
+          });
+          if (additions.length) {
+            for (const { contextId, participantId } of recordedOwners) {
+              const given = givenOwners.get(contextId);
+              if (given !== undefined && given !== participantId)
+                throw new Error("Workspace history returned an inconsistent replay owner");
+              givenOwners.set(contextId, participantId);
+            }
+            recordedOwners = await registerWorkspaceHistoryReplayOwners(
+              source.dispatch, source.canonical, additions,
+            );
+            for (const { contextId, participantId } of additions) givenOwners.set(contextId, participantId);
+          }
+        }
         for (const { contextId, participantId } of recordedOwners) {
           const head = tips.get(contextId);
           if (!head || replayedWorkingHeads.has(contextId) ||

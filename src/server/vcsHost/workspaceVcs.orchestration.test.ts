@@ -194,6 +194,45 @@ afterEach(async () => {
 });
 
 describe("WorkspaceVcs semantic host orchestration", () => {
+  it("recovers only unambiguous durable session owners for unassigned replay contexts", async () => {
+    const { vcs, refs } = await harness();
+    vi.spyOn(refs, "readMainSemanticState").mockReturnValue({ kind: "event", eventId: "main-event" });
+    const canonical = { ...TEST_PROVIDER, objectKey: "canonical" };
+    const existing = { contextId: "recorded", participantId: "exact-task-owner" };
+    const selected = { contextId: "unknown", participantId: '["interactive-session","user1","unknown"]' };
+    const register = vi.fn(async (owners: Array<{ contextId: string; participantId: string }>) =>
+      [existing, ...owners]
+    );
+    const dispatch = vi.fn(async (_owner: typeof TEST_PROVIDER, method: string, raw?: unknown) => {
+      switch (method) {
+        case "listHistoryAppliedPublications": return [];
+        case "readHistoryMain": return { head: "main", eventId: "main-event" };
+        case "readHistoryReplayReceipt": return {
+          head: "initial", eventId: "main-event", frozenPlanDigest: "a".repeat(64),
+          contexts: ["unknown", "ambiguous", "recorded"].map((id) => ({
+            id, committed: "initial", working: `${id}-working`,
+          })),
+        };
+        case "registerHistoryReplayOwners":
+          return register((raw as { owners: (typeof existing)[] }).owners);
+        case "readHistoryReplayPrivateContent": return [];
+        default: throw new Error(`Unexpected participant dispatch ${method}`);
+      }
+    });
+    const listReplayedSessionOwners = vi.fn(async () => [
+      { contextId: "ambiguous", userId: "user2" },
+      { contextId: "ambiguous", userId: "user3" },
+      { contextId: "unknown", userId: "user1" },
+      { contextId: "unknown", userId: "user1" },
+      { contextId: "recorded", userId: "user1" },
+      { contextId: "unreplayed", userId: "user1" },
+    ]);
+    await vcs.attachParticipantHistory({ dispatch: { dispatch }, canonical, listReplayedSessionOwners });
+    expect(listReplayedSessionOwners).toHaveBeenCalledExactlyOnceWith(["unknown", "ambiguous"]);
+    expect(register.mock.calls).toEqual([[[]], [[selected]]]);
+    expect(vcs.participantHistoryAttached).toBe(true);
+  });
+
   it("restores migrated work only for its recorded participant and reclaims directories after archival", async () => {
     const { vcs, blobsDir, refs } = await harness();
     vi.spyOn(refs, "readMainSemanticState").mockReturnValue({ kind: "event", eventId: "main-event" });
