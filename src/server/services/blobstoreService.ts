@@ -58,7 +58,14 @@ import {
   withBlobContentLock,
 } from "../storage/blobRetentions.js";
 import type { ServiceContext, VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-import { blobUploadPrincipal, recordBlobUpload } from "../storage/blobUploads.js";
+import {
+  blobUploadPrincipal,
+  hasPrivateWorkspaceBlobs,
+  markPrivateWorkspaceBlobs,
+  privateWorkspaceBlobScopes,
+  type WorkspaceBlobScope,
+  recordBlobUpload,
+} from "../storage/blobUploads.js";
 import { sendJson, sendText } from "../hostCore/httpResponses.js";
 
 const log = createDevLogger("BlobstoreService");
@@ -71,6 +78,7 @@ function errorText(error: unknown): string {
 export interface BlobstoreServiceDeps {
   blobsDir: string;
   recordParticipantUploads?: () => boolean;
+  canReadPrivateContent?: (digest: string, context?: ServiceContext) => Promise<boolean>;
 }
 
 export interface BlobStat {
@@ -155,7 +163,8 @@ async function promoteTempBlob(blobsDir: string, tmpPath: string, digest: string
 
 async function putBlob(
   blobsDir: string,
-  req: IncomingMessage
+  req: IncomingMessage,
+  promote = (tmpPath: string, digest: string) => promoteTempBlob(blobsDir, tmpPath, digest)
 ): Promise<{ digest: string; size: number }> {
   const tmpPath = path.join(blobsDir, "tmp", `${process.pid}-${randomUUID()}.tmp`);
   const hash = createHash("sha256");
@@ -172,7 +181,7 @@ async function putBlob(
   try {
     await pipeline(req, tee, fs.createWriteStream(tmpPath, { flags: "wx" }));
     const digest = hash.digest("hex");
-    await promoteTempBlob(blobsDir, tmpPath, digest);
+    await promote(tmpPath, digest);
     await fsp.unlink(tmpPath).catch((error) => {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     });
@@ -405,7 +414,8 @@ async function grepBlob(
 
 async function listBlobs(
   blobsDir: string,
-  opts?: { prefix?: string; limit?: number }
+  opts?: { prefix?: string; limit?: number },
+  readable?: (digests: string[]) => Promise<string[]>
 ): Promise<string[]> {
   const prefix = opts?.prefix ?? "";
   const limit = opts?.limit;
@@ -435,11 +445,13 @@ async function listBlobs(
 
       const leafDir = path.join(secondDirPath, second.name);
       const files = await fsp.readdir(leafDir, { withFileTypes: true });
-      for (const file of files.sort((a, b) => compareUtf16CodeUnits(a.name, b.name))) {
-        if (!file.isFile()) continue;
-        const digest = firstFour + file.name;
-        if (!DIGEST_RE.test(digest)) continue;
-        if (!digest.startsWith(prefix)) continue;
+      const digests = files
+        .filter((file) => file.isFile())
+        .map((file) => firstFour + file.name)
+        .filter((digest) => DIGEST_RE.test(digest) && digest.startsWith(prefix))
+        .sort(compareUtf16CodeUnits);
+      const visible = readable ? await readable(digests) : digests;
+      for (const digest of visible) {
         results.push(digest);
         if (limit && results.length >= limit) return results;
       }
@@ -568,6 +580,24 @@ async function resolveTreeRef(blobsDir: string, ref: string): Promise<string | n
   throw new Error(`Invalid tree reference: ${JSON.stringify(ref)}`);
 }
 
+function treeEntryDigest(entry: ManifestHashEntry): string {
+  return entry.kind === "file" ? entry.contentHash : treeHashDigest(entry.childHash);
+}
+
+async function putTreeObject(
+  blobsDir: string,
+  object: { canonicalText: string },
+  ref: string,
+  scope: "manifest" | "state",
+  containsPrivateContent: boolean,
+) {
+  const digest = treeHashDigest(ref);
+  if (containsPrivateContent && !await pathExists(blobPath(blobsDir, digest))) {
+    markPrivateWorkspaceBlobs(blobsDir, [digest], scope);
+  }
+  return putBytes(blobsDir, Buffer.from(object.canonicalText, "utf8"));
+}
+
 /**
  * Store one immutable directory node from its entries. Validates entry shape
  * (names, hashes, modes, duplicates — see contentTree/treeObjects) AND that
@@ -611,7 +641,12 @@ export async function putTree(
     }
   }
 
-  const { digest } = await putBytes(blobsDir, Buffer.from(encoded.canonicalText, "utf8"));
+  const containsPrivateContent = privateWorkspaceBlobScopes(
+    blobsDir, encoded.entries.map(treeEntryDigest),
+  ).size > 0;
+  const { digest } = await putTreeObject(
+    blobsDir, encoded, encoded.treeHash, "manifest", containsPrivateContent,
+  );
   if (digest !== treeHashDigest(encoded.treeHash)) {
     throw new Error(
       `putTree: CAS digest ${digest} disagrees with tree hash ${encoded.treeHash} (hashing bug)`
@@ -629,7 +664,9 @@ export async function putTree(
   }
 
   const state = encodeStateNode(encoded.treeHash);
-  const stateWrite = await putBytes(blobsDir, Buffer.from(state.canonicalText, "utf8"));
+  const stateWrite = await putTreeObject(
+    blobsDir, state, state.stateHash, "state", containsPrivateContent,
+  );
   if (stateWrite.digest !== treeHashDigest(state.stateHash)) {
     throw new Error(
       `putTree: CAS digest ${stateWrite.digest} disagrees with state hash ${state.stateHash} (hashing bug)`
@@ -678,11 +715,16 @@ export async function mirrorWorktreeTree(
   if (await hasTreeObject(blobsDir, encoded.stateHash)) {
     return { stateHash: encoded.stateHash, treeHash: encoded.rootTreeHash, written: 0 };
   }
+  const privateDigests = new Set(privateWorkspaceBlobScopes(
+    blobsDir, files.map((file) => file.contentHash),
+  ).keys());
   let written = 0;
   for (const node of encoded.nodes) {
     const digest = treeHashDigest(node.treeHash);
+    const containsPrivateContent = node.entries.some((entry) => privateDigests.has(treeEntryDigest(entry)));
+    if (containsPrivateContent) privateDigests.add(digest);
     if (await pathExists(blobPath(blobsDir, digest))) continue;
-    const put = await putBytes(blobsDir, Buffer.from(node.canonicalText, "utf8"));
+    const put = await putTreeObject(blobsDir, node, node.treeHash, "manifest", containsPrivateContent);
     if (put.digest !== digest) {
       throw new Error(
         `mirrorWorktreeTree: CAS digest ${put.digest} disagrees with tree hash ${node.treeHash} (hashing bug)`
@@ -690,7 +732,10 @@ export async function mirrorWorktreeTree(
     }
     written += 1;
   }
-  const statePut = await putBytes(blobsDir, Buffer.from(encoded.stateNode.canonicalText, "utf8"));
+  const statePut = await putTreeObject(
+    blobsDir, encoded.stateNode, encoded.stateHash, "state",
+    privateDigests.has(treeHashDigest(encoded.rootTreeHash)),
+  );
   if (statePut.digest !== treeHashDigest(encoded.stateHash)) {
     throw new Error(
       `mirrorWorktreeTree: CAS digest ${statePut.digest} disagrees with state hash ${encoded.stateHash} (hashing bug)`
@@ -939,7 +984,10 @@ export class MerkleTreeComposer {
     }
     const scaffoldPublishedAt = performance.now();
     const state = encodeStateNode(treeHash);
-    const stateWrite = await putBytes(this.blobsDir, Buffer.from(state.canonicalText, "utf8"));
+    const stateWrite = await putTreeObject(
+      this.blobsDir, state, state.stateHash, "state",
+      privateWorkspaceBlobScopes(this.blobsDir, [treeHashDigest(treeHash)]).size > 0,
+    );
     if (stateWrite.digest !== treeHashDigest(state.stateHash)) {
       throw new Error(
         `MerkleTreeComposer: CAS digest ${stateWrite.digest} disagrees with state hash ${state.stateHash} (hashing bug)`
@@ -2308,33 +2356,73 @@ export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithR
   const put = (ctx: ServiceContext, bytes: Buffer) =>
     deps.recordParticipantUploads?.()
       ? withBlobContentLock(deps.blobsDir, async () => {
+          const digest = createHash("sha256").update(bytes).digest("hex");
+          if (!await statBlob(deps.blobsDir, digest)) markPrivateWorkspaceBlobs(deps.blobsDir, [digest]);
           const stored = await putBytes(deps.blobsDir, bytes);
           recordUpload(ctx, stored.digest);
           return stored;
         })
       : putBytes(deps.blobsDir, bytes);
+  const treeContentReadable = async (hash: string, ctx?: ServiceContext): Promise<boolean> => {
+    if (!hasPrivateWorkspaceBlobs(deps.blobsDir)) return true;
+    const closure = await collectTreeReachableDigests(deps.blobsDir, hash, { verifyContent: false });
+    if (!closure) return false;
+    const digests = privateWorkspaceBlobScopes(deps.blobsDir, [
+      ...closure.treeDigests, ...closure.contentDigests,
+    ]);
+    const files = new Set(closure.contentDigests);
+    for (const [digest, scope] of digests) {
+      // Tree-derived scopes follow their leaves; arbitrary private bytes used
+      // as a tree must still be authorized as file content.
+      if ((scope === "content" || files.has(digest)) &&
+        !await deps.canReadPrivateContent?.(digest, ctx)) return false;
+    }
+    return true;
+  };
+  const readScoped = async (digest: string, scope: WorkspaceBlobScope, ctx?: ServiceContext) =>
+    scope === "content"
+      ? await deps.canReadPrivateContent?.(digest, ctx) === true
+      : treeContentReadable(`${scope}:${digest}`, ctx);
+  const canRead = async (digest: string, ctx?: ServiceContext): Promise<boolean> => {
+    const scope = privateWorkspaceBlobScopes(deps.blobsDir, [digest]).get(digest);
+    return !scope || await readScoped(digest, scope, ctx);
+  };
+  const readableBatch = async (digests: string[], ctx: ServiceContext): Promise<string[]> => {
+    const restricted = privateWorkspaceBlobScopes(deps.blobsDir, digests);
+    if (!restricted.size) return digests;
+    const visible: string[] = [];
+    for (const digest of digests) {
+      const scope = restricted.get(digest);
+      if (!scope || await readScoped(digest, scope, ctx)) visible.push(digest);
+    }
+    return visible;
+  };
   const definition: ServiceDefinition = {
     name: "blobstore",
     description: "Per-workspace content-addressable blob storage",
     authority: READ_POLICY,
     methods: blobstoreMethods,
     handler: defineServiceHandler("blobstore", blobstoreMethods, {
-      has: (_ctx, [hash]) => pathExists(blobPath(deps.blobsDir, hash)),
-      stat: (_ctx, [hash]) => statBlob(deps.blobsDir, hash),
+      has: async (ctx, [hash]) => await canRead(hash, ctx) && pathExists(blobPath(deps.blobsDir, hash)),
+      stat: async (ctx, [hash]) => await canRead(hash, ctx) ? statBlob(deps.blobsDir, hash) : null,
       putText: (ctx, [text]) => put(ctx, Buffer.from(text, "utf8")),
-      getText: async (_ctx, [hash]) => {
+      getText: async (ctx, [hash]) => {
+        if (!await canRead(hash, ctx)) return null;
         const bytes = await getBytes(deps.blobsDir, hash);
         return bytes ? bytes.toString("utf8") : null;
       },
-      getRange: async (_ctx, [hash, start, end]) => {
+      getRange: async (ctx, [hash, start, end]) => {
+        if (!await canRead(hash, ctx)) return null;
         const bytes = await getByteRange(deps.blobsDir, hash, start, end);
         return bytes ? bytes.toString("utf8") : null;
       },
-      getRangeBytes: async (_ctx, [hash, start, end]) => {
+      getRangeBytes: async (ctx, [hash, start, end]) => {
+        if (!await canRead(hash, ctx)) return null;
         const bytes = await getByteRange(deps.blobsDir, hash, start, end);
         return bytes ? { bytesBase64: bytes.toString("base64") } : null;
       },
-      grep: (_ctx, [hash, query, options]) => grepBlob(deps.blobsDir, hash, query, options ?? {}),
+      grep: async (ctx, [hash, query, options]) =>
+        await canRead(hash, ctx) ? grepBlob(deps.blobsDir, hash, query, options ?? {}) : null,
       putBase64: (ctx, [content]) => put(ctx, Buffer.from(content, "base64")),
       putRetained: (ctx, [input]) =>
         withBlobContentLock(deps.blobsDir, async () => {
@@ -2345,27 +2433,46 @@ export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithR
         }),
       retain: (ctx, [input]) =>
         withBlobContentLock(deps.blobsDir, async () => {
-          if (!(await statBlob(deps.blobsDir, input.digest)))
-            throw new Error("Cannot retain content absent from this workspace");
+          if (!await canRead(input.digest, ctx) || !(await statBlob(deps.blobsDir, input.digest)))
+            throw new Error("Cannot retain content unavailable in this workspace");
           retainBlob(deps.blobsDir, retentionNamespace(ctx.caller), input.owner, input.digest);
         }),
       releaseRetention: (ctx, [input]) =>
         withBlobContentLock(deps.blobsDir, async () => {
           releaseBlobRetention(deps.blobsDir, retentionNamespace(ctx.caller), input.owner);
         }),
-      getBase64: async (_ctx, [hash]) => {
+      getBase64: async (ctx, [hash]) => {
+        if (!await canRead(hash, ctx)) return null;
         const bytes = await getBytes(deps.blobsDir, hash);
         return bytes ? bytes.toString("base64") : null;
       },
-      putTree: (_ctx, [entries, options]) => putTree(deps.blobsDir, entries, options),
-      getTree: (_ctx, [hash]) => getTree(deps.blobsDir, hash),
-      listTree: (_ctx, [hash, options]) => listTree(deps.blobsDir, hash, options),
-      readFileAtTree: (_ctx, [hash, filePath]) => readFileAtTree(deps.blobsDir, hash, filePath),
-      diffTrees: (_ctx, [leftHash, rightHash]) => diffTrees(deps.blobsDir, leftHash, rightHash),
-      materializeTree: (_ctx, [hash, outDir, options]) =>
-        materializeTree(deps.blobsDir, hash, outDir, options),
-      delete: (_ctx, [hash]) =>
+      putTree: async (ctx, [entries, options]) => {
+        const digests = entries.map(treeEntryDigest);
+        if ((await readableBatch(digests, ctx)).length !== digests.length)
+          throw new Error("Tree content is unavailable to this caller");
+        return putTree(deps.blobsDir, entries, options);
+      },
+      getTree: async (ctx, [hash]) => await treeContentReadable(hash, ctx) ? getTree(deps.blobsDir, hash) : null,
+      listTree: async (ctx, [hash, options]) =>
+        await treeContentReadable(hash, ctx) ? listTree(deps.blobsDir, hash, options) : null,
+      readFileAtTree: async (ctx, [hash, filePath]) =>
+        await treeContentReadable(hash, ctx) ? readFileAtTree(deps.blobsDir, hash, filePath) : null,
+      diffTrees: async (ctx, [leftHash, rightHash]) => {
+        if (!await treeContentReadable(leftHash, ctx) || !await treeContentReadable(rightHash, ctx))
+          throw new Error("Tree content is unavailable to this caller");
+        return diffTrees(deps.blobsDir, leftHash, rightHash);
+      },
+      materializeTree: async (ctx, [hash, outDir, options]) => {
+        if (!await treeContentReadable(hash, ctx))
+          throw new Error("Tree content is unavailable to this caller");
+        return materializeTree(deps.blobsDir, hash, outDir, options);
+      },
+      delete: (ctx, [hash]) =>
         withBlobContentLock(deps.blobsDir, async () => {
+          if (privateWorkspaceBlobScopes(deps.blobsDir, [hash]).size) {
+            if (!await canRead(hash, ctx)) return false;
+            throw new Error("Workspace history content is reclaimed through history retention");
+          }
           if (retainedBlobDigests(deps.blobsDir).includes(hash))
             throw new Error("Cannot delete retained content; release its owners first");
           const filePath = blobPath(deps.blobsDir, hash);
@@ -2377,7 +2484,7 @@ export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithR
             throw error;
           }
         }),
-      list: (_ctx, [options]) => listBlobs(deps.blobsDir, options),
+      list: (ctx, [options]) => listBlobs(deps.blobsDir, options, (digests) => readableBatch(digests, ctx)),
     }),
   };
 
@@ -2387,9 +2494,16 @@ export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithR
       path: "/blob",
       methods: ["PUT"],
       auth: "caller-token",
-      handler: async (req, res) => {
+      handler: async (req, res, _params, caller) => {
         try {
-          sendJson(res, 200, await putBlob(deps.blobsDir, req));
+          const promote = caller && deps.recordParticipantUploads?.()
+            ? (tmpPath: string, digest: string) => withBlobContentLock(deps.blobsDir, async () => {
+                if (!await statBlob(deps.blobsDir, digest)) markPrivateWorkspaceBlobs(deps.blobsDir, [digest]);
+                await promoteTempBlob(deps.blobsDir, tmpPath, digest);
+                recordUpload({ caller }, digest);
+              })
+            : undefined;
+          sendJson(res, 200, await putBlob(deps.blobsDir, req, promote));
         } catch (error) {
           log.warn("Blob PUT failed:", error);
           sendText(res, 500, `Blob write failed: ${errorText(error)}`);
@@ -2401,10 +2515,14 @@ export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithR
       path: "/blob/:digest",
       methods: ["GET"],
       auth: "caller-token",
-      handler: async (_req, res, params) => {
+      handler: async (_req, res, params, caller) => {
         const digest = params["digest"] ?? "";
         if (!DIGEST_RE.test(digest)) {
           sendText(res, 400, "Malformed digest");
+          return;
+        }
+        if (!await canRead(digest, caller ? { caller } : undefined)) {
+          sendText(res, 404, "Blob not found");
           return;
         }
 

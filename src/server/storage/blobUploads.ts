@@ -5,8 +5,15 @@ import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { openCanonicalSqliteDatabase, type CanonicalSqliteSchema } from "@vibestudio/sqlite";
 import { verifiedInteractiveSession } from "../services/principalIdentity.js";
 
+export type WorkspaceBlobScope = "content" | "manifest" | "state";
+
+const privateWorkspaceBlobsTable = `CREATE TABLE private_workspace_blobs (
+  digest TEXT PRIMARY KEY,
+  scope TEXT NOT NULL CHECK(scope IN ('content', 'manifest', 'state'))
+) STRICT`;
+
 const schema: CanonicalSqliteSchema = {
-  version: 1,
+  version: 2,
   objects: [{
     type: "table",
     name: "blob_uploads",
@@ -15,6 +22,10 @@ const schema: CanonicalSqliteSchema = {
       principal TEXT NOT NULL,
       PRIMARY KEY (digest, principal)
     )`,
+  }, {
+    type: "table",
+    name: "private_workspace_blobs",
+    sql: privateWorkspaceBlobsTable,
   }],
 };
 
@@ -45,7 +56,10 @@ function withStore<T>(file: string, action: (db: DatabaseSync) => T): T {
   try {
     fs.chmodSync(file, 0o600);
     db.exec("PRAGMA busy_timeout = 5000");
-    openCanonicalSqliteDatabase(db, schema, { description: `blob upload registry in ${file}` });
+    openCanonicalSqliteDatabase(db, schema, {
+      description: `blob upload registry in ${file}`,
+      migrations: [{ fromVersion: 1, toVersion: 2, migrate: (db) => db.exec(privateWorkspaceBlobsTable) }],
+    });
     return action(db);
   } finally {
     db.close();
@@ -73,4 +87,42 @@ export function hasBlobUploads(
     const uploaded = db.prepare("SELECT 1 FROM blob_uploads WHERE digest = ? AND principal = ?");
     return digests.every((digest) => uploaded.get(digest, principal) !== undefined);
   });
+}
+
+/** Record the scope before creating the first workspace link to authored bytes. */
+export function markPrivateWorkspaceBlobs(
+  blobsDir: string,
+  digests: readonly string[],
+  scope: WorkspaceBlobScope = "content"
+): void {
+  if (digests.length === 0) return;
+  fs.mkdirSync(blobsDir, { recursive: true });
+  withStore(databasePath(blobsDir), (db) => {
+    db.prepare(
+      "INSERT OR IGNORE INTO private_workspace_blobs(digest, scope) SELECT value, ? FROM json_each(?)"
+    ).run(scope, JSON.stringify(digests));
+  });
+}
+
+export function privateWorkspaceBlobScopes(
+  blobsDir: string,
+  digests: readonly string[]
+): Map<string, WorkspaceBlobScope> {
+  const file = databasePath(blobsDir);
+  if (digests.length === 0 || !fs.existsSync(file)) return new Map();
+  return withStore(file, (db) => new Map(
+    db.prepare(
+      `SELECT digest, scope FROM json_each(?)
+        JOIN private_workspace_blobs ON digest = value`
+    ).all(JSON.stringify(digests)).map((row) => [
+      String(row["digest"]), row["scope"] as WorkspaceBlobScope,
+    ])
+  ));
+}
+
+export function hasPrivateWorkspaceBlobs(blobsDir: string): boolean {
+  const file = databasePath(blobsDir);
+  return fs.existsSync(file) && withStore(file, (db) =>
+    db.prepare("SELECT 1 FROM private_workspace_blobs LIMIT 1").get() !== undefined
+  );
 }

@@ -44,7 +44,8 @@ import { WorkspaceMaterializationRepositorySchema } from "@vibestudio/shared/vcs
 import { z } from "zod";
 import { WorkspaceTemplateInstallationSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import type { DODispatch } from "../doDispatch.js";
-import { getBytes, putBytes } from "../services/blobstoreService.js";
+import { getBytes, putBytes, statBlob } from "../services/blobstoreService.js";
+import { markPrivateWorkspaceBlobs } from "../storage/blobUploads.js";
 import { verifiedInteractiveSession } from "../services/principalIdentity.js";
 import type { CanonicalRefPublication } from "../services/protectedRefStore.js";
 import { withBlobContentLock } from "../storage/blobRetentions.js";
@@ -374,6 +375,17 @@ export interface WorkspaceHistorySource {
   canonical: WorkspaceSourceProviderRef;
 }
 
+export async function workspaceHistoryFileContentVisible(
+  source: Pick<WorkspaceHistorySource, "dispatch">,
+  owner: WorkspaceSourceProviderRef,
+  contentHash: string,
+  scope: { kind: "published"; expectedEventId: string } | { kind: "context"; contextId: string }
+): Promise<boolean> {
+  return z.boolean().parse(
+    await source.dispatch.dispatch(owner, "hasHistoryFileContent", { contentHash, scope })
+  );
+}
+
 export async function listWorkspaceHistoryRuntimeContexts(
   source: WorkspaceHistorySource,
   prefix?: string
@@ -586,7 +598,8 @@ export async function collectWorkspaceHistoryContentRoots(input: WorkspaceHistor
 /** Store every prepared blob before its owner can commit a reference to it. */
 export async function putPreparedWorkspaceContent(
   blobsDir: string,
-  blobs: readonly z.infer<typeof blob>[]
+  blobs: readonly z.infer<typeof blob>[],
+  scope?: "participant"
 ): Promise<string[]> {
   const seen = new Set<string>();
   const prepared = blobs.map(({ contentHash, base64 }) => {
@@ -603,9 +616,16 @@ export async function putPreparedWorkspaceContent(
     if (createHash("sha256").update(bytes).digest("hex") !== contentHash) {
       throw new Error(`semantic content preparation bytes do not match ${contentHash}`);
     }
-    return bytes;
+    return { bytes, contentHash };
   });
-  await Promise.all(prepared.map((bytes) => putBytes(blobsDir, bytes)));
+  if (scope === "participant") {
+    const privateDigests: string[] = [];
+    for (const { contentHash } of prepared) {
+      if (!await statBlob(blobsDir, contentHash)) privateDigests.push(contentHash);
+    }
+    markPrivateWorkspaceBlobs(blobsDir, privateDigests);
+  }
+  await Promise.all(prepared.map(({ bytes }) => putBytes(blobsDir, bytes)));
   return [...seen].sort(compareUtf16CodeUnits);
 }
 
@@ -698,7 +718,7 @@ async function mutateWorkspaceParticipant(
   }
   const prepared = plan;
   const applied = await withBlobContentLock(blobsDir, async () => {
-    await putPreparedWorkspaceContent(blobsDir, prepared.blobs);
+    await putPreparedWorkspaceContent(blobsDir, prepared.blobs, "participant");
     return appliedEdit.parse(
       await dispatch.dispatch(owner, "applyHistoryApplication", {
         head: input.head,
@@ -788,7 +808,7 @@ export async function mergeWorkspaceParticipantContext(input: WorkspaceHistoryPa
     if (reply.kind === "prepare-content") {
       const { blobs } = reply;
       reply = await withBlobContentLock(blobsDir, async () => {
-        const contentHashes = await putPreparedWorkspaceContent(blobsDir, blobs);
+        const contentHashes = await putPreparedWorkspaceContent(blobsDir, blobs, "participant");
         return send({ observation, contentHashes });
       });
     }

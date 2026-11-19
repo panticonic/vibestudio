@@ -1223,14 +1223,16 @@ async function handleRouteRequest(
     return true;
   }
 
-  if (!(await enforceAuth(result, req, url, adminToken, tokenManager))) {
+  const authServiceCaller = result.kind === "service" && result.auth === "caller-token";
+  const caller = authServiceCaller ? await validateCallerBearer(req, tokenManager) : null;
+  if (!(authServiceCaller ? caller : await enforceAuth(result, req, url, adminToken, tokenManager))) {
     res.writeHead(401, { "Content-Type": "text/plain" });
     res.end("Unauthorized");
     return true;
   }
 
   if (result.kind === "service") {
-    void Promise.resolve(result.handler(req, res, result.params)).catch((err) => {
+    void Promise.resolve(result.handler(req, res, result.params, caller ?? undefined)).catch((err) => {
       log.warn(`Service route handler error (${result.serviceName}):`, err);
       if (!res.headersSent) {
         res.writeHead(500, { "Content-Type": "text/plain" });

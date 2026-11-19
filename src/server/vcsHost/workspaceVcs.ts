@@ -1,6 +1,6 @@
 import { deserializeRpcFailure } from "@vibestudio/rpc";
 import { intrinsicContentDescriptor } from "@vibestudio/content-addressing";
-import { hasBlobUploads } from "../storage/blobUploads.js";
+import { blobUploadPrincipal, hasBlobUploads } from "../storage/blobUploads.js";
 /**
  * Host boundary for the semantic workspace history.
  *
@@ -103,7 +103,7 @@ import type {
 } from "../workspaceSourceProvider.js";
 import type { DODispatch } from "../doDispatch.js";
 import type { FsVcsBridge } from "../services/fsService.js";
-import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import type { ServiceContext, VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { RpcCausalParent } from "@vibestudio/rpc";
 import {
   GadJsonRecordSchema,
@@ -122,6 +122,7 @@ import {
   mergeWorkspaceParticipantContext,
   observeAppliedWorkspacePublication,
   openWorkspaceParticipantContext,
+  workspaceHistoryFileContentVisible,
   workspaceParticipantIdentity,
   putPreparedWorkspaceContent,
   readWorkspaceCanonicalMain,
@@ -734,6 +735,36 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   get participantHistoryAttached(): boolean {
     return this.participantHistorySource !== null;
+  }
+
+  async canReadPrivateWorkspaceBlob(input: {
+    contentHash: string;
+    context?: ServiceContext;
+    ownerContextId?: string | null;
+    readOwnedContextIds?: () => Promise<readonly string[]>;
+    isActive: (owner: WorkspaceSourceProviderRef) => Promise<boolean>;
+  }): Promise<boolean> {
+    const { contentHash, context, ownerContextId } = input;
+    if (context && hasBlobUploads(this.deps.blobsDir, blobUploadPrincipal(context), [contentHash])) {
+      return true;
+    }
+    const source = this.participantHistorySource;
+    if (!source) return false;
+    const published = this.deps.refs.readMainSemanticState();
+    if (published && await workspaceHistoryFileContentVisible(source, source.canonical, contentHash, {
+      kind: "published", expectedEventId: published.eventId,
+    })) return true;
+    if (!context || !ownerContextId) return false;
+    const participantId = workspaceParticipantIdentity(context.caller, ownerContextId);
+    const owner = { ...source.canonical, objectKey: `work-${sha256HexSyncText(participantId)}` };
+    if (!await input.isActive(owner)) return false;
+    const visibleIn = (contextId: string) =>
+      workspaceHistoryFileContentVisible(source, owner, contentHash, { kind: "context", contextId });
+    if (await visibleIn(ownerContextId)) return true;
+    for (const contextId of await input.readOwnedContextIds?.() ?? []) {
+      if (await visibleIn(contextId)) return true;
+    }
+    return false;
   }
 
   async readParticipantMain() {

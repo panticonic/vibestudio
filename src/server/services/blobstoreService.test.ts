@@ -2083,7 +2083,11 @@ describe("blobstoreService", () => {
 
   it("recognizes a byte upload only for its authenticated producer", async () => {
     const createDispatcher = () => {
-      const service = createBlobstoreService({ blobsDir, recordParticipantUploads: () => true });
+      const service = createBlobstoreService({
+        blobsDir, recordParticipantUploads: () => true,
+        canReadPrivateContent: async (digest, context) =>
+          !!context && hasBlobUploads(blobsDir, blobUploadPrincipal(context), [digest]),
+      });
       const dispatcher = createTestServiceDispatcher();
       dispatcher.registerService(service.definition);
       dispatcher.markInitialized();
@@ -2098,7 +2102,13 @@ describe("blobstoreService", () => {
       digest: string;
     };
     const second = createDispatcher();
-    await second.dispatch(bob, "blobstore", "retain", [{ owner: "bob", digest: stored.digest }]);
+    await expect(second.dispatch(bob, "blobstore", "retain", [{ owner: "bob", digest: stored.digest }]))
+      .rejects.toThrow("unavailable");
+    await expect(second.dispatch(bob, "blobstore", "has", [stored.digest])).resolves.toBe(false);
+    await expect(second.dispatch(bob, "blobstore", "getText", [stored.digest])).resolves.toBeNull();
+    await expect(second.dispatch(bob, "blobstore", "stat", [stored.digest])).resolves.toBeNull();
+    await expect(second.dispatch(alice, "blobstore", "getText", [stored.digest]))
+      .resolves.toBe("alice's uploaded bytes");
     expect(hasBlobUploads(blobsDir, alicePrincipal, [stored.digest])).toBe(true);
     expect(hasBlobUploads(blobsDir, bobPrincipal, [stored.digest])).toBe(false);
     await second.dispatch(bob, "blobstore", "putBase64", [

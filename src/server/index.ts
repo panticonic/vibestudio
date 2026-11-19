@@ -7939,6 +7939,19 @@ async function main() {
         createBlobstoreService({
           blobsDir,
           recordParticipantUploads: () => workspaceVcs.participantHistoryAttached,
+          canReadPrivateContent: (contentHash, context) => {
+            const caller = context?.caller;
+            const ownerContextId = caller ? participantDiscoveryContext(caller) : null;
+            return workspaceVcs.canReadPrivateWorkspaceBlob({
+              contentHash, context, ownerContextId,
+              readOwnedContextIds: () => caller
+                ? readableBuildContexts(caller, ownerContextId)
+                : Promise.resolve([]),
+              isActive: async (owner) => Boolean(await getEntityStore().resolveActiveRecord(canonicalEntityId({
+                kind: "do", source: owner.source, className: owner.className, key: owner.objectKey,
+              }))),
+            });
+          },
         }),
         routeRegistry
       )
