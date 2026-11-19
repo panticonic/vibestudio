@@ -214,6 +214,11 @@ client, a mobile variant on the wrong runtime and a local incompatible ABI.
 Run `client-admission-oracle-qualification` for model-free verification. The
 workflow inspects the platform contract without launching a device client.
 
+The assigned web brief uses live public Chromium fetches and verifies the
+cleaned source bytes by reading the host's cached digest. The cases cover
+two-source citation, the registry's scope and an unsupported question. Run
+`web-brief-oracle-qualification` for the model-free public-fetch check.
+
 Architecture boundary cases trace the actual local RPC provider to its
 authored declaration at the assigned semantic revision. They cover semantic
 history, an owned creator-scoped conversation, and durable mission records.

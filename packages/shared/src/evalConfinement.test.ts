@@ -79,6 +79,20 @@ describe("createPrivateGuestGlobal", () => {
     expect((guest["setTimeout"] as () => number)()).toBe(42);
   });
 
+  it("allows libraries to construct readable response streams", async () => {
+    const guest = createPrivateGuestGlobal({ ReadableStream });
+    const GuestReadableStream = guest["ReadableStream"] as typeof ReadableStream;
+    const stream = new GuestReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([42]));
+        controller.close();
+      },
+    });
+    const response = new Response(stream);
+
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([42]));
+  });
+
   it("does not reveal unreviewed ambient authority", () => {
     const realm = tamedRealm();
     realm["fetch"] = () => undefined;

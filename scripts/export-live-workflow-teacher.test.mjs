@@ -97,6 +97,7 @@ test("authored template worlds flow into the collector without losing original s
       ],
       ["phone-setup-world", "phoneSetupUnavailable", null],
       ["client-admission-worlds", "managedClientAdmissionWorlds", []],
+      ["web-brief-worlds", "managedWebBriefWorlds", []],
       ["architecture-boundary-worlds", "managedArchitectureBoundaryWorlds", []],
       ["release-review-handoff-worlds", "managedReleaseReviewHandoffWorlds", []],
       ["extension-release-worlds", "managedExtensionReleaseWorlds", []],
@@ -2927,6 +2928,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["content-project-worlds", "export const contentProjectWorlds = [];"],
       ["phone-setup-world", "export const phoneSetupUnavailable = undefined;"],
       ["client-admission-worlds", "export const managedClientAdmissionWorlds = [];"],
+      ["web-brief-worlds", "export const managedWebBriefWorlds = [];"],
       ["architecture-boundary-worlds", "export const managedArchitectureBoundaryWorlds = [];"],
       ["release-review-handoff-worlds", "export const managedReleaseReviewHandoffWorlds = [];"],
       ["extension-release-worlds", "export const managedExtensionReleaseWorlds = [];"],
@@ -4744,5 +4746,118 @@ test("architecture export rejects a different creator-scoped provider", async (t
   await assert.rejects(
     exportLiveTeacherWorkflow({ ...options, cases }),
     /actual assigned provider/u
+  );
+});
+
+test("web brief export binds exact page continuation and cited text", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  const name = "web-brief-live-registry-subdomain-scope";
+  const { assignment } = cases.get(name);
+  const pins = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(options.pins, JSON.stringify({ ...pins, workspace: "examples" }));
+  entry.test.name = name;
+  const { goal, sources, facts } = assignment;
+  const url = sources[0];
+  const request = { goal, sources, retrievedAt: Date.UTC(2026, 10, 19) };
+  const quote = "The designation " + facts[0].pattern + ".";
+  const head = "Registry excerpt\n";
+  const visible = head + quote;
+  const digest = createHash("sha256").update(visible).digest("hex");
+  const page = {
+    url,
+    title: "The registry",
+    digest,
+    size: Buffer.byteLength(visible),
+    head,
+    headBytes: Buffer.byteLength(head),
+    truncated: true,
+    session: "public",
+  };
+  const readArgs = { digest, offset: page.headBytes, limit: 9000 - head.length };
+  const tail = { ...readArgs, text: quote, bytes: Buffer.byteLength(quote), nextOffset: page.size };
+  const report = {
+    question: goal,
+    status: "answered",
+    notRead: [],
+    rejected: 0,
+    statements: [
+      {
+        text: quote,
+        cites: [{ url, title: page.title, quote, retrieved: "2026-11-19", published: null }],
+      },
+    ],
+  };
+  diagnostics.managedWebBrief = {
+    caseId: assignment.id,
+    contextId: "ctx",
+    request,
+    passed: true,
+    reads: [{ requested: url, page }],
+    tails: [tail],
+    cache: [{ requested: url, digest, size: page.size, visible, verified: true }],
+    checks: { assigned: true, continuations: true, cache: true, outcome: true, citations: true },
+  };
+  const ref = (value) => {
+    const text = JSON.stringify(value);
+    return {
+      complete: true,
+      hash: createHash("sha256").update(text).digest("hex"),
+      bytes: Buffer.byteLength(text),
+    };
+  };
+  const prototype = diagnostics.natlangTeacher.calls[0];
+  const call = (name, parent, inputs, output, effects = []) => ({
+    callId: name,
+    summary: { ...prototype.summary, call_id: name },
+    record: {
+      ...prototype.record,
+      call_id: name,
+      parent_call_id: parent,
+      definition: { name },
+      outcome: "done",
+      inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+      output: ref(output),
+      effects,
+    },
+  });
+  const continuation = { service: "web", method: "read", args: ref([readArgs]), result: ref(tail) };
+  diagnostics.natlangTeacher = {
+    ...diagnostics.natlangTeacher,
+    programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+    rootCallIds: ["runWorkflow"],
+    report,
+    calls: [
+      call("runWorkflow", null, {}, null),
+      call("writeAssignedBrief", "runWorkflow", { request }, report),
+      call(
+        "researchBrief",
+        "writeAssignedBrief",
+        { question: goal, sources, retrievedAt: request.retrievedAt },
+        report,
+        [
+          {
+            service: "web",
+            method: "fetch",
+            args: ref([{ url, session: "public" }]),
+            result: ref(page),
+          },
+          continuation,
+        ]
+      ),
+      call("findEvidence", "researchBrief", { question: goal }, { claim: quote, quote }),
+      call("writeBrief", "researchBrief", { question: goal }, report.statements),
+    ],
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  continuation.args = ref([{ ...readArgs, offset: 1 }]);
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases }),
+    /host-verified cached bytes/u
   );
 });

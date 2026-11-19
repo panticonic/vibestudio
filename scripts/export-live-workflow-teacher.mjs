@@ -211,6 +211,15 @@ const clientAdmissionWorkflow = {
   root: "reviewClientAdmission",
   evidence: clientAdmissionEvidence,
 };
+const webBriefWorkflow = {
+  family: "workspace-live-public-web-brief",
+  workspace: "examples",
+  namespace: "vibestudio:web-research",
+  group: "public-reserved-domain-sources",
+  validator: { template: "system-testing", path: "skills/system-testing/web-brief-managed.ts" },
+  root: "writeAssignedBrief",
+  evidence: webBriefEvidence,
+};
 const architectureBoundaryWorkflow = {
   family: "workspace-live-architecture-boundary",
   workspace: "examples",
@@ -510,6 +519,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedTestkitCleanupWorlds = [] },
     { phoneSetupUnavailable },
     { managedClientAdmissionWorlds },
+    { managedWebBriefWorlds },
     { managedArchitectureBoundaryWorlds },
     { managedReleaseReviewHandoffWorlds, releaseReviewHandoffWork },
     { managedExtensionReleaseWorlds },
@@ -557,6 +567,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "testkit-cleanup-worlds.ts",
       "phone-setup-world.ts",
       "client-admission-worlds.ts",
+      "web-brief-worlds.ts",
       "architecture-boundary-worlds.ts",
       "release-review-handoff-worlds.ts",
       "extension-release-worlds.ts",
@@ -601,6 +612,9 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of managedClientAdmissionWorlds) {
     cases.set(`client-admission-live-${assignment.id}`, { ...clientAdmissionWorkflow, assignment });
+  }
+  for (const assignment of managedWebBriefWorlds) {
+    cases.set(`web-brief-live-${assignment.id}`, { ...webBriefWorkflow, assignment });
   }
   for (const assignment of managedArchitectureBoundaryWorlds) {
     cases.set(`architecture-boundary-live-${assignment.id}`, {
@@ -2576,6 +2590,134 @@ function clientAdmissionEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: contextId, source, host, abi: workingAbi },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function webBriefEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedWebBrief;
+  const { caseId, contextId, request, reads, tails, cache, checks } = fixture ?? {};
+  const { id, goal, sources, facts } = workflow.assignment;
+  const report = exercise.report;
+  const records = exercise.calls.map(({ record }) => record);
+  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const assigned = records.find(
+    (record) =>
+      record.parent_call_id === root?.call_id && record.definition.name === "writeAssignedBrief"
+  );
+  const research = records.find(
+    (record) =>
+      record.parent_call_id === assigned?.call_id && record.definition.name === "researchBrief"
+  );
+  const effects = records.flatMap(({ effects }) => effects ?? []);
+  const collapse = (text) => text.replace(/\s+/gu, " ").trim();
+  requireEvidence(
+    caseId === id &&
+      typeof contextId === "string" &&
+      contextId === execution.provenance?.contextId &&
+      fixture.passed === true &&
+      ["assigned", "continuations", "cache", "outcome", "citations"].every(
+        (key) => checks?.[key] === true
+      ) &&
+      request?.goal === goal &&
+      isDeepStrictEqual(request.sources, sources) &&
+      Number.isSafeInteger(request.retrievedAt) &&
+      Number.isFinite(new Date(request.retrievedAt).getTime()) &&
+      isDeepStrictEqual(
+        reads?.map(({ requested }) => requested),
+        sources
+      ) &&
+      Array.isArray(tails) &&
+      cache?.length === sources.length &&
+      effects.length === sources.length + tails.length &&
+      effects.every((effect) => effect.service === "web" && !effect.error) &&
+      report?.question === goal &&
+      report.status === (facts.length ? "answered" : "insufficient") &&
+      Array.isArray(report.statements) &&
+      (facts.length ? report.statements.length > 0 : report.statements.length === 0) &&
+      Array.isArray(report.notRead) &&
+      report.notRead.length === 0 &&
+      matchesValue(assigned?.inputs?.request, request) &&
+      matchesValue(assigned.output, report) &&
+      matchesValue(research?.inputs?.question, goal) &&
+      matchesValue(research.inputs.sources, sources) &&
+      matchesValue(research.inputs.retrievedAt, request.retrievedAt) &&
+      matchesValue(research.output, report) &&
+      records.some((record) => record.definition.name === "findEvidence") &&
+      (!facts.length || records.some((record) => record.definition.name === "writeBrief")),
+    "Web brief must use the shared research tree and its exact assigned public URLs"
+  );
+
+  for (const [index, { requested, page }] of reads.entries()) {
+    const cached = cache[index];
+    const continuations = tails.filter(({ digest }) => digest === page.digest);
+    const expectsContinuation = page.truncated && page.head.length < 9000;
+    const [tail] = continuations;
+    requireEvidence(
+      page.session === "public" &&
+        /^[a-f0-9]{64}$/u.test(page.digest) &&
+        continuations.length === (expectsContinuation ? 1 : 0) &&
+        cached?.verified === true &&
+        cached.requested === requested &&
+        cached.digest === page.digest &&
+        cached.size === page.size &&
+        cached.visible === (page.head + (tail?.text ?? "")).slice(0, 9000) &&
+        effects.some(
+          (effect) =>
+            effect.method === "fetch" &&
+            matchesValue(effect.args, [{ url: requested, session: "public" }]) &&
+            matchesValue(effect.result, page)
+        ) &&
+        (!tail ||
+          (tail.offset === page.headBytes &&
+            tail.limit === 9000 - page.head.length &&
+            tail.nextOffset === tail.offset + tail.bytes &&
+            effects.some(
+              (effect) =>
+                effect.method === "read" &&
+                matchesValue(effect.args, [
+                  { digest: tail.digest, offset: tail.offset, limit: tail.limit },
+                ]) &&
+                matchesValue(effect.result, tail)
+            ))),
+      "Web brief needs the actual fetched page and its host-verified cached bytes"
+    );
+  }
+
+  const retrieved = new Date(request.retrievedAt).toISOString().slice(0, 10);
+  requireEvidence(
+    report.statements.every(
+      (statement) =>
+        typeof statement.text === "string" &&
+        statement.text.trim() &&
+        Array.isArray(statement.cites) &&
+        statement.cites.length > 0 &&
+        statement.cites.every(
+          (cite) =>
+            cite.retrieved === retrieved &&
+            typeof cite.quote === "string" &&
+            collapse(cite.quote).length >= 20 &&
+            reads.some(
+              ({ page }, index) =>
+                page.url === cite.url &&
+                page.title === cite.title &&
+                collapse(cache[index].visible).includes(collapse(cite.quote))
+            )
+        )
+    ) &&
+      facts.every(({ source, pattern }) => {
+        const finalUrl = reads.find(({ requested }) => requested === source)?.page.url;
+        return report.statements.some(({ cites }) =>
+          cites.some(
+            (cite) => cite.url === finalUrl && collapse(cite.quote).toLowerCase().includes(pattern)
+          )
+        );
+      }),
+    "Web brief citations must quote the assigned fetched evidence for each claim"
+  );
+  return {
+    world: { context_id: contextId, sources, digests: reads.map(({ page }) => page.digest) },
     checks,
     evidence: { workspace: { fixture } },
   };

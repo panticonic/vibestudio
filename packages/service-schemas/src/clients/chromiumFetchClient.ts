@@ -36,6 +36,18 @@ export function createChromiumFetch(
         .call("main", mainRpcMethods["chromiumFetch.close"], [opened.responseId])
         .catch(() => undefined);
     };
+    let headers: Headers;
+    try {
+      headers = new Headers();
+      for (const [name, value] of Object.entries(opened.headers)) {
+        // CDP joins duplicate response headers with LF. Fetch expects one
+        // value per append, including for non-combinable Set-Cookie fields.
+        for (const field of value.split("\n")) headers.append(name, field);
+      }
+    } catch (error) {
+      await close();
+      throw error;
+    }
     const body = new ReadableStream<Uint8Array>({
       async pull(controller) {
         if (init?.signal?.aborted) {
@@ -69,7 +81,7 @@ export function createChromiumFetch(
       status: opened.status,
       statusText: opened.statusText,
       url: opened.url,
-      headers: new Headers(opened.headers),
+      headers,
       body,
       arrayBuffer: consume,
       text: async () => textDecoder.decode(await consume()),
