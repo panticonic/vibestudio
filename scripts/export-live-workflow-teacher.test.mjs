@@ -108,6 +108,7 @@ test("authored template worlds flow into the collector without losing original s
       ["android-audit-worlds", "androidAuditWorlds", []],
       ["android-install-worlds", "androidInstallWorlds", []],
       ["android-pair-worlds", "androidPairWorlds", []],
+      ["pdf-media-worlds", "pdfMediaWorlds", []],
       ["publication-revision-worlds", "publicationRevisionWorlds", []],
       ["eval-recovery-worlds", "managedEvalRecoveryWorlds", []],
       ["pdf-layout-worlds", "managedPdfLayoutWorlds", []],
@@ -2957,6 +2958,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["android-audit-worlds", "export const androidAuditWorlds = [];"],
       ["android-install-worlds", "export const androidInstallWorlds = [];"],
       ["android-pair-worlds", "export const androidPairWorlds = [];"],
+      ["pdf-media-worlds", "export const pdfMediaWorlds = [];"],
       ["publication-revision-worlds", "export const publicationRevisionWorlds = [];"],
       ["eval-recovery-worlds", "export const managedEvalRecoveryWorlds = [];"],
       ["pdf-layout-worlds", "export const managedPdfLayoutWorlds = [];"],
@@ -6705,5 +6707,148 @@ test("Android pairing export joins readiness to the newly paired identity", asyn
   await assert.rejects(
     exportLiveTeacherWorkflow({ ...options, cases }),
     /matching paired-device readiness/u,
+  );
+});
+
+test("PDF media export rejects an image reference without matching stored artifact evidence", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, ".."),
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  const name = "pdf-media-live-rendered-notice-evidence";
+  const { assignment } = cases.get(name);
+  const pins = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(
+    options.pins,
+    JSON.stringify({ ...pins, workspace: "system" }),
+  );
+  entry.test.name = name;
+  const digest = "a".repeat(64),
+    imageDigest = "b".repeat(64);
+  const imageArtifactId = "stored-png";
+  const request = {
+    goal: assignment.goal,
+    checks: ["pdf"],
+    speech: null,
+    git: null,
+    pdf: {
+      digest,
+      requestedPages: [2],
+      need: "image",
+      minimumOcrConfidence: null,
+      evidence: {
+        id: "native-pdf",
+        digest,
+        pageCount: 2,
+        encrypted: false,
+        selectedPages: [2],
+        engines: [{ id: "pdfjs", available: true, bundled: true }],
+        pages: [
+          {
+            pageNumber: 2,
+            extractionMethod: "embedded-text",
+            imageArtifactId,
+            warnings: [],
+            lines: [
+              {
+                text: assignment.pages[1],
+                bbox: [24, 30, 90, 12],
+                source: "embedded-text",
+                confidence: null,
+              },
+            ],
+          },
+        ],
+      },
+    },
+  };
+  const images = [
+    {
+      page: 2,
+      id: imageArtifactId,
+      digest: imageDigest,
+      expectedDigest: imageDigest,
+      bytes: 2200,
+      integrity: true,
+      png: true,
+    },
+  ];
+  const finding = {
+    check: "pdf",
+    disposition: "pdf-ready",
+    detail: "Page two has a stored image.",
+    evidenceIds: ["native-pdf"],
+    transcript: null,
+  };
+  const report = { findings: [finding] };
+  diagnostics.pdfMedia = {
+    contextId: "ctx",
+    caseId: assignment.id,
+    request,
+    images,
+    passed: true,
+    checks: {
+      source: true,
+      pages: true,
+      artifact: true,
+      report: true,
+    },
+  };
+  const ref = (value) => {
+    const text = JSON.stringify(value);
+    return {
+      complete: true,
+      hash: createHash("sha256").update(text).digest("hex"),
+      bytes: Buffer.byteLength(text),
+    };
+  };
+  const prototype = diagnostics.natlangTeacher.calls[0];
+  const call = (name, parent, inputs, output) => ({
+    callId: name,
+    summary: { ...prototype.summary, call_id: name },
+    record: {
+      ...prototype.record,
+      call_id: name,
+      parent_call_id: parent,
+      definition: { name },
+      outcome: "done",
+      inputs: Object.fromEntries(
+        Object.entries(inputs).map(([key, value]) => [key, ref(value)]),
+      ),
+      output: ref(output),
+      effects: [],
+    },
+  });
+  diagnostics.natlangTeacher = {
+    ...diagnostics.natlangTeacher,
+    programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+    rootCallIds: ["runWorkflow"],
+    report,
+    calls: [
+      call("runWorkflow", null, {}, null),
+      call("reviewMediaAndImport", "runWorkflow", { request }, report),
+      call(
+        "reviewPdf",
+        "reviewMediaAndImport",
+        { assignment: request.pdf },
+        finding,
+      ),
+      call("verifyPages", "reviewPdf", { assignment: request.pdf }, null),
+      call(
+        "checkExtraction",
+        "reviewPdf",
+        { assignment: request.pdf },
+        "pdf-ready",
+      ),
+    ],
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  images[0].digest = "c".repeat(64);
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases }),
+    /original artifact evidence/u,
   );
 });

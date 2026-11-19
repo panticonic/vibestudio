@@ -9,7 +9,7 @@ import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { selectedPreparedAuthorityRequirement } from "@vibestudio/shared/typedServiceClient";
 import { requirementForPrincipals } from "@vibestudio/shared/authorityRequirements";
-import { JsonValueSchema } from "@vibestudio/shared/wireValues";
+import { RpcValueSchema } from "@vibestudio/shared/wireValues";
 
 // Access descriptors add documentation and safety metadata. Enforced
 // caller-kind gates live in the method/service policy.
@@ -180,7 +180,7 @@ export const extensionsMethods = defineServiceMethods({
       "Invoke a public method on a declared, approved extension and await its result. Discover canonical extension names with build.listUnits; the invocation boundary builds and activates cold onInvoke extensions. Provider-namespaced methods are rejected.",
     args: publicExtensionInvocationArgs,
     argumentNames: ["extension", "method", "args"],
-    returns: JsonValueSchema,
+    returns: RpcValueSchema,
     access: INVOKE_ACCESS,
     authority: extensionInvocationAuthority,
     examples: [
@@ -206,7 +206,7 @@ export const extensionsMethods = defineServiceMethods({
     description:
       "Invoke a public provider-namespaced method on the extension selected for a manifest provider slot. Provider methods explicitly marked private are unavailable through this route.",
     args: z.tuple([z.string(), z.string(), z.array(z.unknown())]),
-    returns: JsonValueSchema,
+    returns: RpcValueSchema,
     // Dispatch is read-only; the host checks the selected provider method’s canonical access.
     access: READ_ACCESS,
     examples: [{ args: ["gitInterop", "prepare", [{ channelId: "chan_123" }]] }],

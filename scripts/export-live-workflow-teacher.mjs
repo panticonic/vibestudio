@@ -220,6 +220,19 @@ const publicationRevisionWorkflow = {
   root: "reviewPublicationRevision",
   evidence: publicationRevisionEvidence,
 };
+const pdfMediaWorkflow = {
+  family: "workspace-live-pdf-media-review",
+  workspace: "system",
+  namespace: "vibestudio:media-import",
+  group: "native-pdf-layout-and-artifact-evidence",
+  validator: {
+    template: "system-testing",
+    path: "skills/system-testing/pdf-media-managed.ts",
+  },
+  root: "reviewMediaAndImport",
+  evidence: pdfMediaEvidence,
+};
+
 const androidPairWorkflow = {
   family: "system-live-android-pairing",
   workspace: "system",
@@ -714,6 +727,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { androidAuditWorlds },
     { androidInstallWorlds },
     { androidPairWorlds },
+    { pdfMediaWorlds },
     { publicationRevisionWorlds },
     { managedEvalRecoveryWorlds },
     { managedPdfLayoutWorlds },
@@ -780,6 +794,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "android-audit-worlds.ts",
       "android-install-worlds.ts",
       "android-pair-worlds.ts",
+      "pdf-media-worlds.ts",
       "publication-revision-worlds.ts",
       "eval-recovery-worlds.ts",
       "pdf-layout-worlds.ts",
@@ -835,6 +850,9 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of publicationRevisionWorlds) {
     cases.set(`publication-revision-live-${assignment.id}`, { ...publicationRevisionWorkflow, assignment });
+  }
+  for (const assignment of pdfMediaWorlds) {
+    cases.set(`pdf-media-live-${assignment.id}`, { ...pdfMediaWorkflow, assignment });
   }
   for (const assignment of androidPairWorlds) {
     cases.set(`android-pair-live-${assignment.id}`, { ...androidPairWorkflow, assignment });
@@ -2961,6 +2979,121 @@ function publicationRevisionEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: contextId, source, artifact_digest: observed.candidate.artifactDigest },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function pdfMediaEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.pdfMedia;
+  const { caseId, contextId, request, images, checks } = fixture ?? {};
+  const { assignment } = workflow;
+  const pdf = request?.pdf;
+  const evidence = pdf?.evidence;
+  const report = exercise.report;
+  const finding = report?.findings?.[0];
+  const records = exercise.calls.map(({ record }) => record);
+  const root = records.find(
+    ({ call_id }) => call_id === exercise.rootCallIds[0],
+  );
+  const child = (parent, name) =>
+    parent &&
+    records.find(
+      (record) =>
+        record.parent_call_id === parent.call_id &&
+        record.definition.name === name,
+    );
+  const review = child(root, "reviewMediaAndImport");
+  const pdfReview = child(review, "reviewPdf");
+  const verifyPages = child(pdfReview, "verifyPages");
+  const extraction = child(pdfReview, "checkExtraction");
+  const missing = assignment.disposition === "missing-pages";
+
+  requireEvidence(
+    fixture?.passed === true &&
+      ["source", "pages", "artifact", "report"].every(
+        (key) => checks?.[key] === true,
+      ) &&
+      caseId === assignment.id &&
+      typeof contextId === "string" &&
+      contextId === execution.provenance?.contextId &&
+      request?.goal === assignment.goal &&
+      isDeepStrictEqual(request.checks, ["pdf"]) &&
+      request.git === null &&
+      request.speech === null &&
+      pdf?.need === assignment.need &&
+      pdf.minimumOcrConfidence === null &&
+      isDeepStrictEqual(pdf.requestedPages, assignment.requested) &&
+      /^[0-9a-f]{64}$/u.test(pdf.digest) &&
+      pdf.digest === evidence?.digest &&
+      typeof evidence.id === "string" &&
+      !!evidence.id &&
+      evidence.encrypted === false &&
+      evidence.pageCount === assignment.pages.length &&
+      evidence.engines.some(
+        ({ id, available, bundled }) =>
+          id === "pdfjs" && available === true && bundled === true,
+      ) &&
+      isDeepStrictEqual(evidence.selectedPages, assignment.extracted) &&
+      isDeepStrictEqual(
+        evidence.pages?.map(({ pageNumber }) => pageNumber),
+        assignment.extracted,
+      ) &&
+      evidence.pages.every((page) => {
+        const text = assignment.pages[page.pageNumber - 1];
+        return text
+          ? page.extractionMethod === "embedded-text" &&
+              page.lines.length === 1 &&
+              page.lines[0].text === text &&
+              page.lines[0].source === "embedded-text" &&
+              page.lines[0].bbox.length === 4 &&
+              page.lines[0].bbox.every(Number.isFinite) &&
+              page.lines[0].bbox[2] > 0 &&
+              page.lines[0].bbox[3] > 0
+          : page.extractionMethod === "none" && page.lines.length === 0;
+      }),
+    "PDF media review needs the exact source digest and native page evidence",
+  );
+  requireEvidence(
+    Array.isArray(images) &&
+      images.length === (assignment.images ? evidence.pages.length : 0) &&
+      evidence.pages.every((page) =>
+        assignment.images
+          ? images.some(
+              (image) =>
+                image.page === page.pageNumber &&
+                image.id === page.imageArtifactId &&
+                /^[0-9a-f]{64}$/u.test(image.digest) &&
+                image.digest === image.expectedDigest &&
+                Number.isSafeInteger(image.bytes) &&
+                image.bytes > 8 &&
+                image.integrity === true &&
+                image.png === true,
+            )
+          : page.imageArtifactId === null,
+      ) &&
+      report?.findings?.length === 1 &&
+      finding?.check === "pdf" &&
+      finding.disposition === assignment.disposition &&
+      finding.transcript === null &&
+      typeof finding.detail === "string" &&
+      !!finding.detail.trim() &&
+      isDeepStrictEqual(finding.evidenceIds, [evidence.id]) &&
+      matchesValue(review?.inputs?.request, request) &&
+      matchesValue(review.output, report) &&
+      matchesValue(pdfReview?.inputs?.assignment, pdf) &&
+      matchesValue(pdfReview.output, finding) &&
+      matchesValue(verifyPages?.inputs?.assignment, pdf) &&
+      matchesValue(verifyPages.output, missing ? "missing-pages" : null) &&
+      (missing
+        ? !extraction
+        : matchesValue(extraction?.inputs?.assignment, pdf) &&
+          matchesValue(extraction.output, assignment.disposition)) &&
+      records.every(({ effects }) => !effects?.length),
+    "PDF media review needs the original artifact evidence and exact page and extraction decisions",
+  );
+  return {
+    world: { context_id: contextId, digest: pdf.digest },
     checks,
     evidence: { workspace: { fixture } },
   };

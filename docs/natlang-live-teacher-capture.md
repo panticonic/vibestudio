@@ -121,6 +121,14 @@ in the managed System workspace. Accept the disposable workspace's ordinary
 launch review on the phone when
 it appears. Workspace readiness remains pending while that review is open.
 
+PDF media review cases use the installed PDF extension to extract the exact
+assigned pages from a generated disposable document. They distinguish missing
+pages, missing geometry, and missing images. The image case reads the stored
+PNG back and verifies its digest. Both ordinary and provider extension RPC
+results preserve nested binary values through validation. The review receives
+the resulting evidence without access to the original bytes or extension
+commands.
+
 Panel health cases inspect an owned workspace renderer through CDP. The outcome records the
 exact ordered DOM markers and retained console sequence. Recovery requires fresh evidence from
 the same panel after the assigned state change.
