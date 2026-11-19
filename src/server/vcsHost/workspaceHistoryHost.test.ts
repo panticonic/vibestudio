@@ -260,6 +260,9 @@ it("binds catalog pages to the requested participant revision", async () => {
 it.each([
   { method: "mergeHistoryMain", selection: { head: "mine", base: "base", main: "shared" } },
   { method: "mergeHistoryContext", selection: {
+    head: "mine", base: "base", source: { contextId: "owned-child", head: "shared" },
+  } },
+  { method: "mergeHistoryContext", selection: {
     head: "mine", base: "base", source: { contextId: "peer", head: "shared", participantId: "other" },
   } },
 ])("stores composed content before $method records the merge", async ({ method: expectedMethod, selection }) => {
@@ -287,11 +290,12 @@ it.each([
       intents: [], intentsTruncated: false,
     };
     const dispatch = vi.fn(async (_owner: WorkspaceSourceProviderRef, method: string, raw: unknown) => {
-      if (method === "resolveHistoryMainMerge") {
+      if (method === "resolveHistoryMerge") {
         expect(raw).toEqual({
           contextId: "context",
           target: { kind: "event", eventId: "mine-event" },
-          sourceEventId: "shared-event",
+          source: { kind: "event", eventId: "shared-event" },
+          readableContextIds: ["owned-child"],
         });
         return selection;
       }
@@ -310,9 +314,11 @@ it.each([
       expect(await getBytes(blobsDir, composedDigest)).toEqual(composed);
       return { kind: "committed", head: "merge-head", value: application, result };
     });
+    const explicitSource = "source" in selection && Boolean(selection.source?.participantId);
     await expect(mergeWorkspaceParticipantContext({
       dispatch: { dispatch }, caller, owner, canonical, blobsDir,
-      ...(expectedMethod === "mergeHistoryMain" ? {} : { selection }),
+      readableContextIds: ["owned-child"],
+      ...(explicitSource ? { selection } : {}),
       cause: { parent: null },
       merge: {
         commandId: "merge", contextId: "context",
@@ -320,7 +326,7 @@ it.each([
         source: { kind: "event", eventId: "shared-event" },
       },
     })).resolves.toEqual({ head: "merge-head", value: application, result });
-    expect(dispatch).toHaveBeenCalledTimes(expectedMethod === "mergeHistoryMain" ? 4 : 3);
+    expect(dispatch).toHaveBeenCalledTimes(explicitSource ? 3 : 4);
   } finally {
     await rm(blobsDir, { recursive: true, force: true });
   }
@@ -388,8 +394,8 @@ it("observes exact bytes for a participant comparison and validates the returned
       .mockResolvedValueOnce({ kind: "reviewed", result: { ...result, target: source } });
     const input = { dispatch: { dispatch }, caller, owner, canonical, blobsDir, contextId: "context", compare };
     await expect(reviewWorkspaceParticipantMerge(input)).resolves.toEqual(result);
-    expect(dispatch).toHaveBeenNthCalledWith(2, owner, "reviewHistoryMainMerge", {
-      contextId: "context", compare, observation: { files: [{ contentHash: digest, text: "Exact review content" }] },
+    expect(dispatch).toHaveBeenNthCalledWith(2, owner, "reviewHistoryMerge", {
+      contextId: "context", compare, readableContextIds: [], observation: { files: [{ contentHash: digest, text: "Exact review content" }] },
     });
     await expect(reviewWorkspaceParticipantMerge(input)).rejects.toThrow("different merge comparison");
   } finally {

@@ -110,7 +110,13 @@ const mergeReply = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("prepare-content"), blobs: z.array(blob).min(1) }).strict(),
   appliedEdit.extend({ kind: z.literal("committed"), result: vcsMergeResultSchema }).strict(),
 ]);
-const mainMergeSelection = z.object({ head, base: head, main: head }).strict();
+const historyMergeSelection = z.union([
+  z.object({ head, base: head, main: head }).strict(),
+  z.object({
+    head, base: head,
+    source: z.object({ contextId: z.string().min(1), head }).strict(),
+  }).strict(),
+]);
 const mergeReview = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("read-content"), contentHashes: z.array(digest).min(1) }).strict(),
   z.object({ kind: z.literal("reviewed"), result: vcsCompareResultSchema }).strict(),
@@ -460,6 +466,7 @@ export async function readWorkspaceParticipantFileDescriptors(input: WorkspaceHi
 /** Bind the catalog reads to the admitted copy and verify their exact revision. */
 export function workspaceParticipantCatalog(input: WorkspaceHistoryParticipant & {
   contextId: string;
+  readableContextIds?: readonly string[];
 }) {
   requireWorkspaceParticipantOwner(input);
   const { dispatch, owner, contextId } = input;
@@ -474,7 +481,10 @@ export function workspaceParticipantCatalog(input: WorkspaceHistoryParticipant &
     target: VcsStateNodeRef,
     source: VcsStateNodeRef,
   ) => {
-    const result = changedLocations.parse(await dispatch.dispatch(owner, method, { contextId, target, source }));
+    const result = changedLocations.parse(await dispatch.dispatch(owner, method, {
+      contextId, target, source,
+      ...(method === "readHistoryMergeLocations" ? { readableContextIds: input.readableContextIds ?? [] } : {}),
+    }));
     if (canonicalJson([result.target, result.source]) !== canonicalJson([target, source])) {
       throw new Error("Workspace changes belong to different revisions");
     }
@@ -675,19 +685,20 @@ async function readWorkspaceMergeObservation(blobsDir: string, contentHashes: st
   return { files };
 }
 
-/** Review the participant's current state against the exact shared revision. */
+/** Review the participant's current state against an admitted exact revision. */
 export async function reviewWorkspaceParticipantMerge(input: WorkspaceHistoryParticipant & {
   contextId: string;
   compare: VcsCompareInput;
+  readableContextIds?: readonly string[];
   blobsDir: string;
 }) {
   requireWorkspaceParticipantOwner(input);
   const { contextId, compare, blobsDir, owner, dispatch } = input;
-  const request = { contextId, compare };
-  let review = mergeReview.parse(await dispatch.dispatch(owner, "reviewHistoryMainMerge", request));
+  const request = { contextId, compare, readableContextIds: input.readableContextIds ?? [] };
+  let review = mergeReview.parse(await dispatch.dispatch(owner, "reviewHistoryMerge", request));
   if (review.kind === "read-content") {
     const observation = await readWorkspaceMergeObservation(blobsDir, review.contentHashes);
-    review = mergeReview.parse(await dispatch.dispatch(owner, "reviewHistoryMainMerge", { ...request, observation }));
+    review = mergeReview.parse(await dispatch.dispatch(owner, "reviewHistoryMerge", { ...request, observation }));
   }
   if (review.kind !== "reviewed" ||
       canonicalJson([review.result.target, review.result.source]) !== canonicalJson([compare.target, compare.source])) {
@@ -702,6 +713,7 @@ export async function mergeWorkspaceParticipantContext(input: WorkspaceHistoryPa
     { main: string } | { source: { contextId: string; head: string; participantId?: string } }
   );
   merge: VcsMergeInput;
+  readableContextIds?: readonly string[];
   cause: z.infer<typeof causeSchema>;
   triggerEvidence?: { text: string; sender: VcsTrajectorySenderRef } | null;
   blobsDir: string;
@@ -711,11 +723,14 @@ export async function mergeWorkspaceParticipantContext(input: WorkspaceHistoryPa
   let selection = input.selection;
   if (!selection) {
     if (merge.source.kind !== "event") throw new Error("Workspace integration requires a saved event");
-    selection = mainMergeSelection.parse(await dispatch.dispatch(owner, "resolveHistoryMainMerge", {
-      contextId: merge.contextId,
-      target: merge.expectedWorkingHead,
-      sourceEventId: merge.source.eventId,
+    const readableContextIds = input.readableContextIds ?? [];
+    selection = historyMergeSelection.parse(await dispatch.dispatch(owner, "resolveHistoryMerge", {
+      contextId: merge.contextId, target: merge.expectedWorkingHead, source: merge.source, readableContextIds,
     }));
+    if ("source" in selection && selection.source.contextId !== merge.contextId &&
+        !readableContextIds.includes(selection.source.contextId)) {
+      throw new Error("Workspace integration selected an unauthorized source context");
+    }
   }
   const method = "main" in selection ? "mergeHistoryMain" : "mergeHistoryContext";
   const send = async (content?: {

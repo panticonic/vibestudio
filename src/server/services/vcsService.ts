@@ -393,6 +393,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
         return workspace.reviewParticipantMerge({
           ...scope,
           compare: vcsMethods.compare.args.parse([input])[0],
+          readableContextIds: await reachableContextAuthorities(ctx, deps),
         });
       case "merge":
         return (
@@ -400,6 +401,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
             ...scope,
             cause,
             merge: vcsMethods.merge.args.parse([input])[0],
+            readableContextIds: await reachableContextAuthorities(ctx, deps),
           })
         ).result;
       case "edit":
@@ -820,7 +822,12 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
               workspace && method !== "mainState"
                 ? await participantOperationScope(workspace, ctx, method as VcsMethodName, admittedInput)
                 : null;
-            const catalog = scope ? workspaceParticipantCatalog(scope) : null;
+            const catalog = scope ? workspaceParticipantCatalog({
+              ...scope,
+              ...((method === "compare" || method === "merge")
+                ? { readableContextIds: await reachableContextAuthorities(ctx, deps) }
+                : {}),
+            }) : null;
             const reads: SemanticReads = {
               inspect: async (value) =>
                 vcsMethods.inspect.returns.parse(await invoke(ctx, "inspect", value)),

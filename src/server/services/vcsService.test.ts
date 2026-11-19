@@ -325,6 +325,7 @@ describe("canonical vcsService", () => {
     expect(workspace.mergeParticipantContext).toHaveBeenCalledWith({
       ...scope,
       cause: { parent: null },
+      readableContextIds: ["context:own"],
       merge,
     });
     const push = {
