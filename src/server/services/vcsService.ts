@@ -36,6 +36,7 @@ import {
   type VcsMethodName,
 } from "@vibestudio/service-schemas/vcs";
 import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
+import { blobUploadPrincipal } from "../storage/blobUploads.js";
 import {
   hasWorkspaceParticipantDiscardReceipt,
   inspectWorkspaceParticipantProvenance,
@@ -66,6 +67,7 @@ export interface VcsServiceDeps {
     | "openParticipantScope"
     | "editParticipantContext"
     | "transferParticipantContext"
+    | "importParticipantSnapshot"
     | "saveParticipantContext"
     | "discardParticipantContext"
     | "publishParticipantContext"
@@ -425,6 +427,12 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
             readableContextIds: await reachableContextAuthorities(ctx, deps),
           })
         ).result;
+      case "importSnapshot":
+        return workspace.importParticipantSnapshot({
+          ...common,
+          snapshot: vcsMethods.importSnapshot.args.parse([input])[0],
+          uploadPrincipal: blobUploadPrincipal(ctx),
+        });
       case "commit":
         return workspace.saveParticipantContext({
           ...common,

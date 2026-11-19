@@ -7930,7 +7930,13 @@ async function main() {
 
     const blobsDir = layout.blobsDir;
     container.registerManaged(
-      serviceWithHttpRoutes(createBlobstoreService({ blobsDir }), routeRegistry)
+      serviceWithHttpRoutes(
+        createBlobstoreService({
+          blobsDir,
+          recordParticipantUploads: () => workspaceVcs.participantHistoryAttached,
+        }),
+        routeRegistry
+      )
     );
   }
 

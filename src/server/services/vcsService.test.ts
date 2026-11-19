@@ -204,6 +204,7 @@ describe("canonical vcsService", () => {
       readParticipantMain: vi.fn().mockResolvedValue(EVENT),
       editParticipantContext: vi.fn(),
       transferParticipantContext: vi.fn(),
+      importParticipantSnapshot: vi.fn(),
       saveParticipantContext: vi.fn().mockResolvedValue(saved),
       discardParticipantContext: vi.fn().mockResolvedValue({
         contextId: scope.contextId,

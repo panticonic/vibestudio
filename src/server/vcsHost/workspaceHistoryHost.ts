@@ -44,6 +44,7 @@ import { z } from "zod";
 import { WorkspaceTemplateInstallationSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import type { DODispatch } from "../doDispatch.js";
 import { getBytes, putBytes } from "../services/blobstoreService.js";
+import { verifiedInteractiveSession } from "../services/principalIdentity.js";
 import type { CanonicalRefPublication } from "../services/protectedRefStore.js";
 import { withBlobContentLock } from "../storage/blobRetentions.js";
 import type { WorkspaceSourceProviderRef } from "../workspaceSourceProvider.js";
@@ -790,22 +791,14 @@ export function workspaceParticipantIdentity(caller: VerifiedCaller, ownerContex
     // Every tool call in the same authenticated task reuses its working copy.
     return canonicalJson(["task", invocation.owner, invocation.task]);
   }
-  const userId = caller.subject?.userId;
-  const execution = caller.executionSession;
-  if (
-    userId && ownerContextId &&
-    execution?.mode === "interactive" &&
-    execution.executor.kind === "dynamic-code" &&
-    execution.executor.runtimeId === caller.runtime.id &&
-    execution.contextId === ownerContextId &&
-    execution.ownerUser === `user:${userId}` &&
-    execution.agentBinding === null && execution.parent === null
-  ) {
+  const session = verifiedInteractiveSession(caller);
+  if (session && session.contextId === ownerContextId) {
     // The host reissues task grants for individual signed evals. Their edits
     // belong to the authenticated person's persistent session context.
-    return canonicalJson(["interactive-session", userId, ownerContextId]);
+    return canonicalJson(["interactive-session", session.userId, session.contextId]);
   }
   if (caller.taskAuthority) return canonicalJson(["task-grant", caller.taskAuthority]);
+  const userId = caller.subject?.userId;
   if (userId && ownerContextId) {
     // One device can open several independent sessions with separate retirement.
     return canonicalJson(["user", userId, caller.remoteDeviceKey ?? caller.runtime.id, ownerContextId]);

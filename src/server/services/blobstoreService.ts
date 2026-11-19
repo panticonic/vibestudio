@@ -57,7 +57,8 @@ import {
   retainedBlobDigests,
   withBlobContentLock,
 } from "../storage/blobRetentions.js";
-import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import type { ServiceContext, VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { blobUploadPrincipal, recordBlobUpload } from "../storage/blobUploads.js";
 import { sendJson, sendText } from "../hostCore/httpResponses.js";
 
 const log = createDevLogger("BlobstoreService");
@@ -69,6 +70,7 @@ function errorText(error: unknown): string {
 
 export interface BlobstoreServiceDeps {
   blobsDir: string;
+  recordParticipantUploads?: () => boolean;
 }
 
 export interface BlobStat {
@@ -2299,6 +2301,18 @@ export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithR
   // Durable Object identities survive process/build incarnations. Logical keys
   // are never allowed to choose a different authenticated caller namespace.
   const retentionNamespace = (caller: VerifiedCaller) => blobRetentionNamespace(caller.runtime);
+  const recordUpload = (ctx: ServiceContext, digest: string) => {
+    if (deps.recordParticipantUploads?.())
+      recordBlobUpload(deps.blobsDir, blobUploadPrincipal(ctx), digest);
+  };
+  const put = (ctx: ServiceContext, bytes: Buffer) =>
+    deps.recordParticipantUploads?.()
+      ? withBlobContentLock(deps.blobsDir, async () => {
+          const stored = await putBytes(deps.blobsDir, bytes);
+          recordUpload(ctx, stored.digest);
+          return stored;
+        })
+      : putBytes(deps.blobsDir, bytes);
   const definition: ServiceDefinition = {
     name: "blobstore",
     description: "Per-workspace content-addressable blob storage",
@@ -2307,7 +2321,7 @@ export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithR
     handler: defineServiceHandler("blobstore", blobstoreMethods, {
       has: (_ctx, [hash]) => pathExists(blobPath(deps.blobsDir, hash)),
       stat: (_ctx, [hash]) => statBlob(deps.blobsDir, hash),
-      putText: (_ctx, [text]) => putBytes(deps.blobsDir, Buffer.from(text, "utf8")),
+      putText: (ctx, [text]) => put(ctx, Buffer.from(text, "utf8")),
       getText: async (_ctx, [hash]) => {
         const bytes = await getBytes(deps.blobsDir, hash);
         return bytes ? bytes.toString("utf8") : null;
@@ -2321,11 +2335,12 @@ export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithR
         return bytes ? { bytesBase64: bytes.toString("base64") } : null;
       },
       grep: (_ctx, [hash, query, options]) => grepBlob(deps.blobsDir, hash, query, options ?? {}),
-      putBase64: (_ctx, [content]) => putBytes(deps.blobsDir, Buffer.from(content, "base64")),
+      putBase64: (ctx, [content]) => put(ctx, Buffer.from(content, "base64")),
       putRetained: (ctx, [input]) =>
         withBlobContentLock(deps.blobsDir, async () => {
           const stored = await putBytes(deps.blobsDir, Buffer.from(input.base64, "base64"));
           retainBlob(deps.blobsDir, retentionNamespace(ctx.caller), input.owner, stored.digest);
+          recordUpload(ctx, stored.digest);
           return stored;
         }),
       retain: (ctx, [input]) =>

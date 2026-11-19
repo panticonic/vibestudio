@@ -1,5 +1,6 @@
 import { deserializeRpcFailure } from "@vibestudio/rpc";
 import { intrinsicContentDescriptor } from "@vibestudio/content-addressing";
+import { hasBlobUploads } from "../storage/blobUploads.js";
 /**
  * Host boundary for the semantic workspace history.
  *
@@ -26,13 +27,15 @@ import type {
   VcsCommitResult,
   VcsDiscardInput,
   VcsDiscardResult,
+  VcsImportSnapshotInput,
+  VcsImportSnapshotResult,
   VcsPushInput,
   VcsPushResult,
   VcsReadFileResult,
   VcsReadFilesInput,
   VcsStateNodeRef,
 } from "@vibestudio/service-schemas/vcs";
-import { vcsCommitResultSchema, vcsDiscardResultSchema, vcsMethods, type VcsMethodName } from "@vibestudio/service-schemas/vcs";
+import { vcsCommitResultSchema, vcsDiscardResultSchema, vcsImportSnapshotResultSchema, vcsMethods, type VcsMethodName } from "@vibestudio/service-schemas/vcs";
 import type {
   ProtectedPublicationEvent,
   ProtectedPublicationFileChange,
@@ -1204,6 +1207,35 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     return result;
   }
 
+  async importParticipantSnapshot(input: WorkspaceHistoryParticipant & {
+    head: string;
+    snapshot: VcsImportSnapshotInput;
+    cause: { parent: RpcCausalParent | null };
+    uploadPrincipal: string;
+  }): Promise<VcsImportSnapshotResult> {
+    requireWorkspaceParticipantOwner(input);
+    const { dispatch, owner, head, snapshot, cause, uploadPrincipal } = input;
+    const digests = [...new Set(
+      snapshot.repositories.flatMap(({ files }) => files.map(({ contentHash }) => contentHash))
+    )].sort(compareUtf16CodeUnits);
+    const result = await withBlobContentLock(this.deps.blobsDir, async () => {
+      if (!hasBlobUploads(this.deps.blobsDir, uploadPrincipal, digests)) {
+        throw new Error("Import requires bytes supplied by the authenticated caller");
+      }
+      const observation = await this.observeContentHashes(digests, "descriptor");
+      const receipt = GadJsonRecordSchema.parse(
+        await dispatch.dispatch(owner, "importHistorySnapshot", { head, snapshot, observation, cause })
+      );
+      const imported = vcsImportSnapshotResultSchema.parse(receipt["result"]);
+      if (imported.contextId !== snapshot.contextId || typeof receipt["head"] !== "string" || !receipt["head"]) {
+        throw new Error("Workspace snapshot import returned a different context");
+      }
+      return imported;
+    });
+    await this.materializeParticipantContext({ dispatch, owner, contextId: snapshot.contextId });
+    return result;
+  }
+
   async saveParticipantContext(input: WorkspaceHistoryParticipant & {
     head: string;
     commit: VcsCommitInput;
@@ -1525,6 +1557,13 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       if (!contentHash) throw new Error("content observation contains an empty content hash");
       return contentHash;
     });
+    return this.observeContentHashes(contentHashes, representation);
+  }
+
+  private async observeContentHashes(
+    contentHashes: string[],
+    representation: "bytes" | "descriptor"
+  ): Promise<GadJsonRecord> {
     const observed = new Array<Record<string, unknown>>(contentHashes.length);
     const pending = contentHashes.entries();
     const observeNext = async (): Promise<void> => {

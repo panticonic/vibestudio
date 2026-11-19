@@ -7,6 +7,7 @@ import { Readable } from "stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
+import { blobUploadPrincipal, hasBlobUploads } from "../storage/blobUploads.js";
 import { TreeListCursorSchema } from "@vibestudio/service-schemas/blobstore";
 import {
   buildWorktreeManifest,
@@ -2078,6 +2079,32 @@ describe("blobstoreService", () => {
         /Invalid file mode/
       );
     });
+  });
+
+  it("recognizes a byte upload only for its authenticated producer", async () => {
+    const createDispatcher = () => {
+      const service = createBlobstoreService({ blobsDir, recordParticipantUploads: () => true });
+      const dispatcher = createTestServiceDispatcher();
+      dispatcher.registerService(service.definition);
+      dispatcher.markInitialized();
+      return dispatcher;
+    };
+    const alice = { caller: createVerifiedCaller("writer", "worker") };
+    const bob = { caller: createVerifiedCaller("other-writer", "worker") };
+    const alicePrincipal = blobUploadPrincipal(alice);
+    const bobPrincipal = blobUploadPrincipal(bob);
+    const first = createDispatcher();
+    const stored = await first.dispatch(alice, "blobstore", "putText", ["alice's uploaded bytes"]) as {
+      digest: string;
+    };
+    const second = createDispatcher();
+    await second.dispatch(bob, "blobstore", "retain", [{ owner: "bob", digest: stored.digest }]);
+    expect(hasBlobUploads(blobsDir, alicePrincipal, [stored.digest])).toBe(true);
+    expect(hasBlobUploads(blobsDir, bobPrincipal, [stored.digest])).toBe(false);
+    await second.dispatch(bob, "blobstore", "putBase64", [
+      Buffer.from("alice's uploaded bytes").toString("base64"),
+    ]);
+    expect(hasBlobUploads(blobsDir, bobPrincipal, [stored.digest])).toBe(true);
   });
 
   describe("grep", () => {

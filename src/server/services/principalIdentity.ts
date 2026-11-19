@@ -9,6 +9,20 @@ import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 
 import { isEvalHostRecord } from "@vibestudio/shared/evalRuntimeIdentity";
 
+/** Identify one host-admitted interactive session across separate executions. */
+export function verifiedInteractiveSession(caller: VerifiedCaller) {
+  const userId = caller.subject?.userId;
+  const execution = caller.executionSession;
+  if (
+    !userId || execution?.mode !== "interactive" ||
+    execution.executor.kind !== "dynamic-code" ||
+    execution.executor.runtimeId !== caller.runtime.id ||
+    execution.ownerUser !== `user:${userId}` ||
+    execution.agentBinding !== null || execution.parent !== null
+  ) return null;
+  return { userId, contextId: execution.contextId };
+}
+
 /** The runtime whose context a live session executor is admitted to act in. */
 export function admittedEvalContextOwner(
   entityCache: Pick<EntityCache, "resolveActive"> | undefined,
