@@ -84,6 +84,12 @@ Personal Browser library cases recover a visited link, organize persisted bookma
 an exact duplicate while keeping its assigned copy. The harness uses a fresh browser-data
 namespace and checks surviving bookmark metadata, visit history and an out-of-scope record.
 
+Local messaging exercises the canonical resolver and addressed notify in
+owned channels. It includes an exact handle among similar names, an ambiguous
+display name, and a recipient present only in the control channel. Run
+`messaging-oracle-<case-id>` to qualify each case without a model. The oracle
+joins the actual delivery frontier and checks recipient and control probes.
+
 Channel roster cases use two owned VibeStudio channels with the same handles where appropriate.
 The program reuses the channel membership skill for each step, checks holds after conflicting
 identity evidence, and records the exact final rosters across both channels.
