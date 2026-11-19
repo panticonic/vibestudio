@@ -1057,6 +1057,96 @@ test("authoring export rejects a review drawn from another baseline", async (t) 
   );
 });
 
+test("authoring export requires actual scope receipts and the nested selector comparison", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  entry.test.name = "authoring-live-scope-drop-release-restriction";
+  const world = cases.get(entry.test.name);
+  const run = diagnostics.natlangTeacher;
+  const candidateRevision = world.trackedScopes[0].revision;
+  const baselineRevision = world.trackedScopes[1].revision;
+  run.report = {
+    status: "changes-required",
+    candidateRevision,
+    baselineRevision,
+    findings: [
+      {
+        code: "service-scope-change",
+        subject: "decisionWriter",
+        observed: "unrestricted",
+        recovery: "Restrict the writer to the decision recorder.",
+      },
+    ],
+  };
+  run.programPath = "skills/vibestudio-workflows/runWorkflow.nl";
+  const [root, leaf] = run.calls;
+  root.record.definition.name = "runWorkflow";
+  leaf.record.definition.name = "reviewProgram";
+  leaf.record.outcome = "done";
+  for (const [name, parent] of [
+    ["inspectRevisions", leaf.callId],
+    ["readAssignedProgram", "inspectRevisions"],
+    ["reviewContract", leaf.callId],
+    ["checkAuthority", "reviewContract"],
+    ["checkServices", "checkAuthority"],
+    ["compareSelectors", "checkAuthority"],
+  ]) {
+    const call = structuredClone(leaf);
+    call.callId = call.summary.call_id = name;
+    call.record.definition.name = name;
+    call.record.parent_call_id = parent;
+    run.calls.push(call);
+  }
+  const scopeReadbacks = [
+    {
+      role: "candidate",
+      revision: candidateRevision,
+      scopes: structuredClone(world.trackedScopes[0].scopes),
+    },
+    {
+      role: "baseline",
+      revision: baselineRevision,
+      scopes: structuredClone(world.trackedScopes[1].scopes),
+    },
+  ];
+  diagnostics.managedAuthoring = {
+    contextId: "ctx",
+    verification: {
+      caseId: world.caseId,
+      status: world.expectedStatus,
+      candidateRevision,
+      baselineRevision,
+      passed: true,
+      scopeReadbacks,
+      checks: {
+        sourceUnchanged: true,
+        workspaceHeadUnchanged: true,
+        exactInspections: true,
+        intendedWorld: true,
+        joinedFindings: true,
+      },
+    },
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  scopeReadbacks[1].scopes.decisionWriter = ["review.nl"];
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-wrong-grant` }),
+    /compiled scopes and nested selector checks/u
+  );
+  scopeReadbacks[1].scopes = structuredClone(world.trackedScopes[1].scopes);
+  run.calls.at(-1).record.parent_call_id = "reviewContract";
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-flat-comparison` }),
+    /compiled scopes and nested selector checks/u
+  );
+});
+
 test("provenance history export rejects an aliased file or walk scope", async (t) => {
   const { options, diagnostics, entry, save } = await fixture(t);
   const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(

@@ -154,6 +154,10 @@ Personal memory comparisons call the existing verified recall skill once for eac
 revision. They retain both original quotations and independently observed endpoint outcomes,
 including when one revision has no recall lead or no source. The exporter requires both nested
 recall calls and the comparison judgment.
+Natlang authoring cases compile the candidate and baseline in the workspace. Service-scope
+reviews compare exact callable selectors, call-chain selectors, and explicit empty grants.
+The exporter binds the compiler scope readbacks to the inspected revisions and requires the
+nested authority-review calls.
 Runtime program reviews compile caller-owned scratch source through the installed Natlang loader.
 When a task includes execution, a separate EvalDO run loads and calls the exact typed program.
 The review distinguishes checked output, unchecked output, failure and a receipt from an older

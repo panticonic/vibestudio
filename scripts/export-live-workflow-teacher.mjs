@@ -607,12 +607,27 @@ export async function loadLiveTeacherCases(checkouts) {
       }),
     });
   }
-  for (const { id, request, expected } of managedAuthoringWorlds) {
+  for (const { id, request, expected, candidate, baseline } of managedAuthoringWorlds) {
+    const trackedScopes =
+      candidate?.["natlang.json"] &&
+      (expected.status === "ready" || expected.status === "changes-required")
+        ? [candidate, ...(baseline ? [baseline] : [])].map((tree) => ({
+            scopes: JSON.parse(tree["natlang.json"] ?? "{}").serviceScopes ?? {},
+            revision: hash(
+              JSON.stringify(
+                Object.keys(tree)
+                  .sort()
+                  .map((path) => [path, tree[path]])
+              )
+            ),
+          }))
+        : undefined;
     cases.set(`authoring-live-${id}`, {
       ...authoringWorkflow,
       caseId: id,
       comparedBaseline: request.compare,
       expectedStatus: expected.status,
+      ...(trackedScopes && { trackedScopes, expectedMarkers: expected.markers }),
     });
   }
   for (const world of managedPanelHealthWorlds) {
@@ -1239,13 +1254,55 @@ function authoringEvidence(execution, exercise, _scenario, workflow) {
       ].every((name) => verification.checks?.[name] === true),
     "The authoring review must match the assigned compiler snapshots and exact source revisions"
   );
+  if (workflow.trackedScopes) {
+    const readbacks = verification.scopeReadbacks;
+    const findings = report?.findings;
+    const foundMarkers = Array.isArray(findings)
+      ? findings.map(({ code, subject }) => `${code}:${subject}`).sort()
+      : null;
+    const child = (parentId, name) =>
+      parentId &&
+      exercise.calls.find(
+        ({ record }) =>
+          record.parent_call_id === parentId &&
+          record.definition?.name === name &&
+          record.outcome === "done"
+      )?.callId;
+    const root = child(exercise.rootCallIds[0], "reviewProgram");
+    const inspection = child(root, "inspectRevisions");
+    const contract = child(root, "reviewContract");
+    const authority = child(contract, "checkAuthority");
+    requireEvidence(
+      Array.isArray(readbacks) &&
+        readbacks.length === workflow.trackedScopes.length &&
+        readbacks.every(
+          ({ role, revision: digest, scopes }, index) =>
+            role === (index === 0 ? "candidate" : "baseline") &&
+            digest ===
+              (index === 0 ? verification.candidateRevision : verification.baselineRevision) &&
+            digest === workflow.trackedScopes[index].revision &&
+            isDeepStrictEqual(scopes, workflow.trackedScopes[index].scopes)
+        ) &&
+        isDeepStrictEqual(
+          foundMarkers,
+          workflow.expectedMarkers.map(({ code, subject }) => `${code}:${subject}`).sort()
+        ) &&
+        child(inspection, "readAssignedProgram") &&
+        child(authority, "checkServices") &&
+        child(authority, "compareSelectors"),
+      "The authority review must match the compiled scopes and nested selector checks"
+    );
+  }
   return {
     world: {
       context_id: fixture.contextId,
       candidate_revision: verification.candidateRevision,
       baseline_revision: verification.baselineRevision,
     },
-    checks: verification.checks,
+    checks: {
+      ...verification.checks,
+      ...(workflow.trackedScopes ? { reviewedCompilerScopes: true } : {}),
+    },
     evidence: { workspace: { fixture } },
   };
 }
