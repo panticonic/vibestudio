@@ -45,6 +45,7 @@ import {
   readWorkspaceParticipantNeighbors,
   readWorkspaceParticipantStatus,
   workspaceParticipantCatalog,
+  workspaceParticipantReferenceContext,
   workspaceParticipantReferencesReachable,
 } from "../vcsHost/workspaceHistoryHost.js";
 import { isTrustedDeviceCaller } from "./clientTrust.js";
@@ -331,6 +332,28 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
     return scope;
   };
 
+  const participantOperationScope = async (
+    workspace: NonNullable<VcsServiceDeps["participantWorkspace"]>,
+    ctx: ServiceContext,
+    method: VcsMethodName,
+    input: unknown,
+    caller = ctx.caller
+  ) => {
+    const explicitContext = vcsOperationContextId(method, input);
+    const scope = await participantScope(workspace, ctx, explicitContext, caller);
+    if (explicitContext !== null || vcsOperationRegistry[method].accessClass !== "read") return scope;
+    const reference = parseVcsSemanticRequest(method, input).references.find(
+      ({ kind }) => kind === "state-node" || kind === "node" || kind === "event" || kind === "external-delta"
+    );
+    if (!reference) return scope;
+    const contextId = await workspaceParticipantReferenceContext({
+      ...scope,
+      readableContextIds: await reachableContextAuthorities(ctx, deps),
+      reference,
+    });
+    return { ...scope, contextId };
+  };
+
   const invokeParticipant = async (
     workspace: NonNullable<VcsServiceDeps["participantWorkspace"]>,
     ctx: ServiceContext,
@@ -340,12 +363,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
     epochTransition: boolean
   ): Promise<unknown> => {
     if (method === "mainState") return workspace.readParticipantMain();
-    const scope = await participantScope(
-      workspace,
-      ctx,
-      vcsOperationContextId(method, input),
-      effectCaller
-    );
+    const scope = await participantOperationScope(workspace, ctx, method, input, effectCaller);
     const cause = { parent: ctx.causalParent ?? null };
     const common = { ...scope, head: scope.workingHead, cause };
     switch (method) {
@@ -800,11 +818,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
             const workspace = participantWorkspace();
             const scope =
               workspace && method !== "mainState"
-                ? await participantScope(
-                    workspace,
-                    ctx,
-                    vcsOperationContextId(method as VcsMethodName, admittedInput)
-                  )
+                ? await participantOperationScope(workspace, ctx, method as VcsMethodName, admittedInput)
                 : null;
             const catalog = scope ? workspaceParticipantCatalog(scope) : null;
             const reads: SemanticReads = {

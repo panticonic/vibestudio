@@ -248,6 +248,26 @@ describe("canonical vcsService", () => {
     ).rejects.toMatchObject({ code: "EINVAL" });
     expect(workspace.readParticipantFiles).toHaveBeenCalledOnce();
 
+    const childContext = "context:child";
+    const childState = { kind: "application", applicationId: "child-edit" };
+    const { definition: withChild } = service({
+      context: scope.contextId,
+      owned: [{ contextId: childContext, kind: "lifecycle", ownerEntityId: caller.runtime.id }],
+      participantWorkspace: workspace,
+    });
+    dispatch.mockResolvedValueOnce(true).mockResolvedValueOnce(childContext);
+    await expect(withChild.handler(ctx, "readFile", [{ state: childState, ...file }])).resolves.toBeNull();
+    expect(dispatch).toHaveBeenLastCalledWith(owner, "readHistoryReferenceContext", {
+      contextIds: [scope.contextId, childContext], reference: childState,
+    });
+    expect(workspace.readParticipantFiles).toHaveBeenLastCalledWith({
+      ...scope, contextId: childContext, read: { state: childState, files: [file] },
+    });
+    dispatch.mockResolvedValueOnce(true).mockResolvedValueOnce("context:unrelated");
+    await expect(withChild.handler(ctx, "readFile", [{ state: childState, ...file }])).rejects.toThrow(
+      "selected an unauthorized context"
+    );
+
     const neighbors = { root: EVENT, limit: 2 };
     const page = { root: EVENT, edges: [], nextCursor: null };
     dispatch.mockResolvedValueOnce(true).mockResolvedValueOnce(page);

@@ -160,15 +160,8 @@ export async function workspaceParticipantReferencesReachable(input: WorkspaceHi
 }): Promise<boolean> {
   requireWorkspaceParticipantOwner(input);
   const references = [];
-  for (const { kind, value } of input.references) {
-    if (kind !== "event" && kind !== "state-node" && kind !== "external-delta" && kind !== "node")
-      return false;
-    const ref = kind === "event" ? { kind, eventId: value }
-      : kind === "external-delta" ? { kind, deltaId: value }
-      : value;
-    const parsed = kind === "state-node"
-      ? vcsStateNodeRefSchema.safeParse(ref)
-      : vcsSemanticNodeRefSchema.safeParse(ref);
+  for (const reference of input.references) {
+    const parsed = historyReference(reference);
     if (!parsed.success) return false;
     references.push(parsed.data);
   }
@@ -176,6 +169,35 @@ export async function workspaceParticipantReferencesReachable(input: WorkspaceHi
     contextIds: [...new Set(input.contextIds)],
     references,
   }));
+}
+
+function historyReference({ kind, value }: { kind: string; value: unknown }) {
+  switch (kind) {
+    case "event": return vcsSemanticNodeRefSchema.safeParse({ kind, eventId: value });
+    case "external-delta": return vcsSemanticNodeRefSchema.safeParse({ kind, deltaId: value });
+    case "state-node": return vcsStateNodeRefSchema.safeParse(value);
+    case "node": return vcsSemanticNodeRefSchema.safeParse(value);
+    default: return { success: false } as const;
+  }
+}
+
+/** Select the actual branch containing a reference within one participant's admitted context graph. */
+export async function workspaceParticipantReferenceContext(input: WorkspaceHistoryParticipant & {
+  contextId: string;
+  readableContextIds: readonly string[];
+  reference: { kind: string; value: unknown };
+}): Promise<string> {
+  requireWorkspaceParticipantOwner(input);
+  const contextIds = [...new Set([input.contextId, ...input.readableContextIds])];
+  if (contextIds.length === 1) return input.contextId;
+  const reference = historyReference(input.reference);
+  if (!reference.success) throw new Error("Workspace read requires an exact reference");
+  const result = z.string().min(1).nullable().parse(await input.dispatch.dispatch(
+    input.owner, "readHistoryReferenceContext", { contextIds, reference: reference.data },
+  ));
+  if (result !== null && !contextIds.includes(result))
+    throw new Error("Workspace read selected an unauthorized context");
+  return result ?? input.contextId;
 }
 
 /** A reset removes the discarded application from normal reference visibility. */
