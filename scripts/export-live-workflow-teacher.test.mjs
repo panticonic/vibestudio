@@ -96,6 +96,7 @@ test("authored template worlds flow into the collector without losing original s
         ],
       ],
       ["phone-setup-world", "phoneSetupUnavailable", null],
+      ["agentic-change-worlds", "managedAgenticChangeWorlds", []],
       ["gad-review-worlds", "managedGadReviewWorlds", []],
       ["terminal-check-worlds", "managedTerminalCheckWorlds", []],
       ["integration-readiness-worlds", "managedIntegrationReadinessWorlds", []],
@@ -2919,6 +2920,7 @@ test("workspace integration binds conflict source and verified state without bro
     [
       ["content-project-worlds", "export const contentProjectWorlds = [];"],
       ["phone-setup-world", "export const phoneSetupUnavailable = undefined;"],
+      ["agentic-change-worlds", "export const managedAgenticChangeWorlds = [];"],
       ["gad-review-worlds", "export const managedGadReviewWorlds = [];"],
       ["terminal-check-worlds", "export const managedTerminalCheckWorlds = [];"],
       ["integration-readiness-worlds", "export const managedIntegrationReadinessWorlds = [];"],
@@ -3697,5 +3699,100 @@ test("integration readiness rejects leaked credential fields and substituted loo
   await assert.rejects(
     exportLiveTeacherWorkflow({ ...options, cases }),
     /both scoped host lookups/u
+  );
+});
+
+test("agentic change export joins the captured source revision and its planning tree", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  const name = "agentic-change-live-channel-envelope-replay";
+  const { assignment } = cases.get(name);
+  const pins = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(options.pins, JSON.stringify({ ...pins, workspace: "examples" }));
+  entry.test.name = name;
+  const { goal, owner, consumers } = assignment;
+  const request = { goal, contextId: "ctx" };
+  const source = {
+    contextId: "ctx",
+    revision: "workspace-event:assigned",
+    guides: [owner, ...consumers].map((unit) => ({ unit, excerpt: "Installed guide" })),
+  };
+  const units = { owner, consumers, blockers: [] };
+  const history = {
+    persistedContract: true,
+    retainedHistoryChecks: ["Reduce existing history.", "Check a freshly persisted outcome."],
+  };
+  const impact = { ...units, ...history };
+  const builds = { focusedTests: [owner, ...consumers], rebuild: assignment.rebuild };
+  const canary = {
+    surface: assignment.surface,
+    probe: "Complete a turn and reopen its transcript.",
+    observations: ["Stored and rendered terminal outcome"],
+    cleanup: ["Retire the canary channel"],
+  };
+  const report = { contextId: "ctx", revision: source.revision, impact, builds, canary };
+  diagnostics.managedAgenticChange = {
+    caseId: assignment.id,
+    request,
+    source,
+    passed: true,
+    checks: { source: true, unchanged: true, ownership: true, verification: true },
+  };
+  const ref = (value) => {
+    const text = JSON.stringify(value);
+    return {
+      complete: true,
+      hash: createHash("sha256").update(text).digest("hex"),
+      bytes: Buffer.byteLength(text),
+    };
+  };
+  const prototype = diagnostics.natlangTeacher.calls[0];
+  const call = (name, parent, inputs, output, effects = []) => ({
+    callId: name,
+    summary: { ...prototype.summary, call_id: name },
+    record: {
+      ...prototype.record,
+      call_id: name,
+      parent_call_id: parent,
+      definition: { name },
+      outcome: "done",
+      inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+      output: ref(output),
+      effects,
+    },
+  });
+  const readback = {
+    service: "agenticChangeSource",
+    method: "read",
+    args: ref(["ctx"]),
+    result: ref(source),
+  };
+  diagnostics.natlangTeacher = {
+    ...diagnostics.natlangTeacher,
+    programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+    rootCallIds: ["runWorkflow"],
+    report,
+    calls: [
+      call("runWorkflow", null, {}, null),
+      call("planAgenticChange", "runWorkflow", { request }, report),
+      call("readSource", "planAgenticChange", { contextId: "ctx" }, source, [readback]),
+      call("reviewImpact", "planAgenticChange", { goal, sources: source }, impact),
+      call("findOwners", "reviewImpact", { goal, sources: source }, units),
+      call("reviewHistory", "reviewImpact", { goal, units }, history),
+      call("planVerification", "planAgenticChange", { goal, impact }, { builds, canary }),
+      call("planBuilds", "planVerification", { impact }, builds),
+      call("planCanary", "planVerification", { goal, builds }, canary),
+    ],
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  readback.result = ref({ ...source, revision: "workspace-event:foreign" });
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases }),
+    /exact workspace revision/u
   );
 });

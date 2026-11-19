@@ -203,6 +203,18 @@ const terminalCheckWorkflow = {
   root: "runTerminalChecks",
   evidence: terminalCheckEvidence,
 };
+const agenticChangeWorkflow = {
+  family: "workspace-live-agentic-change",
+  workspace: "examples",
+  namespace: "vibestudio:agentic-development",
+  group: "exact-context-agentic-stack-verification",
+  validator: {
+    template: "system-testing",
+    path: "skills/system-testing/agentic-change-managed.ts",
+  },
+  root: "planAgenticChange",
+  evidence: agenticChangeEvidence,
+};
 const gadReviewWorkflow = {
   family: "workspace-live-gad-review",
   workspace: "examples",
@@ -433,6 +445,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedSessionReplayWorlds = [] },
     { managedTestkitCleanupWorlds = [] },
     { phoneSetupUnavailable },
+    { managedAgenticChangeWorlds },
     { managedGadReviewWorlds },
     { managedTerminalCheckWorlds },
     { managedIntegrationReadinessWorlds },
@@ -473,6 +486,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "session-replay-worlds.ts",
       "testkit-cleanup-worlds.ts",
       "phone-setup-world.ts",
+      "agentic-change-worlds.ts",
       "gad-review-worlds.ts",
       "terminal-check-worlds.ts",
       "integration-readiness-worlds.ts",
@@ -508,6 +522,9 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of managedTerminalCheckWorlds) {
     cases.set(`terminal-check-live-${assignment.id}`, { ...terminalCheckWorkflow, assignment });
+  }
+  for (const assignment of managedAgenticChangeWorlds) {
+    cases.set(`agentic-change-live-${assignment.id}`, { ...agenticChangeWorkflow, assignment });
   }
   for (const assignment of managedGadReviewWorlds) {
     cases.set(`gad-review-live-${assignment.id}`, { ...gadReviewWorkflow, assignment });
@@ -2329,6 +2346,95 @@ function terminalCheckEvidence(execution, exercise, _scenario, workflow) {
   return {
     world: { context_id: contextId, process_checks: checks.map(({ id }) => id) },
     checks: { ...fixture.checks, exactExecutionTree: true },
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function agenticChangeEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedAgenticChange;
+  const { caseId, request, source, checks } = fixture ?? {};
+  const { id, goal, owner, consumers, rebuild, persistedContract, surface } = workflow.assignment;
+  const contextId = execution.provenance?.contextId;
+  const plan = exercise.report;
+  const units = [owner, ...consumers];
+  const sameUnits = (actual, expected) =>
+    Array.isArray(actual) && isDeepStrictEqual([...actual].sort(), [...expected].sort());
+  const records = exercise.calls.map(({ record }) => record);
+  const child = (parent, name) =>
+    parent &&
+    records.find((call) => call.parent_call_id === parent.call_id && call.definition.name === name);
+  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const planning = child(root, "planAgenticChange");
+  const read = child(planning, "readSource");
+  const impact = child(planning, "reviewImpact");
+  const ownership = child(impact, "findOwners");
+  const history = child(impact, "reviewHistory");
+  const verification = child(planning, "planVerification");
+  const builds = child(verification, "planBuilds");
+  const canary = child(verification, "planCanary");
+  const [effect] = read?.effects ?? [];
+  requireEvidence(
+    typeof contextId === "string" &&
+      caseId === id &&
+      request?.goal === goal &&
+      request.contextId === contextId &&
+      source?.contextId === contextId &&
+      typeof source.revision === "string" &&
+      source.revision.length > 0 &&
+      Array.isArray(source.guides) &&
+      units.every((unit) =>
+        source.guides.some(
+          (guide) =>
+            guide.unit === unit && typeof guide.excerpt === "string" && guide.excerpt.length > 0
+        )
+      ) &&
+      fixture.passed === true &&
+      ["source", "unchanged", "ownership", "verification"].every((key) => checks?.[key] === true) &&
+      matchesValue(planning?.inputs?.request, request) &&
+      matchesValue(planning.output, plan) &&
+      matchesValue(read?.inputs?.contextId, contextId) &&
+      matchesValue(read.output, source) &&
+      read.effects?.length === 1 &&
+      effect.service === "agenticChangeSource" &&
+      effect.method === "read" &&
+      !effect.error &&
+      matchesValue(effect.args, [contextId]) &&
+      matchesValue(effect.result, source) &&
+      matchesValue(impact?.inputs?.goal, goal) &&
+      matchesValue(impact.inputs.sources, source) &&
+      matchesValue(impact.output, plan?.impact) &&
+      matchesValue(ownership?.inputs?.goal, goal) &&
+      matchesValue(ownership.inputs.sources, source) &&
+      matchesValue(history?.inputs?.goal, goal) &&
+      isDeepStrictEqual(history.inputs.units, ownership.output) &&
+      matchesValue(verification?.inputs?.goal, goal) &&
+      matchesValue(verification.inputs.impact, plan?.impact) &&
+      matchesValue(builds?.inputs?.impact, plan?.impact) &&
+      matchesValue(builds.output, plan?.builds) &&
+      matchesValue(canary?.inputs?.goal, goal) &&
+      matchesValue(canary.inputs.builds, plan?.builds) &&
+      matchesValue(canary.output, plan?.canary) &&
+      plan?.contextId === contextId &&
+      plan.revision === source.revision &&
+      plan.impact?.owner === owner &&
+      sameUnits(plan.impact.consumers, consumers) &&
+      plan.impact.blockers?.length === 0 &&
+      plan.impact.persistedContract === persistedContract &&
+      (persistedContract
+        ? plan.impact.retainedHistoryChecks?.length >= 2
+        : plan.impact.retainedHistoryChecks?.length === 0) &&
+      sameUnits(plan.builds?.focusedTests, units) &&
+      sameUnits(plan.builds?.rebuild, rebuild) &&
+      plan.canary?.surface === surface &&
+      typeof plan.canary.probe === "string" &&
+      plan.canary.probe.trim().length > 0 &&
+      plan.canary.observations?.length > 0 &&
+      plan.canary.cleanup?.length > 0,
+    "Agentic change planning must use the exact workspace revision and verify the assigned ownership, history and canary plan"
+  );
+  return {
+    world: { context_id: contextId, revision: source.revision, owner },
+    checks: { ...checks, exactPlanningTree: true },
     evidence: { workspace: { fixture } },
   };
 }
