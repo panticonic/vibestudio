@@ -431,11 +431,12 @@ export async function loadLiveTeacherCases(checkouts) {
       previewText,
     });
   }
-  for (const { id, expected } of managedGrimoireWorlds) {
+  for (const { id, expected, actions } of managedGrimoireWorlds) {
     cases.set(`grimoire-live-${id}`, {
       ...grimoireWorkflow,
       caseId: id,
       expectedDecisions: expected,
+      expectedActions: actions.map((action) => action.toLowerCase()),
     });
   }
   for (const { id, request, expected, keys } of managedChecklistWorlds) {
@@ -1660,6 +1661,7 @@ function grimoireEvidence(execution, exercise, _scenario, workflow) {
       typeof verification.garden === "string" &&
       verification.observed?.before?.id === `${verification.garden}:before` &&
       verification.observed?.current?.id === `${verification.garden}:current` &&
+      isDeepStrictEqual(verification.actions, workflow.expectedActions) &&
       same(report, verification.expected) &&
       Array.isArray(report.components) &&
       JSON.stringify(report.components.map(({ decision }) => decision)) ===
@@ -1669,6 +1671,7 @@ function grimoireEvidence(execution, exercise, _scenario, workflow) {
       ) &&
       [
         "persistedVisits",
+        "persistedClock",
         "assignedClaims",
         "readOwnedGarden",
         "matchedJudgment",

@@ -141,7 +141,7 @@ test("authored template worlds flow into the collector without losing original s
       [
         "grimoire-worlds",
         "managedGrimoireWorlds",
-        [{ id: "quiet-garden", expected: ["supported", "supported"] }],
+        [{ id: "quiet-garden", actions: [], expected: ["supported", "supported"] }],
       ],
       [
         "checklist-worlds",
@@ -467,7 +467,41 @@ test("authored template worlds flow into the collector without losing original s
   assert.equal(cases.get("runtime-program-live-sample").root, "reviewRuntimeEvidence");
   assert.equal(cases.get("provenance-history-live-sample").root, "reviewProvenance");
   assert.equal(cases.get("spectrolite-live-sample").workspace, "spectrolite");
-  assert.equal(cases.get("grimoire-live-quiet-garden").workspace, "examples");
+  const garden = cases.get("grimoire-live-quiet-garden");
+  assert.equal(garden.workspace, "examples");
+  const gardenComponent = {
+    decision: "supported",
+    finding: "chosen-home",
+    evidenceIds: ["owned:current"],
+  };
+  const gardenReport = { ...gardenComponent, components: [gardenComponent, gardenComponent] };
+  const gardenVerification = {
+    passed: true,
+    garden: "owned",
+    actions: [],
+    observed: { before: { id: "owned:before" }, current: { id: "owned:current" } },
+    expected: gardenReport,
+    checks: Object.fromEntries(
+      [
+        "persistedVisits",
+        "persistedClock",
+        "assignedClaims",
+        "readOwnedGarden",
+        "matchedJudgment",
+        "matchedClaims",
+      ].map((key) => [key, true])
+    ),
+  };
+  const gardenExecution = {
+    provenance: { contextId: "owned" },
+    diagnostics: { managedGrimoire: { contextId: "owned", verification: gardenVerification } },
+  };
+  assert.ok(garden.evidence(gardenExecution, { report: gardenReport }, "", garden));
+  gardenVerification.actions = ["linger"];
+  assert.throws(
+    () => garden.evidence(gardenExecution, { report: gardenReport }, "", garden),
+    /persisted resident visits/
+  );
   const checklist = cases.get("terminal-checklist-live-restart");
   assert.equal(checklist.root, "verifyChecklist");
   assert.equal(checklist.expectedContinuation, "restart");

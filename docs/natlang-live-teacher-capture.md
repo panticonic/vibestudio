@@ -97,6 +97,9 @@ Terminal checklist target-state cases begin with an existing state in the owned 
 Natlang to choose the necessary toggles in the requested order and preserve unassigned items.
 The oracle checks the exact keys and screens, including cases that need no edits before restart
 or reattachment.
+Examples garden tasks compare visits and elapsed time against the persisted world. Clock cases
+use the panel's quiet observation action in an estate without storyteller seats. The oracle verifies the exact action
+sequence, elapsed phases, and attachment gains on distinct days.
 Personal memory comparisons call the existing verified recall skill once for each assigned
 revision. They retain both original quotations and independently observed endpoint outcomes,
 including when one revision has no recall lead or no source. The exporter requires both nested
