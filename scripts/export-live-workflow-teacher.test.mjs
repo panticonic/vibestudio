@@ -100,6 +100,7 @@ test("authored template worlds flow into the collector without losing original s
       ["log-cursor-worlds", "managedLogCursorWorlds", []],
       ["build-performance-worlds", "buildPerformanceWorlds", []],
       ["tour-rehearsal-worlds", "tourRehearsalWorlds", []],
+      ["explorer-probe-worlds", "explorerTextWorlds", []],
       ["eval-recovery-worlds", "managedEvalRecoveryWorlds", []],
       ["pdf-layout-worlds", "managedPdfLayoutWorlds", []],
       ["offline-dictation-worlds", "managedDictationWorlds", []],
@@ -2940,6 +2941,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["log-cursor-worlds", "export const managedLogCursorWorlds = [];"],
       ["build-performance-worlds", "export const buildPerformanceWorlds = [];"],
       ["tour-rehearsal-worlds", "export const tourRehearsalWorlds = [];"],
+      ["explorer-probe-worlds", "export const explorerTextWorlds = [];"],
       ["eval-recovery-worlds", "export const managedEvalRecoveryWorlds = [];"],
       ["pdf-layout-worlds", "export const managedPdfLayoutWorlds = [];"],
       ["offline-dictation-worlds", "export const managedDictationWorlds = [];"],
@@ -5819,4 +5821,87 @@ test("tour rehearsal export requires each rendered stop and the original restora
   review.record.output = ref(report);
   await save();
   await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /authorized restoration/u);
+});
+
+test("Explorer export rejects a scratch byte count that disagrees with native text", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  const name = "explorer-text-live-unicode-size-claim";
+  const { assignment } = cases.get(name);
+  const pins = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(options.pins, JSON.stringify({ ...pins, workspace: "personal" }));
+  entry.test.name = name;
+  const request = { goal: assignment.goal, operationId: "assigned-workspace-text" };
+  const digest = createHash("sha256").update(assignment.text).digest("hex");
+  const bytes = Buffer.byteLength(assignment.text);
+  const input = {
+    bytes, digest, characters: Array.from(assignment.text).length,
+    lineEnding: assignment.lineEnding, claim: assignment.claim, repeat: assignment.repeat,
+  };
+  const plan = {
+    expectedBytes: bytes, expectedDigest: digest, check: assignment.check, comparison: "round-trip",
+  };
+  const receipt = {
+    blob: { digest, writtenBytes: bytes, exists: true, statBytes: bytes, readDigest: digest, repeatDigest: null },
+    file: { digest, bytes, removed: true },
+  };
+  const assessment = { classification: "doc-mismatch", issue: "claim" };
+  const report = { input, plan, receipt, assessment, next: "Update the maintenance note to state bytes." };
+  diagnostics.explorerTextProbe = {
+    passed: true, caseId: assignment.id, contextId: "ctx", request, observed: input, actual: receipt,
+    operations: ["input", "run"],
+    checks: { operations: true, input: true, plan: true, native: true, classification: true },
+  };
+  const ref = (value) => {
+    const text = JSON.stringify(value);
+    return { complete: true, hash: createHash("sha256").update(text).digest("hex"), bytes: Buffer.byteLength(text) };
+  };
+  const prototype = diagnostics.natlangTeacher.calls[0];
+  const call = (name, parent, inputs, output, effects = []) => ({
+    callId: name,
+    summary: { ...prototype.summary, call_id: name },
+    record: {
+      ...prototype.record,
+      call_id: name,
+      parent_call_id: parent,
+      definition: { name },
+      outcome: "done",
+      inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+      output: ref(output),
+      effects,
+    },
+  });
+  const effect = (method, args, result) => ({
+    service: "explorerTextProbe", method, args: ref(args), result: ref(result),
+  });
+  const probe = call("probeWorkspaceText", "runWorkflow", { request }, report, [
+    effect("input", [request.operationId], input),
+    effect("run", [request.operationId, plan], receipt),
+  ]);
+  diagnostics.natlangTeacher = {
+    ...diagnostics.natlangTeacher,
+    programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+    rootCallIds: ["runWorkflow"],
+    report,
+    calls: [
+      call("runWorkflow", null, {}, null),
+      probe,
+      call("planProbe", "probeWorkspaceText", { input }, plan),
+      call("chooseTextCheck", "planProbe", { input }, plan.check),
+      call("classifyProbe", "probeWorkspaceText", { receipt }, assessment),
+      call("verifyContract", "classifyProbe", { receipt }, null),
+      call("reviewClaim", "classifyProbe", { input, receipt }, "contradicted"),
+      call("chooseNext", "probeWorkspaceText", { assessment }, report.next),
+    ],
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  receipt.file.bytes = input.characters;
+  probe.record.effects[1].result = ref(receipt);
+  probe.record.output = ref(report);
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /exact native file and blob receipts/u);
 });

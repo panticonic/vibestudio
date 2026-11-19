@@ -214,6 +214,11 @@ client, a mobile variant on the wrong runtime and a local incompatible ABI.
 Run `client-admission-oracle-qualification` for model-free verification. The
 workflow inspects the platform contract without launching a device client.
 
+Explorer text probes compare the Personal workspace blobstore with bytes
+read from an owned scratch file. The cases check byte counts, CRLF
+preservation, and repeat-store identity. The runner verifies scratch cleanup.
+Run `explorer-text-oracle-qualification` for the live model-free check.
+
 Tour rehearsal drives a disposable instance of the Personal template's tour.
 It maps requested topics to authorized scenes, confirms the persisted scene
 and rendered frame, and verifies restoration where requested. The held case

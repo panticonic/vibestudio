@@ -211,6 +211,15 @@ const clientAdmissionWorkflow = {
   root: "reviewClientAdmission",
   evidence: clientAdmissionEvidence,
 };
+const explorerTextWorkflow = {
+  family: "personal-live-explorer-text",
+  workspace: "personal",
+  namespace: "vibestudio:explorer",
+  group: "native-text-storage-contract",
+  validator: { template: "system-testing", path: "skills/system-testing/explorer-probe-managed.ts" },
+  root: "probeWorkspaceText",
+  evidence: explorerTextEvidence,
+};
 const tourRehearsalWorkflow = {
   family: "personal-live-tour-rehearsal",
   workspace: "personal",
@@ -609,6 +618,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedLogCursorWorlds },
     { buildPerformanceWorlds },
     { tourRehearsalWorlds },
+    { explorerTextWorlds },
     { managedEvalRecoveryWorlds },
     { managedPdfLayoutWorlds },
     { managedDictationWorlds },
@@ -666,6 +676,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "log-cursor-worlds.ts",
       "build-performance-worlds.ts",
       "tour-rehearsal-worlds.ts",
+      "explorer-probe-worlds.ts",
       "eval-recovery-worlds.ts",
       "pdf-layout-worlds.ts",
       "offline-dictation-worlds.ts",
@@ -717,6 +728,9 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of managedClientAdmissionWorlds) {
     cases.set(`client-admission-live-${assignment.id}`, { ...clientAdmissionWorkflow, assignment });
+  }
+  for (const assignment of explorerTextWorlds) {
+    cases.set(`explorer-text-live-${assignment.id}`, { ...explorerTextWorkflow, assignment });
   }
   for (const assignment of tourRehearsalWorlds) {
     cases.set(`tour-rehearsal-live-${assignment.id}`, { ...tourRehearsalWorkflow, assignment });
@@ -2728,6 +2742,83 @@ function clientAdmissionEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: contextId, source, host, abi: workingAbi },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function explorerTextEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.explorerTextProbe;
+  const { caseId, contextId, request, observed, actual, operations, checks } = fixture ?? {};
+  const { assignment } = workflow;
+  const report = exercise.report;
+  const digest = hash(assignment.text);
+  const bytes = Buffer.byteLength(assignment.text);
+  const input = {
+    bytes, digest, characters: Array.from(assignment.text).length,
+    lineEnding: assignment.lineEnding, claim: assignment.claim, repeat: assignment.repeat,
+  };
+  const plan = {
+    expectedBytes: bytes, expectedDigest: digest, check: assignment.check,
+    comparison: assignment.repeat ? "repeat-store" : "round-trip",
+  };
+  const receipt = {
+    blob: {
+      digest, writtenBytes: bytes, exists: true, statBytes: bytes, readDigest: digest,
+      repeatDigest: assignment.repeat ? digest : null,
+    },
+    file: { digest, bytes, removed: true },
+  };
+  const assessment = {
+    classification: assignment.classification,
+    issue: assignment.classification === "ok" ? null : "claim",
+  };
+  const records = exercise.calls.map(({ record }) => record);
+  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const child = (parent, name) => parent && records.find(
+    (record) => record.parent_call_id === parent.call_id && record.definition.name === name
+  );
+  const probe = child(root, "probeWorkspaceText");
+  const planning = child(probe, "planProbe");
+  const classify = child(probe, "classifyProbe");
+  const followup = child(probe, "chooseNext");
+  const effects = records.flatMap(({ effects }) => effects ?? []);
+  const read = probe?.effects?.[0];
+  const run = probe?.effects?.[1];
+  requireEvidence(
+    fixture?.passed === true &&
+      ["operations", "input", "plan", "native", "classification"].every((key) => checks?.[key] === true) &&
+      caseId === assignment.id && typeof contextId === "string" &&
+      contextId === execution.provenance?.contextId && request?.goal === assignment.goal &&
+      typeof request.operationId === "string" && request.operationId.length > 0 &&
+      isDeepStrictEqual(operations, ["input", "run"]) &&
+      isDeepStrictEqual(observed, input) && isDeepStrictEqual(actual, receipt) &&
+      isDeepStrictEqual(report?.input, observed) && isDeepStrictEqual(report.receipt, actual) &&
+      matchesValue(probe?.inputs?.request, request) && matchesValue(probe.output, report) &&
+      effects.length === 2 &&
+      read?.service === "explorerTextProbe" && read.method === "input" && !read.error &&
+      matchesValue(read.args, [request.operationId]) && matchesValue(read.result, observed) &&
+      run?.service === "explorerTextProbe" && run.method === "run" && !run.error &&
+      matchesValue(run.args, [request.operationId, report.plan]) && matchesValue(run.result, actual),
+    "Explorer text verification requires the exact native file and blob receipts"
+  );
+  const focus = child(planning, "chooseTextCheck");
+  const contract = child(classify, "verifyContract");
+  const claim = child(classify, "reviewClaim");
+  requireEvidence(
+    isDeepStrictEqual(report.plan, plan) && isDeepStrictEqual(report.assessment, assessment) &&
+      typeof report.next === "string" && report.next.trim() &&
+      matchesValue(planning?.inputs?.input, observed) && matchesValue(planning.output, report.plan) &&
+      matchesValue(focus?.output, plan.check) &&
+      matchesValue(classify?.inputs?.receipt, actual) && matchesValue(classify.output, report.assessment) &&
+      matchesValue(contract?.inputs?.receipt, actual) && matchesValue(contract.output, null) &&
+      matchesValue(claim?.output, assessment.issue ? "contradicted" : "supported-or-unresolved") &&
+      matchesValue(followup?.inputs?.assessment, report.assessment) &&
+      matchesValue(followup.output, report.next),
+    "Explorer text verification requires the planned check and nested contract and claim decisions"
+  );
+  return {
+    world: { context_id: contextId, content_digest: digest },
     checks,
     evidence: { workspace: { fixture } },
   };
