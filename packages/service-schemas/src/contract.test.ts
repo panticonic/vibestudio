@@ -28,6 +28,7 @@ import { browserPermissionsMethods } from "./browserPermissions.js";
 import { buildMethods } from "./build.js";
 import { channelMethods } from "./channel.js";
 import { chromiumFetchMethods } from "./chromiumFetch.js";
+import { chronologMethods } from "./chronolog.js";
 import { corsApprovalMethods } from "./corsApproval.js";
 import { ConnectCredentialSpecSchema, credentialsMethods } from "./credentials.js";
 import { localModelRuntimeMethods } from "./localModelRuntime.js";
@@ -103,6 +104,7 @@ type ServiceTable = {
 };
 
 const serviceTables: ServiceTable[] = [
+  { service: "chronolog", file: "chronolog.ts", methods: chronologMethods },
   { service: "gateway", file: "gateway.ts", methods: gatewayMethods },
   { service: "adblock", file: "adblock.ts", methods: adblockMethods },
   { service: "attachedHosts", file: "attachedHosts.ts", methods: attachedHostsMethods },
