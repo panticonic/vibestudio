@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -12,6 +13,34 @@ import {
   sameHostBuildFingerprint,
   writeHostBuildFingerprint,
 } from "./host-build-fingerprint.mjs";
+import { readChronologBuildInput } from "./lib/chronolog-build-input.mjs";
+
+test("a pinned Chronolog package requires the reviewed manifest and matching files", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "chronolog-build-input-"));
+  try {
+    const hash = (value) => createHash("sha256").update(value).digest("hex");
+    const entry = path.join(root, "workspace-celld.mjs");
+    const contents = "export const revision = 1;\n";
+    const manifestPath = path.join(root, "provenance.json");
+    const manifest = JSON.stringify({
+      format: "chronolog-peer-session-package/v1",
+      source: "1".repeat(40),
+      dirty: false,
+      sha256: { "workspace-celld.mjs": hash(contents) },
+    });
+    const fingerprint = hash(manifest);
+    fs.writeFileSync(entry, contents);
+    fs.writeFileSync(manifestPath, manifest);
+    assert.deepEqual(readChronologBuildInput(root, fingerprint), { entry, fingerprint });
+    assert.throws(() => readChronologBuildInput("", fingerprint), /requires a root/);
+    fs.writeFileSync(entry, "export const revision = 2;\n");
+    assert.throws(() => readChronologBuildInput(root, fingerprint), /differs from its manifest/);
+    fs.writeFileSync(manifestPath, `${manifest}\n`);
+    assert.throws(() => readChronologBuildInput(root, fingerprint), /differs from the release pin/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("host artifact and release resolver changes invalidate the host build fingerprint", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "host-build-fingerprint-input-"));
