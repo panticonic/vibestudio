@@ -1206,18 +1206,16 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
   }
 
   /**
-   * Executions this process has verified and since superseded. A build key's
-   * newest source-state rebinding replaces the cached descriptor, while a
-   * caller that resolved the previous execution still names it by digest; the
-   * publication journal must resolve that exact execution, not the key's latest.
+   * Verified retained executions beside the current build descriptor.
+   * An owner may publish a superseded execution it just resolved from disk.
    */
   const supersededExecutions = new ByteBudgetCache<string, StoredBuildResult>(
     8 * 1024 * 1024,
     buildDescriptorBytes
   );
 
-  function executionCacheId(buildKey: string, executionDigest: string): string {
-    return `${buildKey}\0${executionDigest}`;
+  function executionCacheId(dir: string, executionDigest: string): string {
+    return `${localBuildCacheId(dir)}\0${executionDigest}`;
   }
 
   function rememberVerifiedLocalBuild(build: StoredBuildResult): StoredBuildResult {
@@ -1229,7 +1227,7 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
       previousDigest &&
       previousDigest !== build.metadata.execution?.executionDigest
     ) {
-      supersededExecutions.set(executionCacheId(previous.buildKey, previousDigest), previous);
+      supersededExecutions.set(executionCacheId(previous.dir, previousDigest), previous);
     }
     verifiedLocalBuilds.set(cacheId, build);
     for (const style of build.metadata.sharedStyles ?? [])
@@ -1238,7 +1236,12 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
   }
 
   function forgetVerifiedLocalBuild(dir: string): void {
-    verifiedLocalBuilds.delete(localBuildCacheId(dir));
+    const cacheId = localBuildCacheId(dir);
+    verifiedLocalBuilds.delete(cacheId);
+    const prefix = `${cacheId}\0`;
+    for (const executionId of supersededExecutions.keys()) {
+      if (executionId.startsWith(prefix)) supersededExecutions.delete(executionId);
+    }
   }
 
   async function readVerifiedLocalBuild(key: string): Promise<StoredBuildResult | null> {
@@ -1253,9 +1256,10 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
     }
-    if (cached) forgetVerifiedLocalBuild(dir);
     const build = await readBuildDir(dir, key);
-    return build ? rememberVerifiedLocalBuild(build) : null;
+    if (build) return rememberVerifiedLocalBuild(build);
+    forgetVerifiedLocalBuild(dir);
+    return null;
   }
 
   const sharedStyleOwners = new ByteBudgetCache<string, string>(
@@ -1320,7 +1324,7 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
   function peekLocalExecution(key: string, executionDigest: string): StoredBuildResult | null {
     const current = peekLocal(key);
     if (current?.metadata.execution?.executionDigest === executionDigest) return current;
-    return supersededExecutions.get(executionCacheId(key, executionDigest)) ?? null;
+    return supersededExecutions.get(executionCacheId(getBuildDir(key), executionDigest)) ?? null;
   }
 
   /** Read and verify a workspace-owned build without claiming shared-cache ownership. */
@@ -1538,11 +1542,9 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
         return null;
       }
       verifiedExecutionIdentity(metadata, current.artifacts);
-      return {
-        ...current,
-        sourceStateHash: metadata.sourceStateHash,
-        metadata,
-      };
+      const build = { ...current, sourceStateHash: metadata.sourceStateHash, metadata };
+      supersededExecutions.set(executionCacheId(current.dir, executionDigest), build);
+      return build;
     } catch {
       return null;
     }

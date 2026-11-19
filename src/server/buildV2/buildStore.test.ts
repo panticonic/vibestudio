@@ -982,6 +982,22 @@ describe("build artifact helpers", () => {
         "version",
       ]);
       expect(retained).not.toHaveProperty("executableModules");
+
+      const reopenedRoot = path.join(root, "reopened");
+      const reopenedBuild = path.join(reopenedRoot, "builds", buildKey);
+      fs.mkdirSync(path.dirname(reopenedBuild), { recursive: true });
+      fs.cpSync(rebound.dir, reopenedBuild, { recursive: true });
+      setStateRoot(reopenedRoot);
+      expect((await store.readLocal(buildKey))?.metadata.execution).toEqual(rebound.metadata.execution);
+      expect(store.peekLocalExecution(buildKey, firstExecutionDigest)).toBeNull();
+      expect((await store.getByExecution(buildKey, firstExecutionDigest))?.metadata.execution)
+        .toEqual(first.metadata.execution);
+      expect(store.peekLocalExecution(buildKey, firstExecutionDigest)).toMatchObject({
+        dir: reopenedBuild,
+        metadata: { execution: first.metadata.execution },
+      });
+      expect(store.peekLocalExecution(buildKey, rebound.metadata.execution!.executionDigest)?.metadata.execution)
+        .toEqual(rebound.metadata.execution);
     } finally {
       await cleanupRoot(root);
     }
