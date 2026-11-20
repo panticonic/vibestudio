@@ -15,7 +15,7 @@ import {
   workflowSourceGroups,
 } from "./export-live-workflow-teacher.mjs";
 import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
-import { groupLiveTeacherCases } from "./lib/live-teacher-groups.mjs";
+import { groupLiveTeacherCases, terminalStartupFailure } from "./lib/live-teacher-groups.mjs";
 
 const args = process.argv.slice(2);
 const { values } = parseArgs({
@@ -262,8 +262,10 @@ if (!single) {
   mkdirSync(casesDir, { mode: 0o700 });
 }
 const failures = [];
+const unavailableScopes = new Set();
 for (const group of groups) {
   const { instance, workspace, workspaceBaseline } = group;
+  if (unavailableScopes.has(group.scope)) continue;
   const systemTest = (args, stdout) =>
     command(systemTestArgs(group, args), stdout);
   const cases = group.cases.map((scenario) => {
@@ -282,7 +284,13 @@ for (const group of groups) {
   });
   let stopStatus;
   try {
-    if (systemTest(["doctor", "--approve-startup", "--model", source.teacher]) !== 0) {
+    const doctor = spawnSync("pnpm", systemTestArgs(group, ["doctor", "--approve-startup", "--model", source.teacher]), {
+      cwd: host, encoding: "utf8", stdio: ["inherit", "pipe", "inherit"],
+    });
+    if (doctor.error) throw doctor.error;
+    process.stdout.write(doctor.stdout);
+    if (doctor.status !== 0) {
+      if (terminalStartupFailure(doctor.stdout)) unavailableScopes.add(group.scope);
       throw new Error(`The managed ${workspace} workspace did not pass readiness checks`);
     }
     const catalog = installedTests(group);
