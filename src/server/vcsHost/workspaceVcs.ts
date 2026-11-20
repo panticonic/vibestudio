@@ -2791,6 +2791,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     signal?: AbortSignal,
     ownerContextId = contextId
   ) {
+    if (!this.participantHistorySource) await this.whenSemanticReady(signal);
     const scope = await this.openParticipantScope({
       caller, contextId, ownerContextId, ...(signal ? { signal } : {}),
     });
@@ -2813,13 +2814,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   async contextRepoTargets(
     contextId: string, caller?: VerifiedCaller, signal?: AbortSignal
   ): Promise<Array<{ repoPath: string; stateHash: string }>> {
-    if (this.participantHistoryAttached) {
-      if (!caller) throw new Error("A verified caller is required to mirror a participant's working copy");
-      const scope = await this.requireParticipantContentScope(contextId, caller, signal);
-      const snapshot = await this.participantContextContent(scope);
-      return snapshot.repositories.map((repository) => ({ ...repository }));
-    }
-    const snapshot = await this.exactContextContent(contextId);
+    if (!caller) throw new Error("A verified caller is required to mirror a participant's working copy");
+    const scope = await this.requireParticipantContentScope(contextId, caller, signal);
+    const snapshot = await this.participantContextContent(scope);
     return snapshot.repositories.map((repository) => ({ ...repository }));
   }
 
@@ -3122,13 +3119,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     signal?: AbortSignal,
     ownerContextId = contextId
   ) {
-    if (this.participantHistoryAttached) {
-      const scope = await this.requireParticipantContentScope(contextId, caller, signal, ownerContextId);
-      return this.recordParticipantContextSource(scope);
-    }
-    const { semanticState, repositories } = await this.exactContextContent(contextId);
-    const { stateHash } = await this.repositories.contentView(repositories);
-    return { semanticState, stateHash };
+    const scope = await this.requireParticipantContentScope(contextId, caller, signal, ownerContextId);
+    return this.recordParticipantContextSource(scope);
   }
 
   private async recordParticipantContextSource(scope: WorkspaceHistoryParticipant & {

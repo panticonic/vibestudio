@@ -1,14 +1,9 @@
 import { vcsReadMemoryCauseSchema, vcsTrajectoryInvocationRefSchema } from "@vibestudio/service-schemas/vcs";
 import type { RpcCausalParent } from "@vibestudio/rpc";
-import type {
-  InitializeExactWorkspaceSnapshotInput,
-  WorkspaceSourceInitializationInspection,
-} from "@vibestudio/workspace-contracts/workspaceSource";
 import type { DODispatch } from "./doDispatch.js";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import {
-  GadJsonRecordSchema,
   HistoryQueryCausesSchema,
   HistoryQueryTrajectorySchema,
   type HistoryQueryTrajectory,
@@ -24,7 +19,6 @@ import {
   gadWireMethods,
   type HistoryTrajectorySearchInput,
 } from "@vibestudio/service-schemas/workspaceSource";
-import { WorkspaceTemplateInstallationSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import {
   nativeInvocationId,
@@ -57,23 +51,6 @@ export function createCausalEnvelopeReader(
     pending.set(key, flight);
     return flight;
   };
-}
-
-/**
- * The complete bootstrap ABI required by the generic host. Product semantic
- * operations deliberately do not enter this interface.
- */
-export interface WorkspaceSourceProviderV1 {
-  readTemplateInstallation(input: {
-    eventId: string;
-  }): Promise<import("@vibestudio/workspace-contracts/types").WorkspaceTemplateInstallation | null>;
-  initializeExactSnapshot(
-    input: InitializeExactWorkspaceSnapshotInput
-  ): Promise<WorkspaceSourceInitializationInspection>;
-  resolveSource(input: { ref: string }): Promise<{ stateHash: string }>;
-  currentSource(): Promise<{ stateHash: string } | null>;
-  inspectInitialization(): Promise<WorkspaceSourceInitializationInspection>;
-  health(): Promise<{ ok: true; protocol: "vibestudio.workspace-source.v1" }>;
 }
 
 /**
@@ -252,43 +229,6 @@ export function createWorkspaceSemanticPort(
       await dispatch.dispatch(provider, "searchHistoryTrajectory", HistoryTrajectorySearchInputSchema.parse(input)),
     ),
   } satisfies WorkspaceSemanticPort;
-}
-
-export function createWorkspaceSourceProviderV1(
-  dispatch: Pick<DODispatch, "dispatch">,
-  provider: WorkspaceSourceProviderRef
-): WorkspaceSourceProviderV1 {
-  const client = createTypedServiceClient(
-    "workspaceSource",
-    gadWireMethods,
-    (_service, method, args) => dispatch.dispatch(provider, method, ...args)
-  );
-  return {
-    readTemplateInstallation: (input) => client.workspaceSourceTemplateInstallation(input),
-    initializeExactSnapshot: (input) => {
-      const { acknowledgement, ...snapshot } = input;
-      return client.workspaceSourceInitializeExactSnapshot({
-        ...snapshot,
-        installation: WorkspaceTemplateInstallationSchema.parse(input.installation),
-        ...(acknowledgement
-          ? {
-              acknowledgement: {
-                ...acknowledgement,
-                receipt: GadJsonRecordSchema.parse(acknowledgement.receipt),
-              },
-            }
-          : {}),
-        repositories: input.repositories.map((repository) => ({
-          ...repository,
-          files: repository.files.map((file) => ({ ...file })),
-        })),
-      });
-    },
-    resolveSource: (input) => client.workspaceSourceResolve(input),
-    currentSource: () => client.workspaceSourceCurrent(),
-    inspectInitialization: () => client.workspaceSourceInspectInitialization(),
-    health: () => client.workspaceSourceHealth(),
-  } satisfies WorkspaceSourceProviderV1;
 }
 
 export interface ExactCausalInvocationFact {

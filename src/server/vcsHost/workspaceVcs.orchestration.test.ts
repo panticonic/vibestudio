@@ -517,6 +517,9 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     expect(await blobstoreService.readFileAtTree(blobsDir, a!.stateHash, "note.txt")).toMatchObject({ contentHash: privateEdit });
     expect(await blobstoreService.readFileAtTree(blobsDir, b!.stateHash, "note.txt")).toMatchObject({ contentHash: original });
     const before = dispatch.mock.calls.length;
+    const targets = await vcs.contextRepoTargets(contextId, actorA);
+    targets[0]!.stateHash = EMPTY_STATE_HASH;
+    targets.push({ repoPath: "spoofed", stateHash: EMPTY_STATE_HASH });
     expect(await vcs.contextRepoTargets(contextId, actorA)).toEqual([a]);
     expect(dispatch.mock.calls).toHaveLength(before);
     const [privateSource, sharedSource] = await Promise.all([
@@ -598,11 +601,6 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const first = await vcs.resolveContextState("context:source");
     expect(vcs.executionStateForContent(first)).toEqual(head());
     expect(commands).toHaveLength(1);
-    const targets = await vcs.contextRepoTargets("context:source");
-    const retained = structuredClone(targets);
-    targets[0]!.stateHash = EMPTY_STATE_HASH;
-    targets.push({ repoPath: "spoofed", stateHash: EMPTY_STATE_HASH });
-    expect(await vcs.contextRepoTargets("context:source")).toEqual(retained);
     expect(commands).toHaveLength(1);
     expect(await vcs.readFile(first, "packages/config/settings.json")).toMatchObject({
       content: { kind: "text", text: firstBytes.toString() },
