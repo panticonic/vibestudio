@@ -120,7 +120,14 @@ export async function handleChronologHistoryIngress(
     if (!(reply instanceof Uint8Array)) throw new Error("Invalid native workspace history reply");
     res.writeHead(200, { "Cache-Control": "no-store", "Content-Type": "application/octet-stream" });
     res.end(Buffer.from(reply.buffer, reply.byteOffset, reply.byteLength));
-  } catch {
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown history staging error";
+    console.warn("[Chronolog] Workspace history staging refused", {
+      operation,
+      method,
+      publicationId: input.data.publicationId,
+      message: message.replaceAll(token, "[redacted]").slice(0, 1000),
+    });
     sendText(res, 409, "Workspace history staging refused this transition");
   }
 }

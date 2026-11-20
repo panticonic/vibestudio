@@ -56,7 +56,7 @@ export function chronologHistoryCarrier({
       });
       if (!response.ok) {
         await response.arrayBuffer();
-        throw new Error("CELLD_WORKSPACE_HISTORY_STAGE_REFUSED");
+        throw new Error(`CELLD_WORKSPACE_HISTORY_${kind.toUpperCase()}_${method}_HTTP_${response.status}`);
       }
       return response;
     };
