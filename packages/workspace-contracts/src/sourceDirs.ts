@@ -120,6 +120,18 @@ export const WORKSPACE_PACKAGE_SCOPES: readonly string[] = BUILDABLE_UNIT_DIRS.f
   d.scope ? [d.scope] : []
 );
 
+/** Validate the reference of an internal workspace dependency. */
+export function workspaceDependencyRefError(depName: string, rawSpec: string): string | null {
+  const raw = (rawSpec ?? "").trim();
+  const normalized = raw.toLowerCase();
+
+  if (!raw || raw === "*" || normalized === "workspace:*" || normalized === "workspace:") {
+    return null;
+  }
+
+  return `Internal dependency ${depName} must use workspace:*; GAD workspace builds do not support per-dependency refs`;
+}
+
 /**
  * Resolve the identity owned by a unit's workspace location. Manifests must
  * agree with this identity; they never select or override their unit kind.

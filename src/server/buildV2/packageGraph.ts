@@ -15,6 +15,7 @@ import {
   BUILDABLE_UNIT_DIRS,
   expectedBuildUnitName,
   WORKSPACE_PACKAGE_SCOPES,
+  workspaceDependencyRefError,
   isTerminalAppLocation,
 } from "@vibestudio/workspace-contracts/sourceDirs";
 
@@ -196,23 +197,12 @@ function isInternalDep(name: string): boolean {
   return WORKSPACE_PACKAGE_SCOPES.some((scope) => name.startsWith(scope));
 }
 
-function validateInternalDepSpec(depName: string, rawSpec: string): string | null {
-  const raw = (rawSpec ?? "").trim();
-  const normalized = raw.toLowerCase();
-
-  if (!raw || raw === "*" || normalized === "workspace:*" || normalized === "workspace:") {
-    return null;
-  }
-
-  return `Internal dependency ${depName} must use workspace:*; GAD workspace builds do not support per-dependency refs`;
-}
-
 function recordInternalDepSpecError(
   node: { name: string; dependencyErrors?: string[] },
   depName: string,
   rawSpec: string
 ): void {
-  const error = validateInternalDepSpec(depName, rawSpec);
+  const error = workspaceDependencyRefError(depName, rawSpec);
   if (!error) return;
   node.dependencyErrors ??= [];
   if (node.dependencyErrors.includes(error)) return;
