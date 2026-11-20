@@ -795,6 +795,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { missionFacilityWorlds },
     { managedUnitDesignWorlds },
     { managedTerminalEvidenceWorlds },
+    { managedGitHubDiagnosisWorlds },
   ] = await Promise.all(
     [
       "content-project-worlds.ts",
@@ -871,12 +872,29 @@ export async function loadLiveTeacherCases(checkouts) {
       "mission-facility-worlds.ts",
       "unit-design-worlds.ts",
       "terminal-evidence-worlds.ts",
+      "github-diagnosis-worlds.ts",
     ].map(async (file) => {
       const imported = await import(pathToFileURL(path.join(directory, file)).href);
       return imported.default ?? imported;
     })
   );
   const cases = new Map(originalCases);
+  for (const assignment of managedGitHubDiagnosisWorlds) {
+    cases.set(`github-diagnosis-live-${assignment.id}`, {
+      family: "personal-live-github-diagnosis",
+      workspace: "personal",
+      namespace: "vibestudio:github",
+      group: "local-operation-preflight-and-handoff",
+      sourceGroups: [
+        "vibestudio:github:local-operation-preflight-and-handoff",
+        "vibestudio:github:local-credential-setup-route",
+      ],
+      validator: { template: "system-testing", path: "skills/system-testing/github-diagnosis-managed.ts" },
+      root: "diagnoseGitHubOperation",
+      assignment,
+      evidence: gitHubDiagnosisEvidence,
+    });
+  }
   for (const assignment of managedTerminalEvidenceWorlds) {
     cases.set(`terminal-evidence-live-${assignment.id}`, {
       ...terminalCheckWorkflow,
@@ -3519,6 +3537,81 @@ function personalResumeEvidence(execution, exercise, _scenario, { assignment }) 
   );
   return {
     world: { context_id: contextId, repository: observedRepo.repository, working_head: state.finalHead },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function gitHubDiagnosisEvidence(execution, exercise, _scenario, { assignment }) {
+  const fixture = execution.diagnostics.githubDiagnosis;
+  const { caseId, contextId, request, observation, status, route, checks } = fixture ?? {};
+  const records = exercise.calls.map(({ record }) => record);
+  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const child = (parent, name) => parent && records.find(
+    (record) => record.parent_call_id === parent.call_id && record.definition.name === name
+  );
+  const review = child(root, "diagnoseGitHubOperation");
+  const read = child(review, "readGitHubDiagnosis");
+  const diagnose = child(review, "troubleshootGithub");
+  const cause = child(diagnose, "cause");
+  const setup = child(review, "reviewGitHubSetup");
+  const readSetup = child(setup, "readGitHubSetup");
+  const access = child(setup, "accessLevelFor");
+  const resolve = child(setup, "resolveGitHubRoute");
+  const handoff = child(setup, "chooseSetupHandoff");
+  const report = exercise.report;
+  const operationId = request?.operationId;
+  const effects = records.flatMap(({ effects: used }) => used ?? []);
+  const before = (earlier, later) => Date.parse(earlier?.ended_at) <= Date.parse(later?.started_at);
+  const effectMatches = (call, service, method, args, value) => {
+    const [effect] = call?.effects ?? [];
+    return call?.effects?.length === 1 && effect?.service === service && effect.method === method &&
+      !effect.error && matchesValue(effect.args, args) && matchesValue(effect.result, value) &&
+      matchesValue(call.output, value);
+  };
+  requireEvidence(
+    fixture?.passed === true && caseId === assignment.id &&
+    ["failure", "report", "owner", "preserved"].every((key) => checks?.[key] === true) &&
+    typeof contextId === "string" && contextId === execution.provenance?.contextId &&
+    request?.goal === assignment.goal && typeof operationId === "string" && !!operationId &&
+    observation?.operationId === operationId && observation.failure === assignment.failure &&
+    isDeepStrictEqual(report?.observation, observation) &&
+    isDeepStrictEqual(report.diagnosis, { cause: assignment.cause, steps: [assignment.step] }) &&
+    matchesValue(review?.inputs?.request, request) && matchesValue(review.output, report) &&
+    matchesValue(read?.inputs?.operationId, operationId) &&
+    effectMatches(read, "githubDiagnosisRead", "inspect", [operationId], observation) &&
+    matchesValue(diagnose?.inputs?.failure, observation.failure) &&
+    matchesValue(diagnose.output, report.diagnosis) &&
+    matchesValue(cause?.inputs?.failure, observation.failure) && matchesValue(cause.output, assignment.cause) &&
+    before(read, diagnose) && effects.length === (assignment.setup ? 3 : 1),
+    "GitHub diagnosis requires the observed local preflight and an attributed cause decision"
+  );
+  const setupRequest = observation.setup;
+  const setupId = setupRequest?.operationId;
+  requireEvidence(
+    assignment.setup
+      ? setupRequest?.goal === request.goal && typeof setupId === "string" && !!setupId && setupId !== operationId &&
+        setupRequest.interactive === assignment.check.interactive &&
+        isDeepStrictEqual(status, { stage: "needs-token", connected: false, verified: false }) &&
+        route?.action === "render-setup" && route.accessLevel === assignment.setup.access &&
+        isDeepStrictEqual(report.setup, {
+          status, route, accessLevel: assignment.setup.access, handoff: assignment.setup.handoff,
+        }) &&
+        matchesValue(setup?.inputs?.request, setupRequest) && matchesValue(setup.output, report.setup) &&
+        matchesValue(readSetup?.inputs?.operationId, setupId) &&
+        effectMatches(readSetup, "githubSetupRead", "inspect", [setupId], status) &&
+        matchesValue(access?.inputs?.intent, request.goal) && matchesValue(access.output, assignment.setup.access) &&
+        matchesValue(resolve?.inputs?.operationId, setupId) &&
+        matchesValue(resolve.inputs.accessLevel, assignment.setup.access) &&
+        effectMatches(resolve, "githubSetupRoute", "resolve", [setupId, assignment.setup.access], route) &&
+        matchesValue(handoff?.inputs?.route, route) && matchesValue(handoff.inputs.interactive, setupRequest.interactive) &&
+        matchesValue(handoff.output, assignment.setup.handoff) &&
+        before(diagnose, setup) && before(readSetup, resolve) && before(access, resolve) && before(resolve, handoff)
+      : setupRequest === null && report.setup === null && status === null && route === null && !setup,
+    "GitHub diagnosis must use the exact setup route and surface only after a missing connection"
+  );
+  return {
+    world: { context_id: contextId, operation_id: operationId, ...(setupId ? { setup_id: setupId } : {}) },
     checks,
     evidence: { workspace: { fixture } },
   };

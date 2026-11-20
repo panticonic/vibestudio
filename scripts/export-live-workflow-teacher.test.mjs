@@ -109,6 +109,7 @@ test("authored template worlds flow into the collector without losing original s
       ["notification-worlds", "notificationWorlds", []],
       ["retained-triage-worlds", "retainedTriageWorlds", []],
       ["github-setup-worlds", "githubSetupWorlds", []],
+      ["github-diagnosis-worlds", "managedGitHubDiagnosisWorlds", []],
       ["personal-resume-worlds", "personalResumeWorlds", []],
       ["template-release-worlds", "templateReleaseWorlds", []],
       ["delivery-history-worlds", "deliveryHistoryWorlds", []],
@@ -3151,6 +3152,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["notification-worlds", "export const notificationWorlds = [];"],
       ["retained-triage-worlds", "export const retainedTriageWorlds = [];"],
       ["github-setup-worlds", "export const githubSetupWorlds = [];"],
+      ["github-diagnosis-worlds", "export const managedGitHubDiagnosisWorlds = [];"],
       ["template-release-worlds", "export const templateReleaseWorlds = [];"],
       ["delivery-history-worlds", "export const deliveryHistoryWorlds = []; export const chatDeliveryWorlds = [];"],
       ["android-audit-worlds", "export const androidAuditWorlds = [];"],
@@ -6743,6 +6745,89 @@ async function checkDeliveryReceiptExport(t, id, verdict, surface = "history") {
     exportLiveTeacherWorkflow({ ...options, cases }),
     /exact origin and consumer decisions/u
   );
+}
+
+for (const id of [
+  "unsupported-remote-before-verification", "repository-publication-needs-owner-setup",
+  "pages-publication-needs-interactive-setup",
+]) {
+  test(`GitHub diagnosis export binds the local failure and installed route for ${id}`, async (t) => {
+    const { options, diagnostics, entry, save } = await fixture(t);
+    const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+      path.resolve(import.meta.dirname, "..")
+    );
+    const cases = await loadLiveTeacherCases(checkouts);
+    const name = `github-diagnosis-live-${id}`;
+    const { assignment } = cases.get(name);
+    const pins = JSON.parse(await readFile(options.pins, "utf8"));
+    await writeFile(options.pins, JSON.stringify({ ...pins, workspace: "personal" }));
+    entry.test.name = name;
+    const { goal, failure, cause, step, setup: expected, check } = assignment;
+    const request = { goal, operationId: "assigned-local-preflight" };
+    const setupId = "assigned-setup";
+    const setupRequest = expected ? { goal, operationId: setupId, interactive: check.interactive } : null;
+    const observation = { operationId: request.operationId, failure, setup: setupRequest };
+    const diagnosis = { cause, steps: [step] };
+    const status = expected ? { stage: "needs-token", connected: false, verified: false } : null;
+    const route = expected ? {
+      action: "render-setup", accessLevel: expected.access,
+      next: "open the installed setup surface", reason: "No active credential",
+    } : null;
+    const setup = expected ? { status, route, accessLevel: expected.access, handoff: expected.handoff } : null;
+    const report = { observation, diagnosis, setup };
+    diagnostics.githubDiagnosis = {
+      passed: true, caseId: id, contextId: "ctx", request, observation, status, route,
+      checks: { failure: true, report: true, owner: true, preserved: true },
+    };
+    const ref = (value) => {
+      const bytes = JSON.stringify(value);
+      return { complete: true, hash: createHash("sha256").update(bytes).digest("hex"), bytes: Buffer.byteLength(bytes) };
+    };
+    const prototype = diagnostics.natlangTeacher.calls[0];
+    const at = (second) => new Date(Date.UTC(2026, 0, 1, 0, 0, second)).toISOString();
+    const call = (name, parent, inputs, output, start, end, effects = []) => ({
+      callId: name, summary: { ...prototype.summary, call_id: name },
+      record: {
+        ...prototype.record, call_id: name, parent_call_id: parent, definition: { name }, outcome: "done",
+        inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+        output: ref(output), started_at: at(start), ended_at: at(end), effects,
+      },
+    });
+    const effect = (service, method, args, value) => ({ service, method, args: ref(args), result: ref(value) });
+    const decision = call("cause", "troubleshootGithub", { failure }, cause, 4, 4);
+    const calls = [
+      call("runWorkflow", null, {}, null, 0, 15),
+      call("diagnoseGitHubOperation", "runWorkflow", { request }, report, 1, 14),
+      call("readGitHubDiagnosis", "diagnoseGitHubOperation", { operationId: request.operationId }, observation, 2, 2,
+        [effect("githubDiagnosisRead", "inspect", [request.operationId], observation)]),
+      call("troubleshootGithub", "diagnoseGitHubOperation", { failure }, diagnosis, 3, 5),
+      decision,
+    ];
+    if (expected) calls.push(
+      call("reviewGitHubSetup", "diagnoseGitHubOperation", { request: setupRequest }, setup, 6, 12),
+      call("readGitHubSetup", "reviewGitHubSetup", { operationId: setupId }, status, 7, 7,
+        [effect("githubSetupRead", "inspect", [setupId], status)]),
+      call("accessLevelFor", "reviewGitHubSetup", { intent: goal }, expected.access, 8, 8),
+      call("resolveGitHubRoute", "reviewGitHubSetup", { operationId: setupId, accessLevel: expected.access }, route, 9, 9,
+        [effect("githubSetupRoute", "resolve", [setupId, expected.access], route)]),
+      call("chooseSetupHandoff", "reviewGitHubSetup", { route, interactive: check.interactive }, expected.handoff, 10, 10),
+    );
+    diagnostics.natlangTeacher = {
+      ...diagnostics.natlangTeacher, programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+      report, rootCallIds: ["runWorkflow"], calls,
+    };
+    await save();
+    await exportLiveTeacherWorkflow({ ...options, cases });
+    if (expected) {
+      const handoff = calls.find(({callId}) => callId === "chooseSetupHandoff");
+      handoff.record.inputs.interactive = ref(!check.interactive);
+    } else {
+      decision.record.inputs.failure = ref("different preflight");
+    }
+    await save();
+    await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }),
+      expected ? /exact setup route and surface/u : /observed local preflight/u);
+  });
 }
 
 for (const id of [

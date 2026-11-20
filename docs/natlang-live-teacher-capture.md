@@ -155,6 +155,13 @@ whether stderr, output truncation, or a result from another operation changes
 the finding. The model sees result metadata and has only the receipt read.
 Use the matching `terminal-evidence-oracle-<case-id>` for model-free verification.
 
+GitHub diagnosis cases call `github/diagnoseGitHubOperation` in Personal.
+They distinguish a locally rejected remote URL from a missing credential before
+publishing a repository or a Pages site. The last two reuse the installed
+setup route with the appropriate access level and account for whether the
+current surface can open it. Run `github-diagnosis-oracle-<case-id>` for
+model-free verification.
+
 Assigned automation planning cases use the real Missions service. The shared
 program reads the assigned manual monitor and its ledger, calls the automation
 planner, then checks the same assignment again. The stale case edits the
