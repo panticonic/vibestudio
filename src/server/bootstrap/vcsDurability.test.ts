@@ -271,7 +271,7 @@ describe("wireVcsDurability", () => {
     expect(manager.ensureDurableObjectEntity).toHaveBeenCalledOnce();
     expect(publishWorkspaceSourceEntity).toHaveBeenCalledOnce();
   });
-  it.each(["installed", "before-freeze", "older-runtime", "new"] as const)(
+  it.each(["sealed", "installed", "before-freeze", "older-runtime", "new"] as const)(
     "handles %s participant history in workspace activation order",
     async (resumeAt) => {
     const workspaceId = "workspace-1";
@@ -292,17 +292,29 @@ describe("wireVcsDurability", () => {
       head: "installed-head", eventId: main.eventId, contexts: [],
       frozenPlanDigest: sha256HexSyncText(canonicalJson({ source, freeze, plan, generation })),
     };
-    let installed = resumeAt === "installed";
+    let installed = resumeAt === "installed" || resumeAt === "sealed";
+    let frozen = installed;
+    let sealed = resumeAt === "sealed";
+    const receiptDigest = sha256HexSyncText(canonicalJson(receipt));
     const dispatch = vi.fn(async (_target: typeof source, method: string, input: unknown) => {
       switch (method) {
         case "readHistoryReplayReceipt":
           return installed ? receipt : null;
         case "readHistoryReplayFreeze":
-          return resumeAt === "installed" ? freeze : null;
+          if (!frozen) return null;
+          if (resumeAt === "installed" || input === undefined) return freeze;
+          expect(input).toEqual({ receiptDigest });
+          return { ...freeze, verification: { generation, sealed } };
+        case "sealHistoryReplayFreeze":
+          expect(sequence.at(-1)).toBe("participant");
+          expect(input).toEqual({ freeze, generation, receiptDigest });
+          sealed = true;
+          return undefined;
         case "supportsHistoryReplay":
           return resumeAt !== "older-runtime";
         case "beginHistoryReplayFreeze":
           expect(input).toEqual(freeze);
+          frozen = true;
           return { ...plan, generation };
         case "exportHistoryReplayStep":
           expect(input).toEqual(main);
@@ -339,7 +351,7 @@ describe("wireVcsDurability", () => {
       })),
     } as unknown as RuntimeManager;
     const readWorkspaceHistoryOwner = vi.fn(async () => resumeAt === "new" ? null : { contextId });
-    const readProtectedMainEventId = vi.fn(() => resumeAt === "installed" ? "since-published" : main.eventId);
+    const readProtectedMainEventId = vi.fn(() => installed ? "since-published" : main.eventId);
     const listWorkspaceHistorySessionOwners = vi.fn(async () => []);
     const { services } = captureServices({
       workspaceVcs, workspaceId, workspaceSourceProvider: source,
@@ -355,12 +367,15 @@ describe("wireVcsDurability", () => {
       await initialize!();
       expect(runtimeManager.declaresRemoteDoltClass).toHaveBeenCalledWith(source.source, canonical.className);
       expect(dispatch).toHaveBeenCalledWith(source, "beginHistoryReplayFreeze", freeze);
+      expect(dispatch).toHaveBeenCalledWith(source, "sealHistoryReplayFreeze", { freeze, generation, receiptDigest });
       expect(sequence).toEqual(["initialization", "root active", "participant"]);
       return;
     }
     expect(readWorkspaceHistoryOwner).toHaveBeenCalledWith(targetId);
-    expect(readProtectedMainEventId).toHaveBeenCalledTimes(resumeAt === "installed" ? 0 : 1);
-    if (resumeAt !== "installed") {
+    expect(readProtectedMainEventId).toHaveBeenCalledTimes(
+      resumeAt === "sealed" || resumeAt === "installed" ? 0 : 1
+    );
+    if (resumeAt !== "installed" && resumeAt !== "sealed") {
       expect(dispatch).toHaveBeenCalledWith(canonical, "supportsHistoryReplay");
     }
     if (resumeAt === "older-runtime") {
@@ -369,7 +384,13 @@ describe("wireVcsDurability", () => {
       expect(sequence).toEqual(["initialization"]);
       return;
     }
-    expect(dispatch).toHaveBeenCalledWith(source, "beginHistoryReplayFreeze", freeze);
+    if (resumeAt === "sealed") {
+      expect(dispatch.mock.calls.map(([, method]) => method)).toEqual([
+        "readHistoryReplayReceipt", "readHistoryReplayFreeze",
+      ]);
+    } else {
+      expect(dispatch).toHaveBeenCalledWith(source, "beginHistoryReplayFreeze", freeze);
+    }
     expect(dispatch.mock.calls.some(([, method]) => method === "stageHistoryReplayStep"))
       .toBe(resumeAt === "before-freeze");
     expect(workspaceVcs.attachParticipantHistory).toHaveBeenCalledWith({

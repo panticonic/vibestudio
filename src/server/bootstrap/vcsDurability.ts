@@ -17,6 +17,7 @@ import {
   migrateWorkspaceHistory,
   readWorkspaceHistoryReplayFreeze,
   readWorkspaceHistoryReplayReceipt,
+  sealWorkspaceHistoryReplay,
   WORKSPACE_PARTICIPANT_HISTORY_MIGRATION,
 } from "../vcsHost/workspaceHistoryMigration.js";
 import { canonicalWorkspaceObjectContextId } from "./workspaceObjectIdentity.js";
@@ -86,7 +87,7 @@ async function restoreParticipantHistory(
     return true;
   }
   const receipt = await readWorkspaceHistoryReplayReceipt(dispatch, canonical);
-  const held = await readWorkspaceHistoryReplayFreeze(dispatch, legacy);
+  const held = await readWorkspaceHistoryReplayFreeze(dispatch, legacy, receipt ?? undefined);
   const expectedMainEventId = receipt?.eventId ?? deps.readProtectedMainEventId();
   if (!receipt && !held && !expectedMainEventId) return false;
   if (!receipt && !held) {
@@ -99,23 +100,30 @@ async function restoreParticipantHistory(
   // The durable system-owned canonical lifetime is also the reservation
   // for migration. Startup can resume a stop between that reservation and
   // the source freeze using the exact protected event of this workspace.
-  const freeze = held ?? (!receipt && expectedMainEventId ? {
-    operationId: WORKSPACE_PARTICIPANT_HISTORY_MIGRATION,
-    expectedMainEventId,
-  } : null);
+  const freeze = held
+    ? { operationId: held.operationId, expectedMainEventId: held.expectedMainEventId }
+    : !receipt && expectedMainEventId
+      ? { operationId: WORKSPACE_PARTICIPANT_HISTORY_MIGRATION, expectedMainEventId }
+      : null;
   if (
     freeze?.operationId !== WORKSPACE_PARTICIPANT_HISTORY_MIGRATION ||
     freeze.expectedMainEventId !== expectedMainEventId
   ) {
     throw new Error("Participant history startup requires the original held migration");
   }
-  await migrateWorkspaceHistory({
-    dispatch, source: legacy, destination: canonical, freeze,
-  });
+  const installed = held?.verification?.sealed
+    ? undefined
+    : (await migrateWorkspaceHistory({
+        dispatch, source: legacy, destination: canonical, freeze,
+      })).installedFreeze;
   await deps.workspaceVcs.attachParticipantHistory({
     ...history, infrastructureContextId: contextId,
     listReplayedSessionOwners: deps.listWorkspaceHistorySessionOwners,
   });
+  if (installed) await sealWorkspaceHistoryReplay({ dispatch, source: legacy, freeze, installed });
+  if (held?.verification?.sealed) {
+    console.log("[Vcs] Restored participant history from the sealed legacy freeze");
+  }
   await deps.exportSharedHistorySeed?.(history);
   return true;
 }

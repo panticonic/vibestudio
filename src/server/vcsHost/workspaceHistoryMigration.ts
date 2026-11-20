@@ -33,11 +33,46 @@ const freezeSchema = z.object({
   expectedMainEventId: z.string().min(1),
 }).strict();
 
+const freezeEvidenceSchema = freezeSchema.extend({
+  verification: z.object({ generation: z.string().uuid(), sealed: z.boolean() }).strict().optional(),
+});
+type ReplayReceipt = z.infer<typeof replayReceiptSchema>;
+type InstalledFreeze = { generation: string; receipt: ReplayReceipt };
+
 export async function readWorkspaceHistoryReplayFreeze(
   dispatch: Pick<DODispatch, "dispatch">,
-  source: WorkspaceSourceProviderRef
+  source: WorkspaceSourceProviderRef,
+  receipt?: ReplayReceipt
 ) {
-  return freezeSchema.nullable().parse(await dispatch.dispatch(source, "readHistoryReplayFreeze"));
+  const received = receipt
+    ? await dispatch.dispatch(source, "readHistoryReplayFreeze", {
+        receiptDigest: sha256HexSyncText(canonicalJson(receipt)),
+      })
+    : await dispatch.dispatch(source, "readHistoryReplayFreeze");
+  return freezeEvidenceSchema.nullable().parse(received);
+}
+
+export async function sealWorkspaceHistoryReplay(input: {
+  dispatch: Pick<DODispatch, "dispatch">;
+  source: WorkspaceSourceProviderRef;
+  freeze: z.infer<typeof freezeSchema>;
+  installed: InstalledFreeze;
+}): Promise<void> {
+  const { dispatch, source, freeze, installed: { receipt, generation } } = input;
+  if (!receipt.frozenPlanDigest || receipt.eventId !== freeze.expectedMainEventId)
+    throw new Error("Cannot retire legacy history without its exact installed receipt");
+  const held = await readWorkspaceHistoryReplayFreeze(dispatch, source, receipt);
+  if (held?.operationId !== freeze.operationId || held.expectedMainEventId !== freeze.expectedMainEventId)
+    throw new Error("Legacy history changed before retirement");
+  if (!held.verification) return;
+  if (held.verification.generation !== generation)
+    throw new Error("Legacy history freeze generation changed before retirement");
+  if (held.verification.sealed) return;
+  await dispatch.dispatch(source, "sealHistoryReplayFreeze", {
+    freeze,
+    generation,
+    receiptDigest: sha256HexSyncText(canonicalJson(receipt)),
+  });
 }
 
 const planSchema = z
@@ -132,6 +167,7 @@ export async function migrateWorkspaceHistory(input: {
 }): Promise<{
   main: string;
   contexts: Array<{ id: string; committed: string; working: string }>;
+  installedFreeze?: InstalledFreeze;
 }> {
   const { dispatch, source, destination, freeze } = input;
   const readPlan = async (): Promise<HistoryReplayPlan> =>
@@ -153,7 +189,10 @@ export async function migrateWorkspaceHistory(input: {
     if (existing?.frozenPlanDigest) {
       if (existing.frozenPlanDigest !== frozenPlanDigest || existing.eventId !== plan.main.eventId)
         throw new Error("Workspace replay already installed a different frozen source");
-      return { main: existing.head, contexts: existing.contexts };
+      return {
+        main: existing.head, contexts: existing.contexts,
+        ...(generation ? { installedFreeze: { generation, receipt: existing } } : {}),
+      };
     }
   }
   const installed = new Map<string, string>();
@@ -203,5 +242,8 @@ export async function migrateWorkspaceHistory(input: {
       }) !== canonicalJson(receipt)) {
     throw new Error("Workspace replay recorded different context revisions");
   }
-  return { main, contexts };
+  return {
+    main, contexts,
+    ...(generation ? { installedFreeze: { generation, receipt: recorded } } : {}),
+  };
 }

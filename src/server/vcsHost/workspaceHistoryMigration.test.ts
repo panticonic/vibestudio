@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { privateWorkspaceBlobScopes, workspaceReplayBlobScopesReady } from "../storage/blobUploads.js";
-import { installWorkspaceReplayBlobScopes, migrateWorkspaceHistory } from "./workspaceHistoryMigration.js";
+import { installWorkspaceReplayBlobScopes, migrateWorkspaceHistory, sealWorkspaceHistoryReplay } from "./workspaceHistoryMigration.js";
 
 const source = {
   source: "workers/workspace-source",
@@ -56,6 +56,7 @@ it("replays onto one destination and returns the exact migrated context after a 
   await expect(migrateWorkspaceHistory(args)).resolves.toEqual({
     main: "installed-main",
     contexts: [{ id: "context:A", committed: "installed-main", working: "installed-working" }],
+    installedFreeze: { generation, receipt },
   });
   expect(receipt).toEqual({
     eventId: main.eventId,
@@ -89,6 +90,19 @@ it("keeps a replay staged if the source advances before installation", async () 
   expect(dispatch.mock.calls.some(([, method]) => method === "finishHistoryReplay")).toBe(false);
 });
 
+it("cannot seal a newer freeze with an earlier installation receipt", async () => {
+  const freeze = { operationId: "cutover", expectedMainEventId: main.eventId };
+  const receipt = { eventId: main.eventId, head: "installed", contexts: [], frozenPlanDigest: "a".repeat(64) };
+  const generation = "651b30c5-20f1-42b8-8b31-df2de5b13aed";
+  const dispatch = vi.fn(async () => ({
+    ...freeze,
+    verification: { generation: "5046ed08-2fcf-4a67-83bf-81de6ac65dde", sealed: false },
+  }));
+  await expect(sealWorkspaceHistoryReplay({
+    dispatch: { dispatch }, source, freeze, installed: { receipt, generation },
+  })).rejects.toThrow("Legacy history freeze generation changed before retirement");
+  expect(dispatch).toHaveBeenCalledOnce();
+});
 
 it("resumes private replay content registration and skips rereads after a durable finish", async () => {
   const blobsDir = await mkdtemp(path.join(os.tmpdir(), "workspace-replay-blobs-"));
