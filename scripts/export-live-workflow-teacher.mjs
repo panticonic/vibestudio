@@ -10,6 +10,13 @@ import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
 
 const sharedProgram = "skills/vibestudio-workflows/runWorkflow.nl";
 const templateGoalDomains = {
+  "problem-report": {
+    namespace: "vibestudio:problem-report",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-problem-report-managed.ts" },
+    callable: "workOnProblemReportGoal",
+    skill: "problemReport",
+    checks: ["foundCurrentIncident", "preservedNeighbor", "verifiedExactLocalDraft", "stayedLocal"],
+  },
   "compound-recovery": {
     namespace: "vibestudio:compound-recovery",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-compound-recovery-managed.ts" },
@@ -1264,13 +1271,13 @@ export async function loadLiveTeacherCases(checkouts) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
     const distinctGoals = new Set();
-    const { openGoalWorlds, openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], newsGoalWorlds = [],
+    const { openGoalWorlds, openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], newsGoalWorlds = [],
       spectroliteGoalWorlds = [], openGoalGoogleWorlds = [], openGoalPersonalWorlds = [],
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
       openTerminalWorlds = [], openOwnedResearchWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
-    for (const assignment of [...openGoalWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
+    for (const assignment of [...openGoalWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
       ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
@@ -7129,6 +7136,28 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
           record.outcome === "done" && matchesValue(record.output, plan)),
       "Expected the exact observed source, semantic revision, retained native build metadata, and authorized local assembly draft"
     );
+  } else if (world.kind === "problem-report") {
+    const outcome = exercise.report.outcome;
+    const incident = exercise.calls.find(({ record }) => record === skill);
+    const traced = (service, method, args, result) => effects.some(effect => effect.service === service &&
+      effect.method === method && !effect.error && matchesValue(effect.args, args) && matchesValue(effect.result, result));
+    const opened = proof.openings?.find(({ id, result }) => id === proof.activeId && result !== null);
+    const saved = exercise.calls.filter(({ record }) =>
+      record.parent_call_id === incident?.callId && record.definition?.name === "saveProblemDraft" && record.outcome === "done");
+    requireEvidence(
+      outcome.incident === proof.activeId && opened && saved.length === 1 &&
+      traced("problemIncident", "discover", [], proof.candidates) &&
+      traced("problemIncident", "open", [proof.activeId], opened.result) &&
+      matchesValue(saved[0].record.inputs?.request, proof.draft.request) &&
+      matchesValue(saved[0].record.output, outcome.draft) &&
+      matchesValue(saved[0].record.inputs?.request, { goal: world.goal, operationId: opened.result.operationId }) &&
+      (outcome.draft?.status === "saved-local"
+        ? outcome.draft.defect === world.defect && isDeepStrictEqual(outcome.draft.saved, proof.draft.saved) &&
+          traced("problemDraftRead", "confirm", [{ id: outcome.draft.saved.id, revision: outcome.draft.saved.revision,
+            sectionIds: outcome.draft.saved.sectionIds }], outcome.draft.saved)
+        : world.mode === "stale" && outcome.draft?.status === "held" && !performed("problemDraftAppend", "append")),
+      "Expected the actual incident selection, exact draft operation and durable local receipt"
+    );
   } else if (world.kind === "compound-recovery") {
     const outcome = exercise.report.outcome;
     const compound = exercise.calls.find(({ record }) => record === skill);
@@ -7922,7 +7951,7 @@ export function openOwnedResearchEvidence(execution, exercise, _scenario, workfl
         new URL(page.url).pathname.endsWith("/" + world.tail) && result.digest === page.digest &&
           result.offset === page.headBytes && result.bytes > 0))) &&
       (world.edit ? revisions.length === 1 && revisions[0].outcome === "done" && changes.length === 2 &&
-        matchesValue(revisions[0].inputs?.research, research.output) &&
+        matchesValue(revisions[0].inputs?.research, exercise.report.research) &&
         Date.parse(research.ended_at) <= Date.parse(revisions[0].started_at) &&
         proof.document?.attempts?.length === 2 &&
         changes.every((effect, index) => {
