@@ -7207,34 +7207,6 @@ async function main() {
   {
     const { FsService } = await import("./services/fsService.js");
     const { isWritableVcsPath } = await import("./vcsHost/paths.js");
-    type FsCausalParent = import("@vibestudio/rpc").RpcCausalParent | null;
-    type SemanticMethod = import("./vcsHost/workspaceVcs.js").WorkspaceSemanticMethod;
-    type SemanticInput<M extends SemanticMethod> =
-      import("./vcsHost/workspaceVcs.js").WorkspaceSemanticInput<M>;
-    const callSemantic = <M extends SemanticMethod>(
-      method: M,
-      input: SemanticInput<M>,
-      causalParent?: FsCausalParent
-    ) =>
-      causalParent === undefined
-        ? workspaceVcs.semanticDirectCall(method, input)
-        : workspaceVcs.semanticCausalCall(method, input, causalParent);
-    const vcsBridge: import("./services/fsService.js").FsVcsBridge = {
-      isTracked: async (relPath) => isWritableVcsPath(relPath),
-      edit: (input, causalParent) => callSemantic("vcsEdit", input, causalParent),
-      move: (input, causalParent) => callSemantic("vcsMove", input, causalParent),
-      copy: (input, causalParent) => callSemantic("vcsCopy", input, causalParent),
-      status: (input) => callSemantic("vcsStatus", input),
-      resolveRepository: (input) => callSemantic("vcsResolveRepository", input),
-      readFile: (input) => callSemantic("vcsReadFile", input),
-      readFiles: (input) => callSemantic("vcsReadFiles", input),
-      listDirectory: (input) => callSemantic("vcsListDirectory", input),
-      listFiles: (input) => callSemantic("vcsListFiles", input),
-      ensureMaterialized: (contextId, repos) =>
-        workspaceVcs.materializeContextRepos(contextId, repos),
-      isMaterialized: (contextId, repoPath) =>
-        workspaceVcs.isContextRepoMaterialized(contextId, repoPath),
-    };
     container.registerManaged({
       name: "fsService",
       dependencies: ["nativeWorkspace"],
@@ -7250,11 +7222,13 @@ async function main() {
           disk: nativeWorkspace.disk,
           contextAuthority: {
             kind: "semantic",
-            async bind(ctx, contextId) {
-              return await workspaceVcs.bindParticipantFilesystem({
-                caller: ctx.caller, contextId, isTracked: vcsBridge.isTracked,
+            bind(ctx, contextId) {
+              return workspaceVcs.bindParticipantFilesystem({
+                caller: ctx.caller,
+                contextId,
+                isTracked: async (relPath) => isWritableVcsPath(relPath),
                 signal: startupBackgroundLifetime.signal,
-              }) ?? { bridge: vcsBridge, sourceRoot: contextFolderManager.contextSourcePath(contextId) };
+              });
             },
           },
         });

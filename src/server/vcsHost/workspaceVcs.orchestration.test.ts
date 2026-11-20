@@ -317,18 +317,24 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       caller: taskCaller(taskId),
       isTracked: async () => true,
     });
-    await expect(bind(1)).resolves.toBeNull();
+    await expect(bind(1)).rejects.toThrow("Participant workspace history is unavailable");
     await vcs.attachGad(providerFromWireCall(vi.fn(async (method) => {
       expect(method).toBe("vcsDropContext");
       return { dropped: true };
     })));
     const destroyRetiredStorage = vi.fn(async (_owner: typeof TEST_PROVIDER) => {});
-    await vcs.attachParticipantHistory({
-      dispatch: { dispatch }, canonical, destroyRetiredStorage,
+    let permitAttachment!: () => void;
+    const attachmentAllowed = new Promise<void>((resolve) => {
+      permitAttachment = resolve;
     });
-    const [first, second] = await Promise.all([bind(1), bind(2)]);
-    expect(first?.sourceRoot).toBeDefined();
-    expect(first?.sourceRoot).not.toBe(second?.sourceRoot);
+    void vcs.startSemanticInitialization(async () => {
+      await attachmentAllowed;
+      await vcs.attachParticipantHistory({ dispatch: { dispatch }, canonical, destroyRetiredStorage });
+    });
+    const pending = bind(1);
+    permitAttachment();
+    const [first, second] = await Promise.all([pending, bind(2)]);
+    expect(first.sourceRoot).not.toBe(second.sourceRoot);
     const { vcs: restarted, refs: restartedRefs } = await harness();
     vi.spyOn(restartedRefs, "readMainSemanticState").mockReturnValue({ kind: "event", eventId: "main-event" });
     await restarted.attachParticipantHistory({ dispatch: { dispatch }, canonical });
@@ -338,20 +344,20 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     await expect(restarted.openParticipantScope({
       contextId, ownerContextId: contextId, caller: taskCaller(2),
     })).resolves.toMatchObject({ workingHead: "main" });
-    await first!.bridge.ensureMaterialized(contextId, "all");
-    await expect(first!.bridge.isMaterialized(contextId, "meta")).resolves.toBe(true);
-    await expect(second!.bridge.isMaterialized(contextId, "meta")).resolves.toBe(false);
-    await expect(fsp.readFile(path.join(first!.sourceRoot, "meta/note.txt"), "utf8")).resolves.toBe("participant-only bytes");
+    await first.bridge.ensureMaterialized(contextId, "all");
+    await expect(first.bridge.isMaterialized(contextId, "meta")).resolves.toBe(true);
+    await expect(second.bridge.isMaterialized(contextId, "meta")).resolves.toBe(false);
+    await expect(fsp.readFile(path.join(first.sourceRoot, "meta/note.txt"), "utf8")).resolves.toBe("participant-only bytes");
     await expect(vcs.dropContext(contextId)).rejects.toThrow("Archive incomplete");
     expect(destroyRetiredStorage).not.toHaveBeenCalled();
-    await expect(fsp.stat(first!.sourceRoot)).resolves.toBeDefined();
+    await expect(fsp.stat(first.sourceRoot)).resolves.toBeDefined();
     await expect(bind(1)).rejects.toThrow("context has retired");
     refuseRetirement = false;
     await vcs.dropContext(contextId);
     expect(destroyRetiredStorage.mock.calls.map(([owner]) => owner)).toEqual(
       [...allocated].map((objectKey) => ({ ...canonical, objectKey }))
     );
-    await expect(fsp.stat(first!.sourceRoot)).rejects.toHaveProperty("code", "ENOENT");
+    await expect(fsp.stat(first.sourceRoot)).rejects.toHaveProperty("code", "ENOENT");
   });
 
   it("uses native context registration and retirement while legacy history stays frozen", async () => {

@@ -1993,15 +1993,16 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     contextId: string;
     isTracked: FsVcsBridge["isTracked"];
     signal?: AbortSignal;
-  }): Promise<{ bridge: FsVcsBridge; sourceRoot: string } | null> {
+  }): Promise<{ bridge: FsVcsBridge; sourceRoot: string }> {
     const { caller, contextId, isTracked } = input;
+    if (!this.participantHistorySource) await this.whenSemanticReady(input.signal);
     const scope = await this.openParticipantScope({
       caller,
       contextId,
       ownerContextId: contextId,
       ...(input.signal ? { signal: input.signal } : {}),
     });
-    if (!scope) return null;
+    if (!scope) throw new Error("Participant workspace history is unavailable");
     const { owner, dispatch } = scope;
     const catalog = workspaceParticipantCatalog(scope);
     const { disk, materializer } = this.participantProjection(owner);
