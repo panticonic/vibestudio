@@ -4,6 +4,7 @@ import { createServer } from "node:net";
 import { mkdir, open, readFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
 import {
   bindRemoteDeploymentTarget,
   inspectDeploymentIdentity,
@@ -45,6 +46,7 @@ await ownedEntry(
       VIBESTUDIO_APP_ROOT: process.cwd(),
       VIBESTUDIO_PROFILE_ROOT: path.join(scratchRoot, "profile"),
       VIBESTUDIO_INSTANCE_ROOT: instance,
+      VIBESTUDIO_SHARED_DERIVED_CACHE_DIR: getSharedDerivedDataPath(),
       VIBESTUDIO_SERVER_ENTRY: "live",
       VIBESTUDIO_DISABLE_DEV_TEMPLATE_MIRROR: "1",
     };
