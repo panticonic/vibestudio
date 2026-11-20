@@ -307,6 +307,11 @@ export interface ParticipantRepositoryAccess {
   signal?: AbortSignal;
 }
 
+export interface ExactRepositorySnapshotSelection {
+  repositoryId: string;
+  requiredFiles: readonly string[];
+}
+
 export interface WorkspaceVcsDeps {
   blobsDir: string;
   workspaceRoot: string;
@@ -3350,16 +3355,35 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
    * object, or checkout. The returned plan is JSON and may be sealed directly
    * into a dispatcher prepared-authority payload.
    */
-  async planExactContextRepository(input: {
+  async planExactContextRepository(
+    input: ExactRepositorySnapshotSelection & { contextId: string },
+    access?: ParticipantRepositoryAccess
+  ): Promise<ExactRepositorySnapshotPlan> {
+    const { contextId, ...selection } = input;
+    const [plan] = await this.planExactContextRepositories({ contextId, repositories: [selection] }, access);
+    return plan!;
+  }
+
+  async planExactContextRepositories(input: {
     contextId: string;
-    repositoryId: string;
-    requiredFiles: readonly string[];
-  }, access?: ParticipantRepositoryAccess): Promise<ExactRepositorySnapshotPlan> {
+    repositories: readonly ExactRepositorySnapshotSelection[];
+  }, access?: ParticipantRepositoryAccess): Promise<ExactRepositorySnapshotPlan[]> {
     const command = access
       ? await this.readParticipantRepositoryProjection(input.contextId, access)
       : await this.gad().contextMaterializationCommand({
           contextId: input.contextId, materializedState: null,
         });
+    return Promise.all(input.repositories.map((selection) =>
+      this.planExactRepository(input.contextId, selection, command, access ? command.targetState : undefined)
+    ));
+  }
+
+  private async planExactRepository(
+    contextId: string,
+    input: ExactRepositorySnapshotSelection,
+    command: Pick<ContextMaterializationCommand, "targetState" | "repositories" | "blobs">,
+    placement?: VcsStateNodeRef
+  ): Promise<ExactRepositorySnapshotPlan> {
     const repositoryCommand = command.repositories.find(
       (
         candidate
@@ -3423,7 +3447,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     );
     const base = {
       version: 1 as const,
-      contextId: input.contextId,
+      contextId,
       repositoryId: input.repositoryId,
       repoPath: repository.repoPath,
       sourceState: command.targetState,
@@ -3443,7 +3467,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       realization: {
         repository: repositoryCommand,
         blobs: realizationBlobs,
-        ...(access ? { placement: command.targetState } : {}),
+        ...(placement ? { placement } : {}),
       },
     };
     return {

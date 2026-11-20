@@ -124,6 +124,12 @@ export async function wireDevelopmentNative(
     async start() {
       const hostExecutionDigest = readHostBuildFingerprint(deps.hostArtifactRoot).fingerprint;
       const semantic = createNativeDevelopmentSemanticAdapter(deps.workspaceVcs);
+      const resolveAccess = async (contextId: string, ctx?: ServiceContext) => {
+        await deps.workspaceVcs.whenSemanticReady(ctx?.signal);
+        if (!deps.workspaceVcs.participantHistoryAttached) return undefined;
+        if (!ctx) throw new Error("Development source requires a verified workspace context");
+        return deps.resolveParticipantAccess(contextId, ctx);
+      };
       const appendLog = (runId: string, stream: "stdout" | "stderr", line: string, origin = "") => {
         const current = logs.get(runId) ?? [];
         current.push({ stream, line });
@@ -136,7 +142,10 @@ export async function wireDevelopmentNative(
         buildSystem: deps.getBuildSystem(),
         runRoots: developmentRunRoots,
         ownership: deps.ownership,
-        planSource: (input) => deps.workspaceVcs.planExactContextRepository(input),
+        planSources: async (input, ctx) => {
+          const access = await resolveAccess(input.contextId, ctx);
+          return deps.workspaceVcs.planExactContextRepositories(input, access);
+        },
         materializeSource: (plan, destination) =>
           deps.workspaceVcs.materializeExactRepositoryPlan(plan, destination),
         onLog: (runId, stream, line) => appendLog(runId, stream, line),
@@ -163,12 +172,7 @@ export async function wireDevelopmentNative(
         root: path.join(deps.layout.development.root, "template-exchanges"),
         blobsDir: deps.layout.blobsDir,
         semantic,
-        resolveAccess: async (contextId, ctx) => {
-          await deps.workspaceVcs.whenSemanticReady(ctx?.signal);
-          if (!deps.workspaceVcs.participantHistoryAttached) return undefined;
-          if (!ctx) throw new Error("Template exchange requires a verified workspace context");
-          return deps.resolveParticipantAccess(contextId, ctx);
-        },
+        resolveAccess,
         planSource: (input, access) => deps.workspaceVcs.planExactContextRepository(input, access),
         materializeSource: (plan, destination) =>
           deps.workspaceVcs.materializeExactRepositoryPlan(plan, destination),
@@ -212,9 +216,8 @@ export async function wireDevelopmentNative(
         },
         releaseLogs: (runId) => logs.delete(runId),
         resolveAdoptedRepository: async ({ contextId, repositoryId }, ctx) => {
-          await deps.workspaceVcs.whenSemanticReady(ctx.signal);
-          if (deps.workspaceVcs.participantHistoryAttached) {
-            const access = await deps.resolveParticipantAccess(contextId, ctx);
+          const access = await resolveAccess(contextId, ctx);
+          if (access) {
             return deps.workspaceVcs.resolveAdoptedParticipantRepository({ contextId, repositoryId }, access);
           }
           const workingHead = await deps.workspaceVcs.resolveWorkingState(contextId);

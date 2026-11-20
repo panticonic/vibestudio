@@ -508,7 +508,7 @@ export function createDevelopmentNativeService(deps: {
           runId,
           recipe: recipe as DevelopmentRecipe,
           pair,
-        });
+        }, ctx);
         assertRecipeTarget(plan.recipe.target, target);
         if (needsClientExecutor(target)) {
           const ownerUserId = verifiedInitiatingUserId(ctx);

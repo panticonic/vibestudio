@@ -482,6 +482,18 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     expect(alicePlan.requiredFiles[0]?.contentHash).toBe(privateEdit);
     expect(bobPlan.sourceState).toEqual({ kind: "event", eventId: "genesis" });
     expect(bobPlan.requiredFiles[0]?.contentHash).toBe(original);
+    const priorProjectionReads = dispatch.mock.calls.length;
+    const plans = await vcs.planExactContextRepositories({
+      contextId,
+      repositories: [
+        { repositoryId: "repo", requiredFiles: ["note.txt"] },
+        { repositoryId: "repo", requiredFiles: [] },
+      ],
+    }, { caller: actorA, ownerContextId: contextId });
+    expect(dispatch.mock.calls.slice(priorProjectionReads)).toEqual([
+      [owners[0], "readHistoryProjection", { contextId }],
+    ]);
+    expect(plans.map(({ sourceState }) => sourceState)).toEqual([alicePlan.sourceState, alicePlan.sourceState]);
     await expect(vcs.resolveAdoptedParticipantRepository(developmentSource, {
       caller: actorA, ownerContextId: contextId,
     })).resolves.toEqual({ repoPath: "packages/example", workingHead: alicePlan.sourceState });
