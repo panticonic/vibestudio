@@ -129,12 +129,24 @@ export async function readSharedHistorySeedExport(input: {
       const pack = ByteArraySchema.parse(await dispatch.dispatch(canonical, "serveSharedHistorySeed", {
         destinationNodeId, bytes: frame,
       }));
-      if (pack.length < 5 || pack[0] !== 0) throw new Error("The native workspace refused the seed fetch");
+      if (pack.length < 5) throw new Error("The native workspace returned an incomplete seed response");
       const packHeader = Buffer.from(pack.buffer, pack.byteOffset, pack.byteLength);
       const headerEnd = 5 + packHeader.readUInt32LE(1);
+      if (headerEnd > pack.length) throw new Error("The native workspace returned an incomplete seed response");
+      const header: unknown = JSON.parse(packHeader.toString("utf8", 5, headerEnd));
+      if (pack[0] !== 0) {
+        const refusal = z.object({
+          code: z.string().regex(/^ERR_DOLT_[A-Z_]+$/u),
+          message: z.string().max(1000),
+        }).safeParse(header);
+        const detail = refusal.success
+          ? ` (${refusal.data.code}): ${refusal.data.message.replaceAll(grant.token, "[redacted]")}`
+          : "";
+        throw new Error(`The native workspace refused the seed fetch${detail}`);
+      }
       if (headerEnd >= pack.length) throw new Error("The native workspace returned an incomplete seed pack");
       const { branches } = z.object({ branches: z.record(z.string(), activation.shape.seed.shape.head) })
-        .parse(JSON.parse(packHeader.toString("utf8", 5, headerEnd)));
+        .parse(header);
       if (Object.keys(branches).length !== 1 || branches[grant.branch] !== head) {
         throw new Error("The native workspace returned a different seed branch");
       }

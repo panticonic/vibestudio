@@ -3860,13 +3860,14 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     activeState.onRootBootstrapCompleted = () => rootBootstrapLifecycle.complete();
     await rootBootstrapLifecycle.start();
   }
-  // Prewarm every registered workspace runtime WITHOUT blocking hub readiness.
-  // A persisted endpoint-bound device membership is a live reach contract, so children must
-  // restart for returning clients — but pairing and hub control must not wait
-  // out a ~20s child cold boot. Routing coalesces onto the pending start, so a
-  // client that arrives mid-boot awaits the same runtime promise instead of
-  // spawning a duplicate.
-  void restoreRoutedWorkspaceRuntimes(centralData.listWorkspaces(), (name) =>
+  // Restore previously opened workspaces without blocking hub readiness.
+  // A new registration can still need a seed bundle before its first route.
+  const routedWorkspaces = centralData.listWorkspaces().filter(({ name }) =>
+    name === bootstrapWorkspace ||
+    centralData.getWorkspaceCreationIntent(name) === null ||
+    fs.existsSync(workspaceIrohReachPaths(name).identityFile)
+  );
+  void restoreRoutedWorkspaceRuntimes(routedWorkspaces, (name) =>
     ensureWorkspaceRuntime(activeState, name)
   );
   let revocationCleanupDrain: Promise<void> | null = null;
