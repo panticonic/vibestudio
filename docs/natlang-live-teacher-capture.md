@@ -192,6 +192,14 @@ or when the caller's exact requested target differs from the observed offer.
 refuses preparation for the held offers. The exporter also requires the nested
 offer decision and absence of preparation calls in the trajectory.
 
+The native staging smoke exercises the authorized path with two exact local
+Examples revisions. Start an owned disposable `server:live` System instance
+with the earlier detached checkout registered through `--extra-template-checkout`.
+`node --import tsx scripts/smoke-template-candidate-staging.ts INSTANCE PRIOR_COMMIT`
+opens a disposable child workspace, discovers the newer local offer, and uses
+the production candidate binding to stage it. It checks the review context,
+the current protected main event, and candidate identity after a retry.
+
 Retained triage cases run one deliberately failing system test in an owned
 workspace and release its execution scope. The shared Natlang program reads
 the native retained failure, checks its exact run and test assignment, and
