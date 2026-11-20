@@ -1167,7 +1167,7 @@ describe("RuntimeManager", () => {
         bindRuntimeImage: vi.fn(async (_source, ref) => ({
           source,
           unitName: source,
-          artifact: ref === "ctx:b" ? second : first,
+          artifact: ref === "state:b" ? second : first,
           authority: { provides: [], requests: [], serviceRequests: [] },
         })),
         getBuildByExecution: vi.fn(
@@ -1195,6 +1195,7 @@ describe("RuntimeManager", () => {
           className: "BoardDO",
           key: contextId,
           contextId,
+          ref: `state:${contextId}`,
         });
         await mgr.restoreDurableObjectEntity({
           id: prepared.targetId,
@@ -1948,7 +1949,7 @@ describe("RuntimeManager", () => {
       expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/runtime-fixture", "main");
     });
 
-    it("binds runtime-managed workers to their owning context by default", async () => {
+    it("binds runtime-managed workers to protected main by default", async () => {
       const deps = createMockDeps();
       const mgr = new RuntimeManager(deps);
 
@@ -1958,11 +1959,11 @@ describe("RuntimeManager", () => {
         contextId: "ctx-agent",
       });
 
-      const artifact = runtimeArtifact("workers/new", "ctx:ctx-agent");
+      const artifact = runtimeArtifact("workers/new", "main");
       expect(prepared.effectiveVersion).toBe(artifact.sourceState.effectiveVersion);
       expect(prepared.buildKey).toBe(artifact.buildKey);
-      expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/new", "ctx:ctx-agent");
-      expect(statusOf(mgr, "new-worker")?.scopeRef).toBe("ctx:ctx-agent");
+      expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/new", "main");
+      expect(statusOf(mgr, "new-worker")?.scopeRef).toBe("main");
     });
 
     it("honors explicit context refs for runtime-managed workers", async () => {
@@ -1980,7 +1981,7 @@ describe("RuntimeManager", () => {
       expect(statusOf(mgr, "new-worker")?.scopeRef).toBe("ctx:ctx-agent");
     });
 
-    it("binds runtime-managed DOs to their owning context by default", async () => {
+    it("binds runtime-managed DOs to protected main by default", async () => {
       const deps = createMockDeps();
       const mgr = new RuntimeManager(deps);
 
@@ -1991,7 +1992,7 @@ describe("RuntimeManager", () => {
         contextId: "ctx-agent",
       });
 
-      expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/new-do", "ctx:ctx-agent");
+      expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/new-do", "main");
     });
 
     it("keeps a participant's first DO image out of the class default", async () => {
@@ -2067,8 +2068,9 @@ describe("RuntimeManager", () => {
         className: "NewDO",
         key: "k1",
         contextId: "ctx-agent",
+        ref: "state:ctx-agent",
       });
-      const sealedArtifact = runtimeArtifact("workers/new-do", "ctx:ctx-agent");
+      const sealedArtifact = runtimeArtifact("workers/new-do", "state:ctx-agent");
       vi.mocked(deps.getBuildByExecution).mockImplementation(async (buildKey, executionDigest) =>
         buildKey === sealedArtifact.buildKey && executionDigest === sealedArtifact.executionDigest
           ? mockWorkerBuildFor("workers/new-do", sealedArtifact)
@@ -2150,8 +2152,9 @@ describe("RuntimeManager", () => {
         className: "NewDO",
         key: "k1",
         contextId: "ctx-agent",
+        ref: "state:ctx-agent",
       });
-      const sealedArtifact = runtimeArtifact("workers/new-do", "ctx:ctx-agent");
+      const sealedArtifact = runtimeArtifact("workers/new-do", "state:ctx-agent");
       const changedSource = runtimeArtifact("workers/new-do", "changed");
       const changedUnsigned = {
         ...changedSource,
@@ -2391,6 +2394,7 @@ describe("RuntimeManager", () => {
         className: "NewDO",
         key: "subagent-object",
         contextId: "ctx-agent",
+        ref: "state:ctx-agent",
         stateArgs: {
           subagent: {
             runId: "run-1",
@@ -2399,7 +2403,7 @@ describe("RuntimeManager", () => {
           },
         },
       });
-      const sealedArtifact = runtimeArtifact("workers/new-do", "ctx:ctx-agent");
+      const sealedArtifact = runtimeArtifact("workers/new-do", "state:ctx-agent");
       vi.mocked(deps.getBuildByExecution).mockImplementation(async (buildKey, executionDigest) =>
         buildKey === sealedArtifact.buildKey && executionDigest === sealedArtifact.executionDigest
           ? mockWorkerBuildFor("workers/new-do", sealedArtifact)
@@ -2596,14 +2600,14 @@ describe("RuntimeManager", () => {
       expect(updated.scopeRef).toBe("state:feature-x");
     });
 
-    it("restores owning-context tracking on update with an empty selector", async () => {
+    it("restores protected-main tracking on update with an empty selector", async () => {
       const deps = createMockDeps();
       const mgr = new RuntimeManager(deps);
 
       await mgr.startWorker(startArgs({ ref: "state:abc123" }));
       const updated = await mgr.updateInstance("hello", { ref: "" });
 
-      expect(updated.scopeRef).toBe("ctx:ctx-1");
+      expect(updated.scopeRef).toBe("main");
     });
   });
 

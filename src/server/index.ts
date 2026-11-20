@@ -4908,6 +4908,11 @@ async function main() {
                 }
               }
               const ref = participantSource?.stateHash ?? requestedRef;
+              if (ref?.startsWith("ctx:") && !existingBuildKey && !spec.execution.artifact) {
+                throw Object.assign(new Error("Runtime context build requires verified participant history"), {
+                  code: "EACCES",
+                });
+              }
               const sourceState = participantSource?.semanticState;
               let prepared: {
                 effectiveVersion: string;

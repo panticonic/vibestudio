@@ -210,13 +210,9 @@ function explicitScopeRef(explicitRef?: string): string | undefined {
     : undefined;
 }
 
-/**
- * Runtime entities follow the semantic context that owns them unless their
- * creator deliberately pins another immutable selector. This is the execution
- * half of context-local work: code changes remain local until publication.
- */
-function entityScopeRef(explicitRef: string | undefined, contextId: string): string {
-  return explicitScopeRef(explicitRef) ?? `ctx:${contextId}`;
+/** Participant builds enter with a resolved source. Host defaults track protected main. */
+function entityScopeRef(explicitRef?: string): string {
+  return explicitScopeRef(explicitRef) ?? "main";
 }
 
 function scopeTracksProtectedMain(scopeRef: string | undefined): boolean {
@@ -1090,7 +1086,7 @@ export class RuntimeManager {
       className: args.className,
       key: args.key,
     });
-    const scopeRef = entityScopeRef(args.ref, args.contextId);
+    const scopeRef = entityScopeRef(args.ref);
     await this.ensureDOClass(args.source, args.className, {
       scopeRef,
       sourceState: args.sourceState,
@@ -1412,7 +1408,7 @@ export class RuntimeManager {
 
     const callerId = targetId;
     const token = this.ensureWorkerBearer(callerId);
-    const scopeRef = entityScopeRef(args.ref, args.contextId);
+    const scopeRef = entityScopeRef(args.ref);
 
     const stateArgs =
       args.stateArgs && typeof args.stateArgs === "object" && !Array.isArray(args.stateArgs)
@@ -1803,7 +1799,7 @@ export class RuntimeManager {
     if (updates.bindings) instance.bindings = updates.bindings;
     if (updates.stateArgs !== undefined) instance.stateArgs = updates.stateArgs;
     if (updates.ref !== undefined) {
-      instance.scopeRef = entityScopeRef(updates.ref, instance.contextId);
+      instance.scopeRef = entityScopeRef(updates.ref);
       const image = await this.bindRuntimeImage(
         instance.runtimeImageId,
         instance.source,
@@ -3774,7 +3770,7 @@ export class RuntimeManager {
       );
     }
     const scopeRef = opts.contextId
-      ? entityScopeRef(opts.ref, opts.contextId)
+      ? entityScopeRef(opts.ref)
       : explicitScopeRef(opts.ref);
     await this.ensureDOClass(source, className, { scopeRef, objectKey });
   }

@@ -4492,10 +4492,16 @@ describe("runtimeService execution recovery", () => {
     expect(restartDurableObjectIncarnation).toHaveBeenCalledOnce();
   });
 
-  it("explicitly advances a replacement from the entity's semantic context", async () => {
+  it("uses the verified owner’s context for a private replacement", async () => {
     const { service, instance, prepareDurableObject, restartDurableObjectIncarnation } =
       await buildDeps();
-    const handle = (await service.handler({ caller: serverCaller }, "createEntity", [
+    const owner = createVerifiedCaller(shellCaller.runtime.id, "shell", null, null, {
+      userId: "user:owner", handle: "owner",
+    });
+    const outsider = createVerifiedCaller("shell:outside", "shell", null, null, {
+      userId: "user:outside", handle: "outside",
+    });
+    const handle = (await service.handler({ caller: owner }, "createEntity", [
       doCreateSpec({ contextId: "ctx-recovery" }),
     ])) as { id: string };
     vi.mocked(prepareDurableObject).mockResolvedValueOnce({
@@ -4506,13 +4512,14 @@ describe("runtimeService execution recovery", () => {
       authority: { requests: [], provides: [] },
     });
 
-    const result = await service.handler({ caller: shellCaller }, "recoverExecution", [
-      {
-        entityId: handle.id,
-        expectedExecutionDigest: sealedExecution.executionDigest,
-        strategy: "replace-incarnation",
-      },
-    ]);
+    const replacement = {
+      entityId: handle.id,
+      expectedExecutionDigest: sealedExecution.executionDigest,
+      strategy: "replace-incarnation",
+    };
+    await expect(service.handler({ caller: outsider }, "recoverExecution", [replacement]))
+      .rejects.toMatchObject({ code: "EACCES" });
+    const result = await service.handler({ caller: owner }, "recoverExecution", [replacement]);
 
     expect(result).toMatchObject({
       entityId: handle.id,

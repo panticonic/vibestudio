@@ -21,6 +21,7 @@ import { deserializeRpcFailure } from "@vibestudio/rpc";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import { contextIdForTargetKey } from "@vibestudio/shared/runtime/contextIdentity";
+import { SYSTEM_USER_ID } from "@vibestudio/identity/types";
 import type {
   PreparedAuthoritySelection,
   ServiceDefinition,
@@ -1109,7 +1110,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
 
     await setUpContext(existing.contextId);
     const reservedRef = `ctx:${existing.contextId}`;
-    const ref = spec.execution.ref ?? reservedRef;
+    const ref = spec.execution.ref ?? (caller ? reservedRef : "main");
     const sourceContextId = caller && ref !== reservedRef
       ? await store.resolveWorkContext(caller.runtime.id)
       : existing.contextId;
@@ -1753,7 +1754,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         state: "started",
         attemptCount,
       });
-      return recoverExecutionOnce(input)
+      return recoverExecutionOnce(caller, input)
         .then((result) => {
           deps.onExecutionRecovery?.({
             entityId: input.entityId,
@@ -1784,6 +1785,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
   }
 
   async function recoverExecutionOnce(
+    caller: VerifiedCaller,
     input: RuntimeExecutionRecoveryRequest
   ): Promise<RuntimeExecutionRecoveryResult> {
     const record = await store.resolveActiveRecord(input.entityId);
@@ -1813,12 +1815,19 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       };
     }
 
+    const ownerUserId = record.ownerUserId;
+    const privateContext = ownerUserId != null && ownerUserId !== SYSTEM_USER_ID;
+    if (privateContext && caller.subject?.userId !== ownerUserId) {
+      throw Object.assign(new Error("Replacing a private runtime requires its workspace owner"), {
+        code: "EACCES",
+      });
+    }
     const spec: Extract<RuntimeEntityCreateSpec, { kind: "do" }> = {
       kind: "do",
       execution: {
         surface: "code",
         source: record.source.repoPath,
-        ref: `ctx:${record.contextId}`,
+        ref: privateContext ? `ctx:${record.contextId}` : "main",
       },
       className: record.className,
       key: record.key,
@@ -1837,6 +1846,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       spec,
       key: record.key,
       contextId: record.contextId,
+      ...(privateContext ? { sourceAuthority: { caller, contextId: record.contextId } } : {}),
       ...(record.parentId
         ? {
             parent: {
