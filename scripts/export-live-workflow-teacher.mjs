@@ -4764,7 +4764,7 @@ function buildPerformanceEvidence(execution, exercise, _scenario, workflow) {
 function logCursorEvidence(execution, exercise, _scenario, workflow) {
   const fixture = execution.diagnostics.managedLogCursor;
   const { caseId, contextId, request, observed, seed, checks } = fixture ?? {};
-  const { id, goal, kind, lines } = workflow.assignment;
+  const { id, goal, kind, lines, groups } = workflow.assignment;
   const report = exercise.report;
   const records = exercise.calls.map(({ record }) => record);
   const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
@@ -4831,45 +4831,63 @@ function logCursorEvidence(execution, exercise, _scenario, workflow) {
   );
   const snapshot = observed.snapshot;
   const last = seed.steps.at(-1);
-  const first = seed.steps[0];
   requireEvidence(
     kind !== "review-window"
-      ? snapshot === null &&
-          report.next === null &&
-          report.brief === null &&
-          classifications.length === 0
+      ? snapshot === null && report.next === null && report.brief === null
       : snapshot?.serverBootId === seed.boot &&
           snapshot.latestSeq === last &&
           Array.isArray(snapshot.records) &&
-          isDeepStrictEqual(
-            snapshot.records.map(({ seq }) => seq),
-            seed.steps
-          ) &&
+          isDeepStrictEqual(snapshot.records.map(({ seq }) => seq), seed.steps) &&
           snapshot.records.every(
-            ({ tag, message }, i) =>
+            ({ tag, message }, index) =>
               tag === "WorkerdManager" &&
               typeof message === "string" &&
-              message.includes(seed.marker + " " + lines[i])
+              message.includes(seed.marker + " " + lines[index])
           ) &&
-          isDeepStrictEqual(report.next, { serverBootId: seed.boot, seq: last }) &&
-          report.brief?.serverBootId === seed.boot &&
+          isDeepStrictEqual(report.next, { serverBootId: seed.boot, seq: last }),
+    "Log cursor review must keep held cursors unchanged and cite the exact covered records"
+  );
+  const expectedGroups = groups?.map(({ first, last, count, class: label }, id) => {
+    const record = snapshot.records[first];
+    return {
+      label,
+      group: {
+        id,
+        level: record.level,
+        tag: record.tag,
+        message: record.message.slice(0, 300),
+        count,
+        firstSeq: seed.steps[first],
+        lastSeq: seed.steps[last],
+      },
+    };
+  }) ?? [];
+  const findings = expectedGroups
+    .filter(({ label }) => label !== "routine")
+    .map(({ label, group: { id: _id, ...group } }) => ({ ...group, class: label }))
+    .sort((left, right) =>
+      Number(right.class === "failure") - Number(left.class === "failure") ||
+      left.firstSeq - right.firstSeq
+    );
+  const status = findings.some(({ class: label }) => label === "failure")
+    ? "incident" : findings.length ? "attention" : "normal";
+  requireEvidence(
+    classifications.length === expectedGroups.length &&
+      expectedGroups.every(({ label, group }) => classifications.some((classification) =>
+        matchesValue(classification.inputs?.group, group) &&
+        matchesValue(classification.output, label)
+      )) &&
+      (kind !== "review-window" ||
+        (report.brief?.serverBootId === seed.boot &&
           report.brief.latestSeq === last &&
-          report.brief.status === "incident" &&
+          report.brief.status === status &&
           isDeepStrictEqual(report.brief.window, {
-            fromSeq: first,
+            fromSeq: seed.steps[0],
             toSeq: last,
             records: seed.steps.length,
           }) &&
-          report.brief.findings?.length === 1 &&
-          report.brief.findings[0].class === "failure" &&
-          report.brief.findings[0].count === seed.steps.length &&
-          report.brief.findings[0].firstSeq === first &&
-          report.brief.findings[0].lastSeq === last &&
-          report.brief.findings[0].tag === "WorkerdManager" &&
-          report.brief.findings[0].message === snapshot.records[0].message.slice(0, 300) &&
-          classifications.length === 1 &&
-          matchesValue(classifications[0].output, "failure"),
-    "Log cursor review must keep held cursors unchanged and cite the exact covered records"
+          isDeepStrictEqual(report.brief.findings, findings))),
+    "Log cursor classifier calls and findings must match the exact covered records"
   );
   return {
     world: { context_id: contextId, server_boot_id: seed.boot, through_seq: last },

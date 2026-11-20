@@ -5795,19 +5795,19 @@ test("eval recovery export requires the original failed cell and its independent
   await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /exact effect readback/u);
 });
 
-test("log cursor export rejects a sequence past the bounded live read", async (t) => {
+test("log cursor export joins distinct classifier calls to the bounded live read", async (t) => {
   const { options, diagnostics, entry, save } = await fixture(t);
   const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
     path.resolve(import.meta.dirname, "..")
   );
   const cases = await loadLiveTeacherCases(checkouts);
-  const name = "log-cursor-live-resume-one-repeated-failure";
+  const name = "log-cursor-live-resume-mixed-severity-window";
   const { assignment } = cases.get(name);
   const pins = JSON.parse(await readFile(options.pins, "utf8"));
   await writeFile(options.pins, JSON.stringify({ ...pins, workspace: "system" }));
   entry.test.name = name;
   const request = { goal: assignment.goal, operationId: "assigned-log-cursor" };
-  const seed = { marker: "owned-log", boot: "system-boot-1", start: 50, steps: [52, 54] };
+  const seed = { marker: "owned-log", boot: "system-boot-1", start: 50, steps: [52, 54, 55, 57] };
   const records = seed.steps.map((seq, i) => ({
     seq,
     timestamp: 123 + i,
@@ -5821,36 +5821,41 @@ test("log cursor export rejects a sequence past the bounded live read", async (t
     liveBoot: seed.boot,
     oldestSeq: 1,
     latestSeq: 60,
-    throughSeq: 54,
+    throughSeq: 57,
     overflow: false,
-    snapshot: { serverBootId: seed.boot, latestSeq: 54, totalCaptured: 60, records },
+    snapshot: { serverBootId: seed.boot, latestSeq: 57, totalCaptured: 60, records },
   };
   const decision = {
     status: "review-window",
     reason: "The existing boot still retains the assigned range.",
   };
-  const finding = {
-    class: "failure",
-    count: 2,
-    firstSeq: 52,
-    lastSeq: 54,
+  const logGroup = (id, first, last, count) => ({
+    id,
+    level: "warn",
     tag: "WorkerdManager",
-    message: records[0].message,
-  };
+    message: records[first].message,
+    count,
+    firstSeq: records[first].seq,
+    lastSeq: records[last].seq,
+  });
+  const routine = logGroup(0, 0, 0, 1);
+  const notable = logGroup(1, 1, 3, 2);
+  const failure = logGroup(2, 2, 2, 1);
+  const finding = ({ id, ...group }, label) => ({ ...group, class: label });
   const brief = {
     serverBootId: seed.boot,
-    latestSeq: 54,
-    window: { fromSeq: 52, toSeq: 54, records: 2 },
+    latestSeq: 57,
+    window: { fromSeq: 52, toSeq: 57, records: 4 },
     status: "incident",
-    headline: "One repeated failure",
-    findings: [finding],
+    headline: "One failure and one notable group",
+    findings: [finding(failure, "failure"), finding(notable, "notable")],
   };
   const report = {
     liveBoot: seed.boot,
     latestSeq: 60,
     decision,
     brief,
-    next: { serverBootId: seed.boot, seq: 54 },
+    next: { serverBootId: seed.boot, seq: 57 },
   };
   diagnostics.managedLogCursor = {
     caseId: assignment.id,
@@ -5870,12 +5875,12 @@ test("log cursor export rejects a sequence past the bounded live read", async (t
     };
   };
   const prototype = diagnostics.natlangTeacher.calls[0];
-  const call = (name, parent, inputs, output, effects = []) => ({
-    callId: name,
-    summary: { ...prototype.summary, call_id: name },
+  const call = (name, parent, inputs, output, effects = [], id = name) => ({
+    callId: id,
+    summary: { ...prototype.summary, call_id: id },
     record: {
       ...prototype.record,
-      call_id: name,
+      call_id: id,
       parent_call_id: parent,
       definition: { name },
       outcome: "done",
@@ -5891,6 +5896,9 @@ test("log cursor export rejects a sequence past the bounded live read", async (t
     result: ref(observed),
   };
   const review = call("reviewLogCursor", "runWorkflow", { request }, report, [read]);
+  const notableCall = call(
+    "classifyHostLogGroup", "reviewLogCursor", { group: notable }, "notable", [], "classify-1"
+  );
   diagnostics.natlangTeacher = {
     ...diagnostics.natlangTeacher,
     programPath: "skills/vibestudio-workflows/runWorkflow.nl",
@@ -5902,11 +5910,17 @@ test("log cursor export rejects a sequence past the bounded live read", async (t
       call("checkCursor", "reviewLogCursor", { window: observed }, decision),
       call("compareBoot", "checkCursor", {}, "same"),
       call("checkCoverage", "checkCursor", {}, decision),
-      call("classifyHostLogGroup", "reviewLogCursor", { group: finding }, "failure"),
+      call("classifyHostLogGroup", "reviewLogCursor", { group: routine }, "routine", [], "classify-0"),
+      notableCall,
+      call("classifyHostLogGroup", "reviewLogCursor", { group: failure }, "failure", [], "classify-2"),
     ],
   };
   await save();
   await exportLiveTeacherWorkflow({ ...options, cases });
+  notableCall.record.inputs.group = ref(failure);
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /exact covered records/u);
+  notableCall.record.inputs.group = ref(notable);
   report.next.seq = 60;
   review.record.output = ref(report);
   await save();

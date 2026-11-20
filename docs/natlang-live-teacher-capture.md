@@ -418,9 +418,11 @@ review initial payload against an assigned budget. Run
 
 Saved log cursor review runs in the System template. It checks the observed
 boot and retained sequence before classifying a bounded window with the
-server-log skill. The cases cover a repeated failure, an earlier boot, and
-an overflowed window. Run `log-cursor-oracle-qualification` for the live
-model-free check.
+server-log skill. The cases cover repeated failures, mixed severity, a healthy
+window, an earlier boot, and an overflowed window. The exporter joins each
+classifier call to its original record group and checks the cited sequence
+ranges. Run a `log-cursor-oracle-<case-id>` system test for an individual
+live model-free check.
 
 Eval recovery reviews a finite EvalDO result and its native journal. The
 cases cover an effect completed before a later exception, a journal-only
