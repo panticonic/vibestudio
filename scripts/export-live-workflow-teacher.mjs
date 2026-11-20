@@ -18,6 +18,22 @@ const templateGoalDomains = {
     checks: ["exactLiveChecklist", "verifiedTerminalContinuity", "exactNativeExit", "exactNativeChecks", "exactTerminalDiscovery",
       "verifiedLocalHandoff", "protectedOwnedContext", "resultGrounded", "rejectedForeignAction"],
   },
+  "local-reconciliation": {
+    namespace: "vibestudio:local-reconciliation",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-reconciliation-managed.ts" },
+    callable: "workOnLocalReconciliationGoal",
+    skill: "localReconciliation",
+    checks: ["observedOwnedIntegration", "verifiedNativeIntegration", "protectedNeighborAndMain",
+      "honoredRevisionOrWindowRace", "retainedVerifiedIntegrationEvidence", "matchedReconciliationHandoff"],
+  },
+  vaultWork: {
+    namespace: "vibestudio:spectrolite-knowledge",
+    validator: { template: "spectrolite", path: "skills/spectrolite-review-fixtures/knowledge-managed.ts" },
+    callable: "workOnVaultKnowledgeGoal",
+    checks: ["exactVaultRoute", "joinedNativeKnowledge", "independentVaultReadback", "preservedCommittedVault",
+      "recoveredRevisedSource", "matchedKnowledgeOutcome", "verifiedLocalVaultHandoff"],
+  },
+
   "eval-handoff": {
     namespace: "vibestudio:eval-handoff",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-eval-handoff-managed.ts" },
@@ -1178,13 +1194,13 @@ export async function loadLiveTeacherCases(checkouts) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
     const distinctGoals = new Set();
-    const { openGoalWorlds, browserGoalWorlds = [], suiteGoalWorlds = [], newsGoalWorlds = [],
+    const { openGoalWorlds, openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], newsGoalWorlds = [],
       spectroliteGoalWorlds = [], openGoalGoogleWorlds = [], openGoalPersonalWorlds = [],
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
       openTerminalWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
-    for (const assignment of [...openGoalWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
+    for (const assignment of [...openGoalWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
       ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
@@ -7084,6 +7100,46 @@ function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
         proof.initial && proof.latest && proof.observations?.length > 0 && Array.isArray(proof.attempts),
       "Expected the run's actual News observations and schedule action records"
     );
+  } else if (world.kind === "vaultWork") {
+    const outcome = exercise.report.outcome;
+    const { expected } = world;
+    const relevant = new Set(["spectroliteGoal", "spectroliteHandoffRead", "vaultKnowledgeHandoff"]);
+    const available = effects.filter(({ service, error }) => relevant.has(service) && !error);
+    const journal = proof.journal;
+    const exactEffects = Array.isArray(journal) && available.length === journal.length && journal.every(row => {
+      const bound = available.findIndex(effect => effect.service === row.service && effect.method === row.method &&
+        matchesValue(effect.args, row.args) && matchesValue(effect.result, row.result));
+      if (bound < 0) return false;
+      available.splice(bound, 1);
+      return true;
+    });
+    const reads = journal?.filter(row => row.service === "spectroliteGoal" && row.method === "evidence");
+    const edits = expected.steps.filter(step => step.kind === "write");
+    const latest = journal?.findLast(row => row.service === "spectroliteGoal" && row.method === "inspect")?.result;
+    const writes = journal?.filter(row => row.service === "spectroliteGoal" && row.method === "revise");
+    const handoff = journal?.find(row => row.service === "vaultKnowledgeHandoff" && row.method === "stage");
+    const plan = journal?.find(row => row.service === "spectroliteHandoffRead" && row.method === "evidence");
+    requireEvidence(
+      exactEffects && journal[0]?.method === "inspect" && journal[0].result.path === world.openPath &&
+        isDeepStrictEqual(proof.events, expected.steps) && isDeepStrictEqual(latest, proof.final) &&
+        outcome.path === expected.path && outcome.revision === latest.revision && outcome.outcome === expected.outcome &&
+        outcome.authorityPath === (expected.outcome === "authority-confirmed" ? expected.path : null) &&
+        expected.citations.every(text => outcome.answer.includes(text)) &&
+        isDeepStrictEqual(proof.committedFiles, world.files) &&
+        isDeepStrictEqual(proof.workingFiles, {...world.files,...world.draft,
+          ...Object.fromEntries(edits.map(({path,source}) => [path,source]))}) &&
+        reads.length === outcome.reads.length && reads.every(({result}, index) =>
+          result.path === outcome.reads[index].view.path && hash(outcome.reads[index].view.source) === result.document.contentHash &&
+          outcome.reads[index].review.findings.every(({ evidenceIds }) => evidenceIds[0] === result.vault.id)) &&
+        writes.length === edits.length + Number(Boolean(world.movement)) &&
+        (!world.movement || writes.findIndex(row => row.result === "changed") === 0 &&
+          writes[0].args[0] !== writes[1].args[0]) &&
+        (world.handoff ? plan && handoff && handoff.args[0] === latest.revision &&
+          handoff.args[1] === world.handoff.audience && handoff.args[2].disposition === expected.disposition &&
+          isDeepStrictEqual(handoff.result, proof.handoff) && isDeepStrictEqual(outcome.handoff, proof.handoff) :
+          !plan && !handoff && outcome.handoff === null && proof.handoff === null),
+      "Expected exact native vault links, ordered source evidence, verified working changes, and owned handoff"
+    );
   } else if (world.kind === "spectrolite") {
     const generation = proof.final?.binding?.generation;
     requireEvidence(
@@ -7240,6 +7296,33 @@ function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
           : proof.delivery === null),
       "Expected an exact migration decision, scoped import effects, and independently joined retained collection evidence"
     );
+  } else if (world.kind === "local-reconciliation") {
+    const outcome = exercise.report.outcome;
+    const methods = [
+      ["reconciliationWindow", "read"], ["reconciliationWindow", "release"],
+      ["reconciliationArchive", "list"], ["reconciliationArchive", "read"], ["reconciliationArchive", "readCurrent"],
+      ["reconciliationNative", "observe"], ["reconciliationNative", "apply"], ["reconciliationNative", "merge"],
+      ["scratchHandoffRead", "read"], ["scratchHandoffWrite", "stage"],
+    ];
+    requireEvidence(Array.isArray(proof.effects) && methods.every(([service, method]) => {
+      const calls = effects.filter(effect => effect.service === service && effect.method === method && !effect.error);
+      const receipts = proof.effects.filter(receipt => receipt.service === service && receipt.method === method);
+      return calls.length === receipts.length && calls.every(({ args, result }) => {
+        const receipt = receipts.findIndex(item => matchesValue(args, item.args) && matchesValue(result, item.result));
+        if (receipt < 0) return false;
+        receipts.splice(receipt, 1);
+        return true;
+      });
+    }) && ["reconciliationWindow", "reconciliationNative"].every(service => proof.effects.some(effect => effect.service === service)) &&
+      (!world.archive || proof.checks?.recoveredRetainedReconciliation === true &&
+        outcome?.archive?.prior?.id === proof.archiveRecheck?.sourceId && outcome.archive.relation === proof.archiveRecheck.relation) &&
+      matchesValue(outcome?.window, proof.window) && outcome.integration.status === world.expected.status &&
+      outcome.integration.head === (world.expected.status === "integrated" ? proof.mergeHead : proof.nativeHead) &&
+      outcome.handoff?.status === world.expected.handoff &&
+      (world.expected.handoff === "staged" ? outcome.handoff.artifact?.path === proof.artifact?.path &&
+        outcome.handoff.artifact?.bytes === proof.artifact?.bytes && typeof proof.artifact?.sha256 === "string"
+        : outcome.handoff.artifact === null && proof.artifact === null),
+      "Expected exact real working revisions, native merge decisions and owned scratch evidence");
   } else if (world.kind === "personal-history") {
     requireEvidence(
       performed("archiveTimeline", "discover") && performed("archiveTimeline", "list") &&
