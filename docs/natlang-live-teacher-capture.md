@@ -79,8 +79,15 @@ List the available cases, then select workflows from the Vibestudio host checkou
 
 ```sh
 pnpm natlang:teacher --list
+pnpm natlang:teacher --preflight
 pnpm natlang:teacher --case panel-draft-unmount --out /path/to/new-run
 ```
+
+Preflight provisions each assigned workspace and historical baseline, checks
+the visible system-test catalog for an installed orchestrator for every case,
+and retires each instance. Pass `--case CASE` to check a subset. It makes no
+model calls and writes no trajectory data. The collector applies the same
+installed-case check before starting a selected task.
 
 The catalog includes browser-driven panel repair, workspace VCS integration, worker diagnosis and repair,
 grounded document projects, and stateful incident and release handoffs. Worker worlds cover behavior such

@@ -22,19 +22,22 @@ const { values } = parseArgs({
   options: {
     case: { type: "string", multiple: true },
     list: { type: "boolean" },
+    preflight: { type: "boolean" },
     "review-model": { type: "string" },
     out: { type: "string" },
     model: { type: "string", default: "openai-codex:gpt-6-luna" },
   },
 });
-const list = values.list && values.case === undefined && values.out === undefined;
-const scenarios = values.case ?? [];
+const list = values.list && !values.preflight && values.case === undefined && values.out === undefined;
+const preflight = values.preflight && !values.list && values.out === undefined &&
+  values["review-model"] === undefined;
+const requested = values.case ?? [];
 if (
-  !list &&
-  (values.list || !values.out || !scenarios.length || new Set(scenarios).size !== scenarios.length)
+  new Set(requested).size !== requested.length ||
+  (!list && !preflight && (values.list || values.preflight || !values.out || !requested.length))
 ) {
   throw new Error(
-    "Usage: pnpm natlang:teacher --list | --case WORKFLOW_CASE [--case WORKFLOW_CASE ...] --out NEW_DIR [--model PROVIDER:MODEL]"
+    "Usage: pnpm natlang:teacher --list | --preflight [--case WORKFLOW_CASE ...] | --case WORKFLOW_CASE [--case WORKFLOW_CASE ...] --out NEW_DIR [--model PROVIDER:MODEL]"
   );
 }
 
@@ -57,11 +60,92 @@ if (list) {
     );
   process.exit(0);
 }
+const scenarios = preflight && !requested.length ? [...liveTeacherCases.keys()] : requested;
 const unknown = scenarios.filter((scenario) => !liveTeacherCases.has(scenario));
 if (unknown.length) {
   throw new Error(
     `Unknown teacher case(s): ${unknown.join(", ")}. Run pnpm natlang:teacher --list.`
   );
+}
+
+const groups = new Map();
+for (const scenario of scenarios) {
+  const { workspace = "system", workspaceBaseline } = liveTeacherCases.get(scenario);
+  const key = workspaceBaseline ? `${workspace}@${workspaceBaseline}` : workspace;
+  if (!groups.has(key))
+    groups.set(key, { workspace, workspaceBaseline, instance: `natlang-live-${randomUUID().slice(0, 12)}`, cases: [] });
+  groups.get(key).cases.push(scenario);
+}
+
+function command(args, stdout = "inherit") {
+  const result = spawnSync("pnpm", args, { cwd: host, stdio: ["inherit", stdout, "inherit"] });
+  if (result.error) throw result.error;
+  return result.status ?? 1;
+}
+
+function systemTestArgs({ instance, workspace, workspaceBaseline }, args) {
+  return [
+    "system-test", "--instance", instance, "--workspace", workspace,
+    ...(workspaceBaseline ? ["--workspace-baseline", workspaceBaseline] : []),
+    ...args,
+  ];
+}
+
+function installedTests(group) {
+  const { workspace } = group;
+  const result = spawnSync("pnpm", [
+    "--silent", ...systemTestArgs(group, ["list", "--json"]),
+  ], { cwd: host, encoding: "utf8", maxBuffer: 8 * 1024 * 1024, stdio: ["ignore", "pipe", "inherit"] });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`Could not list tests in managed workspace ${workspace}`);
+  const tests = JSON.parse(result.stdout);
+  const byName = new Map();
+  if (!Array.isArray(tests)) throw new Error(`Invalid system-test catalog for ${workspace}`);
+  for (const row of tests) {
+    if (typeof row?.name !== "string" || byName.has(row.name) ||
+        typeof row.installed !== "boolean" || typeof row.orchestrated !== "boolean" ||
+        !Array.isArray(row.requiresUnits)) {
+      throw new Error(`Invalid system-test descriptor in ${workspace}`);
+    }
+    byName.set(row.name, row);
+  }
+  return byName;
+}
+
+function unavailableCase(catalog, scenario) {
+  const test = catalog.get(scenario);
+  if (!test) return "missing system-test descriptor";
+  if (!test.orchestrated) return "no managed workflow orchestrator";
+  if (!test.installed) return `requires installed units: ${test.requiresUnits.join(", ")}`;
+  return null;
+}
+
+if (preflight) {
+  let unavailableCount = 0;
+  for (const group of groups.values()) {
+    const { workspace, workspaceBaseline, cases } = group;
+    try {
+      if (command(systemTestArgs(group, ["doctor", "--approve-startup", "--model", values.model]), "ignore") !== 0) {
+        throw new Error("Managed workspace did not pass readiness checks");
+      }
+      const catalog = installedTests(group);
+      const unavailable = cases.flatMap((scenario) => {
+        const reason = unavailableCase(catalog, scenario);
+        return reason ? [{ scenario, reason }] : [];
+      });
+      unavailableCount += unavailable.length;
+      console.log(JSON.stringify({ workspace, workspaceBaseline, checked: cases.length, unavailable }));
+    } catch (error) {
+      unavailableCount += cases.length;
+      console.log(JSON.stringify({ workspace, workspaceBaseline, checked: 0, error: String(error) }));
+    } finally {
+      if (command(systemTestArgs(group, ["stop"]), "ignore") !== 0) {
+        throw new Error(`Could not retire the managed ${workspace} workspace ${group.instance}`);
+      }
+    }
+  }
+  await new Promise((resolve) => process.stdout.write("", resolve));
+  process.exit(unavailableCount ? 1 : 0);
 }
 
 const review = workflowReviewer(values["review-model"]);
@@ -112,11 +196,6 @@ function pinSources() {
   };
 }
 
-function command(args, stdout = "inherit") {
-  const result = spawnSync("pnpm", args, { cwd: host, stdio: ["inherit", stdout, "inherit"] });
-  if (result.error) throw result.error;
-  return result.status ?? 1;
-}
 
 const pinned = pinSources();
 if (command(["natlang:vendor", "--check"]) !== 0)
@@ -129,14 +208,6 @@ const writePins = (destination, value) =>
 
 const single = scenarios.length === 1;
 const casesDir = path.join(out, "cases");
-const groups = new Map();
-for (const scenario of scenarios) {
-  const { workspace = "system", workspaceBaseline } = liveTeacherCases.get(scenario);
-  const key = workspaceBaseline ? `${workspace}@${workspaceBaseline}` : workspace;
-  if (!groups.has(key))
-    groups.set(key, { workspace, workspaceBaseline, instance: `natlang-live-${randomUUID().slice(0, 12)}`, cases: [] });
-  groups.get(key).cases.push(scenario);
-}
 if (!single) {
   const instances = Object.fromEntries(
     [...groups].map(([workspace, group]) => [workspace, group.instance])
@@ -149,11 +220,7 @@ const failures = [];
 for (const group of groups.values()) {
   const { instance, workspace, workspaceBaseline } = group;
   const systemTest = (args, stdout) =>
-    command([
-      "system-test", "--instance", instance, "--workspace", workspace,
-      ...(workspaceBaseline ? ["--workspace-baseline", workspaceBaseline] : []),
-      ...args,
-    ], stdout);
+    command(systemTestArgs(group, args), stdout);
   const cases = group.cases.map((scenario) => {
     const directory = single ? out : path.join(casesDir, scenario);
     if (!single) mkdirSync(directory, { mode: 0o700 });
@@ -173,8 +240,11 @@ for (const group of groups.values()) {
     if (systemTest(["doctor", "--approve-startup", "--model", source.teacher]) !== 0) {
       throw new Error(`The managed ${workspace} workspace did not pass readiness checks`);
     }
+    const catalog = installedTests(group);
     for (const { scenario, directory, pins, caseSource } of cases) {
       try {
+        const reason = unavailableCase(catalog, scenario);
+        if (reason) throw new Error(reason);
         if (JSON.stringify(pinSources()) !== JSON.stringify(pinned))
           throw new Error("Source pins changed before starting the case");
         const devices = liveTeacherCases.get(scenario).devices ?? [];

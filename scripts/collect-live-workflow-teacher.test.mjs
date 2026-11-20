@@ -68,9 +68,18 @@ exit 0
     `#!/usr/bin/env node
     const fs = require('node:fs');
     const path = require('node:path');
-    const [launcher, , instance, , workspace, command, ...args] = process.argv.slice(2);
+    const words = process.argv.slice(2);
+    if (words[0] === '--silent') words.shift();
+    const [launcher, , instance, , workspace, command, ...args] = words;
     if (launcher === 'natlang:vendor') process.exit(0);
     fs.appendFileSync('commands.jsonl', JSON.stringify({ instance, workspace, command, args }) + '\\n');
+    if (command === 'list') {
+      const names = workspace === 'personal' ? ['personal'] : ['passing', 'failing'];
+      console.log(JSON.stringify(names.map(name => ({
+        name, orchestrated: true, installed: name !== process.env.VIBE_TEST_ABSENT,
+        requiresUnits: ['skills/fixture'],
+      }))));
+    }
     const out = args[args.indexOf('--out-dir') + 1];
     if (command === 'run') {
       fs.mkdirSync(path.join(out, '${runId}'));
@@ -111,25 +120,14 @@ exit 0
     .map(JSON.parse);
   assert.deepEqual(
     commands.map(({ command }) => command),
-    ["doctor", "run", "trajectory", "run", "stop", "doctor", "run", "trajectory", "stop"]
+    ["doctor", "list", "run", "trajectory", "run", "stop", "doctor", "list", "run", "trajectory", "stop"]
   );
-  assert.deepEqual(
-    commands.map(({ workspace }) => workspace),
-    [
-      "system",
-      "system",
-      "system",
-      "system",
-      "system",
-      "personal",
-      "personal",
-      "personal",
-      "personal",
-    ]
-  );
-  assert.equal(new Set(commands.slice(0, 5).map(({ instance }) => instance)).size, 1);
-  assert.equal(new Set(commands.slice(5).map(({ instance }) => instance)).size, 1);
-  assert.notEqual(commands[0].instance, commands[5].instance);
+  assert.deepEqual(commands.map(({ workspace }) => workspace), [
+    ...Array(6).fill("system"), ...Array(5).fill("personal"),
+  ]);
+  assert.equal(new Set(commands.slice(0, 6).map(({ instance }) => instance)).size, 1);
+  assert.equal(new Set(commands.slice(6).map(({ instance }) => instance)).size, 1);
+  assert.notEqual(commands[0].instance, commands[6].instance);
   const pathFor = (kind, name) => path.join(out, "cases", kind, name);
   const admitted = JSON.parse(await readFile(pathFor("passing", "verified/manifest.json"), "utf8"));
   assert.equal(admitted.source.run_id, runId);
@@ -138,7 +136,28 @@ exit 0
     await readFile(pathFor("personal", "verified/manifest.json"), "utf8")
   );
   assert.equal(personal.source.workspace, "personal");
-  assert.equal(personal.source.instance, commands[5].instance);
+  assert.equal(personal.source.instance, commands[6].instance);
   assert.equal(JSON.parse(await readFile(pathFor("failing", "source.json"), "utf8")).run_id, runId);
   await assert.rejects(readFile(pathFor("failing", "verified/manifest.json")), { code: "ENOENT" });
+
+  const preflight = spawnSync(process.execPath, ["scripts/collect-live-workflow-teacher.mjs", "--preflight"], {
+    cwd: root,
+    env: {
+      ...process.env, PATH: path.join(root, "bin") + path.delimiter + process.env.PATH,
+      VIBE_TEST_ABSENT: "personal",
+    },
+    encoding: "utf8",
+  });
+  assert.equal(preflight.status, 1, preflight.stderr);
+  assert.deepEqual(preflight.stdout.trim().split("\n").map(JSON.parse), [
+    { workspace: "system", checked: 2, unavailable: [] },
+    { workspace: "personal", checked: 1, unavailable: [
+      { scenario: "personal", reason: "requires installed units: skills/fixture" },
+    ] },
+  ]);
+  const preflightCommands = (await readFile(path.join(root, "commands.jsonl"), "utf8"))
+    .trim().split("\n").map(JSON.parse).slice(commands.length);
+  assert.deepEqual(preflightCommands.map(({ command }) => command), [
+    "doctor", "list", "stop", "doctor", "list", "stop",
+  ]);
 });
