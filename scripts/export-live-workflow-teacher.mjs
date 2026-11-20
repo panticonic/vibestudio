@@ -723,6 +723,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { gmailComposeHistoryWorlds },
     { unitIdentityWorlds },
     { transcriptCursorWorlds },
+    { remoteRouteWorlds },
     { retainedTriageWorlds },
     { githubSetupWorlds },
     { templateReleasePart, templateReleaseWorlds },
@@ -793,6 +794,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "gmail-compose-history-worlds.ts",
       "unit-identity-worlds.ts",
       "transcript-cursor-worlds.ts",
+      "remote-route-worlds.ts",
       "retained-triage-worlds.ts",
       "github-setup-worlds.ts",
       "template-release-worlds.ts",
@@ -868,6 +870,18 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of androidAuditWorlds) {
     cases.set(`android-audit-live-${assignment.id}`, { ...androidAuditWorkflow, assignment });
+  }
+  for (const assignment of remoteRouteWorlds) {
+    cases.set(`remote-route-live-${assignment.id}`, {
+      family: "workspace-live-remote-route",
+      namespace: "vibestudio:remote-access",
+      group: "authenticated-workspace-gateway",
+      workspace: "system",
+      root: "reviewRemoteRoute",
+      validator: { template: "system-testing", path: "skills/system-testing/remote-route-managed.ts" },
+      assignment,
+      evidence: remoteRouteEvidence,
+    });
   }
   for (const assignment of retainedTriageWorlds) {
     cases.set(`retained-triage-live-${assignment.id}`, {
@@ -3009,6 +3023,61 @@ function clientAdmissionEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: contextId, source, host, abi: workingAbi },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function remoteRouteEvidence(execution, exercise, _scenario, { assignment }) {
+  const fixture = execution.diagnostics.remoteRoute;
+  const verification = fixture?.verification;
+  const { request, native, checks } = verification ?? {};
+  const report = exercise.report;
+  requireEvidence(
+    fixture?.contextId === execution.provenance?.contextId &&
+      verification?.caseId === assignment.id && verification.passed === true &&
+      ["scopedRead", "stableGateway", "assignedRoute", "exactReport"].every(
+        (name) => checks?.[name] === true,
+      ) &&
+      request?.goal === assignment.goal &&
+      [request?.operationId, request?.serverId, request?.workspaceId, native?.bootId, native?.workspaceId].every(
+        (value) => typeof value === "string" && !!value,
+      ) &&
+      native.serverId === request.serverId &&
+      (native.workspaceId !== request.workspaceId) === assignment.differentWorkspace &&
+      isDeepStrictEqual(report, {
+        observed: native, verdict: assignment.verdict, layer: assignment.layer, next: assignment.next,
+      }),
+    "Remote route review needs the exact authenticated gateway and the assigned server and workspace",
+  );
+  const records = exercise.calls.map(({ record }) => record);
+  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const child = (parent, name) => parent && records.find(
+    (record) => record.parent_call_id === parent.call_id && record.definition.name === name,
+  );
+  const review = child(root, "reviewRemoteRoute");
+  const read = child(review, "readGatewayIdentity");
+  const layer = child(review, "remoteLayer");
+  const handoff = child(review, "routeHandoff");
+  const effect = read?.effects?.[0];
+  const diagnostic = assignment.differentWorkspace
+    ? "The gateway answered, but the selected workspace route reaches a different workspace ID."
+    : "The server and workspace gateway identities match the assigned route.";
+  requireEvidence(
+    matchesValue(review?.inputs?.request, request) && matchesValue(review.output, report) &&
+      matchesValue(read?.inputs?.operationId, request.operationId) && matchesValue(read.output, native) &&
+      records.flatMap(({ effects }) => effects ?? []).length === 1 &&
+      effect?.service === "remoteGatewayIdentity" && effect.method === "observe" && !effect.error &&
+      matchesValue(effect.args, [request.operationId]) && matchesValue(effect.result, native) &&
+      matchesValue(layer?.inputs?.diagnosis, diagnostic) && matchesValue(layer.output, assignment.layer) &&
+      matchesValue(handoff?.inputs?.verdict, assignment.verdict) &&
+      matchesValue(handoff.inputs?.layer, assignment.layer) && matchesValue(handoff.output, assignment.next) &&
+      Date.parse(read.ended_at) <= Date.parse(layer.started_at) &&
+      Date.parse(layer.ended_at) <= Date.parse(handoff.started_at),
+    "Remote route review needs the native read before its diagnosis and handoff, with no profile mutation",
+  );
+  return {
+    world: { context_id: fixture.contextId, server_id: native.serverId, observed_workspace: native.workspaceId },
     checks,
     evidence: { workspace: { fixture } },
   };

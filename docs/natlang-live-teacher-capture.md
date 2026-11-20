@@ -140,6 +140,14 @@ uses the existing triage tree to classify it and quote evidence. The
 `retained-triage-oracle-qualification-` checks cover a thrown validator and
 a stopped fixture orchestration without model calls.
 
+Remote route review cases read the authenticated System gateway and compare
+its live server and workspace IDs to the assigned route. The existing
+remote-layer decision interprets a mismatching workspace and hands back the
+refresh step without changing the profile. Use the
+`remote-route-oracle-qualification-` cases for model-free validation. The
+separate host smoke `scripts/smoke-remote-workspace-access.ts` tests pairing
+and resume through the disposable managed instance's local transport.
+
 Gmail compose audits run in an owned channel in the Google Workspace template.
 The shared program calls the compose-history skill, projects a typed draft or
 delivery readback from that same native cursor, and calls the Gmail workflow

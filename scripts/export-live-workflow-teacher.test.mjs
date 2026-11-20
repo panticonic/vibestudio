@@ -105,6 +105,7 @@ test("authored template worlds flow into the collector without losing original s
       ["gmail-compose-history-worlds", "gmailComposeHistoryWorlds", []],
       ["unit-identity-worlds", "unitIdentityWorlds", []],
       ["transcript-cursor-worlds", "transcriptCursorWorlds", []],
+      ["remote-route-worlds", "remoteRouteWorlds", []],
       ["retained-triage-worlds", "retainedTriageWorlds", []],
       ["github-setup-worlds", "githubSetupWorlds", []],
       ["template-release-worlds", "templateReleaseWorlds", []],
@@ -3029,6 +3030,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["gmail-compose-history-worlds", "export const gmailComposeHistoryWorlds = [];"],
       ["unit-identity-worlds", "export const unitIdentityWorlds = [];"],
       ["transcript-cursor-worlds", "export const transcriptCursorWorlds = [];"],
+      ["remote-route-worlds", "export const remoteRouteWorlds = [];"],
       ["retained-triage-worlds", "export const retainedTriageWorlds = [];"],
       ["github-setup-worlds", "export const githubSetupWorlds = [];"],
       ["template-release-worlds", "export const templateReleaseWorlds = [];"],
@@ -7364,5 +7366,63 @@ test("retained triage export binds diagnosis to the exact released run record", 
   assert.throws(
     () => workflow.evidence(execution, exercise, id, workflow),
     /assigned native read before the nested failure review/u,
+  );
+});
+
+test("remote route export binds the routing diagnosis to a live gateway read", async () => {
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(path.resolve(import.meta.dirname, ".."));
+  const cases = await loadLiveTeacherCases(checkouts);
+  const id = "remote-route-live-stale-workspace-assignment";
+  const workflow = cases.get(id);
+  const { assignment } = workflow;
+  const request = {
+    goal: assignment.goal, operationId: "assigned-route", serverId: "server",
+    workspaceId: "previous-workspace",
+  };
+  const native = { serverId: "server", bootId: "current-boot", workspaceId: "current-workspace" };
+  const report = {
+    observed: native, verdict: "workspace-mismatch", layer: "workspace-routing", next: "refresh-workspace-reach",
+  };
+  const execution = {
+    provenance: { contextId: "owned" },
+    diagnostics: { remoteRoute: {
+      contextId: "owned",
+      verification: {
+        caseId: assignment.id, request, native, passed: true,
+        checks: { scopedRead: true, stableGateway: true, assignedRoute: true, exactReport: true },
+      },
+    } },
+  };
+  const ref = (value) => {
+    const bytes = JSON.stringify(value);
+    return { complete: true, hash: createHash("sha256").update(bytes).digest("hex"), bytes: Buffer.byteLength(bytes) };
+  };
+  const call = (name, parent, args, output, effects = []) => ({
+    record: {
+      call_id: name, parent_call_id: parent, definition: { name },
+      inputs: Object.fromEntries(Object.entries(args).map(([key, value]) => [key, ref(value)])),
+      output: ref(output), started_at: "2026-11-20T00:00:00Z", ended_at: "2026-11-20T00:00:00Z", effects,
+    },
+  });
+  const read = call("readGatewayIdentity", "reviewRemoteRoute", { operationId: request.operationId }, native, [{
+    service: "remoteGatewayIdentity", method: "observe", args: ref([request.operationId]), result: ref(native),
+  }]);
+  const exercise = {
+    report, rootCallIds: ["runWorkflow"],
+    calls: [
+      call("runWorkflow", null, {}, null),
+      call("reviewRemoteRoute", "runWorkflow", { request }, report),
+      read,
+      call("remoteLayer", "reviewRemoteRoute", {
+        diagnosis: "The gateway answered, but the selected workspace route reaches a different workspace ID.",
+      }, report.layer),
+      call("routeHandoff", "reviewRemoteRoute", { verdict: report.verdict, layer: report.layer }, report.next),
+    ],
+  };
+  assert.equal(workflow.evidence(execution, exercise, id, workflow).world.observed_workspace, native.workspaceId);
+  read.record.effects[0].result = ref({ ...native, workspaceId: request.workspaceId });
+  assert.throws(
+    () => workflow.evidence(execution, exercise, id, workflow),
+    /needs the native read before its diagnosis/u,
   );
 });
