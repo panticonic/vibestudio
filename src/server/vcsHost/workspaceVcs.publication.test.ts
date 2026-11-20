@@ -309,7 +309,7 @@ describe("WorkspaceVcs protected publication notification", () => {
       source: "workers/workspace-source", className: "GadHistoryDO", objectKey: "canonical",
     };
     const seed = { sourceNodeId: "a".repeat(64), head: "1".repeat(40), eventId: "seed-event" };
-    const body = "verified source file";
+    const body = JSON.stringify({ name: "@workspace/a", version: "1.2.3" });
     const contentHash = sha256HexSyncText(body);
     const confirmSource = vi.fn(async () => undefined);
     let installed = false;
@@ -321,7 +321,7 @@ describe("WorkspaceVcs protected publication notification", () => {
             state: { kind: "event", eventId: seed.eventId },
             repositories: [{
               repositoryId: "repo", repoPath: "packages/a", presence: "present", fileManifestId: "manifest",
-              source: { kind: "snapshot", files: [{ path: "example.txt", contentHash, mode: 0o644 }] },
+              source: { kind: "snapshot", files: [{ path: "package.json", contentHash, mode: 0o644 }] },
             }],
             contentHashes: [contentHash],
           };
@@ -357,6 +357,11 @@ describe("WorkspaceVcs protected publication notification", () => {
     vcs.startSemanticInitialization(initialize);
     await expect(vcs.whenSemanticReady()).resolves.toBeUndefined();
     expect(refs.readMainSemanticState()?.eventId).toBe(seed.eventId);
+    const { stateHash } = await vcs.ensureFresh();
+    const graph = await vcs.discoverGraph(stateHash);
+    const node = graph.allNodes().find((unit) => unit.relativePath === "packages/a");
+    expect(node).toBeDefined();
+    await expect(fsp.readFile(path.join(node!.path, "package.json"), "utf8")).resolves.toBe(body);
     await expect(initialize()).resolves.toBeUndefined();
     expect(gate).toHaveBeenCalledOnce();
     expect(fetchFile).toHaveBeenCalledTimes(2);

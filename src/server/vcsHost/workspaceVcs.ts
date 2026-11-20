@@ -463,6 +463,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   private gadCaller: WorkspaceSemanticPort | null = null;
   private sourceProviderCaller: WorkspaceSourceProviderV1 | null = null;
+  private seededWorkspace = false;
   private readonly outgoingHistoryPackets = new Map<string, {
     senderId: string;
     send(bytes: Uint8Array): Promise<Uint8Array>;
@@ -884,6 +885,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }): Promise<void> {
     const { canonical, dispatch, offer } = input;
     const seed = sharedHistorySeedSchema.parse(input.seed);
+    this.seededWorkspace = true;
     const publicationId = `workspace-seed:${sha256HexSyncText(canonicalJson(seed))}`;
     const readReceipt = async () => sharedHistorySeedReceipt.nullable().parse(
       await dispatch.dispatch(canonical, "readSharedHistorySeedReceipt")
@@ -3532,6 +3534,13 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   async discoverGraph(stateHash: string): Promise<PackageGraph> {
+    // Some startup consumers read files at the discovered node's path.
+    // A seed's exact graph can contain units absent from the local bootstrap
+    // template. Use the immutable projection for those reads.
+    if (this.seededWorkspace) {
+      const graphRoot = await this.materializeStateForGraphDiscovery(stateHash);
+      return discoverPackageGraphAtTree(this.deps.blobsDir, stateHash, graphRoot);
+    }
     await this.contentProjection.ensureStateMirrored(stateHash);
     return discoverPackageGraphAtTree(this.deps.blobsDir, stateHash, this.deps.workspaceRoot);
   }

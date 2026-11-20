@@ -39,7 +39,7 @@ import {
   type EntityRecord,
 } from "@vibestudio/shared/runtime/entitySpec";
 import { isOpenPanelBrowserUrl } from "@vibestudio/shared/panelChrome";
-import { createHostBuildUnitGate } from "@vibestudio/shared/hostBuildUnits";
+import { createHostBuildUnitGate, hostBuildUnitInventoryPath } from "@vibestudio/shared/hostBuildUnits";
 import { parseUnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 import {
   callerAccountUserId,
@@ -500,6 +500,12 @@ async function main() {
   const workspacePath = workspace.path;
   const workspaceConfig = workspace.config;
   const statePath = workspace.statePath;
+  const { readSharedHistorySeed, readSharedHistorySeedExport } = await import("./bootstrap/sharedHistorySeed.js");
+  const sharedHistorySeed = await readSharedHistorySeed(
+    statePath,
+    workspaceId,
+    path.join(getCentralDataPath(), "workspace-history-seeds", workspaceId)
+  );
   const { ExecutionPublicationJournal } = await import("./executionPublicationJournal.js");
   const { executionArtifactRefFromBuild, buildKeyRootProvider, DelegatingExecutionRootProvider } =
     await import("./executionRootProviders.js");
@@ -1774,6 +1780,7 @@ async function main() {
     // host-build units. A checkout the host designated is vouched for whole,
     // because there the developer is the vendor and the files change all day.
     designation: (pin) => {
+      if (sharedHistorySeed) return null;
       if (!designatedTemplateUrls.has(normalizeTemplateGitUrl(pin.url))) return null;
       return {
         vouchesWholeTree: workspaceSources.some((source) =>
@@ -1783,6 +1790,12 @@ async function main() {
     },
   });
   await rootTemplateBootstrap.prepareSource();
+  if (sharedHistorySeed) {
+    // The template supplies bootstrap code, while the imported revision's
+    // units carry their own creation review. Retire any provisional inventory
+    // left by an interrupted startup before a unit gate reads it.
+    fs.rmSync(hostBuildUnitInventoryPath(statePath), { force: true });
+  }
   console.log(
     `[Perf] root template source prepared at ${Math.round(process.uptime() * 1000)}ms uptime`
   );
@@ -2762,7 +2775,7 @@ async function main() {
   console.log(
     `[Perf] workspace bootstrap publication recovered at ${Math.round(process.uptime() * 1000)}ms uptime`
   );
-  trustedBootstrapStateHash = bootstrapStateHash;
+  trustedBootstrapStateHash = sharedHistorySeed ? null : bootstrapStateHash;
 
   // One build owner follows the exact initial content through semantic
   // publication and every subsequent workspace edit.
@@ -7357,14 +7370,10 @@ async function main() {
   });
 
   const { wireVcsDurability } = await import("./bootstrap/vcsDurability.js");
-  const { readSharedHistorySeed, readSharedHistorySeedExport } = await import("./bootstrap/sharedHistorySeed.js");
-  const [sharedHistorySeed, exportSharedHistorySeed] = await Promise.all([
-    readSharedHistorySeed(statePath, workspaceId, path.join(getCentralDataPath(), "workspace-history-seeds", workspaceId)),
-    readSharedHistorySeedExport({
-      statePath, workspaceId, blobsDir: layout.blobsDir,
-      sourceNodeId: async () => (await assertPresent(runtimeManagerForGateway).workspaceNodeEndpoint()).nodeId,
-    }),
-  ]);
+  const exportSharedHistorySeed = await readSharedHistorySeedExport({
+    statePath, workspaceId, blobsDir: layout.blobsDir,
+    sourceNodeId: async () => (await assertPresent(runtimeManagerForGateway).workspaceNodeEndpoint()).nodeId,
+  });
   wireVcsDurability({
     container,
     workspaceVcs,
