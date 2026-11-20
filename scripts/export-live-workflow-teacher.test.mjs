@@ -106,6 +106,7 @@ test("authored template worlds flow into the collector without losing original s
       ["unit-identity-worlds", "unitIdentityWorlds", []],
       ["transcript-cursor-worlds", "transcriptCursorWorlds", []],
       ["remote-route-worlds", "remoteRouteWorlds", []],
+      ["notification-worlds", "notificationWorlds", []],
       ["retained-triage-worlds", "retainedTriageWorlds", []],
       ["github-setup-worlds", "githubSetupWorlds", []],
       ["template-release-worlds", "templateReleaseWorlds", []],
@@ -3142,6 +3143,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["unit-identity-worlds", "export const unitIdentityWorlds = [];"],
       ["transcript-cursor-worlds", "export const transcriptCursorWorlds = [];"],
       ["remote-route-worlds", "export const remoteRouteWorlds = [];"],
+      ["notification-worlds", "export const notificationWorlds = [];"],
       ["retained-triage-worlds", "export const retainedTriageWorlds = [];"],
       ["github-setup-worlds", "export const githubSetupWorlds = [];"],
       ["template-release-worlds", "export const templateReleaseWorlds = [];"],
@@ -7538,6 +7540,64 @@ test("retained triage export binds diagnosis to the exact released run record", 
     () => workflow.evidence(execution, exercise, id, workflow),
     /assigned native read before the nested failure review/u,
   );
+});
+
+test("notification export requires the accepted ID to be dismissed and interaction to remain unobserved", async () => {
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(path.resolve(import.meta.dirname, ".."));
+  const cases = await loadLiveTeacherCases(checkouts);
+  const id = "notification-lifecycle-live-temporary-actions";
+  const workflow = cases.get(id);
+  const { assignment } = workflow;
+  const request = { goal: assignment.goal, operationId: "assigned-notification" };
+  const accepted = { notificationId: "notif-durable-id", actionLabels: ["Accept", "Decline"] };
+  const dismissed = { notificationId: accepted.notificationId };
+  const report = { ...accepted, status: "cleaned-up", interaction: "unobserved" };
+  const execution = {
+    provenance: { contextId: "owned" },
+    diagnostics: { managedNotification: {
+      contextId: "owned",
+      verification: {
+        caseId: assignment.id, request, accepted, dismissed, passed: true,
+        checks: { accepted: true, dismissed: true, exactReport: true },
+      },
+    } },
+  };
+  const ref = (value) => {
+    const bytes = JSON.stringify(value);
+    return { complete: true, hash: createHash("sha256").update(bytes).digest("hex"), bytes: Buffer.byteLength(bytes) };
+  };
+  const call = (name, parent, args, output, effects = []) => ({
+    record: {
+      call_id: name, parent_call_id: parent, definition: { name },
+      inputs: Object.fromEntries(Object.entries(args).map(([key, value]) => [key, ref(value)])),
+      output: ref(output), started_at: "2026-11-20T00:00:00Z", ended_at: "2026-11-20T00:00:00Z", effects,
+    },
+  });
+  const show = call("showAssignedNotification", "runNotificationLifecycle", { operationId: request.operationId }, accepted, [{
+    service: "temporaryNotificationShow", method: "show", args: ref([request.operationId]), result: ref(accepted),
+  }]);
+  const dismiss = call("dismissAssignedNotification", "runNotificationLifecycle", {
+    operationId: request.operationId, notificationId: accepted.notificationId,
+  }, dismissed, [{
+    service: "temporaryNotificationDismiss", method: "dismiss",
+    args: ref([request.operationId, accepted.notificationId]), result: ref(dismissed),
+  }]);
+  const exercise = {
+    report, rootCallIds: ["runWorkflow"],
+    calls: [
+      call("runWorkflow", null, {}, null),
+      call("runNotificationLifecycle", "runWorkflow", { request }, report),
+      show, dismiss,
+      call("confirmNotificationLifecycle", "runNotificationLifecycle", { accepted, dismissed }, report),
+    ],
+  };
+  const verify = () => workflow.evidence(execution, exercise, id, workflow);
+  assert.equal(verify().world.notification_id, accepted.notificationId);
+  dismiss.record.effects[0].args = ref([request.operationId, "notif-other"]);
+  assert.throws(verify, /requires native acceptance and explicit same-identity dismissal/u);
+  dismiss.record.effects[0].args = ref([request.operationId, accepted.notificationId]);
+  report.interaction = "clicked";
+  assert.throws(verify, /requires native acceptance and explicit same-identity dismissal/u);
 });
 
 test("remote route export binds the routing diagnosis to a live gateway read", async () => {

@@ -174,6 +174,9 @@ not durable. Keep normal progress and completion in the conversation; reserve
 shell notifications for brief, time-sensitive attention while the user is
 connected.
 
+The [temporary notification workflow](https://github.com/panticonic/vibestudio-base/blob/main/skills/conversation-evidence-review/runNotificationLifecycle.nl)
+joins the host acceptance and dismissal receipts for the same notification.
+
 ## Observe frontend work
 
 For panel changes, inspect the panel in the same context and build as the source:

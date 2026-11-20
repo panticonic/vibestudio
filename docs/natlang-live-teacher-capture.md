@@ -169,6 +169,12 @@ hub and workspace watch snapshots with the paired CLI's independent list
 readback. It stops the owned System instance, then passes the redacted
 receipts through the shared Natlang root with a scripted executor.
 
+Temporary notification cases call the native shell notification service in an
+isolated workspace. The workflow passes the accepted host ID to the dismissal
+stage and reports the offered action labels and explicit cleanup. User
+interaction stays unobserved. `notification-lifecycle-oracle-qualification`
+checks plain and action-bearing notifications and rejects a foreign ID.
+
 Gmail compose audits run in an owned channel in the Google Workspace template.
 The shared program calls the compose-history skill, projects a typed draft or
 delivery readback from that same native cursor, and calls the Gmail workflow

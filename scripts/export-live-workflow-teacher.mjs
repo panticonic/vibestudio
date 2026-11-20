@@ -747,6 +747,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { unitIdentityWorlds },
     { transcriptCursorWorlds },
     { remoteRouteWorlds, cliContinuationWork },
+    { notificationWorlds },
     { retainedTriageWorlds },
     { githubSetupWorlds },
     { templateReleasePart, templateReleaseWorlds },
@@ -818,6 +819,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "unit-identity-worlds.ts",
       "transcript-cursor-worlds.ts",
       "remote-route-worlds.ts",
+      "notification-worlds.ts",
       "retained-triage-worlds.ts",
       "github-setup-worlds.ts",
       "template-release-worlds.ts",
@@ -867,6 +869,19 @@ export async function loadLiveTeacherCases(checkouts) {
     })
   );
   const cases = new Map(originalCases);
+  for (const assignment of notificationWorlds) {
+    cases.set(`notification-lifecycle-live-${assignment.id}`, {
+      family: "workspace-live-notification-lifecycle",
+      namespace: "vibestudio:notification",
+      group: "assigned-shell-notification",
+      workspace: "system",
+      root: "runNotificationLifecycle",
+      validator: { template: "system-testing", path: "skills/system-testing/notification-lifecycle-managed.ts" },
+      assignment,
+      sourceGroups: ["vibestudio:notification:assigned-shell-notification", assignment.sourceGroup],
+      evidence: notificationLifecycleEvidence,
+    });
+  }
   for (const assignment of managedIntegrationReadinessWorlds) {
     cases.set(`integration-readiness-live-${assignment.id}`, {
       ...integrationReadinessWorkflow,
@@ -3204,6 +3219,59 @@ function cliContinuationEvidence(execution, exercise, scenario, workflow) {
   return {
     world: { ...gateway.world, context_source: assigned.source },
     checks: { ...gateway.checks, ...verification.checks },
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function notificationLifecycleEvidence(execution, exercise, _scenario, { assignment }) {
+  const fixture = execution.diagnostics.managedNotification;
+  const { request, accepted, dismissed, checks } = fixture?.verification ?? {};
+  const report = exercise.report;
+  const records = exercise.calls.map(({ record }) => record);
+  const child = (parent, name) => records.find(
+    (record) => record.parent_call_id === parent && record.definition.name === name
+  );
+  const skill = child(exercise.rootCallIds[0], "runNotificationLifecycle");
+  const show = child(skill?.call_id, "showAssignedNotification");
+  const dismiss = child(skill?.call_id, "dismissAssignedNotification");
+  const confirm = child(skill?.call_id, "confirmNotificationLifecycle");
+  const [showEffect] = show?.effects ?? [];
+  const [dismissEffect] = dismiss?.effects ?? [];
+  requireEvidence(
+    fixture?.contextId === execution.provenance?.contextId &&
+      fixture?.verification.passed === true &&
+      fixture.verification.caseId === assignment.id &&
+      checks?.accepted === true && checks.dismissed === true && checks.exactReport === true &&
+      request?.goal === assignment.goal && typeof request.operationId === "string" && request.operationId.length > 0 &&
+      typeof accepted?.notificationId === "string" && accepted.notificationId.startsWith("notif-") &&
+      isDeepStrictEqual(accepted.actionLabels, assignment.actionLabels) &&
+      dismissed?.notificationId === accepted.notificationId &&
+      isDeepStrictEqual(report, {
+        status: "cleaned-up",
+        notificationId: accepted.notificationId,
+        actionLabels: assignment.actionLabels,
+        interaction: "unobserved",
+      }) &&
+      records.flatMap(({ effects }) => effects ?? []).length === 2 &&
+      showEffect?.service === "temporaryNotificationShow" && showEffect.method === "show" &&
+      !showEffect.error && matchesValue(showEffect.args, [request.operationId]) &&
+      matchesValue(showEffect.result, accepted) &&
+      dismissEffect?.service === "temporaryNotificationDismiss" && dismissEffect.method === "dismiss" &&
+      !dismissEffect.error && matchesValue(dismissEffect.args, [request.operationId, accepted.notificationId]) &&
+      matchesValue(dismissEffect.result, dismissed) &&
+      matchesValue(skill?.inputs?.request, request) && matchesValue(skill.output, report) &&
+      matchesValue(show.inputs?.operationId, request.operationId) && matchesValue(show.output, accepted) &&
+      matchesValue(dismiss.inputs?.operationId, request.operationId) &&
+      matchesValue(dismiss.inputs.notificationId, accepted.notificationId) && matchesValue(dismiss.output, dismissed) &&
+      matchesValue(confirm?.inputs?.accepted, accepted) && matchesValue(confirm.inputs.dismissed, dismissed) &&
+      matchesValue(confirm.output, report) &&
+      Date.parse(show.ended_at) <= Date.parse(dismiss.started_at) &&
+      Date.parse(dismiss.ended_at) <= Date.parse(confirm.started_at),
+    "Notification lifecycle requires native acceptance and explicit same-identity dismissal before reporting cleanup",
+  );
+  return {
+    world: { context_id: fixture.contextId, notification_id: accepted.notificationId },
+    checks,
     evidence: { workspace: { fixture } },
   };
 }
