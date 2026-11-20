@@ -10,6 +10,13 @@ import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
 
 const sharedProgram = "skills/vibestudio-workflows/runWorkflow.nl";
 const templateGoalDomains = {
+  githubWork: {
+    namespace: "vibestudio:github-work",
+    validator: { template: "personal", path: "skills/github/open-github-managed.ts" },
+    callable: "workOnGitHubGoal",
+    checks: ["exactOwnedRepository", "exactGitHubPreflight", "currentOwnerSetup", "exactGitHubDecision",
+      "preservedLocalAndOwnerState", "independentlyReadLocalHandoff"],
+  },
   "terminal-handoff": {
     namespace: "vibestudio:terminal-handoff",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-terminal-managed.ts" },
@@ -1232,13 +1239,13 @@ export async function loadLiveTeacherCases(checkouts) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
     const distinctGoals = new Set();
-    const { openGoalWorlds, openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], newsGoalWorlds = [],
+    const { openGoalWorlds, openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], newsGoalWorlds = [],
       spectroliteGoalWorlds = [], openGoalGoogleWorlds = [], openGoalPersonalWorlds = [],
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
       openTerminalWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
-    for (const assignment of [...openGoalWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
+    for (const assignment of [...openGoalWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
       ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
@@ -7531,6 +7538,51 @@ function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
       (proof.expectedHandoff ? outcome.delivery?.readback?.acknowledged === true &&
         matchesValue(outcome.delivery.readback, proof.delivery) : outcome.delivery === null && proof.delivery === null),
       "Expected the exact current native task, original retained outcome and owned handoff readback");
+  } else if (world.kind === "githubWork") {
+    const outcome = exercise.report.outcome;
+    const expected = world.expected;
+    const selected = world.repositories.find(repo => repo.id === expected.intent.repositoryId);
+    const services = new Set(["openGitHubWork", "githubSetupRead", "githubSetupRoute"]);
+    const relevant = effects.filter(({ service, error }) => services.has(service) && !error);
+    const expectedEffects = [
+      ["openGitHubWork", "discover"], ["openGitHubWork", "inspect"],
+      ...(expected.preflight ? [["openGitHubWork", "preflight"]] : []),
+      ...(expected.setup ? [["githubSetupRead", "inspect"], ["githubSetupRoute", "resolve"]] : []),
+      ...(expected.stage ? [["openGitHubWork", "stage"]] : []),
+    ];
+    const journal = proof.journal;
+    const [catalog, inspect, preflight] = journal ?? [];
+    const joinedProfile = proof.profileLedger?.find(row => row.id === outcome.preflight?.profile?.id);
+    const updated = world.approvalRecheck;
+    const { id: _receipt, ...reportedLocal } = outcome.local ?? {};
+    const exactEffects = Array.isArray(journal) && relevant.length === journal.length &&
+      expectedEffects.length === journal.length && expectedEffects.every(([service, method], index) => {
+        const row = journal[index];
+        const matches = relevant.filter(effect => effect.service === service && effect.method === method);
+        return row.service === service && row.method === method && matches.length === 1 &&
+          matchesValue(matches[0].args, row.args) && matchesValue(matches[0].result, row.result);
+      });
+    requireEvidence(
+      exactEffects && isDeepStrictEqual(catalog.result, proof.catalog) &&
+        isDeepStrictEqual(inspect.args, [proof.catalog.revision, expected.intent.repositoryId]) &&
+        isDeepStrictEqual(inspect.result, outcome.local) && isDeepStrictEqual(reportedLocal, proof.local) &&
+        proof.local.remote === selected.remote &&
+        isDeepStrictEqual(outcome.intent, expected.intent) &&
+        outcome.decision?.route === expected.route && outcome.decision.access === expected.access &&
+        isDeepStrictEqual(outcome.decision.retainedApprovals, expected.retained) &&
+        (expected.preflight ? isDeepStrictEqual(preflight.args, [outcome.local.id, expected.intent, expected.access]) &&
+          isDeepStrictEqual(preflight.result, outcome.preflight) && outcome.preflight.status === expected.preflight &&
+          (outcome.preflight.profile ? isDeepStrictEqual(outcome.preflight.profile, joinedProfile) : joinedProfile === undefined) &&
+          (!updated || isDeepStrictEqual(joinedProfile?.approval, updated.current) &&
+            !isDeepStrictEqual(catalog.result.profiles.find(row => row.id === updated.profileId)?.approval, updated.current)) :
+          outcome.preflight === null) &&
+        (expected.setup ? outcome.setup?.handoff === expected.setup : outcome.setup === null) &&
+        (expected.stage ? isDeepStrictEqual(journal.at(-1).args,
+          [outcome.preflight?.id ?? outcome.local.id, outcome.decision]) &&
+          isDeepStrictEqual(journal.at(-1).result, proof.handoff) && isDeepStrictEqual(outcome.handoff, proof.handoff) :
+          outcome.handoff === null && proof.handoff === null),
+      "Expected exact local Git, owner-specific preflight, and independently reread handoff evidence"
+    );
   } else if (world.kind === "personal-history") {
     requireEvidence(
       performed("archiveTimeline", "discover") && performed("archiveTimeline", "list") &&
