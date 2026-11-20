@@ -79,6 +79,14 @@ const templateGoalDomains = {
     checks: ["exactOwnedClientOrder", "joinedCurrentRendererFields", "exactOwnedGadEvidence",
       "resolvedClientGoal", "verifiedLocalClientHandoff", "protectedClientSource"],
   },
+  "workspace-assembly": {
+    namespace: "vibestudio:workspace-assembly",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-workspace-assembly-managed.ts" },
+    callable: "workOnAssemblyGoal",
+    skill: "workspaceAssembly",
+    checks: ["observedExactAssemblyScope", "verifiedNativePackageSources", "exactDependencyDecision", "verifiedPinnedBuildReadback",
+      "groundedRolloutDisposition", "verifiedLocalDraft", "protectedManagedHeads", "rejectedUnownedAssembly"],
+  },
   "eval-handoff": {
     namespace: "vibestudio:eval-handoff",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-eval-handoff-managed.ts" },
@@ -1239,13 +1247,13 @@ export async function loadLiveTeacherCases(checkouts) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
     const distinctGoals = new Set();
-    const { openGoalWorlds, openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], newsGoalWorlds = [],
+    const { openGoalWorlds, openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], newsGoalWorlds = [],
       spectroliteGoalWorlds = [], openGoalGoogleWorlds = [], openGoalPersonalWorlds = [],
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
       openTerminalWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
-    for (const assignment of [...openGoalWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
+    for (const assignment of [...openGoalWorlds, ...openAssemblyWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
       ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
@@ -7070,6 +7078,33 @@ function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
         (writes.length ? matchesValue(writes[0].args, [plan]) && matchesValue(writes[0].result, handoff) &&
           matchesValue(handoff, live.staged) && typeof handoff?.sha256 === "string" : handoff === null),
       "Expected live searchable method schemas, installed skill knowledge within plan synthesis, and an independently verified authorized handoff"
+    );
+  } else if (world.kind === "workspace-assembly") {
+    const outcome = exercise.report.outcome;
+    const plan = outcome.plan;
+    const effectsOf = (lambda, service, method) => exercise.calls.flatMap(({ record }) =>
+      record.definition?.name === lambda ? (record.effects ?? []).filter(effect =>
+        effect.service === service && effect.method === method && !effect.error) : []);
+    const inventory = effectsOf("readAssemblyInventory", "assemblyInventory", "observe");
+    const sources = effectsOf("readAssemblyUnits", "assemblySource", "read");
+    const builds = effectsOf("verifyAssemblyBuild", "assemblyBuild", "verify");
+    const drafts = effectsOf("stageAssemblyDraft", "assemblyDraft", "stage");
+    requireEvidence(
+      inventory.length === 1 && matchesValue(inventory[0].result, proof.observed) &&
+        matchesValue(plan.head, proof.observed.head) && plan.root === world.expected.root &&
+        world.expected.read.every(id => proof.reads.some(source => source.unit.id === id)) &&
+        proof.reads.every(source => sources.some(effect => matchesValue(effect.args, [source.unit.id, plan.head]) &&
+          matchesValue(effect.result, source))) &&
+        builds.length === proof.buildReceipts.length && plan.builds.length === proof.buildReceipts.length &&
+        proof.buildReceipts.every((receipt, index) => matchesValue(builds[index].args, [receipt.unit, plan.head]) &&
+          matchesValue(builds[index].result, receipt) && matchesValue(plan.builds[index], receipt)) &&
+        drafts.length === Number(world.expected.stage) &&
+        (drafts.length ? matchesValue(drafts[0].args, [plan]) && matchesValue(drafts[0].result, outcome.handoff) &&
+          matchesValue(proof.handoff, outcome.handoff) && typeof proof.durableText === "string" &&
+          hash(proof.durableText) === outcome.handoff?.sha256 : outcome.handoff === null) &&
+        exercise.calls.some(({ record }) => record.definition?.name === "decideAssemblyOutcome" &&
+          record.outcome === "done" && matchesValue(record.output, plan)),
+      "Expected the exact observed source, semantic revision, retained native build metadata, and authorized local assembly draft"
     );
   } else if (world.kind === "eval-handoff") {
     const outcome = exercise.report.outcome;
