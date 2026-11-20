@@ -134,6 +134,13 @@ edit takes precedence before a push, and that case skips the owner read. The
 oracle checks that the original edit and protected main are preserved. Run an
 individual `personal-resume-oracle-<case-id>` check for model-free verification.
 
+Mission facility cases call `personalFacility/reviewPersonalFacility` in the
+Personal workspace. They read the live Mission Control card, project and
+prerequisite, then reuse the facility's planning gate and execution review.
+The cases distinguish a revision that needs rereading, a prerequisite that
+still needs acceptance, and a ready card with no evidence of a started run.
+Run the matching `mission-facility-oracle-<case-id>` for model-free verification.
+
 Assigned automation planning cases use the real Missions service. The shared
 program reads the assigned manual monitor and its ledger, calls the automation
 planner, then checks the same assignment again. The stale case edits the

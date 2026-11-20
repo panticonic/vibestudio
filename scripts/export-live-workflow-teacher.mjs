@@ -792,6 +792,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedRuntimeProgramWorlds },
     { managedProvenanceHistoryWorlds },
     { personalResumeWorlds },
+    { missionFacilityWorlds },
   ] = await Promise.all(
     [
       "content-project-worlds.ts",
@@ -865,12 +866,27 @@ export async function loadLiveTeacherCases(checkouts) {
       "runtime-program-worlds.ts",
       "provenance-history-worlds.ts",
       "personal-resume-worlds.ts",
+      "mission-facility-worlds.ts",
     ].map(async (file) => {
       const imported = await import(pathToFileURL(path.join(directory, file)).href);
       return imported.default ?? imported;
     })
   );
   const cases = new Map(originalCases);
+  for (const assignment of missionFacilityWorlds) {
+    cases.set(`mission-facility-live-${assignment.id}`, {
+      ...missionPlanningWorkflow,
+      family: "personal-live-mission-facility",
+      group: "assigned-mission-revision-and-admission",
+      sourceGroups: [
+        "vibestudio:personal:mission-planning:assigned-mission-revision-and-admission",
+        ...workflowSourceGroups(missionPlanningWorkflow),
+      ],
+      root: "reviewPersonalFacility",
+      assignment,
+      evidence: missionFacilityEvidence,
+    });
+  }
   for (const assignment of personalResumeWorlds) {
     cases.set(`personal-resume-live-${assignment.id}`, {
       family: "personal-live-repository-resume",
@@ -7727,6 +7743,69 @@ function channelRosterEvidence(execution, exercise, _scenario, workflow) {
   return {
     world: { context_id: fixture.contextId, channel_id: initial.oncall.channelId },
     checks: verification.checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function missionFacilityEvidence(execution, exercise, _scenario, { assignment }) {
+  const fixture = execution.diagnostics.missionFacility;
+  const { caseId, contextId, request, observed, checks } = fixture ?? {};
+  const records = exercise.calls.map(({ record }) => record);
+  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const child = (parent, name) => parent && records.find(
+    (record) => record.parent_call_id === parent.call_id && record.definition.name === name
+  );
+  const facility = child(root, "reviewPersonalFacility");
+  const live = child(facility, "reviewLiveMission");
+  const read = child(live, "readMissionCard");
+  const review = child(live, "reviewMission");
+  const gate = child(review, "establishMissionCard");
+  const boundary = child(review, "inspectMissionBoundary");
+  const effects = records.flatMap(({ effects: used }) => used ?? []);
+  const effect = read?.effects?.[0];
+  const operationId = request?.operationId;
+  const card = observed?.card;
+  const target = observed?.target;
+  requireEvidence(
+    fixture?.passed === true && caseId === assignment.id &&
+    ["attribution", "assignedState", "preserved", "outcome"].every((key) => checks?.[key] === true) &&
+    typeof contextId === "string" && contextId === execution.provenance?.contextId &&
+    request?.kind === "mission-live" && request.goal === assignment.goal && typeof operationId === "string" &&
+    !!operationId && observed?.kind === "mission" && observed.goal === assignment.goal &&
+    target?.id === operationId && typeof card?.id === "string" && !!card.id &&
+    card.id === card.taskId && card.id === target.taskId &&
+    Number.isSafeInteger(target.expectedRevision) && target.expectedRevision > 0 &&
+    card.revision === target.expectedRevision + Number(assignment.stale) &&
+    card.state === "ready" && card.projectArchived === false &&
+    card.dependencyAccepted === (assignment.prerequisite === "done") && card.automationId === null &&
+    isDeepStrictEqual(observed.detail, {kind:"execution", intent:"start", automationKind:null, receipt:null}) &&
+    matchesValue(facility?.inputs?.request, request) && matchesValue(live?.inputs?.request, request) &&
+    matchesValue(read?.inputs?.operationId, operationId) && matchesValue(read.output, observed) &&
+    effects.length === 1 && effect?.service === "missionFacilityRead" && effect.method === "inspect" &&
+    !effect.error && matchesValue(effect.args, [operationId]) && matchesValue(effect.result, observed),
+    "Mission facility review needs the exact live card and prerequisite receipt"
+  );
+  const expected = {
+    status: assignment.status,
+    findings: [{code: assignment.code, evidenceIds: assignment.stale ? [operationId, card.id] : [card.id]}],
+  };
+  const passesPlanningGate = !assignment.stale && assignment.prerequisite === "done";
+  requireEvidence(
+    isDeepStrictEqual(exercise.report, expected) &&
+    matchesValue(facility.output, exercise.report) && matchesValue(live.output, exercise.report) &&
+    matchesValue(review?.inputs?.input, observed) && matchesValue(review.output, exercise.report) &&
+    matchesValue(gate?.inputs?.input, observed) &&
+    matchesValue(gate.output, passesPlanningGate ? null : exercise.report) &&
+    Date.parse(read.ended_at) <= Date.parse(review.started_at) &&
+    (passesPlanningGate
+      ? matchesValue(boundary?.inputs?.input, observed) && matchesValue(boundary.output, exercise.report) &&
+        Date.parse(gate.ended_at) <= Date.parse(boundary.started_at)
+      : !boundary),
+    "Mission facility review must respect the planning gate before interpreting execution"
+  );
+  return {
+    world: { context_id: contextId, task_id: card.id, revision: card.revision },
+    checks,
     evidence: { workspace: { fixture } },
   };
 }

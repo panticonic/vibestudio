@@ -157,6 +157,7 @@ test("authored template worlds flow into the collector without losing original s
       ["browser-library-worlds", "managedBrowserLibraryWorlds", []],
       ["browser-handoff-worlds", "managedBrowserHandoffWorlds", []],
       ["mission-planning-worlds", "managedMissionPlanningWorlds", []],
+      ["mission-facility-worlds", "missionFacilityWorlds", []],
       ["channel-roster-worlds", "managedChannelRosterWorlds", []],
       ["panel-health-worlds", "managedPanelHealthWorlds", []],
       [
@@ -3198,6 +3199,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["browser-library-worlds", "export const managedBrowserLibraryWorlds = [];"],
       ["browser-handoff-worlds", "export const managedBrowserHandoffWorlds = [];"],
       ["mission-planning-worlds", "export const managedMissionPlanningWorlds = [];"],
+      ["mission-facility-worlds", "export const missionFacilityWorlds = [];"],
       ["channel-roster-worlds", "export const managedChannelRosterWorlds = [];"],
       ["panel-health-worlds", "export const managedPanelHealthWorlds = [];"],
       ["google-setup-worlds", "export const managedGoogleSetupWorlds = [];"],
@@ -6737,6 +6739,79 @@ async function checkDeliveryReceiptExport(t, id, verdict, surface = "history") {
     exportLiveTeacherWorkflow({ ...options, cases }),
     /exact origin and consumer decisions/u
   );
+}
+
+for (const id of [
+  "reread-revised-launch-card", "hold-for-unaccepted-checklist-review",
+  "distinguish-ready-card-from-started-run",
+]) {
+  test(`Mission facility export preserves the planning gate for ${id}`, async (t) => {
+    const { options, diagnostics, entry, save } = await fixture(t);
+    const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+      path.resolve(import.meta.dirname, "..")
+    );
+    const cases = await loadLiveTeacherCases(checkouts);
+    const name = `mission-facility-live-${id}`;
+    const { assignment } = cases.get(name);
+    const pins = JSON.parse(await readFile(options.pins, "utf8"));
+    await writeFile(options.pins, JSON.stringify({ ...pins, workspace: "personal" }));
+    entry.test.name = name;
+    const { goal, stale, prerequisite, status, code } = assignment;
+    const current = !stale && prerequisite === "done";
+    const operationId = "operation";
+    const taskId = "assigned-task";
+    const request = { kind: "mission-live", goal, operationId };
+    const observed = {
+      kind: "mission", goal,
+      target: { id: operationId, taskId, expectedRevision: 5 },
+      card: {
+        id: taskId, taskId, revision: 5 + Number(stale), state: "ready",
+        projectArchived: false, dependencyAccepted: prerequisite === "done", automationId: null,
+      },
+      detail: { kind: "execution", intent: "start", automationKind: null, receipt: null },
+    };
+    const report = { status, findings: [{ code, evidenceIds: stale ? [operationId, taskId] : [taskId] }] };
+    diagnostics.missionFacility = {
+      passed: true, caseId: id, contextId: "ctx", request, observed,
+      checks: { attribution: true, assignedState: true, preserved: true, outcome: true },
+    };
+    const ref = (value) => {
+      const bytes = JSON.stringify(value);
+      return { complete: true, hash: createHash("sha256").update(bytes).digest("hex"), bytes: Buffer.byteLength(bytes) };
+    };
+    const prototype = diagnostics.natlangTeacher.calls[0];
+    const at = (second) => new Date(1767225600000 + second * 1000).toISOString();
+    const call = (name, parent, inputs, output, start, end, effects = []) => ({
+      callId: name, summary: { ...prototype.summary, call_id: name },
+      record: {
+        ...prototype.record, call_id: name, parent_call_id: parent, definition: { name }, outcome: "done",
+        inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+        output: ref(output), started_at: at(start), ended_at: at(end), effects,
+      },
+    });
+    const boundary = call("inspectMissionBoundary", "reviewMission", { input: observed }, report, 6, 6);
+    const gate = call("establishMissionCard", "reviewMission", { input: observed }, current ? null : report, 5, 5);
+    const calls = [
+      call("runWorkflow", null, {}, null, 0, 10),
+      call("reviewPersonalFacility", "runWorkflow", { request }, report, 1, 9),
+      call("reviewLiveMission", "reviewPersonalFacility", { request }, report, 2, 8),
+      call("readMissionCard", "reviewLiveMission", { operationId }, observed, 3, 3,
+        [{ service: "missionFacilityRead", method: "inspect", args: ref([operationId]), result: ref(observed) }]),
+      call("reviewMission", "reviewLiveMission", { input: observed }, report, 4, 7),
+      gate,
+      ...(current ? [boundary] : []),
+    ];
+    diagnostics.natlangTeacher = {
+      ...diagnostics.natlangTeacher, programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+      report, rootCallIds: ["runWorkflow"], calls,
+    };
+    await save();
+    await exportLiveTeacherWorkflow({ ...options, cases });
+    if (current) boundary.record.started_at = at(4);
+    else calls.push(boundary);
+    await save();
+    await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /respect the planning gate/u);
+  });
 }
 
 for (const id of ["resume-pull-without-github-connection", "review-local-edit-before-push"]) {
