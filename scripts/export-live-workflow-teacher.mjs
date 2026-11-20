@@ -10,6 +10,20 @@ import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
 
 const sharedProgram = "skills/vibestudio-workflows/runWorkflow.nl";
 const templateGoalDomains = {
+  personal: {
+    namespace: "vibestudio:mission-control",
+    validator: { template: "personal", path: "skills/open-personal-goal/managed.ts" },
+    callable: "workOnMissionGoal",
+    checks: ["observedMissionBoard", "exactMissionEffects", "recoveredMissionRevision",
+      "preservedOtherMissions", "verifiedMissionHandoff", "reportedMissionEvidence"],
+  },
+  operator: {
+    namespace: "vibestudio:system-operations",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-operator-managed.ts" },
+    callable: "workOnSystemGoal",
+    checks: ["discoveredOwnedTarget", "observedCurrentHub", "respectedOperatorAuthority",
+      "verifiedServiceOutcome", "boundOperatorReport"],
+  },
   news: {
     namespace: "vibestudio:news",
     validator: { template: "news", path: "packages/news-live-evidence/open-goal.ts" },
@@ -1024,9 +1038,10 @@ export async function loadLiveTeacherCases(checkouts) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
     const { openGoalWorlds, browserGoalWorlds = [], suiteGoalWorlds = [], newsGoalWorlds = [],
-      spectroliteGoalWorlds = [], openGoalGoogleWorlds = [] } = imported.default ?? imported;
+      spectroliteGoalWorlds = [], openGoalGoogleWorlds = [], openGoalPersonalWorlds = [],
+      operatorGoalWorlds = [] } = imported.default ?? imported;
     for (const assignment of [...openGoalWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
-      ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds]) {
+      ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds, ...operatorGoalWorlds]) {
       const split = assignment.split ?? "train";
       const sourceGroups = [assignment.sourceGroup, assignment.relatedSourceGroup].filter(Boolean);
       const scenario = `open-goal-${assignment.id}`;
@@ -1055,6 +1070,8 @@ export async function loadLiveTeacherCases(checkouts) {
           "browser", "suite",
         ].includes(assignment.kind) ? `-${assignment.kind}` : ""}-managed.ts` },
         assignment,
+        ...(assignment.devices ? { devices: assignment.devices } : {}),
+        ...(assignment.requiresDeploymentPackage ? { requiresDeploymentPackage: true } : {}),
         evidence: domain ? openTemplateGoalEvidence : openGoalEvidence,
       });
     }
@@ -6725,6 +6742,27 @@ function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
       "Expected navigation and readback bound to the original Spectrolite renderer"
     );
     evidence.cdp = { panelId: proof.panelId, observations: proof.observations, final: proof.final };
+  } else if (world.kind === "personal") {
+    const writes = world.expected.steps.some(step => step.kind !== "held" && step.kind !== "observed");
+    requireEvidence(
+      performed("missionGoalBoard", "observe") &&
+        (!(writes || world.concurrent) || performed("missionGoalChange", "apply")) &&
+        (world.expected.handoff.length === 0 || performed("missionGoalHandoff", "stage")) &&
+        proof.baseline && Array.isArray(proof.transitions) && Array.isArray(proof.final),
+      "Expected the observed mission board, scoped effects and final readback"
+    );
+  } else if (world.kind === "operator") {
+    const profile = world.target.surface === "terminal-profile";
+    const deployed = ["deployed", "restarted"].includes(world.expected.status);
+    requireEvidence(
+      performed("operatorDiscovery", "list") && performed("operatorDiscovery", "observe") &&
+        (!profile || performed("operatorProfile", "inspect")) &&
+        (!deployed || (performed("operatorDeployment", "apply") && performed("operatorDeployment", "verify"))) &&
+        (world.expected.status !== "paired" || ["pair", "open", "verify"].every(method =>
+          performed("operatorProfile", method))) &&
+        proof.initial && proof.baseline && proof.final,
+      "Expected the owned operator's observed hub and verified service state"
+    );
   } else {
     const { mode, gate } = world.expected;
     requireEvidence(
