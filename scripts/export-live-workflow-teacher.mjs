@@ -5895,10 +5895,20 @@ function logHandoffEvidence(execution, exercise, _scenario, workflow) {
 function evalRecoveryEvidence(execution, exercise, _scenario, workflow) {
   const fixture = execution.diagnostics.managedEvalRecovery;
   const { caseId, contextId, request, attempt, readback, checks } = fixture ?? {};
-  const { id, goal, stored, fails, allowReadback, next } = workflow.assignment;
+  const { id, goal, stored, fails, allowReadback, next, journalCase } = workflow.assignment;
   const expectedCell = fails ? "failed" : "returned";
-  const finding = stored ? "matched" : "absent";
-  const effect = allowReadback ? "confirmed" : "unchecked";
+  const truncated = journalCase?.startsWith("truncated-") === true;
+  const finding = truncated ? "incomplete" : journalCase ? "mismatch" : stored ? "matched" : "absent";
+  const readExpected = allowReadback && finding === "matched";
+  const effect = readExpected ? "confirmed" : "unchecked";
+  const assignedStore = {
+    digest: attempt?.expectedDigest, contentDigest: attempt?.expectedDigest, size: attempt?.expectedSize,
+  };
+  const foreign = `Unrelated recovery evidence for ${caseId} in ${contextId}.\n`;
+  const expectedStores = journalCase === "conflicting"
+    ? [assignedStore, { digest: hash(foreign), contentDigest: hash(foreign), size: Buffer.byteLength(foreign) }]
+    : journalCase === "duplicate" ? [assignedStore, assignedStore]
+    : stored && journalCase !== "truncated-before-store" ? [assignedStore] : [];
   const report = exercise.report;
   const records = exercise.calls.map(({ record }) => record);
   const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
@@ -5928,26 +5938,15 @@ function evalRecoveryEvidence(execution, exercise, _scenario, workflow) {
       /^system-test-eval-recovery:[a-f0-9-]{36}$/u.test(attempt?.runId) &&
       attempt.operationId === request.operationId &&
       attempt.cell === expectedCell &&
-      attempt.journal === "complete" &&
+      attempt.journal === (truncated ? "truncated" : "complete") &&
       attempt.allowReadback === allowReadback &&
       /^[a-f0-9]{64}$/u.test(attempt.expectedDigest) &&
       Number.isSafeInteger(attempt.expectedSize) &&
       attempt.expectedSize > 0 &&
-      isDeepStrictEqual(
-        attempt.stores,
-        stored
-          ? [
-              {
-                digest: attempt.expectedDigest,
-                contentDigest: attempt.expectedDigest,
-                size: attempt.expectedSize,
-              },
-            ]
-          : []
-      ) &&
+      isDeepStrictEqual(attempt.stores, expectedStores) &&
       matchesValue(review?.inputs?.request, request) &&
       matchesValue(review.output, report) &&
-      effects.length === (allowReadback ? 2 : 1) &&
+      effects.length === (readExpected ? 2 : 1) &&
       observed?.service === "evalRecoveryJournal" &&
       observed.method === "observe" &&
       !observed.error &&
@@ -5972,7 +5971,7 @@ function evalRecoveryEvidence(execution, exercise, _scenario, workflow) {
       matchesValue(confirm.output, { readback, effect }) &&
       matchesValue(decision?.inputs?.attempt, attempt) &&
       matchesValue(decision.output, { next, reason: report.reason }) &&
-      (allowReadback
+      (readExpected
         ? isDeepStrictEqual(readback, {
             digest: attempt.expectedDigest,
             observedDigest: attempt.expectedDigest,

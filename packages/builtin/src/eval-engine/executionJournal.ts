@@ -62,6 +62,25 @@ import {
   type NativeExtensionInvocationObservation,
 } from "@vibestudio/service-schemas/extensions";
 
+const nativeOperationTypes = [
+  "rpc.call",
+  "worker.lifecycle",
+  "fs.read",
+  "extension.invocation",
+  "webhook.observation",
+  "permissions.inventory",
+  "runtime.health",
+  "runtime.units",
+  "credentials.resolution",
+  "notification.lifecycle",
+  "blob-tree.observation",
+  "blob-text.observation",
+  "server-log.observation",
+  "build.profile",
+] as const;
+const reservedOperationTypes: ReadonlySet<string> = new Set(nativeOperationTypes);
+type NativeOperation = Record<string, unknown> & { type: (typeof nativeOperationTypes)[number] };
+
 /** Native effect evidence belongs to one execution, independently of its return value. */
 export class ExecutionJournal {
   readonly entries: Record<string, unknown>[] = [];
@@ -72,13 +91,14 @@ export class ExecutionJournal {
   /** Guest-visible runtime hooks may record descriptive effects, but native
    * execution receipts are written only by this journal's owning host path. */
   appendGuestOperation(entry: Record<string, unknown>): void {
-    if (entry["type"] === "rpc.call" || entry["type"] === "worker.lifecycle") {
-      throw new Error(`Operation type ${String(entry["type"])} is reserved for host evidence`);
-    }
-    this.append(entry);
+    this.appendEntry(entry, "guest");
   }
 
-  append(entry: Record<string, unknown>): void {
+  append(entry: NativeOperation): void {
+    this.appendEntry(entry, "host");
+  }
+
+  private appendEntry(entry: Record<string, unknown>, origin: "guest" | "host"): void {
     if (this.closed) return;
     const encoded = JSON.stringify(entry);
     if (
@@ -88,8 +108,12 @@ export class ExecutionJournal {
       this.truncated = true;
       return;
     }
-    // Guest code can later mutate a returned object; it cannot mutate this copy.
-    this.entries.push(JSON.parse(encoded) as Record<string, unknown>);
+    const retained = JSON.parse(encoded) as Record<string, unknown>;
+    const type = retained?.["type"];
+    if (origin === "guest" && typeof type === "string" && reservedOperationTypes.has(type)) {
+      throw new Error(`Operation type ${type} is reserved for host evidence`);
+    }
+    this.entries.push(retained);
     this.characters += encoded.length;
   }
 

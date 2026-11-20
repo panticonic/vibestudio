@@ -691,6 +691,13 @@ cases cover an effect completed before a later exception, a journal-only
 confirmation, and a success-looking value with an absent store. The binding
 can verify an authorized content digest with independent readback.
 Run `eval-recovery-oracle-qualification` for the model-free check.
+The recovery bank also exercises conflicting and duplicate stores, plus
+truncation on either side of the native store receipt. These cases reach the
+host journal limit through actual operations. The runner independently checks
+the stored effect and verifies that the recovery binding refuses readback
+without a complete, unique receipt. Run the `eval-recovery-oracle-` selectors
+for `conflicting-store-receipts`, `duplicate-store-receipts`,
+`truncated-with-visible-store`, and `truncated-before-visible-store`.
 
 PDF layout review runs the installed PDF extension over an assigned document
 snapshot. The cases distinguish row-major tables, column-major narratives,

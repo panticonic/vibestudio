@@ -6631,6 +6631,42 @@ test("eval recovery export requires the original failed cell and its independent
   read.args = ref([request.operationId, "b".repeat(64)]);
   await save();
   await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /exact effect readback/u);
+
+  const truncatedId = "eval-recovery-live-truncated-with-visible-store";
+  const truncated = cases.get(truncatedId);
+  const truncatedRequest = { ...request, goal: truncated.assignment.goal };
+  const retainedAttempt = { ...attempt, journal: "truncated" };
+  const disposition = { next: "recover-journal", reason: "The retained prefix may omit another receipt." };
+  const incompleteReport = {
+    ...report, journal: "incomplete", readback: null, effect: "unchecked", ...disposition,
+  };
+  const witness = {
+    ...diagnostics.managedEvalRecovery,
+    caseId: truncated.assignment.id, request: truncatedRequest, attempt: retainedAttempt, readback: null,
+  };
+  const qualification = {
+    provenance: { contextId: "ctx" },
+    diagnostics: { managedEvalRecovery: witness },
+  };
+  const verify = call("verifyEffect", "reviewEvalRecovery", { attempt: retainedAttempt, finding: "incomplete" }, {
+    readback: null, effect: "unchecked",
+  });
+  const captured = {
+    ...diagnostics.natlangTeacher, report: incompleteReport, calls: [
+      call("runWorkflow", null, {}, null),
+      call("reviewEvalRecovery", "runWorkflow", { request: truncatedRequest }, incompleteReport, [
+        { ...observed, result: ref(retainedAttempt) },
+      ]),
+      call("inspectJournal", "reviewEvalRecovery", { attempt: retainedAttempt }, "incomplete"),
+      call("compareReceipts", "inspectJournal", { attempt: retainedAttempt }, "incomplete"),
+      verify,
+      call("chooseRecovery", "reviewEvalRecovery", { attempt: retainedAttempt }, disposition),
+    ],
+  };
+  const validateTruncated = () => truncated.evidence(qualification, captured, truncatedId, truncated);
+  assert.equal(validateTruncated().world.run_id, runId);
+  verify.record.effects.push(read);
+  assert.throws(validateTruncated, /original native journal/u);
 });
 
 test("log cursor export joins distinct classifier calls to the bounded live read", async (t) => {
