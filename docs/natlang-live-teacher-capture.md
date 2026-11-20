@@ -368,7 +368,11 @@ ready or blocked, and a cancelled import with stored batches. The managed
 tests use a local host fixture for preview and a context-owned Browser Data
 worker for the retained receipts. Each case has a model-free system test
 named `browser-import-oracle-qualification-CASE`. These tests read no local
-browser profiles.
+browser profiles. The execution cases compare a fresh preview with the
+caller's approval. A matching preview leads to the native import coordinator,
+which writes a synthetic bookmark to the isolated Browser Data store. The
+drift case verifies that the approved operation creates neither a job receipt
+nor a bookmark.
 
 Personal Browser handoffs compose Browser library and Collection conductor in one shared
 workflow. Collection writes require a live readback of the retained bookmark. The exporter

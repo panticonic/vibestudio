@@ -9645,11 +9645,13 @@ function browserImportEvidence(execution, exercise, _scenario, { assignment }) {
   const fixture = execution.diagnostics.managedBrowserImport;
   const verification = fixture?.verification;
   const { id, goal, kind, categories, reads, expected } = assignment;
-  const request = { goal, kind, categories };
+  const approvedPreview = assignment.execution?.approvedPreview;
+  const request = { goal, kind, categories, ...(approvedPreview && { approvedPreview }) };
   const { findings, ...decision } = exercise.report ?? {};
   const declared = {
     source: { service: "browserImportSource", stage: "inspectAssignedSource", value: assignment.source },
     preview: { service: "browserImportPreview", stage: "inspectPreview", value: assignment.preview },
+    start: { service: "browserImportStart", stage: "startApprovedImport", value: assignment.execution?.start },
     history: { service: "browserImportHistory", stage: "inspectRetainedJob", value: assignment.job },
   };
   requireEvidence(
@@ -9658,6 +9660,11 @@ function browserImportEvidence(execution, exercise, _scenario, { assignment }) {
       ["exactReads", "exactReport", "retainedState", "previewCalls"].every((key) => verification.checks?.[key] === true) &&
       isDeepStrictEqual(verification.request, request) &&
       isDeepStrictEqual(verification.reads, reads.map((read) => ({ kind: read, value: declared[read].value }))) &&
+      (!assignment.execution || isDeepStrictEqual(verification.importReadback, {
+        starts: assignment.execution.start === "started" ? 1 : 0,
+        phase: assignment.job?.phase ?? null,
+        bookmarks: assignment.execution.bookmarks,
+      })) &&
       Array.isArray(findings) && isDeepStrictEqual(decision, expected),
     "Browser migration must retain the assigned preview counts or persisted import progress and the matching decision"
   );
@@ -9667,8 +9674,14 @@ function browserImportEvidence(execution, exercise, _scenario, { assignment }) {
       record.definition?.name === name && record.outcome === "done"
   );
   const review = child(root, "reviewBrowserImport");
-  const interpret = child(review, "interpretRetainedJob");
-  const stages = reads.map((read) => child(review, declared[read].stage));
+  const authorize = child(review, "executeApprovedImport");
+  const parent = kind === "execute" ? authorize : review;
+  const compare = child(authorize, "compareApprovedPreview");
+  const interpret = child(parent, "interpretRetainedJob");
+  const stages = reads.map((read) => child(parent, declared[read].stage));
+  const preview = stages[reads.indexOf("preview")];
+  const start = stages[reads.indexOf("start")];
+  const history = stages[reads.indexOf("history")];
   const effects = exercise.calls.flatMap(({ record }) => record.effects ?? []);
   const before = (earlier, later) =>
     Date.parse(earlier?.record.ended_at) <= Date.parse(later?.record.started_at);
@@ -9682,17 +9695,27 @@ function browserImportEvidence(execution, exercise, _scenario, { assignment }) {
       reads.every((read, index) => {
         const [effect] = stages[index]?.record.effects ?? [];
         const { service, value } = declared[read];
-        return effect?.service === service && effect.method === "observe" && !effect.error &&
-          matchesValue(effect.result, value) &&
-          (read === "history"
-            ? matchesValue(stages[index].record.output, value)
-            : matchesValue(stages[index].record.inputs?.requested, categories)) &&
+        const record = stages[index]?.record;
+        const matchingInput = read === "history" ? matchesValue(record?.output, value) :
+          read === "start" ? matchesValue(record?.inputs?.observed, assignment.preview) &&
+            matchesValue(record?.output, value) && matchesValue(effect?.args, [assignment.preview]) :
+            matchesValue(record?.inputs?.requested, categories);
+        return effect?.service === service && effect.method === (read === "start" ? "start" : "observe") &&
+          !effect.error && matchesValue(effect.result, value) && matchingInput &&
           (index === 0 || before(stages[index - 1], stages[index]));
       }) &&
-      (kind === "recover"
-        ? before(stages[0], interpret) && matchesValue(interpret.record.inputs?.job, assignment.job) &&
-          (stages.length === 1 || before(interpret, stages[1]))
-        : !interpret),
+      (kind === "execute"
+        ? matchesValue(authorize?.record.inputs?.request, request) &&
+          matchesValue(authorize?.record.output, exercise.report) && before(preview, compare) &&
+          matchesValue(compare?.record.inputs?.approved, approvedPreview) &&
+          matchesValue(compare?.record.inputs?.observed, assignment.preview) &&
+          matchesValue(compare?.record.output, Boolean(start)) &&
+          (start ? before(compare, start) && before(history, interpret) &&
+            matchesValue(interpret?.record.inputs?.job, assignment.job) : !interpret)
+        : kind === "recover"
+          ? before(history, interpret) && matchesValue(interpret.record.inputs?.job, assignment.job) &&
+            (stages.length === 1 || before(interpret, stages[1]))
+          : !interpret),
     "Browser migration trace must read and interpret the assigned records in order before any dependent preview or source check"
   );
   return {

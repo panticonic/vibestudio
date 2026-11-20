@@ -4971,7 +4971,7 @@ test("Drive checkpoint export binds full, partial and stale outcomes to their ac
   }
 });
 
-test("Browser migration export binds each preview or recovery decision to its assigned observations", async () => {
+test("Browser migration export binds preview, execution, and recovery decisions to its assigned observations", async () => {
   const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(path.resolve(import.meta.dirname, ".."));
   const cases = await loadLiveTeacherCases(checkouts);
   const ref = (value) => {
@@ -4979,17 +4979,24 @@ test("Browser migration export binds each preview or recovery decision to its as
     return { complete: true, hash: createHash("sha256").update(json).digest("hex"), bytes: Buffer.byteLength(json) };
   };
   const migrations = [...cases].filter(([, workflow]) => workflow.family === "personal-live-browser-import-review");
-  assert.equal(migrations.length, 5);
+  assert.equal(migrations.length, 7);
   for (const [name, workflow] of migrations) {
     const { id, goal, kind, categories, reads, expected, job, preview, source } = workflow.assignment;
-    const request = { goal, kind, categories };
+    const approved = workflow.assignment.execution?.approvedPreview;
+    const dispatched = workflow.assignment.execution?.start;
+    const request = { goal, kind, categories, ...(approved && { approvedPreview: approved }) };
     const report = { ...expected, findings: ["Review the assigned records"] };
     const contextId = "owned-browser-migration";
-    const values = { source, preview, history: job };
+    const values = { source, preview, history: job, start: dispatched };
     const verification = {
       caseId: id, passed: true, request, reads: reads.map((kind) => ({ kind, value: values[kind] })),
       checks: { exactReads: true, exactReport: true, retainedState: true, previewCalls: true },
     };
+    const importReadback = approved && {
+      starts: dispatched ? 1 : 0, phase: job?.phase ?? null,
+      bookmarks: workflow.assignment.execution.bookmarks,
+    };
+    if (importReadback) verification.importReadback = importReadback;
     const execution = {
       provenance: { contextId }, diagnostics: { managedBrowserImport: { contextId, verification } },
     };
@@ -5007,23 +5014,33 @@ test("Browser migration export binds each preview or recovery decision to its as
       }, report),
       call("review", "root", "reviewBrowserImport", { request }, report),
     ] };
+    const parent = approved ? "execute" : "review";
+    const compare = approved && call("compare", parent, "compareApprovedPreview", { approved, observed: preview }, Boolean(dispatched), [], [52, 60]);
+    if (compare) exercise.calls.push(call(parent, "review", "executeApprovedImport", { request }, report), compare);
     const declared = {
       source: ["inspectAssignedSource", "browserImportSource"],
       history: ["inspectRetainedJob", "browserImportHistory"],
+      start: ["startApprovedImport", "browserImportStart"],
       preview: ["inspectPreview", "browserImportPreview"],
     };
     for (const [index, read] of reads.entries()) {
       const [stage, service] = declared[read];
       const time = 10 + index * 30;
-      exercise.calls.push(call(read, "review", stage,
-        read === "history" ? {} : { requested: categories }, values[read], [
-          { service, method: "observe", result: ref(values[read]) },
-        ], [time, time + 10]));
+      const effect = { service, method: read === "start" ? "start" : "observe", result: ref(values[read]) };
+      if (read === "start") effect.args = ref([preview]);
+      const inputs = read === "history" ? {} : read === "start" ? { observed: preview } : { requested: categories };
+      exercise.calls.push(call(read, parent, stage, inputs, values[read], [effect], [time, time + 10]));
     }
-    const interpret = job && call("interpret", "review", "interpretRetainedJob", { job }, { next: expected.next }, [], [25, 30]);
+    const interpret = job && call("interpret", parent, "interpretRetainedJob", { job }, { next: expected.next }, [],
+      approved ? [115, 120] : [25, 30]);
     if (interpret) exercise.calls.push(interpret);
     assert.ok(workflow.evidence(execution, exercise, name, workflow));
-    if (interpret) {
+    if (approved) {
+      verification.importReadback = { ...importReadback, starts: importReadback.starts + 1 };
+      assert.throws(() => workflow.evidence(execution, exercise, name, workflow), /retain the assigned preview counts/);
+      verification.importReadback = importReadback;
+      compare.record.output = ref(!dispatched);
+    } else if (interpret) {
       interpret.record.inputs.job = ref({ ...job, progress: [] });
     } else {
       exercise.calls.find(({ callId }) => callId === "preview").record.started_at = new Date(0).toISOString();
