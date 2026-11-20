@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { runInNewContext } from "node:vm";
+import { describe, expect, it, vi } from "vitest";
 import { PANEL_BOOTSTRAP_SCRIPT } from "./panelBootstrapScript.js";
 
 describe("PANEL_BOOTSTRAP_SCRIPT", () => {
@@ -31,6 +32,68 @@ describe("PANEL_BOOTSTRAP_SCRIPT", () => {
     expect(ready).toBeGreaterThan(-1);
     expect(bundle).toBeGreaterThan(ready);
   });
+
+  it.each([false, true])(
+    "holds bundle startup until state reconciliation, explicit override %s",
+    async (override) => {
+      const location = new URL("https://panel.example.test/");
+      if (override)
+        location.searchParams.set("stateArgs", JSON.stringify({ ownerStage: "override" }));
+      let finishPreparation!: () => void;
+      const pendingPreparation = new Promise<void>((resolve) => {
+        finishPreparation = resolve;
+      });
+      let preparationStarted!: () => void;
+      const wasPreparing = new Promise<void>((resolve) => {
+        preparationStarted = resolve;
+      });
+      const appendBundle = vi.fn();
+      const prepare = vi.fn(async () => {
+        preparationStarted();
+        await pendingPreparation;
+        realm.__vibestudioStateArgs = { ownerStage: "current" };
+      });
+      const realm = {
+        URL,
+        location,
+        CustomEvent,
+        addEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+        sessionStorage: { setItem: vi.fn() },
+        document: {
+          baseURI: location.href,
+          createElement: () => ({}),
+          head: { appendChild: (script: { onload: () => void }) => script.onload() },
+          body: { appendChild: appendBundle },
+        },
+        __vibestudioPanelInit: {
+          workspaceId: "workspace:test",
+          entityId: "panel:nav-a",
+          slotId: "panel:tree/a",
+          gatewayConfig: { serverUrl: "https://host.example.test", token: "owned-test-grant" },
+          stateArgs: { ownerStage: "stale-bootstrap" },
+        },
+        __vibestudioShell: { ready: async () => undefined },
+        __vibestudioPreparePanelStateArgs: prepare,
+        __vibestudioStateArgs: undefined as { ownerStage: string } | undefined,
+      };
+
+      const boot = runInNewContext(PANEL_BOOTSTRAP_SCRIPT, realm) as Promise<void>;
+      if (!override) {
+        await wasPreparing;
+        expect(appendBundle).not.toHaveBeenCalled();
+        finishPreparation();
+      }
+      await boot;
+
+      expect(prepare).toHaveBeenCalledTimes(override ? 0 : 1);
+      expect(appendBundle).toHaveBeenCalledOnce();
+      expect(realm.__vibestudioStateArgs).toEqual({
+        ownerStage: override ? "override" : "current",
+      });
+      expect(realm.__vibestudioPreparePanelStateArgs).toBeUndefined();
+    }
+  );
 
   it("keys persisted panel init by document URL instead of one shared session key", () => {
     expect(PANEL_BOOTSTRAP_SCRIPT).toContain(

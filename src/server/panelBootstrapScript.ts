@@ -162,8 +162,12 @@ export const PANEL_BOOTSTRAP_SCRIPT = `(async () => {
   globalThis.__vibestudioKind = "panel";
 
   let effectiveStateArgs = cfg.stateArgs;
+  let hasStateArgsOverride = false;
   if (url.searchParams.has("stateArgs")) {
-    try { effectiveStateArgs = JSON.parse(url.searchParams.get("stateArgs")); } catch { /* ignore */ }
+    try {
+      effectiveStateArgs = JSON.parse(url.searchParams.get("stateArgs"));
+      hasStateArgsOverride = true;
+    } catch { /* ignore */ }
   }
   Object.assign(globalThis, {
     __vibestudioWorkspaceId: cfg.workspaceId,
@@ -203,12 +207,21 @@ export const PANEL_BOOTSTRAP_SCRIPT = `(async () => {
   }
   delete globalThis.__vibestudioConnectionId;
 
-  // A headless host's fallback shell owns an asynchronous authenticated
-  // WebSocket. Do not start (and eventually mark ready) the panel bundle until
-  // that panel endpoint is actually routable. Desktop/mobile bridges are
-  // already host-owned and need not expose this readiness hook.
-  if (typeof globalThis.__vibestudioShell?.ready === "function") {
-    await globalThis.__vibestudioShell.ready();
+  // Headless panels authenticate their own lease-scoped session, via the
+  // fallback WebSocket or the injected host bridge. Join it and reconcile
+  // commits that may have landed since the host read the bootstrap payload.
+  const prepareStateArgs = globalThis.__vibestudioPreparePanelStateArgs;
+  delete globalThis.__vibestudioPreparePanelStateArgs;
+  try {
+    if (typeof globalThis.__vibestudioShell?.ready === "function") {
+      await globalThis.__vibestudioShell.ready();
+    }
+    if (!hasStateArgsOverride) await prepareStateArgs?.();
+  } catch (err) {
+    reportBoot("failed", err, "config");
+    const root = document.getElementById("root");
+    if (root) root.textContent = "Failed to start panel session: " + (err.message || err);
+    return;
   }
 
   globalThis.__vibestudioContextReady = true;
