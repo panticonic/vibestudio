@@ -66,6 +66,7 @@ import { createTestExecutionSession } from "@vibestudio/shared/serviceDispatcher
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { authorityFailureForDecision } from "@vibestudio/shared/authorization";
 import { attributeAsNode } from "./celldEgressTestHeaders.js";
+import { signCelldEgress } from "./celldEgressIdentity.js";
 
 class MemoryCredentialStore {
   constructor(private readonly credentials = new Map<string, Credential>()) {}
@@ -423,6 +424,45 @@ describe("EgressProxy", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it("forwards only the authenticated Chronolog directory's history ingress request", async () => {
+    const gateway = createServer((req, res) =>
+      res.end(req.headers["x-chronolog-node-token"] ?? "")
+    );
+    gateway.listen(0, "127.0.0.1");
+    await once(gateway, "listening");
+    const origin = `http://127.0.0.1:${(gateway.address() as AddressInfo).port}`;
+    const proxy = createProxy();
+    proxy.setHostProgramOrigins(() => [origin]);
+    const secret = "fixture-node-secret";
+    const proxyPort = await proxy.startShared(secret);
+    const request = (targetUrl: string, loaded = false) =>
+      requestThroughHttpProxy({
+        proxyPort,
+        targetUrl,
+        method: "PUT",
+        headers: {
+          "x-chronolog-node-token": "fixture-ingress-token",
+          ...signCelldEgress({
+            secret,
+            kind: "fetch",
+            method: "PUT",
+            target: targetUrl,
+            identity: { loaded, class: "ChronologWorkspaceDO" },
+          }),
+        },
+      });
+    try {
+      const history = `${origin}/_chronolog-history?publicationId=fixture`;
+      await expect(request(history)).resolves.toEqual({ status: 200, body: "fixture-ingress-token" });
+      await expect(request(`${origin}/_chronolog-history-other`)).resolves.toMatchObject({ status: 403 });
+      await expect(request("http://127.0.0.1:1/_chronolog-history")).resolves.toMatchObject({ status: 403 });
+      await expect(request(history, true)).resolves.toMatchObject({ status: 403 });
+    } finally {
+      await proxy.stop();
+      await new Promise<void>((resolve) => gateway.close(() => resolve()));
+    }
   });
 
   it("detects multi-address WebSocket connect failures eligible for IPv4 fallback", () => {

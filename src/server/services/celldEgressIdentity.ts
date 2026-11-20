@@ -54,10 +54,12 @@ const UNIVERSAL_DO_CLASS = "UniversalDO";
  * - `host-program`: the runtime application's own router, worker host or
  *   UniversalDO (no class, or UniversalDO, and not loaded). Its traffic is
  *   confined to the gateway origin by the proxy.
+ * - `chronolog-history`: the internal workspace directory can reach the
+ *   gateway's authenticated history ingress.
  */
 export type CelldEgressSubject =
   | { readonly kind: "caller"; readonly callerId: string }
-  | { readonly kind: "host-program" };
+  | { readonly kind: "host-program" | "chronolog-history" };
 
 export function celldEgressSubject(identity: CelldEgressIdentity): CelldEgressSubject | null {
   if (identity.loaded) {
@@ -66,6 +68,9 @@ export function celldEgressSubject(identity: CelldEgressIdentity): CelldEgressSu
   }
   if (identity.class === null || identity.class === UNIVERSAL_DO_CLASS) {
     return { kind: "host-program" };
+  }
+  if (identity.class === "ChronologWorkspaceDO") {
+    return { kind: "chronolog-history" };
   }
   return { kind: "caller", callerId: `do-service:${INTERNAL_EGRESS_SOURCE}:${identity.class}` };
 }

@@ -473,8 +473,8 @@ export class EgressProxy {
     this.sharedServer = new EgressListener({
       request: async (req, res) => {
         const subject = await this.resolveAttributedCaller(req, "fetch");
-        if (subject === "host-program") {
-          void this.handleHostProgramRequest(req, res);
+        if (typeof subject === "string") {
+          void this.handleHostProgramRequest(req, res, subject);
           return;
         }
         if (!subject) {
@@ -486,7 +486,7 @@ export class EgressProxy {
       },
       connect: (req, socket, head) => {
         void this.resolveAttributedCaller(req, "connect").then((subject) =>
-          this.handleConnect(req, socket, head, subject === "host-program" ? null : subject)
+          this.handleConnect(req, socket, head, typeof subject === "string" ? null : subject)
         );
       },
       upgrade: (req, socket, head) => {
@@ -495,7 +495,7 @@ export class EgressProxy {
             req,
             socket,
             head,
-            subject === "host-program" ? null : subject
+            typeof subject === "string" ? null : subject
           )
         );
       },
@@ -505,13 +505,13 @@ export class EgressProxy {
 
   /**
    * Resolve who a shared-listener request speaks for. Null when the MAC does
-   * not verify or the identity is unknown; "host-program" for the runtime
-   * application's own programs (admitted to the gateway only).
+   * not verify or the identity is unknown. Product programs have a separate
+   * gateway route instead of a userland caller registration.
    */
   private async resolveAttributedCaller(
     req: IncomingMessage,
     kind: CelldEgressKind
-  ): Promise<VerifiedCaller | "host-program" | null> {
+  ): Promise<VerifiedCaller | "host-program" | "chronolog-history" | null> {
     if (!this.sharedSecret) return null;
     const identity = verifyCelldEgress({
       headers: req.headers,
@@ -523,17 +523,26 @@ export class EgressProxy {
     if (!identity) return null;
     const subject = celldEgressSubject(identity);
     if (!subject) return null;
-    if (subject.kind === "host-program") return "host-program";
+    if (subject.kind !== "caller") return subject.kind;
     return (await this.callerResolver?.(subject.callerId)) ?? null;
   }
 
   /** A host program's request: HTTP to the gateway's loopback origin only. */
-  private async handleHostProgramRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  private async handleHostProgramRequest(
+    req: IncomingMessage,
+    res: ServerResponse,
+    program: "host-program" | "chronolog-history"
+  ): Promise<void> {
     const targetUrl = this.resolveTargetUrl(req);
     const allowed = this.hostProgramOrigins?.() ?? [];
     if (!targetUrl || !allowed.includes(targetUrl.origin)) {
       req.resume();
       this.respondWithError(res, 403, "egress: host programs may reach only the gateway");
+      return;
+    }
+    if (program === "chronolog-history" && targetUrl.pathname !== "/_chronolog-history") {
+      req.resume();
+      this.respondWithError(res, 403, "egress: Chronolog can reach only workspace history ingress");
       return;
     }
     const operation = this.beginOperation("host-program");
