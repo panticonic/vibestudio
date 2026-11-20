@@ -264,7 +264,37 @@ launches an empty profile. `remote-deployment-live-preserves-workspace-on-update
 restarts the same installed build and verifies a new boot and preserved IDs.
 The existing deployment receipt protocol drives both cases. The fixture
 owns the target process and profile and retires both at the end of each case.
-The test launcher uses the installed service's command directly.
+The test launcher uses the installed service's command directly. The package
+directory must come from a completed installation with its postinstall
+dependencies available. Use the same installed package on the machine running
+the terminal driver. Preflight loads its native Iroh binding using the Node
+binary that will start the packaged server. If an offline install omitted the
+platform binding, reinstall in a fresh prefix with access to the package's
+pinned platform dependency.
+
+On Linux, set `artifact` to the absolute path of the server tarball and
+`prefix` to a fresh installation directory. The production installer uses
+npm's global layout. A private prefix keeps that layout and places the native
+TypeScript compiler under the installed server.
+
+```sh
+npm install --global --prefix "$prefix" "$artifact"
+export VIBESTUDIO_MANAGED_DEPLOYMENT_PACKAGE="$(npm root --global --prefix "$prefix")/@panticonic/vibestudio-server"
+```
+
+With that environment variable set, qualify both cases without a teacher.
+The command creates and retires its own managed System instance.
+
+```sh
+pnpm system-test --instance deployment-qualification --workspace system \
+  --device terminal run \
+  remote-deployment-oracle-qualification-fresh-default-workspace \
+  remote-deployment-oracle-qualification-preserves-workspace-on-update \
+  --concurrency 1
+```
+
+The qualification checks that the mutation rejects a foreign receipt and that
+the final deployment matches the independently read server and workspace IDs.
 
 CLI continuation cases compose the authenticated gateway review with
 `planCliContinuation`. The gateway receipt comes from the running System

@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { createServer } from "node:net";
 import { access, mkdir, open, readFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { promisify } from "node:util";
 import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
 import { inspectDeploymentIdentity } from "../cli/remote-deployment-workflow.mjs";
 import { managedServerArgs } from "../cli/remote-deploy.mjs";
+
+const execute = promisify(execFile);
 
 async function loopbackPort() {
   const listener = createServer();
@@ -19,9 +23,33 @@ async function loopbackPort() {
 }
 
 export async function requireInstalledDeploymentPackage(appRoot) {
-  const manifest = JSON.parse(await readFile(path.join(appRoot, "package.json"), "utf8"));
-  assert.equal(manifest.name, "@panticonic/vibestudio-server");
-  await access(path.join(appRoot, "node_modules"));
+  try {
+    const manifest = JSON.parse(await readFile(path.join(appRoot, "package.json"), "utf8"));
+    assert.equal(manifest.name, "@panticonic/vibestudio-server");
+    await access(path.join(appRoot, "scripts", "cli", "remote-serve.mjs"));
+  } catch (cause) {
+    throw new Error(
+      "VIBESTUDIO_MANAGED_DEPLOYMENT_PACKAGE must identify an installed Vibestudio server package",
+      { cause }
+    );
+  }
+
+  // Probe the packaged loader in its own process, using the same Node binary
+  // as the deployment. The development checkout has a separate Iroh binding.
+  try {
+    await execute(process.execPath, [
+      "--eval",
+      `
+        const { Endpoint, SecretKey, RelayMode } = require(process.argv[1]);
+        if (![Endpoint, SecretKey, RelayMode].every(value => typeof value === "function")) {
+          process.exitCode = 1;
+        }
+      `,
+      path.resolve(appRoot, "node_modules", "@number0", "iroh"),
+    ]);
+  } catch (cause) {
+    throw new Error("The installed Vibestudio server could not load its Iroh native binding", { cause });
+  }
 }
 
 export async function openOwnedDeploymentTarget({ appRoot, ownership, scratchRoot, signal }) {

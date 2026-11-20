@@ -121,8 +121,8 @@ const deploymentPackageProblem = scenarios.some((scenario) => liveTeacherCases.g
         const { requireInstalledDeploymentPackage } = await import("./lib/owned-deployment-target.mjs");
         await requireInstalledDeploymentPackage(path.resolve(host, input));
         return null;
-      } catch {
-        return "VIBESTUDIO_MANAGED_DEPLOYMENT_PACKAGE must identify an installed Vibestudio server package";
+      } catch (error) {
+        return error.message;
       }
     })()
   : null;
