@@ -5,7 +5,8 @@ import type { ServiceContainer } from "@vibestudio/shared/serviceContainer";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { StateLayout } from "../stateLayout.js";
-import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
+import type { ParticipantRepositoryAccess, WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
+import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { PanelRuntimeCoordinator } from "../panelRuntimeCoordinator.js";
 import type { AttachedHostPublisher } from "../services/attachedHostController.js";
 import type { AttachedHostEndpoint } from "../services/attachedHostProtocol.js";
@@ -31,6 +32,7 @@ export interface DevelopmentNativeBootstrapDeps {
     "getBuildByKey" | "putStoredBuild" | "readBuildArtifactBytes"
   >;
   workspaceVcs: WorkspaceVcs;
+  resolveParticipantAccess(contextId: string, ctx: ServiceContext): Promise<ParticipantRepositoryAccess>;
   layout: Pick<StateLayout, "development" | "blobsDir">;
   eventService: EventService;
   serverLogStore: Pick<ServerLogStore, "append">;
@@ -161,7 +163,13 @@ export async function wireDevelopmentNative(
         root: path.join(deps.layout.development.root, "template-exchanges"),
         blobsDir: deps.layout.blobsDir,
         semantic,
-        planSource: (input) => deps.workspaceVcs.planExactContextRepository(input),
+        resolveAccess: async (contextId, ctx) => {
+          await deps.workspaceVcs.whenSemanticReady(ctx?.signal);
+          if (!deps.workspaceVcs.participantHistoryAttached) return undefined;
+          if (!ctx) throw new Error("Template exchange requires a verified workspace context");
+          return deps.resolveParticipantAccess(contextId, ctx);
+        },
+        planSource: (input, access) => deps.workspaceVcs.planExactContextRepository(input, access),
         materializeSource: (plan, destination) =>
           deps.workspaceVcs.materializeExactRepositoryPlan(plan, destination),
       });
@@ -203,7 +211,12 @@ export async function wireDevelopmentNative(
           return current;
         },
         releaseLogs: (runId) => logs.delete(runId),
-        resolveAdoptedRepository: async ({ contextId, repositoryId }) => {
+        resolveAdoptedRepository: async ({ contextId, repositoryId }, ctx) => {
+          await deps.workspaceVcs.whenSemanticReady(ctx.signal);
+          if (deps.workspaceVcs.participantHistoryAttached) {
+            const access = await deps.resolveParticipantAccess(contextId, ctx);
+            return deps.workspaceVcs.resolveAdoptedParticipantRepository({ contextId, repositoryId }, access);
+          }
           const workingHead = await deps.workspaceVcs.resolveWorkingState(contextId);
           const inspected = await deps.workspaceVcs.semanticDirectCall("vcsInspect", {
             node: { kind: "repository", state: workingHead, repositoryId },

@@ -255,7 +255,8 @@ export async function getBytes(blobsDir: string, digest: string): Promise<Buffer
  */
 export async function putFile(
   blobsDir: string,
-  filePath: string
+  filePath: string,
+  beforePromote?: (digest: string) => void
 ): Promise<{ digest: string; size: number }> {
   const tmpPath = path.join(blobsDir, "tmp", `${process.pid}-${randomUUID()}.tmp`);
   const hash = createHash("sha256");
@@ -274,6 +275,7 @@ export async function putFile(
       fs.createWriteStream(tmpPath, { flags: "wx" })
     );
     const digest = hash.digest("hex");
+    beforePromote?.(digest);
     await promoteTempBlob(blobsDir, tmpPath, digest);
     await fsp.unlink(tmpPath).catch((error) => {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;

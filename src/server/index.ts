@@ -5591,6 +5591,16 @@ async function main() {
     ownership: () => processOwnership.get(),
     getBuildSystem: () => assertPresent(buildSystemInstance),
     workspaceVcs,
+    resolveParticipantAccess: async (contextId, ctx) => {
+      for (const caller of [ctx.caller, ctx.authorizingCaller]) {
+        if (!caller) continue;
+        const ownerContextId = participantDiscoveryContext(caller);
+        if (ownerContextId && await canBuildFromContext(caller, ownerContextId, contextId)) {
+          return { caller, ownerContextId, ...(ctx.signal ? { signal: ctx.signal } : {}) };
+        }
+      }
+      throw Object.assign(new Error("The development context is outside the caller's working copy"), { code: "EACCES" });
+    },
     layout,
     eventService,
     serverLogStore,

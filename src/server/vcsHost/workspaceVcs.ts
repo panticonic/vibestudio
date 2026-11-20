@@ -296,8 +296,15 @@ export interface ExactRepositorySnapshotPlan {
   realization: {
     repository: Extract<WorkspaceMaterializationRepository, { presence: "present" }>;
     blobs: WorkspaceMaterializationBlob[];
+    placement?: VcsStateNodeRef;
   };
   planDigest: string;
+}
+
+export interface ParticipantRepositoryAccess {
+  caller: VerifiedCaller;
+  ownerContextId: string;
+  signal?: AbortSignal;
 }
 
 export interface WorkspaceVcsDeps {
@@ -1938,6 +1945,19 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     return result;
   }
 
+  async importParticipantSnapshotFromContext(input: {
+    snapshot: VcsImportSnapshotInput;
+    access: ParticipantRepositoryAccess;
+    cause: { parent: RpcCausalParent | null };
+    uploadPrincipal: string;
+  }): Promise<VcsImportSnapshotResult> {
+    const { snapshot, access, cause, uploadPrincipal } = input;
+    const scope = await this.requireParticipantContentScope(
+      snapshot.contextId, access.caller, access.signal, access.ownerContextId,
+    );
+    return this.importParticipantSnapshot({ ...scope, head: scope.workingHead, snapshot, cause, uploadPrincipal });
+  }
+
   async registerParticipantExternalDelta(input: WorkspaceHistoryParticipant & {
     head: string;
     delta: VcsRegisterExternalDeltaInput;
@@ -3334,17 +3354,12 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     contextId: string;
     repositoryId: string;
     requiredFiles: readonly string[];
-  }): Promise<ExactRepositorySnapshotPlan> {
-    const command = await this.gad().contextMaterializationCommand({
-      contextId: input.contextId,
-      materializedState: null,
-    });
-    const roots = await this.materializer.planContentRoots(command.repositories);
-    const repository = roots.find((candidate) => candidate.repositoryId === input.repositoryId);
-    if (!repository)
-      throw Object.assign(new Error(`Unknown repository ${input.repositoryId}`), {
-        code: "ENOENT",
-      });
+  }, access?: ParticipantRepositoryAccess): Promise<ExactRepositorySnapshotPlan> {
+    const command = access
+      ? await this.readParticipantRepositoryProjection(input.contextId, access)
+      : await this.gad().contextMaterializationCommand({
+          contextId: input.contextId, materializedState: null,
+        });
     const repositoryCommand = command.repositories.find(
       (
         candidate
@@ -3352,10 +3367,12 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         candidate.presence === "present" && candidate.repositoryId === input.repositoryId
     );
     if (!repositoryCommand) {
-      throw Object.assign(new Error(`Repository ${input.repositoryId} has no exact source`), {
-        code: "ECORRUPT",
+      throw Object.assign(new Error(`Unknown repository ${input.repositoryId}`), {
+        code: "ENOENT",
       });
     }
+    const [repository] = await this.materializer.planContentRoots([repositoryCommand]);
+    if (!repository) throw new Error("Could not plan content for the selected repository");
     const referencedContent = new Set(
       repositoryCommand.source.kind === "snapshot"
         ? repositoryCommand.source.files.map((file) => file.contentHash)
@@ -3426,12 +3443,33 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       realization: {
         repository: repositoryCommand,
         blobs: realizationBlobs,
+        ...(access ? { placement: command.targetState } : {}),
       },
     };
     return {
       ...base,
       planDigest: sha256HexSyncText(canonicalJson(base)),
     };
+  }
+
+  async resolveAdoptedParticipantRepository(
+    input: { contextId: string; repositoryId: string },
+    access: ParticipantRepositoryAccess
+  ): Promise<{ repoPath: string; workingHead: VcsStateNodeRef } | null> {
+    const projection = await this.readParticipantRepositoryProjection(input.contextId, access);
+    const repository = projection.repositories.find((entry) =>
+      entry.presence === "present" && entry.repositoryId === input.repositoryId
+    );
+    return repository ? { repoPath: repository.repoPath, workingHead: projection.targetState } : null;
+  }
+
+  private async readParticipantRepositoryProjection(contextId: string, access: ParticipantRepositoryAccess) {
+    await this.whenSemanticReady(access.signal);
+    const scope = await this.requireParticipantContentScope(
+      contextId, access.caller, access.signal, access.ownerContextId,
+    );
+    const projection = await readWorkspaceParticipantProjection(scope);
+    return { targetState: projection.state, repositories: projection.repositories, blobs: [] };
   }
 
   /**
@@ -3462,7 +3500,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     await this.materializer.realizePlannedRepository(
       plan.realization.repository,
       plan.realization.blobs,
-      plan.contentRoot
+      plan.contentRoot,
+      plan.realization.placement
     );
     await materializeTree(this.deps.blobsDir, plan.contentRoot, destination, {
       strategy: "copy-on-write",

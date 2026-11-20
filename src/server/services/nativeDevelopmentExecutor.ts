@@ -10,6 +10,9 @@ import { canonicalJson, compareUtf16CodeUnits } from "@vibestudio/content-addres
 import { domainHash } from "@vibestudio/shared/execution/identity";
 import { semanticVcsPathAdmission } from "@vibestudio/shared/vcs/pathAdmission";
 import { putFile } from "./blobstoreService.js";
+import { markPrivateWorkspaceBlobs, recordBlobUpload } from "../storage/blobUploads.js";
+import { withBlobContentLock } from "../storage/blobRetentions.js";
+import type { ParticipantRepositoryAccess } from "../vcsHost/workspaceVcs.js";
 import { writeFileAtomicSync } from "../../atomicFile.js";
 
 const SESSION_ID = /^[A-Za-z0-9._-]{1,160}$/u;
@@ -188,6 +191,7 @@ export interface NativeDevelopmentSemanticAdapter {
 
 export interface NativeDevelopmentSemanticIngress {
   causalParent: RpcCausalParent | null;
+  participant?: { access: ParticipantRepositoryAccess; uploadPrincipal: string };
 }
 
 export interface NativeDevelopmentSessionReceipt {
@@ -1074,6 +1078,7 @@ export async function scanNativeSnapshot(input: {
   sessionId: string;
   blobsDir: string;
   persist: boolean;
+  uploadPrincipal?: string;
 }): Promise<NativeSnapshotDescriptor> {
   const rootStat = await fs.lstat(input.repositoryRoot);
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
@@ -1159,9 +1164,21 @@ export async function scanNativeSnapshot(input: {
         `Native file changed before checkpoint capture: ${observation.path}`
       );
     }
-    const contentHash = input.persist
-      ? (await putFile(input.blobsDir, observation.absolutePath)).digest
-      : await hashFile(observation.absolutePath);
+    let contentHash: string;
+    if (!input.persist) {
+      contentHash = await hashFile(observation.absolutePath);
+    } else if (input.uploadPrincipal) {
+      const principal = input.uploadPrincipal;
+      contentHash = await withBlobContentLock(input.blobsDir, async () => {
+        const stored = await putFile(input.blobsDir, observation.absolutePath, (digest) =>
+          markPrivateWorkspaceBlobs(input.blobsDir, [digest])
+        );
+        recordBlobUpload(input.blobsDir, principal, stored.digest);
+        return stored.digest;
+      });
+    } else {
+      contentHash = (await putFile(input.blobsDir, observation.absolutePath)).digest;
+    }
     const after = await fs.lstat(observation.absolutePath);
     if (!sameFileObservation(observation.stat, after)) {
       throw coded(

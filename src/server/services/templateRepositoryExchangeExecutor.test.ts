@@ -6,6 +6,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import { TemplateRepositoryExchangeExecutor } from "./templateRepositoryExchangeExecutor.js";
 import type { ExactRepositorySnapshotPlan } from "../vcsHost/workspaceVcs.js";
+import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import { hasBlobUploads, privateWorkspaceBlobScopes } from "../storage/blobUploads.js";
+import type { NativeDevelopmentSemanticAdapter } from "./nativeDevelopmentExecutor.js";
 
 const roots: string[] = [];
 const digest = (character: string): string => character.repeat(64);
@@ -23,7 +26,7 @@ function manifest(): string {
   ].join("\n");
 }
 
-async function fixture() {
+async function fixture(participant = false) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "semantic-template-exchange-"));
   roots.push(root);
   const checkout = path.join(root, "checkout");
@@ -63,7 +66,7 @@ async function fixture() {
       targetRepositoryIds: ["repository"],
     },
   } as never;
-  const semanticImport = vi.fn(async (_input: unknown) => imported);
+  const semanticImport = vi.fn(async (_input: Parameters<NativeDevelopmentSemanticAdapter["importSnapshot"]>[0]) => imported);
   const materializeSource = vi.fn(async (_plan: ExactRepositorySnapshotPlan, destination: string) =>
     writeTree(destination, semanticValue));
   fs.mkdirSync(path.join(root, "blobs", "tmp"), { recursive: true });
@@ -72,6 +75,12 @@ async function fixture() {
     blobsDir: path.join(root, "blobs"),
     planSource: async () => sourcePlan,
     materializeSource,
+    ...(participant ? {
+      resolveAccess: async (contextId: string, ctx?: ServiceContext) => {
+        if (!ctx) throw new Error("Missing caller");
+        return { caller: ctx.caller, ownerContextId: contextId };
+      },
+    } : {}),
     semantic: { commitChildBase: vi.fn(), importSnapshot: semanticImport },
   });
   return {
@@ -209,6 +218,43 @@ describe("TemplateRepositoryExchangeExecutor", () => {
     expect(fs.existsSync(path.join(fx.root, "operations", prepared.intentDigest, "semantic"))).toBe(
       false
     );
+  });
+
+  it("accepts a private import only for the participant who prepared it", async () => {
+    const fx = await fixture(true);
+    const context = (id: string, grant: string) => ({
+      caller: { ...createVerifiedCaller(id, "shell"), taskAuthority: `task:${grant.repeat(64)}` as const },
+    }) as ServiceContext;
+    const alice = context("shell:alice", "a");
+    const bob = context("shell:bob", "b");
+    const basis = {
+      checkout: fx.checkout,
+      contextId: "context",
+      repositoryId: "repository",
+      expectedWorkingHead: { kind: "event", eventId: "event" } as const,
+    };
+    const baselined = await fx.executor.prepare({ ...basis, direction: "export", idempotencyKey: "baseline" }, alice);
+    const apply = (prepared: typeof baselined, ctx: ServiceContext) => fx.executor.apply({
+      operationId: prepared.plan.operationId, intentDigest: prepared.intentDigest,
+      checkout: fx.checkout, ingress: { causalParent: null },
+    }, ctx);
+    await apply(baselined, alice);
+    await fsp.writeFile(path.join(fx.checkout, "clients", "one", "package.json"), "private import\n");
+    const prepared = await fx.executor.prepare({ ...basis, direction: "import", idempotencyKey: "private" }, alice);
+    await expect(apply(prepared, bob)).rejects.toMatchObject({ code: "EACCES" });
+    expect(fx.semanticImport).not.toHaveBeenCalled();
+    const result = await apply(prepared, alice);
+    expect(result.direction).toBe("import");
+    const request = fx.semanticImport.mock.calls[0]![0];
+    const principal = request.ingress.participant!.uploadPrincipal;
+    expect(request.ingress.participant?.access.caller).toBe(alice.caller);
+    const digests = [...new Set(request.descriptor.files.map(({ contentHash }) => contentHash))];
+    const blobsDir = path.join(fx.root, "blobs");
+    expect(hasBlobUploads(blobsDir, principal, digests)).toBe(true);
+    expect(privateWorkspaceBlobScopes(blobsDir, digests).size).toBe(digests.length);
+    await expect(apply(prepared, bob)).rejects.toMatchObject({ code: "EACCES" });
+    await expect(apply(prepared, alice)).resolves.toEqual(result);
+    expect(fx.semanticImport).toHaveBeenCalledOnce();
   });
 
   it("rejects apply against a different checkout coordinate", async () => {

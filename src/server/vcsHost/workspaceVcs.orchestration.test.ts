@@ -473,6 +473,18 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       workingHead: input.caller === actorA && aliceEdited ? "edited" : "initial",
     });
     const scope = vi.spyOn(vcs, "openParticipantScope").mockImplementation(resolveScope);
+    const developmentSource = { contextId, repositoryId: "repo", requiredFiles: ["note.txt"] };
+    const [alicePlan, bobPlan] = await Promise.all([
+      vcs.planExactContextRepository(developmentSource, { caller: actorA, ownerContextId: contextId }),
+      vcs.planExactContextRepository(developmentSource, { caller: actorB, ownerContextId: contextId }),
+    ]);
+    expect(alicePlan.sourceState).toEqual({ kind: "application", applicationId: "alice-edit" });
+    expect(alicePlan.requiredFiles[0]?.contentHash).toBe(privateEdit);
+    expect(bobPlan.sourceState).toEqual({ kind: "event", eventId: "genesis" });
+    expect(bobPlan.requiredFiles[0]?.contentHash).toBe(original);
+    await expect(vcs.resolveAdoptedParticipantRepository(developmentSource, {
+      caller: actorA, ownerContextId: contextId,
+    })).resolves.toEqual({ repoPath: "packages/example", workingHead: alicePlan.sourceState });
     const [a] = await vcs.contextRepoTargets(contextId, actorA);
     const [b] = await vcs.contextRepoTargets(contextId, actorB);
     expect(a!.stateHash).not.toBe(b!.stateHash);

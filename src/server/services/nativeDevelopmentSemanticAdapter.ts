@@ -6,8 +6,10 @@ import {
 } from "@vibestudio/service-schemas/vcs";
 import type { RpcCausalParent } from "@vibestudio/rpc";
 import type { NativeDevelopmentSemanticAdapter } from "./nativeDevelopmentExecutor.js";
+import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
 
 export interface NativeDevelopmentSemanticCausalPort {
+  importParticipantSnapshotFromContext?: WorkspaceVcs["importParticipantSnapshotFromContext"];
   semanticCausalCall(
     method: string,
     input: unknown,
@@ -81,13 +83,22 @@ export function createNativeDevelopmentSemanticAdapter(
         ],
         message: `Native development checkpoint ${input.descriptor.source.snapshotRevision}`,
       });
-      const result = vcsImportSnapshotResultSchema.parse(
-        await workspaceVcs.semanticCausalCall(
+      const participant = input.ingress.participant;
+      let imported: unknown;
+      if (participant) {
+        if (!workspaceVcs.importParticipantSnapshotFromContext)
+          throw new Error("Participant snapshot import is unavailable");
+        imported = await workspaceVcs.importParticipantSnapshotFromContext({
+          ...participant, snapshot: request, cause: { parent: input.ingress.causalParent },
+        });
+      } else {
+        imported = await workspaceVcs.semanticCausalCall(
           "vcsImportSnapshot",
           request,
           input.ingress.causalParent
-        )
-      );
+        );
+      }
+      const result = vcsImportSnapshotResultSchema.parse(imported);
       if (
         result.contextId !== input.developmentContextId ||
         result.importedRepositoryIds.length !== 1 ||
