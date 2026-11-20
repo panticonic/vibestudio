@@ -115,6 +115,7 @@ test("authored template worlds flow into the collector without losing original s
       ["github-diagnosis-worlds", "managedGitHubDiagnosisWorlds", []],
       ["adventure-review-worlds", "managedAdventureWorlds", []],
       ["regency-review-worlds", "managedRegencyWorlds", []],
+      ["examples-portfolio-worlds", "managedExamplesPortfolioWorlds", []],
       ["personal-resume-worlds", "personalResumeWorlds", []],
       ["template-release-worlds", "templateReleaseWorlds", []],
       ["template-candidate-worlds", "templateCandidateManagedWorlds", []],
@@ -3206,6 +3207,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["github-diagnosis-worlds", "export const managedGitHubDiagnosisWorlds = [];"],
       ["adventure-review-worlds", "export const managedAdventureWorlds = [];"],
       ["regency-review-worlds", "export const managedRegencyWorlds = [];"],
+      ["examples-portfolio-worlds", "export const managedExamplesPortfolioWorlds = [];"],
       ["template-release-worlds", "export const templateReleaseWorlds = [];"],
       ["template-candidate-worlds", "export const templateCandidateManagedWorlds = [];"],
       ["delivery-history-worlds", "export const deliveryHistoryWorlds = []; export const chatDeliveryWorlds = [];"],
@@ -4690,6 +4692,103 @@ test("client admission export preserves unavailable required capabilities", (t) 
 test("client admission export preserves denied optional capabilities", (t) =>
   checkClientCapabilityCase(t, "android-candidate-requests-optional-menu", "review-candidate")
 );
+
+test("Examples readiness export links both games to the exact criteria in order", async () => {
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(path.resolve(import.meta.dirname, ".."));
+  const name = "examples-portfolio-live-ready-quiet-estate-and-forecast";
+  const workflow = (await loadLiveTeacherCases(checkouts)).get(name);
+  const { world, request, garden, realm } = workflow.assignment;
+  const groups = workflowSourceGroups(workflow);
+  assert.ok(groups.includes("vibestudio:examples:grimoire-resident-care"));
+  assert.ok(groups.includes("vibestudio:examples:regency-saved-and-projected-accounts"));
+  const ref = (value) => {
+    const json = JSON.stringify(value);
+    return { complete: true, hash: createHash("sha256").update(json).digest("hex"), bytes: Buffer.byteLength(json) };
+  };
+  const suffix = "e7e43702-5e20-4592-ac74-06605c3776da";
+  const gardenId = "natlang-garden-" + suffix;
+  const realmId = "natlang-realm-" + suffix;
+  const gardenObserved = { before: { id: gardenId + ":before" }, current: { id: gardenId + ":current" } };
+  const saved = { id: realmId + ":saved", month: 0, treasury: 120 };
+  const forecast = { id: realmId + ":forecast:1", month: 1, treasury: realm.projectedTreasury };
+  const realmObserved = { saved, forecast };
+  const findings = (caseWorld, evidenceId) => caseWorld.expected.map((decision, index) => ({
+    decision, finding: "finding-" + index, evidenceIds: [evidenceId],
+  }));
+  const result = (components) => ({ ...components[0], components });
+  const demos = {
+    garden: result(findings(garden, gardenObserved.current.id)),
+    realm: result(findings(realm, forecast.id)),
+  };
+  const selected = world.criteria.map(({ demo, claimIndex }) => demos[demo].components[claimIndex]);
+  const report = {
+    decision: world.readiness, finding: "all-criteria-supported",
+    evidenceIds: selected.flatMap(({ evidenceIds }) => evidenceIds),
+    components: selected,
+    demos,
+  };
+  const check = (...keys) => Object.fromEntries(keys.map((key) => [key, true]));
+  const verification = {
+    passed: true, request, expected: report,
+    checks: check("exactGarden", "exactRealm", "scope", "assignedDecisions", "exactReadiness"),
+    gardenEvidence: {
+      passed: true, garden: gardenId, observed: gardenObserved, expected: demos.garden,
+      actions: garden.actions.map((action) => action.toLowerCase()),
+      checks: check("persistedVisits", "persistedClock", "assignedClaims", "readOwnedGarden", "matchedJudgment", "matchedClaims"),
+    },
+    realmEvidence: {
+      passed: true, realm: realmId, observed: realmObserved, expected: demos.realm,
+      checks: check("exactBasis", "openingIntact", "exactForecast", "assignedClaims", "exactReport"),
+    },
+  };
+  const execution = { provenance: { contextId: "owned" }, diagnostics: {
+    managedExamplesPortfolio: { contextId: "owned", verification },
+  } };
+  const call = (callId, parent, name, inputs = {}, output, effects) => ({
+    callId, record: {
+      parent_call_id: parent, outcome: "done", definition: { name },
+      inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+      ...(output && { output: ref(output) }), ...(effects && { effects }),
+    },
+  });
+  const readGarden = { service: "gardenRead", method: "observe", result: ref(gardenObserved) };
+  const readRealm = { service: "realmRead", method: "observe", args: ref([1]), result: ref(realmObserved) };
+  const combine = call("decision-result", "decide", "combineFindings", { components: selected });
+  const exercise = { report, rootCallIds: ["root"], calls: [
+    call("root", null, "runWorkflow"),
+    call("review", "root", "reviewExample", { request }, report),
+    call("portfolio", "review", "reviewLivePortfolio", { request }, report),
+    call("garden", "portfolio", "inspectLiveGarden", { claims: garden.request.claims }, demos.garden),
+    call("garden-read", "garden", "readGarden", {}, undefined, [readGarden]),
+    call("garden-combine", "garden", "combineFindings", {}, demos.garden),
+    ...garden.request.claims.flatMap((claim, index) => [
+      call("garden-claim-" + index, "garden", "qualifyClaim", { claim, observed: gardenObserved }),
+      call("garden-review-" + index, "garden-claim-" + index, "reviewGarden", {}, demos.garden.components[index]),
+    ]),
+    call("realm", "portfolio", "inspectLiveRealm", { claims: realm.request.claims, months: 1 }, demos.realm),
+    call("realm-read", "realm", "readSettlement", {}, undefined, [readRealm]),
+    call("realm-combine", "realm", "combineFindings", {}, demos.realm),
+    ...realm.request.claims.flatMap((claim, index) => {
+      const settlement = claim.kind === "settlement";
+      const input = settlement ? { check: claim.check, current: claim.source === "saved" ? saved : forecast }
+        : { check: claim.check, before: saved, after: forecast, basis: "forecast", assertCommitted: claim.assertCommitted };
+      const verdict = demos.realm.components[index];
+      return [
+        call("realm-claim-" + index, "realm", "qualifyClaim", { claim, observed: realmObserved }, verdict),
+        call("realm-review-" + index, "realm-claim-" + index, "reviewRealm"),
+        call("realm-leaf-" + index, "realm-review-" + index, settlement ? "inspectSettlement" : "compareEconomy", input, verdict),
+      ];
+    }),
+    call("decide", "portfolio", "decideReadiness", { ...demos, criteria: world.criteria }, report),
+    combine,
+  ] };
+  assert.ok(workflow.evidence(execution, exercise, name, workflow));
+  combine.record.inputs.components = ref([...selected].reverse());
+  assert.throws(() => workflow.evidence(execution, exercise, name, workflow), /selected the acceptance criteria/);
+  combine.record.inputs.components = ref(selected);
+  readRealm.args = ref([3]);
+  assert.throws(() => workflow.evidence(execution, exercise, name, workflow), /saved or projected evidence/);
+});
 
 test("Regency export keeps the committed claim and forecast evidence distinct", async () => {
   const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(

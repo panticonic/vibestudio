@@ -438,6 +438,10 @@ computed by the installed policy engine. The Natlang settlement and economy
 reviewers cite the assigned source for each claim. Run
 `regency-review-oracle-qualification` in Examples to check the horizon, final
 accounts, and preservation of the saved realm without invoking a model.
+Examples demo-readiness tasks call both the live Grimoire and Regency
+reviewers in the same workspace. A separate readiness lambda selects the
+assigned criteria in order and retains both full reports. Run
+`examples-portfolio-oracle-qualification` to check the ready and held cases.
 Spectrolite navigation reviews retain the browser-observed source and destination of each
 wiki-link hop. The navigation finding binds the whole route to the final canonical document,
 and any preview finding refers to that same editor and revision. Draft reviews compare the

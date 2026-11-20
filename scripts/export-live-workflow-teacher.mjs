@@ -655,6 +655,15 @@ const regencyReviewWorkflow = {
   root: "reviewExample",
   evidence: regencyReviewEvidence,
 };
+const examplesPortfolioWorkflow = {
+  family: "examples-live-portfolio-readiness",
+  workspace: "examples",
+  namespace: "vibestudio:examples",
+  group: "cross-game-demo-readiness",
+  validator: { template: "examples", path: "skills/examples-review-fixtures/live-portfolio.ts" },
+  root: "reviewExample",
+  evidence: examplesPortfolioEvidence,
+};
 const tendrilWorkflow = {
   family: "workspace-tendril-presentation",
   namespace: "vibestudio:tendrils",
@@ -847,6 +856,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedGitHubDiagnosisWorlds },
     { managedAdventureWorlds },
     { managedRegencyWorlds },
+    { managedExamplesPortfolioWorlds, examplesPortfolioAssignment },
   ] = await Promise.all(
     [
       "content-project-worlds.ts",
@@ -930,6 +940,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "github-diagnosis-worlds.ts",
       "adventure-review-worlds.ts",
       "regency-review-worlds.ts",
+      "examples-portfolio-worlds.ts",
     ].map(async (file) => {
       const imported = await import(pathToFileURL(path.join(directory, file)).href);
       return imported.default ?? imported;
@@ -1446,6 +1457,14 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of managedRegencyWorlds) {
     cases.set(`regency-review-live-${assignment.id}`, { ...regencyReviewWorkflow, assignment });
+  }
+  for (const { id } of managedExamplesPortfolioWorlds) {
+    cases.set(`examples-portfolio-live-${id}`, {
+      ...examplesPortfolioWorkflow,
+      assignment: examplesPortfolioAssignment(id),
+      sourceGroups: [examplesPortfolioWorkflow, grimoireWorkflow, regencyReviewWorkflow]
+        .flatMap(workflowSourceGroups),
+    });
   }
   for (const { id, request, expected } of managedBrowserLibraryWorlds) {
     cases.set(`browser-library-live-${id}`, {
@@ -8266,7 +8285,14 @@ function spectroliteHandoffEvidence(execution, exercise, scenario, workflow) {
   };
 }
 
-function regencyReviewEvidence(execution, exercise, _scenario, { assignment }) {
+function completedExampleChildren(exercise, parent, name) {
+  return exercise.calls.filter(({ record }) =>
+    parent && record.parent_call_id === parent.callId &&
+    record.definition?.name === name && record.outcome === "done"
+  );
+}
+
+function regencyReviewEvidence(execution, exercise, _scenario, { assignment }, portfolio) {
   const fixture = execution.diagnostics.managedRegencyReview;
   const { realm, observed, expected, checks, passed } = fixture?.verification ?? {};
   const { saved, forecast } = observed ?? {};
@@ -8286,22 +8312,23 @@ function regencyReviewEvidence(execution, exercise, _scenario, { assignment }) {
     "Regency review must match the unchanged saved realm and its assigned forecast horizon"
   );
   const root = exercise.calls.find(({ callId }) => callId === exercise.rootCallIds[0]);
-  const children = (parent, name) => exercise.calls.filter(({ record }) =>
-    parent && record.parent_call_id === parent.callId &&
-    record.definition?.name === name && record.outcome === "done"
-  );
+  const children = (parent, name) => completedExampleChildren(exercise, parent, name);
   const [review] = children(root, "reviewExample");
-  const [inspect] = children(review, "inspectLiveRealm");
+  const [inspect] = children(portfolio ?? review, "inspectLiveRealm");
   const [read] = children(inspect, "readSettlement");
   const [combined] = children(inspect, "combineFindings");
   const claims = children(inspect, "qualifyClaim");
   const effects = exercise.calls.flatMap(({ record }) => record.effects ?? []);
-  const [observation] = effects;
+  const [observation] = read?.record.effects ?? [];
   requireEvidence(
-    matchesValue(review?.record.inputs?.request, request) &&
-      matchesValue(review?.record.output, report) &&
+    (portfolio
+      ? matchesValue(inspect?.record.inputs?.months, request.months) &&
+        matchesValue(inspect?.record.inputs?.claims, request.claims) &&
+        matchesValue(inspect?.record.output, report)
+      : matchesValue(review?.record.inputs?.request, request) &&
+        matchesValue(review?.record.output, report) && effects.length === 1) &&
       matchesValue(combined?.record.output, report) &&
-      effects.length === 1 && read?.record.effects?.includes(observation) &&
+      read?.record.effects?.length === 1 &&
       observation?.service === "realmRead" && observation.method === "observe" &&
       !observation.error && matchesValue(observation.args, [request.months]) &&
       matchesValue(observation.result, observed) &&
@@ -8327,6 +8354,82 @@ function regencyReviewEvidence(execution, exercise, _scenario, { assignment }) {
   );
   return {
     world: { context_id: fixture.contextId, case_id: assignment.id, realm },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function examplesPortfolioEvidence(execution, exercise, scenario, { assignment }) {
+  const fixture = execution.diagnostics.managedExamplesPortfolio;
+  const { gardenEvidence, realmEvidence, expected, checks, request, passed } = fixture?.verification ?? {};
+  const report = exercise.report;
+  const { world, garden, realm } = assignment;
+  const demos = report?.demos;
+  const selected = world.criteria.map(({ demo, claimIndex }) => demos?.[demo]?.components?.[claimIndex]);
+  requireEvidence(
+    typeof fixture?.contextId === "string" &&
+      fixture.contextId === execution.provenance?.contextId &&
+      passed === true &&
+      ["exactGarden", "exactRealm", "scope", "assignedDecisions", "exactReadiness"].every((key) => checks?.[key] === true) &&
+      isDeepStrictEqual(request, assignment.request) &&
+      isDeepStrictEqual(report, expected) &&
+      isDeepStrictEqual(report?.components, selected) &&
+      isDeepStrictEqual(selected.map((finding) => finding?.decision), world.expected) &&
+      report.decision === world.readiness &&
+      isDeepStrictEqual(report.evidenceIds, [...new Set(selected.flatMap(({ evidenceIds }) => evidenceIds))]) &&
+      gardenEvidence?.garden === realmEvidence?.realm?.replace(/^natlang-realm-/u, "natlang-garden-"),
+    "Demo readiness must combine the assigned claims in order from the same owned workspace"
+  );
+  const root = exercise.calls.find(({ callId }) => callId === exercise.rootCallIds[0]);
+  const children = (parent, name) => completedExampleChildren(exercise, parent, name);
+  const [review] = children(root, "reviewExample");
+  const [portfolio] = children(review, "reviewLivePortfolio");
+  const [gardenReview] = children(portfolio, "inspectLiveGarden");
+  const [readGarden] = children(gardenReview, "readGarden");
+  const [gardenCombined] = children(gardenReview, "combineFindings");
+  const gardenClaims = children(gardenReview, "qualifyClaim");
+  const [decide] = children(portfolio, "decideReadiness");
+  const [combine] = children(decide, "combineFindings");
+  const effects = exercise.calls.flatMap(({ record }) => record.effects ?? []);
+  const [gardenRead] = readGarden?.record.effects ?? [];
+  const observed = gardenEvidence.observed;
+  requireEvidence(
+    matchesValue(review?.record.inputs?.request, request) &&
+      matchesValue(portfolio?.record.inputs?.request, request) &&
+      matchesValue(review?.record.output, report) &&
+      matchesValue(portfolio?.record.output, report) &&
+      matchesValue(gardenReview?.record.inputs?.claims, garden.request.claims) &&
+      matchesValue(gardenReview?.record.output, demos.garden) &&
+      matchesValue(gardenCombined?.record.output, demos.garden) &&
+      effects.length === 2 && readGarden?.record.effects?.length === 1 &&
+      gardenRead?.service === "gardenRead" && gardenRead.method === "observe" &&
+      !gardenRead.error && matchesValue(gardenRead.result, observed) &&
+      gardenClaims.length === garden.request.claims.length &&
+      garden.request.claims.every((claim, index) => gardenClaims.some((branch) => {
+        const [nested] = children(branch, "reviewGarden");
+        return matchesValue(branch.record.inputs?.claim, claim) &&
+          matchesValue(branch.record.inputs?.observed, observed) &&
+          matchesValue(nested?.record.output, demos.garden.components[index]);
+      })) &&
+      matchesValue(decide?.record.inputs?.criteria, world.criteria) &&
+      matchesValue(decide?.record.inputs?.garden, demos.garden) &&
+      matchesValue(decide?.record.inputs?.realm, demos.realm) &&
+      matchesValue(combine?.record.inputs?.components, selected) &&
+      matchesValue(decide?.record.output, report),
+    "Demo readiness must retain both live reviews and the call that selected the acceptance criteria"
+  );
+  const scoped = (name, verification) => ({
+    ...execution, diagnostics: { [name]: { contextId: fixture.contextId, verification } },
+  });
+  const gardenResult = grimoireEvidence(
+    scoped("managedGrimoire", gardenEvidence), { ...exercise, report: demos.garden }, scenario,
+    { caseId: garden.id, expectedActions: garden.actions.map((action) => action.toLowerCase()), expectedDecisions: garden.expected },
+  );
+  const realmResult = regencyReviewEvidence(
+    scoped("managedRegencyReview", realmEvidence), { ...exercise, report: demos.realm }, scenario, { assignment: realm }, portfolio,
+  );
+  return {
+    world: { context_id: fixture.contextId, case_id: world.id, garden: gardenResult.world.garden, realm: realmResult.world.realm },
     checks,
     evidence: { workspace: { fixture } },
   };
