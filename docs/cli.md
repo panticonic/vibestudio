@@ -418,7 +418,9 @@ vibestudio remote rotate-endpoint --workspace default --yes
 Use `local` when the computer running the command is the server; it uses the
 same installer and service lifecycle without requiring an SSH daemon. Deploy
 installs a `systemd --user` unit, enables linger, and starts
-`vibestudio remote serve` bound to loopback. The unit's `ExecStart` uses the
+`vibestudio remote serve --bootstrap-workspace default` bound to loopback.
+The first managed boot registers `default`. Later boots reuse the existing
+workspace identity. The unit's `ExecStart` uses the
 absolute path resolved from `command -v vibestudio` on the host (so it survives
 nvm / user-prefix npm installs). Deploy then polls both the loopback hub and the
 routed `default` workspace health endpoint and requires protected managed ready

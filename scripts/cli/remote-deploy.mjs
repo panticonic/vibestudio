@@ -316,6 +316,14 @@ case "$vibestudio_entry" in
   *[!A-Za-z0-9_./+@:-]*) echo "vibestudio entry contains unsupported systemd characters" >&2; exit 1 ;;
 esac`;
 
+/** Managed deployments promise a routed project as well as a ready hub. */
+export function managedServerArgs(port, readyFile) {
+  return [
+    "remote", "serve", "--port", String(port),
+    "--bootstrap-workspace", "default", "--ready-file", readyFile,
+  ];
+}
+
 export async function deploy(options, hooks = {}) {
   assertSafeTarget(options.target);
   if (options.artifact && !fs.statSync(options.artifact, { throwIfNoEntry: false })?.isFile())
@@ -385,9 +393,8 @@ npm install -g ${shellQuote(`${SERVER_PACKAGE_NAME}@${pkg.version}`)}
     );
     console.log(`✓ Installed package         ${SERVER_PACKAGE_NAME}@${pkg.version}`);
   }
-  const serverCommand =
-    `__NODE_BIN__ __VIBESTUDIO_ENTRY__ remote serve --port ${options.port} ` +
-    `--ready-file "%h/${MANAGED_READY_FILE_RELATIVE}"`;
+  const serverArgs = managedServerArgs(options.port, `"%h/${MANAGED_READY_FILE_RELATIVE}"`);
+  const serverCommand = `__NODE_BIN__ __VIBESTUDIO_ENTRY__ ${serverArgs.join(" ")}`;
   const unit = `[Unit]
 Description=Vibestudio remote server
 After=network-online.target

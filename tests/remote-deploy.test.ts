@@ -65,6 +65,9 @@ describe("remote-deploy CLI", () => {
     expect(scripts.join("\n")).toContain(
       "remote doctor --relay-url 'https://one.example/' --relay-url 'https://two.example/' --workspace default"
     );
+    expect(scripts.join("\n")).toContain(
+      'ExecStart=__NODE_BIN__ __VIBESTUDIO_ENTRY__ remote serve --port 3035 --bootstrap-workspace default --ready-file "%h/.config/vibestudio/server-auth/hub-ready.json"'
+    );
     expect(scripts.join("\n")).not.toContain("signal-url");
   });
 
