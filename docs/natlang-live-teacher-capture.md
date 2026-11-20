@@ -184,6 +184,14 @@ to read pull requests needs a panel before setup can continue. The checks
 leave credentials and workspace state untouched. Use the
 `github-setup-oracle-qualification-` cases for model-free validation.
 
+Template candidate hold cases use native Templates discovery for the installed
+Base source. They leave protected main and working state unchanged when the
+release is already installed, when the cached check predates the review window,
+or when the caller's exact requested target differs from the observed offer.
+`template-candidate-oracle-qualification-*` verifies the native reads and
+refuses preparation for the held offers. The exporter also requires the nested
+offer decision and absence of preparation calls in the trajectory.
+
 Retained triage cases run one deliberately failing system test in an owned
 workspace and release its execution scope. The shared Natlang program reads
 the native retained failure, checks its exact run and test assignment, and

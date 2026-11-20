@@ -761,6 +761,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { retainedTriageWorlds },
     { githubSetupWorlds },
     { templateReleasePart, templateReleaseWorlds },
+    { templateCandidateManagedWorlds },
     { chatDeliveryWorlds, conversationHandoffWorlds = [], deliveryHistoryWorlds, deliveryOriginByMode },
     { androidAuditWorlds },
     { androidInstallWorlds },
@@ -839,6 +840,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "retained-triage-worlds.ts",
       "github-setup-worlds.ts",
       "template-release-worlds.ts",
+      "template-candidate-worlds.ts",
       "delivery-history-worlds.ts",
       "android-audit-worlds.ts",
       "android-install-worlds.ts",
@@ -1065,6 +1067,18 @@ export async function loadLiveTeacherCases(checkouts) {
       assignment,
       part: templateReleasePart,
       evidence: templateReleaseEvidence,
+    });
+  }
+  for (const assignment of templateCandidateManagedWorlds) {
+    cases.set(`template-candidate-live-${assignment.id}`, {
+      family: "system-live-template-candidate",
+      namespace: "vibestudio:templates",
+      group: "exact-installation-update-offer",
+      workspace: "system",
+      root: "stageTemplateCandidate",
+      validator: { template: "system-testing", path: "skills/system-testing/template-candidate-managed.ts" },
+      assignment,
+      evidence: templateCandidateEvidence,
     });
   }
   for (const assignment of deliveryHistoryWorlds) {
@@ -3757,6 +3771,58 @@ function templateReleaseEvidence(execution, exercise, _scenario, { assignment, p
   );
   return {
     world: { context_id: fixture.contextId, seed_revision: actual.mainEventId },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function templateCandidateEvidence(execution, exercise, _scenario, { assignment }) {
+  const fixture = execution.diagnostics.templateCandidateManaged;
+  const { caseId, contextId, request, observed, checks } = fixture?.verification ?? {};
+  const report = exercise.report;
+  const records = exercise.calls.map(({ record }) => record);
+  const effects = records.flatMap(({ effects }) => effects ?? []);
+  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const child = (parent, name) => parent && records.find(
+    (record) => record.parent_call_id === parent.call_id && record.definition.name === name,
+  );
+  const stage = child(root, "stageTemplateCandidate");
+  const inspect = child(stage, "inspectOffer");
+  const read = child(inspect, "readOffer");
+  const assess = child(inspect, "assessOffer");
+  const effect = read?.effects?.[0];
+  requireEvidence(
+    fixture?.verification?.passed === true &&
+      fixture.contextId === execution.provenance?.contextId &&
+      typeof contextId === "string" && fixture.contextId === contextId && caseId === assignment.id &&
+      ["observed", "report", "held", "unchanged"].every((key) => checks?.[key] === true) &&
+      request?.goal === assignment.goal && request.intent === assignment.intent &&
+      request.sourceUrl === "git+https://github.com/panticonic/vibestudio-base.git" &&
+      typeof request.commandId === "string" && request.commandId.length > 0 &&
+      /^[a-f0-9]{40}$/u.test(request.installedCommit) &&
+      /^[a-f0-9]{40}$/u.test(request.incomingCommit) &&
+      observed?.status === "current" && observed.hostUnavailable === false &&
+      request.installedCommit === observed.installedCommit &&
+      observed.installedCommit === observed.incomingCommit &&
+      (request.incomingCommit !== observed.incomingCommit) === (assignment.status === "target-changed") &&
+      Number.isSafeInteger(observed.checkedAt) &&
+      request.checkedAfterMs === observed.checkedAt + Number(assignment.status === "refresh") &&
+      isDeepStrictEqual(report, { status: assignment.status, offer: observed, operationId: null, candidate: null }),
+    "Template candidate requires the exact local discovery receipt and its expected hold"
+  );
+  requireEvidence(
+    matchesValue(stage?.inputs?.request, request) && matchesValue(stage.output, report) &&
+      matchesValue(inspect?.inputs?.request, request) &&
+      matchesValue(inspect.output, { decision: assignment.status, offer: observed }) &&
+      matchesValue(assess?.inputs?.request, request) && matchesValue(assess.inputs.offer, observed) &&
+      matchesValue(assess.output, assignment.status) && matchesValue(read?.output, observed) &&
+      effects.length === 1 && effect?.service === "templateOffer" && effect.method === "read" && !effect.error &&
+      matchesValue(effect.args, []) && matchesValue(effect.result, observed) &&
+      !child(stage, "prepareCandidate") && !child(stage, "reconcileCandidate"),
+    "Template candidate hold requires a live read and nested offer decision before any preparation"
+  );
+  return {
+    world: { context_id: contextId, installed_commit: observed.installedCommit, checked_at: observed.checkedAt },
     checks,
     evidence: { workspace: { fixture } },
   };

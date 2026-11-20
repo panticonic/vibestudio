@@ -113,6 +113,7 @@ test("authored template worlds flow into the collector without losing original s
       ["github-diagnosis-worlds", "managedGitHubDiagnosisWorlds", []],
       ["personal-resume-worlds", "personalResumeWorlds", []],
       ["template-release-worlds", "templateReleaseWorlds", []],
+      ["template-candidate-worlds", "templateCandidateManagedWorlds", []],
       ["delivery-history-worlds", "deliveryHistoryWorlds", []],
       ["android-audit-worlds", "androidAuditWorlds", []],
       ["android-install-worlds", "androidInstallWorlds", []],
@@ -3156,6 +3157,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["github-setup-worlds", "export const githubSetupWorlds = [];"],
       ["github-diagnosis-worlds", "export const managedGitHubDiagnosisWorlds = [];"],
       ["template-release-worlds", "export const templateReleaseWorlds = [];"],
+      ["template-candidate-worlds", "export const templateCandidateManagedWorlds = [];"],
       ["delivery-history-worlds", "export const deliveryHistoryWorlds = []; export const chatDeliveryWorlds = [];"],
       ["android-audit-worlds", "export const androidAuditWorlds = [];"],
       ["android-install-worlds", "export const androidInstallWorlds = [];"],
@@ -7927,6 +7929,76 @@ test("automation planning export requires the post-plan readback of the edited m
     () => workflow.evidence(execution, exercise, id, workflow),
     /readback taken after its decision/u,
   );
+});
+
+test("template hold export binds its decision to the cached native offer and refuses extra effects", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  const name = "template-candidate-live-base-check-predates-review-window";
+  const { assignment } = cases.get(name);
+  entry.test.name = name;
+  const request = {
+    goal: assignment.goal, intent: assignment.intent,
+    sourceUrl: "git+https://github.com/panticonic/vibestudio-base.git",
+    installedCommit: "a".repeat(40), incomingCommit: "a".repeat(40),
+    checkedAfterMs: 41, commandId: "assigned-update",
+  };
+  const observed = {
+    installedCommit: request.installedCommit, incomingCommit: request.incomingCommit,
+    status: "current", checkedAt: 40, workspaceAppVersion: "0.1.106", currentAppVersion: "0.1.106",
+    targetAppVersion: null, minimumAppVersion: null, hostUnavailable: false,
+  };
+  const report = { status: "refresh", offer: observed, operationId: null, candidate: null };
+  diagnostics.templateCandidateManaged = {
+    contextId: "ctx", verification: {
+      contextId: "ctx", caseId: assignment.id, request, observed, passed: true,
+      checks: { observed: true, report: true, held: true, unchanged: true },
+    },
+  };
+  const ref = (value) => {
+    const text = JSON.stringify(value);
+    return { complete: true, hash: createHash("sha256").update(text).digest("hex"), bytes: Buffer.byteLength(text) };
+  };
+  const prototype = diagnostics.natlangTeacher.calls[0];
+  const call = (name, parent, inputs, output, effects = []) => ({
+    callId: name,
+    summary: { ...prototype.summary, call_id: name },
+    record: {
+      ...prototype.record, call_id: name, parent_call_id: parent, definition: { name }, outcome: "done",
+      inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+      output: ref(output), effects,
+    },
+  });
+  const read = call("readOffer", "inspectOffer", {}, observed, [{
+    service: "templateOffer", method: "read", args: ref([]), result: ref(observed),
+  }]);
+  const assess = call("assessOffer", "inspectOffer", { request, offer: observed }, "refresh");
+  diagnostics.natlangTeacher = {
+    ...diagnostics.natlangTeacher,
+    programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+    rootCallIds: ["runWorkflow"],
+    report,
+    calls: [
+      call("runWorkflow", null, {}, null),
+      call("stageTemplateCandidate", "runWorkflow", { request }, report),
+      call("inspectOffer", "stageTemplateCandidate", { request }, { decision: "refresh", offer: observed }),
+      read,
+      assess,
+    ],
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  const recorded = assess.record.inputs.offer;
+  assess.record.inputs.offer = ref({ ...observed, checkedAt: 41 });
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /nested offer decision/u);
+  assess.record.inputs.offer = recorded;
+  read.record.effects.push({ service: "templateCandidatePrepare", method: "prepare" });
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /before any preparation/u);
 });
 
 test("template release export requires the freshly inspected protected-main receipt", async () => {
