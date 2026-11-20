@@ -26,6 +26,14 @@ const templateGoalDomains = {
     checks: ["exactOwnedCheckpointCatalog", "nativeObservationAndProvenance", "verifiedPerformanceAndDiagnosis",
       "exactFindingAndEvidenceBoundary", "exactLocalHandoff", "protectedWorkingAndMain"],
   },
+  "dictation-handoff": {
+    namespace: "vibestudio:retained-dictation",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-dictation-managed.ts" },
+    callable: "workOnDictationHandoffGoal",
+    skill: "dictationHandoff",
+    checks: ["exactOwnedDictation", "verifiedDictationFrontiers", "exactDictationSelection", "exactInstalledDraft",
+      "verifiedLocalCorrection", "preservedDraftAndMain", "rejectedForeignDictation"],
+  },
   "provider-handoff": {
     namespace: "vibestudio:retained-provider",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-provider-handoff-managed.ts" },
@@ -1309,13 +1317,13 @@ export async function loadLiveTeacherCases(checkouts) {
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
-      openTerminalWorlds = [], openOwnedResearchWorlds = [], providerHandoffWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
-    for (const assignment of [...openGoalWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
+      openTerminalWorlds = [], openOwnedResearchWorlds = [], dictationHandoffWorlds = [], providerHandoffWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
+    for (const assignment of [...openGoalWorlds, ...dictationHandoffWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
       ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
       ...openGoalCalendarWorlds, ...openPersonalArtifactWorlds, ...openPersonalHistoryWorlds,
-      ...openTerminalWorlds, ...openOwnedResearchWorlds, ...providerHandoffWorlds, ...openGoalEvalHandoffWorlds, ...openGoalProgramRunWorlds, ...openGoalAuthoringWorlds, ...openGoalGoogleHandoffWorlds, ...openPersonalAutomationWorlds, ...openGoalOwnedPreviewWorlds, ...openDiagnosticWorlds, ...openLocalDeliveryWorlds, ...openGoalPanelRecoveryWorlds, ...openBrowserMigrationWorlds]) {
+      ...openTerminalWorlds, ...openOwnedResearchWorlds, ...dictationHandoffWorlds, ...providerHandoffWorlds, ...openGoalEvalHandoffWorlds, ...openGoalProgramRunWorlds, ...openGoalAuthoringWorlds, ...openGoalGoogleHandoffWorlds, ...openPersonalAutomationWorlds, ...openGoalOwnedPreviewWorlds, ...openDiagnosticWorlds, ...openLocalDeliveryWorlds, ...openGoalPanelRecoveryWorlds, ...openBrowserMigrationWorlds]) {
       const split = assignment.split ?? "train";
       const sourceGroups = [assignment.sourceGroup, assignment.relatedSourceGroup].filter(Boolean);
       const scenario = `open-goal-${assignment.id}`;
@@ -7123,6 +7131,71 @@ function retainedProviderHandoffEvidence(exercise, world, proof, skill) {
   );
 }
 
+function retainedDictationHandoffEvidence(exercise, world, proof, skill) {
+  const { plan, review, handoff } = exercise.report.outcome;
+  const { explanation, ...facts } = plan;
+  const records = exercise.calls.map(({ record }) => record);
+  const observed = (name, service, method) => records.flatMap(record =>
+    record.definition?.name === name ? (record.effects ?? []).filter(effect =>
+      effect.service === service && effect.method === method && !effect.error) : []);
+  const listed = observed("discoverDictationThreads", "retainedDictationIndex", "list");
+  const read = observed("readDictationThread", "retainedDictationState", "read")
+    .filter(effect => matchesValue(effect.args, [proof.thread.threadId]));
+  const wrote = observed("stageDictationCorrection", "retainedDictationHandoff", "stage");
+  const childCalls = (parent, name) => records.filter(record => record.parent_call_id === parent.call_id &&
+    record.definition?.name === name && record.outcome === "done");
+  const reconcile = childCalls(skill, "reconcileDictationSegments");
+  const decide = childCalls(skill, "decideDictationHandoff");
+  const reviewCalls = childCalls(skill, "reviewRetainedDictation");
+  const draftCalls = records.filter(record => record.definition?.name === "prepareDraft" && record.outcome === "done");
+  const shouldStage = world.expected.action === "stage-correction" || world.expected.action === "stage-alternative";
+  const [earlier, current] = proof.snapshots;
+  const scopedArguments = call => matchesValue(call.inputs?.thread, proof.thread) &&
+    matchesValue(call.inputs?.current, current);
+  const joined = reconcile.length === 1 && scopedArguments(reconcile[0]) &&
+    matchesValue(reconcile[0].inputs?.goal, world.goal) && matchesValue(reconcile[0].inputs?.earlier, earlier);
+  const origin = joined ? childCalls(reconcile[0], "resolveDictationProvenance") : [];
+  const assembled = joined ? childCalls(reconcile[0], "assembleAcknowledgedText") : [];
+  const capture = current?.rows.findLast(row => row.record.kind === "capture" &&
+    row.record.captureId === plan.captureId)?.record;
+  const acknowledged = current?.rows.find(row => row.messageId === plan.acknowledgementMessage &&
+    row.record.kind === "acknowledgment")?.record;
+  const assemblyBound = assembled.length === 1 && scopedArguments(assembled[0]) &&
+    matchesValue(assembled[0].inputs?.capture, capture) &&
+    matchesValue(assembled[0].inputs?.acknowledgment, acknowledged);
+  requireEvidence(
+    listed.length === 1 && matchesValue(listed[0].args, []) && matchesValue(listed[0].result, proof.listed) &&
+      Array.isArray(proof.listed) && proof.listed.filter(item => isDeepStrictEqual(item, proof.thread)).length === 1 &&
+      read.length === 2 && proof.snapshots.length === 2 &&
+      proof.snapshots.every((snapshot, index) => matchesValue(read[index].result, snapshot)) &&
+      isDeepStrictEqual(facts, proof.independent) && typeof explanation === "string" &&
+      plan.threadId === proof.thread.threadId && plan.draftId === proof.thread.draftId &&
+      plan.through === current.through && joined && origin.length === 1 && scopedArguments(origin[0]) &&
+      (plan.transcript ? assemblyBound : assembled.length === 0 || assemblyBound) &&
+      decide.length === 1 && scopedArguments(decide[0]) && matchesValue(decide[0].inputs?.goal, world.goal) &&
+      matchesValue(decide[0].inputs?.review, review) && matchesValue(decide[0].output, plan) &&
+      (proof.exactDraft ? reviewCalls.length === 1 && draftCalls.length === 1 && review &&
+        draftCalls[0].parent_call_id === reviewCalls[0].call_id &&
+        review.presentation === "verbatim" && review.goal === world.goal &&
+        isDeepStrictEqual(review.transcript, proof.independent.transcript) &&
+        isDeepStrictEqual(review.result, proof.exactDraft) &&
+        matchesValue(reviewCalls[0].inputs?.transcript, review.transcript) &&
+        matchesValue(reviewCalls[0].inputs?.goal, world.goal) && matchesValue(reviewCalls[0].output, review) &&
+        Object.keys(draftCalls[0].inputs ?? {}).length === 3 &&
+        matchesValue(draftCalls[0].inputs.capturedText, review.transcript) &&
+        matchesValue(draftCalls[0].inputs.presentation, "verbatim") &&
+        matchesValue(draftCalls[0].inputs.goal, world.goal) &&
+        matchesValue(draftCalls[0].output, proof.exactDraft) :
+        review === null && reviewCalls.length === 0 && draftCalls.length === 0) &&
+      wrote.length === Number(shouldStage) &&
+      (shouldStage ? matchesValue(wrote[0].args, [plan, proof.exactDraft]) && matchesValue(wrote[0].result, handoff) &&
+        isDeepStrictEqual(handoff, proof.handoff) && typeof proof.artifact === "string" &&
+        hash(proof.artifact) === handoff?.sha256 && Buffer.byteLength(proof.artifact) === handoff?.bytes :
+        handoff === null && proof.handoff === null && proof.artifact === null),
+    "Expected exact native dictation frontiers, the installed draft review and the scoped local artifact"
+  );
+}
+
 export function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
   const proof = execution.diagnostics.openGoalVerification;
   const world = workflow.assignment;
@@ -7145,7 +7218,9 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
     "Expected a verified live goal and its actual installed Natlang skill call"
   );
   const evidence = { workspace: { proof } };
-  if (world.kind === "provider-handoff") {
+  if (world.kind === "dictation-handoff") {
+    retainedDictationHandoffEvidence(exercise, world, proof, skill);
+  } else if (world.kind === "provider-handoff") {
     retainedProviderHandoffEvidence(exercise, world, proof, skill);
   } else if (world.kind === "terminal-handoff") {
     const outcome = exercise.report.outcome;
