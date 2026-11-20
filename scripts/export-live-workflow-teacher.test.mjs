@@ -6565,13 +6565,15 @@ test("publication revision export rejects a review that omits a changed public e
   await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /exact changed public files/u);
 });
 
-async function checkDeliveryReceiptExport(t, id, verdict, browser = false) {
+async function checkDeliveryReceiptExport(t, id, verdict, surface = "history") {
   const { options, diagnostics, entry, save } = await fixture(t);
   const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
     path.resolve(import.meta.dirname, "..")
   );
   const cases = await loadLiveTeacherCases(checkouts);
-  const name = `${browser ? "chat-delivery" : "delivery-history"}-live-${id}`;
+  const handoff = surface === "conversation-handoff";
+  const browser = surface !== "history";
+  const name = `${browser ? surface : "delivery-history"}-live-${id}`;
   const { assignment } = cases.get(name);
   const pins = JSON.parse(await readFile(options.pins, "utf8"));
   await writeFile(options.pins, JSON.stringify({ ...pins, workspace: "system" }));
@@ -6658,31 +6660,57 @@ async function checkDeliveryReceiptExport(t, id, verdict, browser = false) {
     ],
   };
   if (browser) {
+    const wrongPanel = assignment.mode === "wrong-panel";
     const chatRequest = { ...request, contextId: "ctx", panelId: "assigned-chat" };
     const panel = {
-      contextId: "ctx", panelId: chatRequest.panelId, channelId: observation.channelId,
+      contextId: "ctx", panelId: chatRequest.panelId,
+      channelId: wrongPanel ? "another-channel" : observation.channelId,
       source: "panels/chat", phase: "ready",
-      messages: [{ messageId: canonical.messageId, text: canonical.text }],
+      messages: [{ messageId: wrongPanel ? "msg-decoy" : canonical.messageId, text: canonical.text }],
     };
     const chatReport = {
       delivery: report, panel: matched ? panel : null,
-      verdict: matched ? "verified" : "history-unverified",
+      verdict: !matched ? "history-unverified" : wrongPanel ? "panel-mismatch" : "verified",
     };
     const verification = diagnostics.deliveryHistory;
-    verification.request = chatRequest;
-    verification.chat = { actualPanel: panel, observedPanel: matched ? panel : null, panelReads: matched ? 1 : 0 };
+    verification.request = handoff ? { kind: "chat-handoff", ...chatRequest } : chatRequest;
+    verification.chat = {
+      actualPanel: panel, observedPanel: matched ? panel : null, panelReads: matched ? 1 : 0,
+      panelChannelId: panel.channelId, panelMessageId: panel.messages[0].messageId,
+    };
     Object.assign(verification.checks, { livePanel: true, browserScope: true, chatVerdict: true, panelReleased: true });
     const teacher = diagnostics.natlangTeacher;
     teacher.report = chatReport;
-    teacher.calls.push(call("reviewChatDelivery", "runWorkflow", { request: chatRequest }, chatReport));
+    const conversationRoot = handoff ? "reviewConversation" : "runWorkflow";
+    teacher.calls.push(call("reviewChatDelivery", conversationRoot, { request: chatRequest }, chatReport));
     if (matched) {
       teacher.calls.push(
         call("inspectPanel", "reviewChatDelivery", { panelId: chatRequest.panelId }, panel, [{
           service: "chatDeliveryPanel", method: "inspect", args: ref([chatRequest.panelId]), result: ref(panel),
         }]),
-        call("checkPanel", "reviewChatDelivery", { request: chatRequest, channelId: observation.channelId, panel }, true),
+        call("checkPanel", "reviewChatDelivery", { request: chatRequest, channelId: observation.channelId, panel }, !wrongPanel),
+      );
+      if (!wrongPanel) teacher.calls.push(
         call("checkMessage", "reviewChatDelivery", { retained: canonical, messages: panel.messages }, "verified"),
       );
+    }
+    if (handoff) {
+      verification.checks.handoff = true;
+      teacher.report = {
+        kind: "chat-handoff", basis: observation.channelId, ready: false,
+        next: assignment.next, chat: chatReport, blockers: [chatReport.verdict],
+      };
+      const choice = call("chooseChatHandoff", conversationRoot, { chat: chatReport }, assignment.next);
+      teacher.calls.push(
+        call("reviewConversation", "runWorkflow", { request: verification.request }, teacher.report),
+        choice,
+      );
+      await save();
+      await exportLiveTeacherWorkflow({ ...options, cases });
+      choice.record.inputs.chat = ref({ ...chatReport, verdict: "verified" });
+      await save();
+      await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /grounded next step/u);
+      return;
     }
     await save();
     await exportLiveTeacherWorkflow({ ...options, cases });
@@ -6720,10 +6748,16 @@ test("delivery history export rejects a receipt for an absent causal message", (
 );
 
 test("chat delivery export joins the visible message to the assigned panel read", (t) =>
-  checkDeliveryReceiptExport(t, "reopened-chat-after-retry", "matched", true)
+  checkDeliveryReceiptExport(t, "reopened-chat-after-retry", "matched", "chat-delivery")
 );
 test("chat delivery export requires a foreign receipt to stop before a browser read", (t) =>
-  checkDeliveryReceiptExport(t, "wrong-chat-same-reminder", "foreign-channel", true)
+  checkDeliveryReceiptExport(t, "wrong-chat-same-reminder", "foreign-channel", "chat-delivery")
+);
+test("conversation handoff joins the wrong-chat decision to the exact audit", (t) =>
+  checkDeliveryReceiptExport(t, "reopen-original-chat-after-context-switch", "matched", "conversation-handoff")
+);
+test("conversation handoff traces a missing receipt before reading the browser", (t) =>
+  checkDeliveryReceiptExport(t, "trace-absent-receipt-before-opening-chat", "missing-message", "conversation-handoff")
 );
 
 test("Android audit export requires the native app observation and keeps workspace readiness unverified", async (t) => {

@@ -118,6 +118,14 @@ service call. Both cases check that the panel has been archived. Run
 `chat-delivery-oracle-qualification` to exercise the real workspace and browser
 checks without model calls.
 
+Conversation handoff cases call `conversation/reviewConversation` in the shared
+program. The reviewer delegates to the durable replay and browser audit, then
+chooses a next step from its exact result. One case opens a different owned
+channel with identical text and requires the original chat to be reopened.
+The other requires tracing an absent receipt before any browser service call.
+Use the matching `conversation-handoff-oracle-<case-id>` check to qualify either
+case with real VibeStudio services.
+
 Assigned automation planning cases use the real Missions service. The shared
 program reads the assigned manual monitor and its ledger, calls the automation
 planner, then checks the same assignment again. The stale case edits the

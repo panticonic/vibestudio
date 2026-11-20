@@ -751,7 +751,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { retainedTriageWorlds },
     { githubSetupWorlds },
     { templateReleasePart, templateReleaseWorlds },
-    { chatDeliveryWorlds, deliveryHistoryWorlds, deliveryOriginByMode },
+    { chatDeliveryWorlds, conversationHandoffWorlds = [], deliveryHistoryWorlds, deliveryOriginByMode },
     { androidAuditWorlds },
     { androidInstallWorlds },
     { androidPairWorlds },
@@ -982,6 +982,21 @@ export async function loadLiveTeacherCases(checkouts) {
         ...workflowSourceGroups(deliveryHistoryWorkflow),
       ],
       root: "reviewChatDelivery",
+      assignment,
+      originVerdict: deliveryOriginByMode[assignment.mode],
+    });
+  }
+  for (const assignment of conversationHandoffWorlds) {
+    cases.set(`conversation-handoff-live-${assignment.id}`, {
+      ...deliveryHistoryWorkflow,
+      family: "workspace-live-conversation-handoff",
+      group: "conversation-handoff",
+      sourceGroups: [
+        "vibestudio:conversation:conversation-handoff",
+        "vibestudio:conversation:receipt-to-visible-chat-panel",
+        ...workflowSourceGroups(deliveryHistoryWorkflow),
+      ],
+      root: "reviewConversation",
       assignment,
       originVerdict: deliveryOriginByMode[assignment.mode],
     });
@@ -4119,8 +4134,10 @@ function deliveryHistoryEvidence(execution, exercise, _scenario, workflow) {
   const { contextId, caseId, request, observed, canonical, retryId, decoyId, checks } =
     fixture ?? {};
   const { assignment } = workflow;
-  const browser = workflow.root === "reviewChatDelivery";
-  const report = browser ? exercise.report?.delivery : exercise.report;
+  const handoff = workflow.root === "reviewConversation";
+  const browser = handoff || workflow.root === "reviewChatDelivery";
+  const browserReport = handoff ? exercise.report?.chat : exercise.report;
+  const report = browser ? browserReport?.delivery : exercise.report;
   const records = exercise.calls.map(({ record }) => record);
   const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
   const child = (parent, name) =>
@@ -4128,7 +4145,8 @@ function deliveryHistoryEvidence(execution, exercise, _scenario, workflow) {
     records.find(
       (record) => record.parent_call_id === parent.call_id && record.definition.name === name
     );
-  const browserReview = browser ? child(root, "reviewChatDelivery") : undefined;
+  const handoffReview = handoff ? child(root, "reviewConversation") : undefined;
+  const browserReview = browser ? child(handoff ? handoffReview : root, "reviewChatDelivery") : undefined;
   const review = child(browser ? browserReview : root, "reviewDeliveryHistory");
   const origin = child(review, "checkOrigin");
   const match = child(origin, "matchReceipt");
@@ -4209,28 +4227,36 @@ function deliveryHistoryEvidence(execution, exercise, _scenario, workflow) {
   );
   if (browser) {
     const { actualPanel, observedPanel, panelReads } = fixture.chat ?? {};
-    const browserReport = exercise.report;
     const inspectPanel = child(browserReview, "inspectPanel");
     const checkPanel = child(browserReview, "checkPanel");
     const checkMessage = child(browserReview, "checkMessage");
-    const visible = [{ messageId: canonical.messageId, text: canonical.text }];
+    const wrongPanel = assignment.mode === "wrong-panel";
+    const panelChannelId = wrongPanel ? fixture.chat?.panelChannelId : observed.channelId;
+    const panelMessageId = wrongPanel ? fixture.chat?.panelMessageId : canonical.messageId;
+    const visible = [{ messageId: panelMessageId, text: canonical.text }];
+    const chatRequest = { goal: request.goal, operationId: request.operationId, contextId, panelId: request.panelId };
+    const verdict = !matched ? "history-unverified" : wrongPanel ? "panel-mismatch" : "verified";
     requireEvidence(
       ["livePanel", "browserScope", "chatVerdict", "panelReleased"].every(
         (key) => checks[key] === true,
       ) &&
         request.contextId === contextId &&
         typeof request.panelId === "string" && !!request.panelId &&
+        (!wrongPanel || (
+          typeof panelChannelId === "string" && !!panelChannelId && panelChannelId !== observed.channelId &&
+          typeof panelMessageId === "string" && !!panelMessageId && panelMessageId !== canonical.messageId
+        )) &&
         isDeepStrictEqual(actualPanel, {
-          contextId, panelId: request.panelId, channelId: observed.channelId,
+          contextId, panelId: request.panelId, channelId: panelChannelId,
           source: "panels/chat", phase: "ready", messages: visible,
         }) &&
-        matchesValue(browserReview?.inputs?.request, request) &&
+        matchesValue(browserReview?.inputs?.request, handoff ? chatRequest : request) &&
         matchesValue(browserReview.output, browserReport) &&
+        browserReport.verdict === verdict &&
         (matched
           ? panelReads === 1 &&
             isDeepStrictEqual(observedPanel, actualPanel) &&
             isDeepStrictEqual(browserReport.panel, actualPanel) &&
-            browserReport.verdict === "verified" &&
             matchesValue(inspectPanel?.inputs?.panelId, request.panelId) &&
             matchesValue(inspectPanel.output, actualPanel) &&
             inspectPanel.effects?.length === 1 &&
@@ -4239,17 +4265,33 @@ function deliveryHistoryEvidence(execution, exercise, _scenario, workflow) {
             !inspectPanel.effects[0].error &&
             matchesValue(inspectPanel.effects[0].args, [request.panelId]) &&
             matchesValue(inspectPanel.effects[0].result, actualPanel) &&
-            matchesValue(checkPanel?.inputs?.request, request) &&
+            matchesValue(checkPanel?.inputs?.request, handoff ? chatRequest : request) &&
             matchesValue(checkPanel.inputs?.channelId, observed.channelId) &&
             matchesValue(checkPanel.inputs?.panel, actualPanel) &&
-            matchesValue(checkPanel.output, true) &&
-            matchesValue(checkMessage?.inputs?.retained, canonical) &&
-            matchesValue(checkMessage.inputs?.messages, visible) &&
-            matchesValue(checkMessage.output, "verified")
+            matchesValue(checkPanel.output, !wrongPanel) &&
+            (wrongPanel ? !checkMessage : (
+              matchesValue(checkMessage?.inputs?.retained, canonical) &&
+              matchesValue(checkMessage.inputs?.messages, visible) &&
+              matchesValue(checkMessage.output, "verified")
+            ))
           : panelReads === 0 && observedPanel === null && browserReport.panel === null &&
-            browserReport.verdict === "history-unverified" && !inspectPanel && !checkPanel && !checkMessage),
+            !inspectPanel && !checkPanel && !checkMessage),
       "Chat delivery needs the assigned stock panel's observed message, or a stop before browser access",
     );
+    if (handoff) {
+      const choice = child(handoffReview, "chooseChatHandoff");
+      requireEvidence(
+        checks.handoff === true && request.kind === "chat-handoff" &&
+          exercise.report.kind === request.kind && exercise.report.basis === observed.channelId &&
+          exercise.report.ready === false && isDeepStrictEqual(exercise.report.blockers, [verdict]) &&
+          exercise.report.next === assignment.next &&
+          matchesValue(handoffReview?.inputs?.request, request) &&
+          matchesValue(handoffReview.output, exercise.report) &&
+          matchesValue(choice?.inputs?.chat, browserReport) &&
+          matchesValue(choice.output, assignment.next),
+        "Conversation handoff needs a grounded next step from the exact chat audit"
+      );
+    }
   }
   return {
     world: {
