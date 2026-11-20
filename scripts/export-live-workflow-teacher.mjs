@@ -10,6 +10,20 @@ import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
 
 const sharedProgram = "skills/vibestudio-workflows/runWorkflow.nl";
 const templateGoalDomains = {
+  publication: {
+    namespace: "vibestudio:website-publication",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-publication-managed.ts" },
+    callable: "workTowardPublicationGoal",
+    checks: ["discoveredLaunchRecord", "choseExactReview", "boundWebsiteReadback",
+      "rereadCurrentAndRetainedPackage", "exactPreflight", "exactRevision", "localJournalUnchanged", "protectedHeads"],
+  },
+  recovery: {
+    namespace: "vibestudio:session-recovery",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-recovery-managed.ts" },
+    callable: "recoverSessionGoal",
+    checks: ["discoveredRetainedSources", "exactReplayScope", "boundNativeReplay",
+      "preservedRetainedChannels", "groundedRecoveryDecision", "verifiedRecoveryHandoff"],
+  },
   personal: {
     namespace: "vibestudio:mission-control",
     validator: { template: "personal", path: "skills/open-personal-goal/managed.ts" },
@@ -1039,9 +1053,10 @@ export async function loadLiveTeacherCases(checkouts) {
     const splitByGroup = new Map();
     const { openGoalWorlds, browserGoalWorlds = [], suiteGoalWorlds = [], newsGoalWorlds = [],
       spectroliteGoalWorlds = [], openGoalGoogleWorlds = [], openGoalPersonalWorlds = [],
-      operatorGoalWorlds = [] } = imported.default ?? imported;
+      operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [] } = imported.default ?? imported;
     for (const assignment of [...openGoalWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
-      ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds, ...operatorGoalWorlds]) {
+      ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
+      ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds]) {
       const split = assignment.split ?? "train";
       const sourceGroups = [assignment.sourceGroup, assignment.relatedSourceGroup].filter(Boolean);
       const scenario = `open-goal-${assignment.id}`;
@@ -6742,6 +6757,16 @@ function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
       "Expected navigation and readback bound to the original Spectrolite renderer"
     );
     evidence.cdp = { panelId: proof.panelId, observations: proof.observations, final: proof.final };
+  } else if (world.kind === "recovery") {
+    requireEvidence(
+      performed("recoverySessions", "discover") && performed("recoveryReplay", "resume") &&
+        performed("recoveryHandoff", "stage") === world.expected.stage &&
+        Array.isArray(proof.catalog) && proof.catalog.length > 0 &&
+        Array.isArray(proof.observed) && proof.observed.length > 0 &&
+        Array.isArray(proof.durable) && proof.durable.length > 0 &&
+        (world.expected.stage ? Boolean(proof.artifact && proof.handoffText) : proof.artifact === null),
+      "Expected retained session discovery, exact replay and the authorized handoff outcome"
+    );
   } else if (world.kind === "personal") {
     const writes = world.expected.steps.some(step => step.kind !== "held" && step.kind !== "observed");
     requireEvidence(
@@ -6750,6 +6775,24 @@ function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
         (world.expected.handoff.length === 0 || performed("missionGoalHandoff", "stage")) &&
         proof.baseline && Array.isArray(proof.transitions) && Array.isArray(proof.final),
       "Expected the observed mission board, scoped effects and final readback"
+    );
+  } else if (world.kind === "publication") {
+    const { choice } = world.expected;
+    const digest = /^sha256:[a-f0-9]{64}$/u;
+    requireEvidence(
+      performed("publicationGoal", "discover") && performed("publicationGoal", "bind") &&
+        isDeepStrictEqual(proof.selected, choice) &&
+        Boolean(choice.preflight) === performed("websiteReadback", "observe") &&
+        choice.compareRevision === performed("publicationRevision", "compare") &&
+        proof.reads?.preflight === Number(Boolean(choice.preflight)) &&
+        proof.reads?.revision === Number(choice.compareRevision) &&
+        digest.test(proof.artifact?.current) && digest.test(proof.artifact?.prior) &&
+        Boolean(proof.renderer?.buildKey) && proof.renderer.attemptId === proof.renderer.snapshotAttemptId &&
+        Array.isArray(proof.journal) && proof.journal.length === world.targets.filter(target => target.journal).length &&
+        proof.journal.every(({ id, seeded, current }) => world.targets.some(target => target.id === id && target.journal) &&
+          isDeepStrictEqual(seeded, current)) &&
+        exercise.report.outcome?.preflight?.status !== "verified",
+      "Expected an exact current website and scoped, unchanged publication journal"
     );
   } else if (world.kind === "operator") {
     const profile = world.target.surface === "terminal-profile";
