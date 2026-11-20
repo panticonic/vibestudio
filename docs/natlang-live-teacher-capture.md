@@ -125,6 +125,14 @@ preserve the main event, and check that no publication was attempted. The
 model-free live checks are `template-release-oracle-qualification-ready-component-snapshot`
 and `template-release-oracle-qualification-reinspect-renamed-snapshot`.
 
+GitHub setup cases use a Personal workspace with an empty GitHub credential
+inventory. The Natlang workflow reads the local status, chooses the minimum
+access level, and returns the exact native setup route with a surface-specific
+handoff. A Pages request needs an interactive setup offer. A headless request
+to read pull requests needs a panel before setup can continue. The checks
+leave credentials and workspace state untouched. Use the
+`github-setup-oracle-qualification-` cases for model-free validation.
+
 Gmail compose audits run in an owned channel in the Google Workspace template.
 The shared program calls the compose-history skill, projects a typed draft or
 delivery readback from that same native cursor, and calls the Gmail workflow

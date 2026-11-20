@@ -723,6 +723,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { gmailComposeHistoryWorlds },
     { unitIdentityWorlds },
     { transcriptCursorWorlds },
+    { githubSetupWorlds },
     { templateReleasePart, templateReleaseWorlds },
     { chatDeliveryWorlds, deliveryHistoryWorlds, deliveryOriginByMode },
     { androidAuditWorlds },
@@ -791,6 +792,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "gmail-compose-history-worlds.ts",
       "unit-identity-worlds.ts",
       "transcript-cursor-worlds.ts",
+      "github-setup-worlds.ts",
       "template-release-worlds.ts",
       "delivery-history-worlds.ts",
       "android-audit-worlds.ts",
@@ -864,6 +866,18 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of androidAuditWorlds) {
     cases.set(`android-audit-live-${assignment.id}`, { ...androidAuditWorkflow, assignment });
+  }
+  for (const assignment of githubSetupWorlds) {
+    cases.set(`github-setup-live-${assignment.id}`, {
+      family: "personal-live-github-setup",
+      namespace: "vibestudio:github",
+      group: "local-credential-setup-route",
+      workspace: "personal",
+      root: "reviewGitHubSetup",
+      validator: { template: "system-testing", path: "skills/system-testing/github-setup-managed.ts" },
+      assignment,
+      evidence: githubSetupEvidence,
+    });
   }
   for (const assignment of templateReleaseWorlds) {
     cases.set(`template-release-live-${assignment.id}`, {
@@ -2981,6 +2995,66 @@ function clientAdmissionEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: contextId, source, host, abi: workingAbi },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function githubSetupEvidence(execution, exercise, _scenario, { assignment }) {
+  const fixture = execution.diagnostics.githubSetup;
+  const verification = fixture?.verification;
+  const { request, status, route, checks } = verification ?? {};
+  const report = exercise.report;
+  const accessLevel = assignment.accessLevel;
+  requireEvidence(
+    fixture?.contextId === execution.provenance?.contextId &&
+      verification?.caseId === assignment.id && verification.passed === true &&
+      ["exactConnection", "accessLevel", "nativeRoute", "surfaceHandoff", "credentialsUnchanged", "workspaceUnchanged"].every(
+        (name) => checks?.[name] === true,
+      ) &&
+      request?.goal === assignment.goal && request.interactive === assignment.interactive &&
+      typeof request.operationId === "string" && !!request.operationId &&
+      isDeepStrictEqual(status, { stage: "needs-token", connected: false, verified: false }) &&
+      route?.action === "render-setup" && route.accessLevel === accessLevel &&
+      route.next === `inline_ui({ path: "skills/github/GitHubSetup.tsx", props: { accessLevel: "${accessLevel}" } })` &&
+      typeof route.reason === "string" && !!route.reason &&
+      isDeepStrictEqual(report, { status, accessLevel, route, handoff: assignment.handoff }),
+    "GitHub setup needs the observed local connection, exact access level, and surface handoff",
+  );
+  const records = exercise.calls.map(({ record }) => record);
+  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const child = (parent, name) => parent && records.find(
+    (record) => record.parent_call_id === parent.call_id && record.definition.name === name,
+  );
+  const review = child(root, "reviewGitHubSetup");
+  const read = child(review, "readGitHubSetup");
+  const level = child(review, "accessLevelFor");
+  const resolve = child(review, "resolveGitHubRoute");
+  const handoff = child(review, "chooseSetupHandoff");
+  const checkEffect = (record, service, method, args, result) => {
+    const effect = record?.effects?.[0];
+    return record?.effects?.length === 1 && effect.service === service &&
+      effect.method === method && !effect.error &&
+      matchesValue(effect.args, args) && matchesValue(effect.result, result);
+  };
+  requireEvidence(
+    matchesValue(review?.inputs?.request, request) && matchesValue(review.output, report) &&
+      matchesValue(read?.inputs?.operationId, request.operationId) && matchesValue(read.output, status) &&
+      matchesValue(level?.inputs?.intent, request.goal) && matchesValue(level.output, accessLevel) &&
+      matchesValue(resolve?.inputs?.operationId, request.operationId) &&
+      matchesValue(resolve.inputs?.accessLevel, accessLevel) && matchesValue(resolve.output, route) &&
+      matchesValue(handoff?.inputs?.route, route) && matchesValue(handoff.inputs?.interactive, request.interactive) &&
+      matchesValue(handoff.output, assignment.handoff) &&
+      records.flatMap(({ effects }) => effects ?? []).length === 2 &&
+      checkEffect(read, "githubSetupRead", "inspect", [request.operationId], status) &&
+      checkEffect(resolve, "githubSetupRoute", "resolve", [request.operationId, accessLevel], route) &&
+      Date.parse(read.ended_at) <= Date.parse(level.started_at) &&
+      Date.parse(level.ended_at) <= Date.parse(resolve.started_at) &&
+      Date.parse(resolve.ended_at) <= Date.parse(handoff.started_at),
+    "GitHub setup needs the assigned native reads and the nested least-access and presentation decisions",
+  );
+  return {
+    world: { context_id: fixture.contextId },
     checks,
     evidence: { workspace: { fixture } },
   };

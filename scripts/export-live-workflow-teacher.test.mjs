@@ -105,6 +105,7 @@ test("authored template worlds flow into the collector without losing original s
       ["gmail-compose-history-worlds", "gmailComposeHistoryWorlds", []],
       ["unit-identity-worlds", "unitIdentityWorlds", []],
       ["transcript-cursor-worlds", "transcriptCursorWorlds", []],
+      ["github-setup-worlds", "githubSetupWorlds", []],
       ["template-release-worlds", "templateReleaseWorlds", []],
       ["delivery-history-worlds", "deliveryHistoryWorlds", []],
       ["android-audit-worlds", "androidAuditWorlds", []],
@@ -3027,6 +3028,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["gmail-compose-history-worlds", "export const gmailComposeHistoryWorlds = [];"],
       ["unit-identity-worlds", "export const unitIdentityWorlds = [];"],
       ["transcript-cursor-worlds", "export const transcriptCursorWorlds = [];"],
+      ["github-setup-worlds", "export const githubSetupWorlds = [];"],
       ["template-release-worlds", "export const templateReleaseWorlds = [];"],
       ["delivery-history-worlds", "export const deliveryHistoryWorlds = []; export const chatDeliveryWorlds = [];"],
       ["android-audit-worlds", "export const androidAuditWorlds = [];"],
@@ -7228,5 +7230,70 @@ test("template release export requires the freshly inspected protected-main rece
   assert.throws(
     () => workflow.evidence(execution, exercise, id, workflow),
     /assigned inspection and nested publication review/u,
+  );
+});
+
+test("GitHub setup export binds the access decision to the native route and surface", async () => {
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(path.resolve(import.meta.dirname, ".."));
+  const cases = await loadLiveTeacherCases(checkouts);
+  const id = "github-setup-live-inspect-open-prs-headless";
+  const workflow = cases.get(id);
+  const { assignment } = workflow;
+  const request = { goal: assignment.goal, operationId: "assigned-github", interactive: false };
+  const status = { stage: "needs-token", connected: false, verified: false };
+  const route = {
+    action: "render-setup", accessLevel: "read-only",
+    next: 'inline_ui({ path: "skills/github/GitHubSetup.tsx", props: { accessLevel: "read-only" } })',
+    reason: "GitHub is disconnected",
+  };
+  const report = { status, accessLevel: "read-only", route, handoff: "interactive-required" };
+  const execution = {
+    provenance: { contextId: "owned" },
+    diagnostics: { githubSetup: {
+      contextId: "owned",
+      verification: {
+        caseId: assignment.id, request, status, route, passed: true,
+        checks: {
+          exactConnection: true, accessLevel: true, nativeRoute: true, surfaceHandoff: true,
+          credentialsUnchanged: true, workspaceUnchanged: true,
+        },
+      },
+    } },
+  };
+  const ref = (value) => {
+    const bytes = JSON.stringify(value);
+    return { complete: true, hash: createHash("sha256").update(bytes).digest("hex"), bytes: Buffer.byteLength(bytes) };
+  };
+  const call = (name, parent, args, output, effects = []) => ({
+    record: {
+      call_id: name, parent_call_id: parent, definition: { name },
+      inputs: Object.fromEntries(Object.entries(args).map(([key, value]) => [key, ref(value)])),
+      output: ref(output), started_at: "2026-11-20T00:00:00Z", ended_at: "2026-11-20T00:00:00Z", effects,
+    },
+  });
+  const resolve = call("resolveGitHubRoute", "reviewGitHubSetup", {
+    operationId: request.operationId, accessLevel: report.accessLevel,
+  }, route, [{
+    service: "githubSetupRoute", method: "resolve",
+    args: ref([request.operationId, report.accessLevel]), result: ref(route),
+  }]);
+  const exercise = {
+    report, rootCallIds: ["runWorkflow"],
+    calls: [
+      call("runWorkflow", null, {}, null),
+      call("reviewGitHubSetup", "runWorkflow", { request }, report),
+      call("readGitHubSetup", "reviewGitHubSetup", { operationId: request.operationId }, status, [{
+        service: "githubSetupRead", method: "inspect", args: ref([request.operationId]), result: ref(status),
+      }]),
+      call("accessLevelFor", "reviewGitHubSetup", { intent: request.goal }, report.accessLevel),
+      resolve,
+      call("chooseSetupHandoff", "reviewGitHubSetup", { route, interactive: false }, report.handoff),
+    ],
+  };
+  assert.equal(workflow.evidence(execution, exercise, id, workflow).world.context_id, "owned");
+  resolve.record.effects[0].args = ref([request.operationId, "collaborate"]);
+  assert.throws(
+    () => workflow.evidence(execution, exercise, id, workflow),
+    /nested least-access and presentation decisions/u,
   );
 });
