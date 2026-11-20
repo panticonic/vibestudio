@@ -25,6 +25,14 @@ const templateGoalDomains = {
     checks: ["inspectedExactInstalledDefinition", "verifiedExactProviderBoundary", "honoredRetainedReviewScope",
       "distinguishedDeployedDefinition", "verifiedExactLocalHandoff", "preservedWorkspaceState"],
   },
+  "personal-welcome": {
+    namespace: "vibestudio:personal-first-run",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-personal-welcome-managed.ts" },
+    callable: "workOnPersonalWelcomeGoal",
+    skill: "personalWelcome",
+    checks: ["exactWelcomeResource", "exactWelcomeFrontiers", "exactWelcomeDecision", "verifiedWelcomeOwner",
+      "verifiedWelcomeTour", "verifiedWelcomeRetry", "exactWelcomeHandoff", "preservedWelcomeContext", "rejectedForeignWelcome"],
+  },
   "local-width": {
     namespace: "vibestudio:local-width",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-local-width-managed.ts" },
@@ -1349,13 +1357,13 @@ export async function loadLiveTeacherCases(checkouts) {
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
-      openTerminalWorlds = [], openOwnedResearchWorlds = [], dictationHandoffWorlds = [], specialistHandoffWorlds = [], providerHandoffWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
+      openTerminalWorlds = [], openOwnedResearchWorlds = [], personalWelcomeWorlds = [], dictationHandoffWorlds = [], specialistHandoffWorlds = [], providerHandoffWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
     for (const assignment of [...openGoalWorlds, ...openDeployedInterfaceWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
       ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
       ...openGoalCalendarWorlds, ...openPersonalArtifactWorlds, ...openPersonalHistoryWorlds,
-      ...openTerminalWorlds, ...openOwnedResearchWorlds, ...dictationHandoffWorlds, ...specialistHandoffWorlds, ...providerHandoffWorlds, ...openGoalEvalHandoffWorlds, ...openGoalProgramRunWorlds, ...openGoalAuthoringWorlds, ...openGoalGoogleHandoffWorlds, ...openPersonalAutomationWorlds, ...openGoalOwnedPreviewWorlds, ...openDiagnosticWorlds, ...openLocalDeliveryWorlds, ...openGoalPanelRecoveryWorlds, ...openBrowserMigrationWorlds]) {
+      ...openTerminalWorlds, ...openOwnedResearchWorlds, ...personalWelcomeWorlds, ...dictationHandoffWorlds, ...specialistHandoffWorlds, ...providerHandoffWorlds, ...openGoalEvalHandoffWorlds, ...openGoalProgramRunWorlds, ...openGoalAuthoringWorlds, ...openGoalGoogleHandoffWorlds, ...openPersonalAutomationWorlds, ...openGoalOwnedPreviewWorlds, ...openDiagnosticWorlds, ...openLocalDeliveryWorlds, ...openGoalPanelRecoveryWorlds, ...openBrowserMigrationWorlds]) {
       const split = assignment.split ?? "train";
       const sourceGroups = [assignment.sourceGroup, assignment.relatedSourceGroup].filter(Boolean);
       const scenario = `open-goal-${assignment.id}`;
@@ -7296,6 +7304,74 @@ function retainedSpecialistHandoffEvidence(exercise, world, proof, skill) {
   );
 }
 
+function personalWelcomeEvidence(exercise, world, proof, skill) {
+  const { plan, reviews, handoff } = exercise.report.outcome;
+  const { explanation, ...facts } = plan;
+  const { index, snapshots, resolution, ownerRead, independent, probeInput, probeRun } = proof;
+  const [earlier, current] = snapshots;
+  const records = exercise.calls.map(({ record }) => record);
+  const child = (parent, name) => records.filter(record => record.parent_call_id === parent.call_id &&
+    record.definition?.name === name && record.outcome === "done");
+  const effects = (name, service, method) => records.flatMap(record =>
+    record.definition?.name === name && record.outcome === "done" ? (record.effects ?? [])
+      .filter(effect => effect.service === service && effect.method === method && !effect.error) : []);
+  const listed = effects("discoverWelcomeResources", "welcomeResourceIndex", "list");
+  const read = effects("readWelcomeFrontier", "welcomeReceiptStore", "read");
+  const routed = effects("resolveWelcomeResource", "welcomeResourceResolution", "resolve");
+  const owner = effects("readOwnerSnapshot", "onboardingRead", "inspect");
+  const textInput = effects("probeWorkspaceText", "explorerTextProbe", "input");
+  const textRun = effects("probeWorkspaceText", "explorerTextProbe", "run");
+  const writes = effects("stageWelcomeNextStep", "welcomeLocalHandoff", "stage");
+  const selection = child(skill, "chooseWelcomeResource");
+  const reconcile = child(skill, "reconcileWelcomeEvidence");
+  const localDecision = child(skill, "decideWelcomeNextStep");
+  const check = (wrapperName, policyName, review, argumentsMatch) => {
+    const wrapper = child(skill, wrapperName);
+    if (!review) return wrapper.length === 0;
+    if (wrapper.length !== 1 || !matchesValue(wrapper[0].output, review)) return false;
+    const caller = child(wrapper[0], policyName);
+    return caller.length === 1 && argumentsMatch(caller[0].inputs ?? {}) &&
+      matchesValue(caller[0].output, review.result);
+  };
+  const setup = reviews.setup;
+  const tour = reviews.tour;
+  const probe = reviews.probe;
+
+  requireEvidence(
+    listed.length === 1 && matchesValue(listed[0].args, []) && matchesValue(listed[0].result, index) &&
+      read.length === 2 && snapshots.length === 2 && snapshots.every((snapshot, i) =>
+        matchesValue(read[i].args, [index.scope.channelId]) && matchesValue(read[i].result, snapshot)) &&
+      selection.length === 1 && matchesValue(selection[0].inputs?.goal, world.goal) && matchesValue(selection[0].inputs?.index, index) &&
+      (plan.resourceId ? routed.length === 1 && resolution?.resourceId === plan.resourceId &&
+        matchesValue(routed[0].args, [plan.resourceId]) && matchesValue(routed[0].result, resolution) : routed.length === 0 && resolution === null) &&
+      reconcile.length === 1 && matchesValue(reconcile[0].inputs?.earlier, earlier) && matchesValue(reconcile[0].inputs?.current, current) &&
+      matchesValue(reconcile[0].inputs?.index, index) && matchesValue(reconcile[0].inputs?.resolved, resolution) &&
+      (!plan.resourceId || child(reconcile[0], "chooseCurrentReceipt").length === 1 && child(reconcile[0], "reviewWelcomeAuthority").length === 1) &&
+      localDecision.length === 1 && matchesValue(localDecision[0].inputs?.current, current) &&
+      matchesValue(localDecision[0].inputs?.reviews, reviews) && matchesValue(localDecision[0].output, plan) &&
+      isDeepStrictEqual(facts, independent.plan) && typeof explanation === "string" &&
+      isDeepStrictEqual(setup, independent.setup) && isDeepStrictEqual(tour, independent.tour) &&
+      check("reviewWelcomeSetup", "planSetup", setup, inputs => matchesValue(inputs.request, setup.request)) &&
+      (setup ? owner.length === 1 && matchesValue(owner[0].args, []) && matchesValue(owner[0].result, ownerRead) :
+        owner.length === 0 && ownerRead === null) &&
+      check("reviewWelcomeTour", "verifyTourStop", tour, inputs => matchesValue(inputs.stop, tour.stop) &&
+        matchesValue(inputs.frame, tour.frame) && matchesValue(inputs.sceneCount, tour.sceneCount)) &&
+      check("retryWelcomeProbe", "probeWorkspaceText", probe, inputs => matchesValue(inputs.request, probe.request)) &&
+      (independent.probeRequired ? probe && textInput.length === 1 && textRun.length === 1 &&
+        isDeepStrictEqual(probe.request, resolution.probe) && isDeepStrictEqual(probe.result.input, probeInput) &&
+        isDeepStrictEqual(probe.result.plan, probeRun.plan) && isDeepStrictEqual(probe.result.receipt, probeRun.receipt) &&
+        matchesValue(textInput[0].args, [probe.request.operationId]) && matchesValue(textInput[0].result, probeInput) &&
+        matchesValue(textRun[0].args, [probe.request.operationId, probe.result.plan]) && matchesValue(textRun[0].result, probeRun.receipt) :
+        probe === null && probeInput === null && probeRun === null && textInput.length === 0 && textRun.length === 0) &&
+      writes.length === Number(world.expected.action === "stage") &&
+      (writes.length ? matchesValue(writes[0].args, [plan, reviews]) && matchesValue(writes[0].result, handoff) &&
+        isDeepStrictEqual(handoff, proof.handoff) && typeof proof.artifact === "string" &&
+        hash(proof.artifact) === handoff?.sha256 && Buffer.byteLength(proof.artifact) === handoff?.bytes :
+        handoff === null && proof.handoff === null && proof.artifact === null),
+    "Expected the exact Personal welcome frontier, installed review evidence and authorized local handoff"
+  );
+}
+
 export function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
   const proof = execution.diagnostics.openGoalVerification;
   const world = workflow.assignment;
@@ -7318,7 +7394,9 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
     "Expected a verified live goal and its actual installed Natlang skill call"
   );
   const evidence = { workspace: { proof } };
-  if (world.kind === "dictation-handoff") {
+  if (world.kind === "personal-welcome") {
+    personalWelcomeEvidence(exercise, world, proof, skill);
+  } else if (world.kind === "dictation-handoff") {
     retainedDictationHandoffEvidence(exercise, world, proof, skill);
   } else if (world.kind === "specialist-handoff") {
     retainedSpecialistHandoffEvidence(exercise, world, proof, skill);
