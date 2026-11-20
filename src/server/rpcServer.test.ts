@@ -3999,6 +3999,10 @@ describe("RpcServer relay behavior", () => {
           serviceBinding: "declared",
           methodEffect: { kind: "open" },
           methodTier: "open",
+          methodWebsite: {
+            kind: "closed",
+            reason: "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
+          },
           principals: ["code"],
           presentation: { domain: "automation", verb: "manage" },
           title: "Workspace data",

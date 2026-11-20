@@ -66,7 +66,7 @@ function configFixture(initialYaml: string) {
       committedApplicationIds: [editedState.applicationId], integrationSourceEventIds: [],
     })),
     publishParticipantContext: vi.fn<WorkspaceVcs["publishParticipantContext"]>(async ({ push }) => ({
-      contextId: push.contextId, effectId: "effect:config", appliedAt: 1,
+      contextId: push.contextId, effectId: "effect:config", appliedAt: "2026-11-20T00:00:00.000Z",
       eventId: committedState.eventId, mainEventId: committedState.eventId,
     })),
   };

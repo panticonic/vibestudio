@@ -175,7 +175,7 @@ function mutationService(options?: Omit<ServiceOptions, "participantWorkspace">)
         eventId: push.expectedCommittedEventId,
         mainEventId: push.expectedCommittedEventId,
         effectId: "effect:fixture",
-        appliedAt: 1,
+        appliedAt: "2026-11-20T00:00:00.000Z",
       };
     }),
     readParticipantFiles: vi.fn(),
@@ -242,7 +242,7 @@ describe("canonical vcsService", () => {
       eventId: EVENT.eventId,
       mainEventId: EVENT.eventId,
       effectId: "effect:push",
-      appliedAt: 1,
+      appliedAt: "2026-11-20T00:00:00.000Z",
     };
     const workspace = {
       participantHistoryAttached: true,
