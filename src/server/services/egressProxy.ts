@@ -30,7 +30,10 @@ import {
   credentialRefusesAgentGrant,
   type CredentialCallerFacts,
 } from "@vibestudio/credential-client/credentialActor";
-import { findCredentialBinding, matchUrlBoundCredentialCandidates } from "@vibestudio/credential-client/urlBoundSelection";
+import {
+  findCredentialBinding,
+  matchUrlBoundCredentialCandidates,
+} from "@vibestudio/credential-client/urlBoundSelection";
 import {
   credentialCarrierStripHeaders,
   findMatchingUrlAudience,
@@ -1876,7 +1879,11 @@ export class EgressProxy {
       ...(requestedByUserId ? { userId: requestedByUserId } : {}),
     };
     const { candidates: matchingCredentials, refusal } = matchUrlBoundCredentialCandidates(
-      credentials, targetUrl, use, facts, { label }
+      credentials,
+      targetUrl,
+      use,
+      facts,
+      { label }
     );
     if (matchingCredentials.length === 0 && refusal) {
       throw new ForwardRejection(403, refusal, refusal);
@@ -1947,7 +1954,11 @@ export class EgressProxy {
       )
     );
     const { candidates: matching, refusal } = matchUrlBoundCredentialCandidates(
-      credentials, targetUrl, use, facts, { directOnly: true }
+      credentials,
+      targetUrl,
+      use,
+      facts,
+      { directOnly: true }
     );
     if (matching.length === 0 && refusal) {
       throw new ForwardRejection(403, refusal, refusal);

@@ -7,7 +7,10 @@ import {
   type ClientConfigRecord,
 } from "@vibestudio/credential-client/clientConfigStore";
 import { CredentialStore } from "@vibestudio/credential-client/store";
-import { findCredentialBinding, matchUrlBoundCredentialCandidates } from "@vibestudio/credential-client/urlBoundSelection";
+import {
+  findCredentialBinding,
+  matchUrlBoundCredentialCandidates,
+} from "@vibestudio/credential-client/urlBoundSelection";
 import { credentialLifecycle as summarizeCredentialLifecycle } from "@vibestudio/credential-client/credentialStatus";
 import {
   credentialCallerUse,
@@ -1338,8 +1341,16 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     use: CredentialBindingUse = "fetch",
     label?: string
   ): Promise<{ credential: Credential; usage: CredentialUseContext } | null> {
-    const { audienceMatches, candidates: credentials, refusal } = matchUrlBoundCredentialCandidates(
-      await credentialStore.listUrlBound(), targetUrl, use, caller, { label }
+    const {
+      audienceMatches,
+      candidates: credentials,
+      refusal,
+    } = matchUrlBoundCredentialCandidates(
+      await credentialStore.listUrlBound(),
+      targetUrl,
+      use,
+      caller,
+      { label }
     );
     if (credentials.length === 0 && refusal) {
       throw credentialCallerRefusalError(audienceMatches[0]!, refusal);
