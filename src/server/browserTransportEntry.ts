@@ -9,8 +9,8 @@
  * entry installs a fallback shell bridge backed by the panel's own `/rpc`
  * WebSocket when the host has not already exposed one.
  *
- * It also applies early `stateArgs:updated` events the host pushes over the
- * bridge before the panel bundle's runtime is up.
+ * It retains the latest committed state arguments for startup. The installed
+ * runtime consumes the same shell event once the panel bundle starts.
  *
  * Timing: the panel bootstrap script runs as a blocking <script> and sets the panel globals
  * before dynamically loading this script. Host preload/injection may already
@@ -18,40 +18,18 @@
  * panel bundle starts.
  */
 
-import { applyStateArgsSnapshot } from "@vibestudio/shared/panel/applyStateArgsSnapshot";
 import { installFallbackShellBridge } from "./browserShellBridge.js";
 
-type RuntimeEventMessage = {
-  type: "event";
-  event: string;
-  payload: unknown;
-};
-
-function isRuntimeEventMessage(message: unknown): message is RuntimeEventMessage {
-  return (
-    typeof message === "object" &&
-    message !== null &&
-    (message as { type?: unknown }).type === "event" &&
-    typeof (message as { event?: unknown }).event === "string"
-  );
-}
-
-// ---------------------------------------------------------------------------
-// stateArgs listener
-// ---------------------------------------------------------------------------
-// The host pushes runtime events (incl. stateArgs:updated) over the shell bridge
-// back to the panel's logical session. This early listener applies them before
-// the panel bundle's runtime takes over; applyStateArgsSnapshot is idempotent.
-
+// The panel runtime owns reactive updates. Before it subscribes to shell events,
+// keep its initial snapshot current without emitting a second DOM event.
+const browserWindow = window as Window & { __vibestudioStateArgs?: Record<string, unknown> };
 const shell = installFallbackShellBridge();
-
-shell?.onEnvelope?.((envelope) => {
-  const message = envelope.message;
-  if (isRuntimeEventMessage(message) && message.event === "stateArgs:updated") {
-    const stateArgs =
-      message.payload && typeof message.payload === "object"
-        ? (message.payload as Record<string, unknown>)
-        : {};
-    applyStateArgsSnapshot(stateArgs);
+shell?.onEnvelope?.(({ delivery, message }) => {
+  if (
+    delivery.caller.callerKind === "server" &&
+    message.type === "event" &&
+    message.event === "runtime:stateArgsChanged"
+  ) {
+    browserWindow.__vibestudioStateArgs = message.payload as Record<string, unknown>;
   }
 });

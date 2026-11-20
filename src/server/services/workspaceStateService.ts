@@ -61,6 +61,12 @@ export type SlotStateChange =
         artifact?: { buildKey: string; executionDigest: string };
       };
     }
+  | {
+      kind: "state-args";
+      slotId: string;
+      runtimeEntityId: string;
+      stateArgs: Record<string, unknown>;
+    }
   | { kind: "tree" }
   | { kind: "closed"; slotIds: string[] };
 
@@ -494,7 +500,12 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
           activeBuildKey,
           ...(schema ? { schema } : {}),
         });
-        deps.onSlotStateChanged?.();
+        deps.onSlotStateChanged?.({
+          kind: "state-args",
+          slotId,
+          runtimeEntityId: detail.entity.id,
+          stateArgs: next,
+        });
         return next;
       },
       "slot.move": async (ctx, [slotId, parentSlotId, placement]) => {

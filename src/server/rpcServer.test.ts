@@ -1122,6 +1122,22 @@ describe("RpcServer relay behavior", () => {
     expect(relayAuthorization).not.toHaveBeenCalled();
   });
 
+  it.each(["panel:stateArgsChanged", "runtime:stateArgsChanged"])(
+    "reserves committed %s publication for the server",
+    (event) => {
+      const { server } = createServer();
+      expect(
+        testServer(server).checkRelayAuth("panel:nav-a", "panel", "panel:nav-b", `__event:${event}`)
+      ).toEqual({
+        ok: false,
+        reason: "Only the committing server can publish panel state arguments",
+      });
+      expect(
+        testServer(server).checkRelayAuth("main", "server", "panel:nav-b", `__event:${event}`)
+      ).toEqual({ ok: true });
+    }
+  );
+
   it("replaces forged WS route identity with the authenticated panel principal", async () => {
     const { server, grantPanel } = createServer();
     const sourceWs = createTestWs();

@@ -98,6 +98,7 @@ export type EventName =
   | "panel:executionActivated"
   | "panel:executionFailed"
   | "panel:stateArgsChanged"
+  | "runtime:stateArgsChanged"
   | "panel-presentation-changed"
   | "panel-presentation-requested"
   | "panel-local-presentation-changed"
@@ -350,8 +351,12 @@ export interface EventPayloads {
    */
   "panel:stateArgsChanged": {
     panelId: string;
+    runtimeEntityId: string;
+    connectionId: string;
     stateArgs: Record<string, unknown>;
   };
+  /** The committed snapshot, addressed to the exact live panel renderer. */
+  "runtime:stateArgsChanged": Record<string, unknown>;
   "panel-presentation-changed": { revision: number; panelIds: string[] };
   /**
    * Tendrils (docs/tendrils-plan.md 4.5): an agent or user asked for a panel
@@ -661,6 +666,7 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "panel:executionActivated",
   "panel:executionFailed",
   "panel:stateArgsChanged",
+  "runtime:stateArgsChanged",
   "panel-presentation-changed",
   "panel-presentation-requested",
   "panel-local-presentation-changed",

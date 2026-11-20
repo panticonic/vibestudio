@@ -901,7 +901,12 @@ describe("workspaceStateService — slot-state change hook", () => {
         { entryKey: "entry-1", activeBuildKey: buildKey, schema },
       ],
     });
-    expect(onSlotStateChanged).toHaveBeenCalledTimes(1);
+    expect(onSlotStateChanged).toHaveBeenCalledExactlyOnceWith({
+      kind: "state-args",
+      slotId: "panel:tree/s1",
+      runtimeEntityId: "panel:nav-s1",
+      stateArgs: { mode: "b" },
+    });
   });
 
   it("refuses a stateArgs patch for a missing panel without dispatching a write", async () => {
