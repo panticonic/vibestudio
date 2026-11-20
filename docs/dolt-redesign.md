@@ -1025,7 +1025,10 @@ What becomes local (F4, never versioned, never merged, empty in a fork):
 - `publication_intents` and `publication_delivery_outbox`;
 - `gad_materialized_repository_states` (receipts of host observations);
 - `vcs_context_projection_policies`;
-- the derived `commit_index(stable_id → commit)` accelerator;
+- the bounded `commit_index` cache from (exact tip, state kind, stable ID)
+  to origin commit;
+- the derived `content_roots` and `content_root_basis` tables for garbage
+  collection, maintained from retained Dolt branch tips;
 - the FTS search indexes;
 - the grants a cell has issued and the remotes it holds (`_cf_*`, the runtime
   keeps them out of every commit).

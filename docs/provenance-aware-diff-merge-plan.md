@@ -2019,6 +2019,11 @@ Integrate valid feedback destructively and repeat affected tests.
 
 ## 14. Acceptance matrix
 
+For the Dolt release, start with a fresh installed workspace. Run the
+participant workflow through a normal shutdown and restart on the same
+runtime. Forced server crashes and lost replies are optional follow-up
+coverage, as in §13.
+
 ### Causality
 
 - Trusted agent vessels preserve the causal parent of each concurrent tool
@@ -2050,6 +2055,9 @@ Integrate valid feedback destructively and repeat affected tests.
 ### State and identity
 
 - A committed state is addressed by event ID; a local state by application ID.
+- Resolve each state against the exact Dolt history tip admitted for that
+  participant or for protected main. A stable ID can have different origins
+  in separate histories. Refuse an ambiguous origin at a merged tip.
 - Clean contexts point working head at committed event.
 - Each application basis equals the previous working head.
 - Equal semantic roots may exist in distinct event histories without collapsing
@@ -2105,6 +2113,9 @@ Integrate valid feedback destructively and repeat affected tests.
 
 ### Boundary and durability
 
+- Each participant can reopen saved work in their own working copy after a
+  normal restart. Another participant can read the exact approved revision
+  from protected main and cannot read the unpublished revision.
 - Workspace manifest, semantic store, protected refs, and runtime host share
   one exact destructive system epoch; mismatches fail before readiness.
 - Workers and Durable Objects follow their owning context state by default;
@@ -2129,11 +2140,11 @@ Integrate valid feedback destructively and repeat affected tests.
 - Semantic code invokes no filesystem/ref effects directly and does not
   orchestrate builds.
 - Host ports contain no semantic change/decision/integration branching.
-- Recoverable pending materialization and publication effects retry
-  idempotently after every crash window without being starved by an earlier
-  unapplied publication that still needs its original authority; missing or
-  stale context projections derive and execute a fresh exact repair command
-  without replaying journal state.
+- On normal reopen, pending materialization and publication effects retry
+  idempotently. An earlier unapplied publication awaiting its original
+  authority does not starve later ready work. Missing or stale context
+  projections derive and execute a fresh exact repair command without
+  replaying journal state.
 - A request that derives a future wake does not succeed until the one durable
   alarm row is written. The driver lists due rows without consuming them and
   clears/replaces a row only after the handler outcome is durably acknowledged.
