@@ -105,6 +105,7 @@ test("authored template worlds flow into the collector without losing original s
       ["gmail-compose-history-worlds", "gmailComposeHistoryWorlds", []],
       ["unit-identity-worlds", "unitIdentityWorlds", []],
       ["transcript-cursor-worlds", "transcriptCursorWorlds", []],
+      ["template-release-worlds", "templateReleaseWorlds", []],
       ["delivery-history-worlds", "deliveryHistoryWorlds", []],
       ["android-audit-worlds", "androidAuditWorlds", []],
       ["android-install-worlds", "androidInstallWorlds", []],
@@ -3026,6 +3027,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["gmail-compose-history-worlds", "export const gmailComposeHistoryWorlds = [];"],
       ["unit-identity-worlds", "export const unitIdentityWorlds = [];"],
       ["transcript-cursor-worlds", "export const transcriptCursorWorlds = [];"],
+      ["template-release-worlds", "export const templateReleaseWorlds = [];"],
       ["delivery-history-worlds", "export const deliveryHistoryWorlds = []; export const chatDeliveryWorlds = [];"],
       ["android-audit-worlds", "export const androidAuditWorlds = [];"],
       ["android-install-worlds", "export const androidInstallWorlds = [];"],
@@ -7158,5 +7160,73 @@ test("automation planning export requires the post-plan readback of the edited m
   assert.throws(
     () => workflow.evidence(execution, exercise, id, workflow),
     /readback taken after its decision/u,
+  );
+});
+
+test("template release export requires the freshly inspected protected-main receipt", async () => {
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(path.resolve(import.meta.dirname, ".."));
+  const cases = await loadLiveTeacherCases(checkouts);
+  const id = "template-release-live-reinspect-renamed-snapshot";
+  const workflow = cases.get(id);
+  const { assignment, part } = workflow;
+  const digest = (hex) => `v1-sha256:${hex.repeat(64)}`;
+  const original = {
+    mainEventId: "protected-head", name: assignment.previousName,
+    requestedParts: [part], includedParts: [part, "packages/companion"],
+    requiredParts: ["packages/companion"], manifestDigest: digest("a"), fingerprint: digest("b"),
+  };
+  const actual = { ...original, name: assignment.name, manifestDigest: digest("c"), fingerprint: digest("d") };
+  const request = {
+    goal: assignment.goal, operationId: "owned-review", reviewedFingerprint: original.fingerprint,
+    acknowledgedParts: original.requiredParts, destination: assignment.destination, version: assignment.version,
+  };
+  const publicationInput = {
+    kind: "publication", goal: request.goal, inspectedFingerprint: original.fingerprint,
+    currentFingerprint: actual.fingerprint, missingParts: [], destination: request.destination,
+    version: request.version, receipt: null,
+  };
+  const report = { plan: actual, review: { kind: "publication", next: "reinspect", basis: actual.fingerprint } };
+  const execution = {
+    provenance: { contextId: "owned" },
+    diagnostics: { templateRelease: {
+      contextId: "owned",
+      verification: {
+        caseId: assignment.id, request, original, actual, passed: true,
+        checks: {
+          assignedScope: true, protectedMain: true, closure: true, nativeManifest: true, fingerprint: true, report: true,
+        },
+      },
+    } },
+  };
+  const ref = (value) => {
+    const bytes = JSON.stringify(value);
+    return { complete: true, hash: createHash("sha256").update(bytes).digest("hex"), bytes: Buffer.byteLength(bytes) };
+  };
+  const call = (name, parent, args, output, effects = []) => ({
+    record: {
+      call_id: name, parent_call_id: parent, definition: { name },
+      inputs: Object.fromEntries(Object.entries(args).map(([key, value]) => [key, ref(value)])),
+      output: ref(output), started_at: "2026-11-20T00:00:00Z", ended_at: "2026-11-20T00:00:00Z", effects,
+    },
+  });
+  const read = call("readAuthoringPlan", "reviewTemplateRelease", { operationId: request.operationId }, actual, [{
+    service: "templateAuthoringRead", method: "inspect", args: ref([request.operationId]), result: ref(actual),
+  }]);
+  const exercise = {
+    report, rootCallIds: ["runWorkflow"],
+    calls: [
+      call("runWorkflow", null, {}, null),
+      call("reviewTemplateRelease", "runWorkflow", { request }, report),
+      read,
+      call("reviewTemplate", "reviewTemplateRelease", { request: publicationInput }, report.review),
+      call("reviewPublication", "reviewTemplate", { request: publicationInput }, report.review),
+      call("confirmInspection", "reviewPublication", { request: publicationInput }, "reinspect"),
+    ],
+  };
+  assert.equal(workflow.evidence(execution, exercise, id, workflow).world.seed_revision, actual.mainEventId);
+  read.record.effects[0].result = ref(original);
+  assert.throws(
+    () => workflow.evidence(execution, exercise, id, workflow),
+    /assigned inspection and nested publication review/u,
   );
 });

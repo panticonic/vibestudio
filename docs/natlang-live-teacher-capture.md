@@ -118,6 +118,13 @@ mission definition after the first read. Both cases require the installed
 scheduling state and run count to stay unchanged. Run
 `automation-planning-managed-qualification` for the model-free live check.
 
+Template release cases inspect VibeStudio's protected-main template authoring
+plan and pass the exact receipt to the Natlang publication review. The stable
+and renamed assignments compare native fingerprint and manifest digests,
+preserve the main event, and check that no publication was attempted. The
+model-free live checks are `template-release-oracle-qualification-ready-component-snapshot`
+and `template-release-oracle-qualification-reinspect-renamed-snapshot`.
+
 Gmail compose audits run in an owned channel in the Google Workspace template.
 The shared program calls the compose-history skill, projects a typed draft or
 delivery readback from that same native cursor, and calls the Gmail workflow

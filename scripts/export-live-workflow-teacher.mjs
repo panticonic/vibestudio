@@ -723,6 +723,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { gmailComposeHistoryWorlds },
     { unitIdentityWorlds },
     { transcriptCursorWorlds },
+    { templateReleasePart, templateReleaseWorlds },
     { chatDeliveryWorlds, deliveryHistoryWorlds, deliveryOriginByMode },
     { androidAuditWorlds },
     { androidInstallWorlds },
@@ -790,6 +791,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "gmail-compose-history-worlds.ts",
       "unit-identity-worlds.ts",
       "transcript-cursor-worlds.ts",
+      "template-release-worlds.ts",
       "delivery-history-worlds.ts",
       "android-audit-worlds.ts",
       "android-install-worlds.ts",
@@ -862,6 +864,19 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of androidAuditWorlds) {
     cases.set(`android-audit-live-${assignment.id}`, { ...androidAuditWorkflow, assignment });
+  }
+  for (const assignment of templateReleaseWorlds) {
+    cases.set(`template-release-live-${assignment.id}`, {
+      family: "workspace-live-template-release",
+      namespace: "vibestudio:templates",
+      group: "protected-main-authoring-plan",
+      workspace: "system",
+      root: "reviewTemplateRelease",
+      validator: { template: "system-testing", path: "skills/system-testing/template-release-managed.ts" },
+      assignment,
+      part: templateReleasePart,
+      evidence: templateReleaseEvidence,
+    });
   }
   for (const assignment of deliveryHistoryWorlds) {
     cases.set(`delivery-history-live-${assignment.id}`, {
@@ -2966,6 +2981,77 @@ function clientAdmissionEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: contextId, source, host, abi: workingAbi },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function templateReleaseEvidence(execution, exercise, _scenario, { assignment, part }) {
+  const fixture = execution.diagnostics.templateRelease;
+  const verification = fixture?.verification;
+  const { request, original, actual, checks } = verification ?? {};
+  const report = exercise.report;
+  const stale = "previousName" in assignment;
+  const digest = /^v1-sha256:[0-9a-f]{64}$/u;
+  requireEvidence(
+    fixture?.contextId === execution.provenance?.contextId &&
+      verification?.caseId === assignment.id && verification.passed === true &&
+      ["assignedScope", "protectedMain", "closure", "nativeManifest", "fingerprint", "report"].every(
+        (key) => checks?.[key] === true,
+      ) &&
+      request?.goal === assignment.goal &&
+      typeof request.operationId === "string" && !!request.operationId &&
+      request.destination === assignment.destination && request.version === assignment.version &&
+      original?.name === (assignment.previousName ?? assignment.name) && actual?.name === assignment.name &&
+      typeof actual.mainEventId === "string" && !!actual.mainEventId && original.mainEventId === actual.mainEventId &&
+      [original.fingerprint, original.manifestDigest, actual.fingerprint, actual.manifestDigest].every(
+        (value) => typeof value === "string" && digest.test(value),
+      ) &&
+      request.reviewedFingerprint === original.fingerprint &&
+      (original.fingerprint !== actual.fingerprint) === stale &&
+      (original.manifestDigest !== actual.manifestDigest) === stale &&
+      [original, actual].every((plan) =>
+        isDeepStrictEqual(plan.requestedParts, [part]) && Array.isArray(plan.includedParts) &&
+        plan.includedParts.includes(part) && Array.isArray(plan.requiredParts) &&
+        plan.requiredParts.every((required) => plan.includedParts.includes(required)),
+      ) &&
+      isDeepStrictEqual(request.acknowledgedParts, original.requiredParts) &&
+      isDeepStrictEqual(actual.requiredParts, original.requiredParts) &&
+      isDeepStrictEqual(report, {
+        plan: actual, review: { kind: "publication", next: assignment.next, basis: actual.fingerprint },
+      }),
+    "Template release needs the verified protected-main receipt and its current exact fingerprint",
+  );
+  const records = exercise.calls.map(({ record }) => record);
+  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const child = (parent, name) => parent && records.find(
+    (record) => record.parent_call_id === parent.call_id && record.definition.name === name,
+  );
+  const release = child(root, "reviewTemplateRelease");
+  const read = child(release, "readAuthoringPlan");
+  const template = child(release, "reviewTemplate");
+  const publication = child(template, "reviewPublication");
+  const confirm = child(publication, "confirmInspection");
+  const effect = read?.effects?.[0];
+  const reviewInput = {
+    kind: "publication", goal: request.goal, inspectedFingerprint: original.fingerprint,
+    currentFingerprint: actual.fingerprint, missingParts: [], destination: request.destination,
+    version: request.version, receipt: null,
+  };
+  requireEvidence(
+    matchesValue(release?.inputs?.request, request) && matchesValue(release.output, report) &&
+      matchesValue(read?.inputs?.operationId, request.operationId) && matchesValue(read.output, actual) &&
+      records.flatMap(({ effects }) => effects ?? []).length === 1 &&
+      effect?.service === "templateAuthoringRead" && effect.method === "inspect" && !effect.error &&
+      matchesValue(effect.args, [request.operationId]) && matchesValue(effect.result, actual) &&
+      matchesValue(template?.inputs?.request, reviewInput) && matchesValue(template.output, report.review) &&
+      matchesValue(publication?.inputs?.request, reviewInput) && matchesValue(publication.output, report.review) &&
+      matchesValue(confirm?.inputs?.request, reviewInput) && matchesValue(confirm.output, assignment.next) &&
+      Date.parse(read.ended_at) <= Date.parse(template.started_at),
+    "Template release needs the assigned inspection and nested publication review without a publish call",
+  );
+  return {
+    world: { context_id: fixture.contextId, seed_revision: actual.mainEventId },
     checks,
     evidence: { workspace: { fixture } },
   };
