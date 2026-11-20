@@ -20,16 +20,18 @@ import type {
   WorkspaceSemanticOutput,
   WorkspaceVcs,
 } from "../vcsHost/workspaceVcs.js";
+import { workspaceParticipantIdentity } from "../vcsHost/workspaceHistoryHost.js";
 import { createVcsService, type VcsServiceDeps } from "./vcsService.js";
 import { gadWireMethods } from "@vibestudio/service-schemas/workspaceSource";
 import type { RpcCausalParent } from "@vibestudio/rpc";
 
 const EVENT = { kind: "event" as const, eventId: "event:one" };
+const TEST_SUBJECT = { userId: "test-user", handle: "test" };
 const INTERNAL_AUTHORIZATION = {} as unknown as NonNullable<ServiceContext["authorization"]>;
 
 function workerContext(id = "worker:one"): ServiceContext {
   return {
-    caller: createVerifiedCaller(id, "worker"),
+    caller: createVerifiedCaller(id, "worker", null, null, TEST_SUBJECT),
     requestId: "request:one",
     authorization: INTERNAL_AUTHORIZATION,
   };
@@ -37,7 +39,7 @@ function workerContext(id = "worker:one"): ServiceContext {
 
 function shellContext(): ServiceContext {
   return {
-    caller: createVerifiedCaller("shell:test-device", "shell"),
+    caller: createVerifiedCaller("shell:test-device", "shell", null, null, TEST_SUBJECT),
     authorization: INTERNAL_AUTHORIZATION,
   };
 }
@@ -49,12 +51,12 @@ function agentContext(channelId = "channel:own"): ServiceContext {
       contextId: "context:agent",
       channelId,
       agentId: "agent:stable",
-    }),
+    }, TEST_SUBJECT),
     authorization: INTERNAL_AUTHORIZATION,
   };
 }
 
-function service(options?: {
+type ServiceOptions = {
   context?: string | null;
   owned?: Array<{
     contextId: string;
@@ -85,7 +87,9 @@ function service(options?: {
   ) => Promise<void>;
   onEpochTransitionPublished?: () => void;
   participantWorkspace?: VcsServiceDeps["participantWorkspace"];
-}) {
+};
+
+function service(options?: ServiceOptions) {
   const semanticCall = vi.fn<WorkspaceVcs["semanticCausalCall"]>(
     async <M extends WorkspaceSemanticMethod>(
       method: M,
@@ -102,32 +106,10 @@ function service(options?: {
       return (options?.result ?? { contextId: "context:own" }) as WorkspaceSemanticOutput<M>;
     }
   );
-  const semanticPublishCall = vi.fn<WorkspaceVcs["semanticPublishCall"]>(
-    async (input, causalParent, _caller, _signal) => {
-      if (options && "failure" in options) throw options.failure;
-      if (options?.semanticCall)
-        return (await options.semanticCall(
-          "vcsPush",
-          input,
-          causalParent
-        )) as WorkspaceSemanticOutput<"vcsPush">;
-      return (options?.result ?? {
-        contextId: "context:own",
-      }) as WorkspaceSemanticOutput<"vcsPush">;
-    }
-  );
-  const semanticEpochTransitionPublishCall = vi.fn<
-    WorkspaceVcs["semanticEpochTransitionPublishCall"]
-  >(async (_input, _causalParent, _caller, _signal) => {
-    if (options && "failure" in options) throw options.failure;
-    return (options?.result ?? { contextId: "context:own" }) as WorkspaceSemanticOutput<"vcsPush">;
-  });
   const definition = createVcsService({
     participantWorkspace: options?.participantWorkspace,
     workspaceVcs: {
       semanticCausalCall: semanticCall,
-      semanticPublishCall,
-      semanticEpochTransitionPublishCall,
       referencesReachable: vi.fn<WorkspaceVcs["referencesReachable"]>(
         async (contextIds, references) =>
           typeof options?.referencesReachable === "function"
@@ -156,8 +138,72 @@ function service(options?: {
   return {
     definition,
     semanticCall,
-    semanticPublishCall,
-    semanticEpochTransitionPublishCall,
+  };
+}
+
+function mutationService(options?: Omit<ServiceOptions, "participantWorkspace">) {
+  const canonical = {
+    source: "workers/workspace-source",
+    className: "GadHistoryDO",
+    objectKey: "canonical",
+  };
+  const dispatch = vi.fn(async (_target: unknown, method: string) => {
+    if (method === "readHistoryReferenceVisibility") return true;
+    throw new Error(`unexpected history method ${method}`);
+  });
+  const workspace = {
+    participantHistoryAttached: true,
+    openParticipantScope: vi.fn<WorkspaceVcs["openParticipantScope"]>(async (input) => {
+      const { caller, contextId, ownerContextId } = input;
+      const participant = workspaceParticipantIdentity(caller, ownerContextId);
+      const owner = { ...canonical, objectKey: `work-${sha256HexSyncText(participant)}` };
+      return { canonical, owner, dispatch: { dispatch }, caller, contextId, ownerContextId, workingHead: "head" };
+    }),
+    readParticipantMain: vi.fn(),
+    editParticipantContext: vi.fn(),
+    transferParticipantContext: vi.fn(),
+    revertParticipantContext: vi.fn(),
+    importParticipantSnapshot: vi.fn(),
+    registerParticipantExternalDelta: vi.fn(),
+    setParticipantExternalDeltaStatus: vi.fn(),
+    saveParticipantContext: vi.fn(),
+    discardParticipantContext: vi.fn(),
+    publishParticipantContext: vi.fn<WorkspaceVcs["publishParticipantContext"]>(async ({ push }) => {
+      if (options && "failure" in options) throw options.failure;
+      return {
+        contextId: push.contextId,
+        eventId: push.expectedCommittedEventId,
+        mainEventId: push.expectedCommittedEventId,
+        effectId: "effect:fixture",
+        appliedAt: 1,
+      };
+    }),
+    readParticipantFiles: vi.fn(),
+    readParticipantMemory: vi.fn(),
+    walkParticipantHistory: vi.fn(),
+    queryParticipantHistory: vi.fn(),
+    searchParticipantHistory: vi.fn(),
+    reviewParticipantMerge: vi.fn(),
+    mergeParticipantContext: vi.fn<WorkspaceVcs["mergeParticipantContext"]>(async ({ merge }) => ({
+      head: "head",
+      value: merge.expectedWorkingHead,
+      result: {
+        status: "unchanged",
+        contextId: merge.contextId,
+        workingHead: merge.expectedWorkingHead,
+        resolution: { complete: true, concluded: true, remainingCoordinateCount: 0 },
+        intents: [],
+        intentsTruncated: false,
+        counts: { adopt: 0, convergent: 0, composed: 0, conflict: 0, resolved: 0 },
+        conflicts: [],
+        nextConflictCursor: null,
+      },
+    })),
+  };
+  return {
+    ...service({ ...options, participantWorkspace: workspace }),
+    publish: workspace.publishParticipantContext,
+    discard: workspace.discardParticipantContext,
   };
 }
 
@@ -226,7 +272,7 @@ describe("canonical vcsService", () => {
       mergeParticipantContext: vi.fn(),
     };
     const onEpochTransitionPublished = vi.fn();
-    const { definition, semanticCall, semanticPublishCall, semanticEpochTransitionPublishCall } = service({
+    const { definition, semanticCall } = service({
       context: scope.contextId,
       participantWorkspace: workspace,
       onEpochTransitionPublished,
@@ -412,12 +458,10 @@ describe("canonical vcsService", () => {
     });
     expect(onEpochTransitionPublished).toHaveBeenCalledOnce();
     expect(semanticCall).not.toHaveBeenCalled();
-    expect(semanticPublishCall).not.toHaveBeenCalled();
-    expect(semanticEpochTransitionPublishCall).not.toHaveBeenCalled();
   });
 
   it("keeps installation provenance restricted to reviewed source consumers", async () => {
-    const { definition, semanticPublishCall } = service({ context: "context:own" });
+    const { definition, publish } = mutationService({ context: "context:own" });
     await expect(
       definition.handler(workerContext(), "push", [
         {
@@ -440,7 +484,7 @@ describe("canonical vcsService", () => {
         },
       ])
     ).rejects.toThrow(/reviewed source consumer/);
-    expect(semanticPublishCall).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
   });
   it("registers its authority preparers with the production dispatcher", () => {
     const { definition } = service();
@@ -509,7 +553,7 @@ describe("canonical vcsService", () => {
 
   it("notifies the owning host coordinator after an ordinary delta merge", async () => {
     const onExternalDeltaIntegrated = vi.fn(async () => undefined);
-    const { definition } = service({ onExternalDeltaIntegrated });
+    const { definition } = mutationService({ onExternalDeltaIntegrated });
     const ctx = shellContext();
     await definition.handler(ctx, "merge", [
       {
@@ -629,7 +673,7 @@ describe("canonical vcsService", () => {
 
   it("allows the exact lifecycle owner to mutate its child context", async () => {
     const caller = workerContext();
-    const { definition, semanticCall } = service({
+    const { definition, discard } = mutationService({
       context: "context:own",
       owned: [
         {
@@ -646,13 +690,13 @@ describe("canonical vcsService", () => {
         commandId: "command:discard-child",
       },
     ]);
-    expect(semanticCall).toHaveBeenCalledOnce();
+    expect(discard).toHaveBeenCalledOnce();
   });
 
   it("recognizes the exact lifecycle owner through its live eval admission", async () => {
     const callerId = "do:workers/session:SessionDO:executor";
     const ownerId = "session:owner";
-    const { definition, semanticCall } = service({
+    const { definition, discard } = mutationService({
       context: "context:own",
       resolveActive: (id) => id === callerId ? {
         id, kind: "do", className: "SessionDO", key: "executor",
@@ -662,7 +706,7 @@ describe("canonical vcsService", () => {
       } : null,
       owned: [{ contextId: "context:child", kind: "lifecycle", ownerEntityId: ownerId }],
     });
-    const caller = createVerifiedCaller(callerId, "do");
+    const caller = createVerifiedCaller(callerId, "do", null, null, TEST_SUBJECT);
     const discardArgs = [{
       contextId: "context:child", expectedWorkingHead: EVENT, commandId: "command:discard-child",
     }];
@@ -676,7 +720,7 @@ describe("canonical vcsService", () => {
     });
     await expect(definition.handler(admitted("context:other"), "discard", discardArgs)).rejects.toThrow(/outside the caller's authority/);
     await definition.handler(admitted("context:own"), "discard", discardArgs);
-    expect(semanticCall).toHaveBeenCalledOnce();
+    expect(discard).toHaveBeenCalledOnce();
   });
 
   it("keeps lineage and foreign lifecycle contexts non-writable", async () => {
@@ -705,8 +749,18 @@ describe("canonical vcsService", () => {
     }
   });
 
+  it("refuses a write before native workspace history is attached", async () => {
+    const { definition, semanticCall } = service({ context: "context:own" });
+    await expect(definition.handler(workerContext(), "discard", [{
+      contextId: "context:own",
+      expectedWorkingHead: EVENT,
+      commandId: "command:discard",
+    }])).rejects.toMatchObject({ code: "ENOTREADY" });
+    expect(semanticCall).not.toHaveBeenCalled();
+  });
+
   it("allows a context owner to request protected publication", async () => {
-    const { definition, semanticPublishCall } = service({ context: "context:own" });
+    const { definition, publish } = mutationService({ context: "context:own" });
     await definition.handler(workerContext(), "push", [
       {
         contextId: "context:own",
@@ -715,12 +769,12 @@ describe("canonical vcsService", () => {
         expectedMainEventId: "event:main",
       },
     ]);
-    expect(semanticPublishCall).toHaveBeenCalledOnce();
+    expect(publish).toHaveBeenCalledOnce();
   });
 
   it("publishes an epoch transition through the protected transition call and notifies after commit", async () => {
     const onEpochTransitionPublished = vi.fn();
-    const { definition, semanticPublishCall, semanticEpochTransitionPublishCall } = service({
+    const { definition, publish } = mutationService({
       context: "context:own",
       onEpochTransitionPublished,
     });
@@ -734,24 +788,22 @@ describe("canonical vcsService", () => {
       },
     ]);
 
-    expect(semanticPublishCall).not.toHaveBeenCalled();
-    expect(semanticEpochTransitionPublishCall).toHaveBeenCalledWith(
-      {
+    expect(publish).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      push: {
         contextId: "context:own",
         commandId: "command:epoch-push",
         expectedCommittedEventId: "event:next",
         expectedMainEventId: "event:main",
       },
-      null,
-      expect.any(Object)
-    );
+      gateContext: { kind: "caller", caller: expect.any(Object), epochTransition: true },
+    }));
     expect(onEpochTransitionPublished).toHaveBeenCalledOnce();
   });
 
   it("does not request a handoff when epoch-transition publication fails", async () => {
     const failure = new Error("candidate rejected");
     const onEpochTransitionPublished = vi.fn();
-    const { definition } = service({
+    const { definition } = mutationService({
       context: "context:own",
       failure,
       onEpochTransitionPublished,
@@ -796,7 +848,7 @@ describe("canonical vcsService", () => {
       testPolicy: orchestrator,
       executionSession: { testPolicy: orchestrator } as never,
     };
-    const { definition, semanticPublishCall } = service({
+    const { definition, publish } = mutationService({
       context: "context:own",
       owned: [
         {
@@ -817,10 +869,15 @@ describe("canonical vcsService", () => {
       },
     ]);
 
-    expect(semanticPublishCall.mock.calls[0]![2]).toMatchObject({
-      testPolicy: casePolicy,
-      executionSession: { testPolicy: casePolicy },
-    });
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({
+      gateContext: {
+        kind: "caller",
+        caller: expect.objectContaining({
+          testPolicy: casePolicy,
+          executionSession: { testPolicy: casePolicy },
+        }),
+      },
+    }));
   });
 
   it("rejects an unrelated resident test policy", async () => {
@@ -829,7 +886,7 @@ describe("canonical vcsService", () => {
       ...ctx.caller,
       testPolicy: { policyId: "test:other", kind: "orchestrator" },
     };
-    const { definition, semanticPublishCall } = service({
+    const { definition, publish } = mutationService({
       context: "context:own",
       owned: [
         {
@@ -865,7 +922,7 @@ describe("canonical vcsService", () => {
         },
       ])
     ).rejects.toThrow(/unrelated to caller policy/);
-    expect(semanticPublishCall).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it("allows an exactly attributed agent to request publication of its own context", async () => {
@@ -875,7 +932,7 @@ describe("canonical vcsService", () => {
       ...channelTrajectoryFor("channel:own"),
       invocationId: "invocation:push",
     };
-    const { definition, semanticPublishCall } = service();
+    const { definition, publish } = mutationService();
     await definition.handler(ctx, "push", [
       {
         contextId: "context:agent",
@@ -884,7 +941,7 @@ describe("canonical vcsService", () => {
         expectedMainEventId: "event:main",
       },
     ]);
-    expect(semanticPublishCall).toHaveBeenCalledOnce();
+    expect(publish).toHaveBeenCalledOnce();
   });
 
   it("authorizes the primary context on status reads", async () => {
@@ -1222,7 +1279,7 @@ describe("canonical vcsService", () => {
 
   it("carries the verified caller only to the protected publication gate", async () => {
     const ctx = shellContext();
-    const { definition, semanticPublishCall } = service();
+    const { definition, publish } = mutationService();
     await definition.handler(ctx, "push", [
       {
         contextId: "context:own",
@@ -1231,15 +1288,14 @@ describe("canonical vcsService", () => {
         expectedMainEventId: "event:main",
       },
     ]);
-    expect(semanticPublishCall).toHaveBeenCalledWith(
-      {
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({
+      push: {
         contextId: "context:own",
         commandId: "command:push",
         expectedCommittedEventId: "event:next",
         expectedMainEventId: "event:main",
       },
-      null,
-      ctx.caller
-    );
+      gateContext: { kind: "caller", caller: ctx.caller },
+    }));
   });
 });

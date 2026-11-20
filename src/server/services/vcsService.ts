@@ -56,8 +56,6 @@ export interface VcsServiceDeps {
   workspaceVcs: Pick<
     WorkspaceVcs,
     | "semanticCausalCall"
-    | "semanticPublishCall"
-    | "semanticEpochTransitionPublishCall"
     | "referencesReachable"
   >;
   participantWorkspace?: Pick<
@@ -544,81 +542,6 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
       return invokeParticipant(workspace, ctx, method, input, effectCaller, epochTransition);
     const causalParent = ctx.causalParent ?? null;
     switch (method) {
-      case "edit":
-        return deps.workspaceVcs.semanticCausalCall(
-          "vcsEdit",
-          vcsMethods.edit.args.parse([input])[0],
-          causalParent
-        );
-      case "move":
-        return deps.workspaceVcs.semanticCausalCall(
-          "vcsMove",
-          vcsMethods.move.args.parse([input])[0],
-          causalParent
-        );
-      case "copy":
-        return deps.workspaceVcs.semanticCausalCall(
-          "vcsCopy",
-          vcsMethods.copy.args.parse([input])[0],
-          causalParent
-        );
-      case "merge":
-        return deps.workspaceVcs.semanticCausalCall(
-          "vcsMerge",
-          vcsMethods.merge.args.parse([input])[0],
-          causalParent
-        );
-      case "revert":
-        return deps.workspaceVcs.semanticCausalCall(
-          "vcsRevert",
-          vcsMethods.revert.args.parse([input])[0],
-          causalParent
-        );
-      case "commit":
-        return deps.workspaceVcs.semanticCausalCall(
-          "vcsCommit",
-          vcsMethods.commit.args.parse([input])[0],
-          causalParent
-        );
-      case "discard":
-        return deps.workspaceVcs.semanticCausalCall(
-          "vcsDiscard",
-          vcsMethods.discard.args.parse([input])[0],
-          causalParent
-        );
-      case "importSnapshot":
-        return deps.workspaceVcs.semanticCausalCall(
-          "vcsImportSnapshot",
-          vcsMethods.importSnapshot.args.parse([input])[0],
-          causalParent
-        );
-      case "registerExternalDelta":
-        return deps.workspaceVcs.semanticCausalCall(
-          "vcsRegisterExternalDelta",
-          vcsMethods.registerExternalDelta.args.parse([input])[0],
-          causalParent
-        );
-      case "supersedeExternalDelta":
-        return deps.workspaceVcs.semanticCausalCall(
-          "vcsSupersedeExternalDelta",
-          vcsMethods.supersedeExternalDelta.args.parse([input])[0],
-          causalParent
-        );
-      case "finalizeExternalDelta":
-        return deps.workspaceVcs.semanticCausalCall(
-          "vcsFinalizeExternalDelta",
-          vcsMethods.finalizeExternalDelta.args.parse([input])[0],
-          causalParent
-        );
-      case "push": {
-        const pushInput = vcsMethods.push.args.parse([input])[0];
-        const publish = epochTransition
-          ? deps.workspaceVcs.semanticEpochTransitionPublishCall
-          : deps.workspaceVcs.semanticPublishCall;
-        return ctx.signal
-          ? publish.call(deps.workspaceVcs, pushInput, causalParent, effectCaller, ctx.signal)
-          : publish.call(deps.workspaceVcs, pushInput, causalParent, effectCaller);
-      }
       case "mainState":
         return deps.workspaceVcs.semanticCausalCall("vcsMainState", undefined, causalParent);
       case "status":
@@ -711,6 +634,8 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           vcsMethods.listFiles.args.parse([input])[0],
           causalParent
         );
+      default:
+        throw new ServiceError("vcs", method, "Workspace history is not ready", "ENOTREADY");
     }
   };
 
@@ -733,6 +658,9 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
     const primaryContextId = vcsOperationContextId(method, parsed.input);
     if (primaryContextId !== null) {
       await authorizeContext(ctx, deps, primaryContextId, isMutation ? "write" : "read");
+    }
+    if (isMutation && !participantWorkspace()) {
+      throw new ServiceError("vcs", method, "Workspace history is not ready", "ENOTREADY");
     }
 
     const readableContexts = [

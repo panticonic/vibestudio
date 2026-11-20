@@ -69,9 +69,6 @@ function fixture() {
   const vcs = createVcsService({
     workspaceVcs: {
       semanticCausalCall: semanticCall,
-      semanticPublishCall: vi.fn<WorkspaceVcs["semanticPublishCall"]>(),
-      semanticEpochTransitionPublishCall:
-        vi.fn<WorkspaceVcs["semanticEpochTransitionPublishCall"]>(),
       referencesReachable: vi.fn<WorkspaceVcs["referencesReachable"]>(),
     },
     entityCache,
