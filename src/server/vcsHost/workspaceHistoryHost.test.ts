@@ -8,6 +8,8 @@ import { expect, it, vi } from "vitest";
 import type { WorkspaceSourceProviderRef } from "../workspaceSourceProvider.js";
 import { getBytes, putBytes } from "../services/blobstoreService.js";
 import {
+  advanceWorkspaceCommitMemoryIndex,
+  type HistoryCommitMemoryIndex,
   editWorkspaceParticipant,
   forkWorkspaceParticipantContext,
   inspectWorkspaceParticipantProvenance,
@@ -33,6 +35,55 @@ const native = (taskId: number, callId: string): VerifiedCaller => ({
     task: { conversationId: 3, taskId },
     operation: { kind: "tool", assistantEntryId: 0, callId },
   },
+});
+
+it("resumes an interrupted commit recall backfill before indexing a newer protected tip", async () => {
+  const head = "a".repeat(40);
+  const timestamp = "2026-08-14T00:00:00.000Z";
+  const document = (eventId: string) => ({ eventId, revision: head, text: eventId, createdAt: timestamp });
+  let interrupted = true;
+  let marker: string | null = null;
+  const recorded: string[] = [];
+  const dispatch = vi.fn(async (_target: WorkspaceSourceProviderRef, method: string, input: unknown) => {
+    expect(method).toBe("readHistoryMain");
+    const { commitMemoryPage: page, commitMemoryEventId: eventId } = input as {
+      commitMemoryEventId: string;
+      commitMemoryPage: { previousEventId: string | null; after: string | null } | null;
+    };
+    if (!page) return { head, eventId, commitMemoryPage: null };
+    const response = (id: string, nextAfter: string | null) => ({
+      head, eventId, commitMemoryPage: { eventId, documents: [document(id)], nextAfter },
+    });
+    if (eventId === "first-tip") {
+      expect(page.previousEventId).toBeNull();
+      if (!page.after) return response("event:a", "event:a");
+      expect(page.after).toBe("event:a");
+      if (interrupted) throw new Error("Native reader stopped between pages");
+      return response("event:b", null);
+    }
+    expect(eventId).toBe("next-tip");
+    expect(page).toEqual({ previousEventId: "first-tip", after: null });
+    return response("event:c", null);
+  });
+  const index = {
+    readHistoryCommitMemoryIndex: async () => marker,
+    recordHistoryCommitMemory: vi.fn(),
+    recordHistoryCommitMemoryPage: vi.fn<NonNullable<HistoryCommitMemoryIndex["recordHistoryCommitMemoryPage"]>>(async (page) => {
+      expect(page.previousMarker).toBe(marker);
+      marker = page.marker;
+      recorded.push(...page.documents.map(({ eventId }) => eventId));
+    }),
+  };
+  const source = { dispatch: { dispatch }, canonical, index };
+  await expect(advanceWorkspaceCommitMemoryIndex({ ...source, eventId: "first-tip" }))
+    .rejects.toThrow("stopped between pages");
+  expect(recorded).toEqual(["event:a"]);
+  interrupted = false;
+  await advanceWorkspaceCommitMemoryIndex({ ...source, eventId: "next-tip" });
+  await advanceWorkspaceCommitMemoryIndex({ ...source, eventId: "next-tip" });
+  expect(recorded).toEqual(["event:a", "event:b", "event:c"]);
+  expect(index.recordHistoryCommitMemory).not.toHaveBeenCalled();
+  expect(JSON.parse(marker!)).toEqual({ completedEventId: "next-tip", pending: null });
 });
 
 it("uses the verified task to choose a copy and preserves the migrated context head", async () => {

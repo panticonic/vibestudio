@@ -156,7 +156,7 @@ import {
   workspaceParticipantIdentity,
   putPreparedWorkspaceContent,
   readWorkspaceCanonicalMain,
-  readWorkspaceHistoryCommitMemory,
+  advanceWorkspaceCommitMemoryIndex,
   readWorkspaceHistoryTemplateInstallation,
   readWorkspaceParticipantContentSource,
   readWorkspaceParticipantFileDescriptors,
@@ -4021,14 +4021,13 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   private async indexPublishedCommitMemory(eventId: string): Promise<void> {
     const source = this.participantHistorySource;
-    const recorder = this.gadCaller?.recordHistoryCommitMemory;
-    if (!source || !recorder) return;
+    const index = this.gadCaller;
+    if (!source || !index) return;
     try {
-      const document = await readWorkspaceHistoryCommitMemory({ ...source, eventId });
-      if (document) await recorder(document);
+      await advanceWorkspaceCommitMemoryIndex({ ...source, index, eventId });
     } catch (error) {
-      // Recall is a disposable projection. Reopening retries the latest
-      // protected revision without making a committed publication fail.
+      // Recall is a disposable projection. Reopening resumes indexing without
+      // making a committed publication fail.
       console.warn("[Vcs] Could not index published commit memory", error);
     }
   }

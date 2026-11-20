@@ -378,17 +378,80 @@ const historyCommitMemorySchema = z.object({
 }).strict();
 export type HistoryCommitMemory = z.infer<typeof historyCommitMemorySchema>;
 
-export async function readWorkspaceHistoryCommitMemory(input: WorkspaceHistorySource & { eventId: string }) {
+const historyCommitMemoryPageSchema = z.object({
+  eventId: z.string().min(1),
+  documents: historyCommitMemorySchema.array().max(16),
+  nextAfter: z.string().min(1).nullable(),
+}).strict();
+const historyCommitMemoryMarkerSchema = z.object({
+  completedEventId: z.string().min(1).nullable(),
+  pending: z.object({ eventId: z.string().min(1), after: z.string().min(1) }).strict().nullable(),
+}).strict();
+
+export interface HistoryCommitMemoryIndex {
+  readHistoryCommitMemoryIndex?(): Promise<string | null>;
+  recordHistoryCommitMemory?(document: HistoryCommitMemory): Promise<void>;
+  recordHistoryCommitMemoryPage?(page: {
+    previousMarker: string | null;
+    marker: string;
+    documents: HistoryCommitMemory[];
+  }): Promise<void>;
+}
+
+async function readWorkspaceHistoryCommitMemory(input: WorkspaceHistorySource & {
+  eventId: string;
+  page?: { previousEventId: string | null; after: string | null } | null;
+}) {
   const response = z.object({
-    head, eventId: z.string().min(1), commitMemory: historyCommitMemorySchema.nullable().optional(),
+    head, eventId: z.string().min(1),
+    commitMemory: historyCommitMemorySchema.nullable().optional(),
+    commitMemoryPage: historyCommitMemoryPageSchema.nullable().optional(),
   }).strict().parse(await input.dispatch.dispatch(input.canonical, "readHistoryMain", {
     commitMemoryEventId: input.eventId,
+    ...(input.page !== undefined ? { commitMemoryPage: input.page } : {}),
   }));
   if (response.commitMemory &&
       (response.commitMemory.eventId !== input.eventId ||
         (response.eventId === input.eventId && response.commitMemory.revision !== response.head)))
     throw new Error("Workspace history returned commit memory for a different event");
-  return response.commitMemory ?? null;
+  return response;
+}
+
+/** Resume any interrupted page before indexing advances from its completed tip. */
+export async function advanceWorkspaceCommitMemoryIndex(input: WorkspaceHistorySource & {
+  eventId: string;
+  index: HistoryCommitMemoryIndex;
+}): Promise<void> {
+  const { index, eventId } = input;
+  if (!index.recordHistoryCommitMemory) return;
+  const paged = index.readHistoryCommitMemoryIndex && index.recordHistoryCommitMemoryPage;
+  const first = await readWorkspaceHistoryCommitMemory({ ...input, ...(paged ? { page: null } : {}) });
+  if (!index.readHistoryCommitMemoryIndex || !index.recordHistoryCommitMemoryPage ||
+      first.commitMemoryPage === undefined) {
+    if (first.commitMemory) await index.recordHistoryCommitMemory(first.commitMemory);
+    return;
+  }
+  let raw = await index.readHistoryCommitMemoryIndex();
+  let marker: z.infer<typeof historyCommitMemoryMarkerSchema> = raw === null
+    ? { completedEventId: null, pending: null }
+    : historyCommitMemoryMarkerSchema.parse(JSON.parse(raw));
+  while (marker.pending || marker.completedEventId !== eventId) {
+    const target = marker.pending?.eventId ?? eventId;
+    const after = marker.pending?.after ?? null;
+    const result = await readWorkspaceHistoryCommitMemory({
+      ...input, eventId: target, page: { previousEventId: marker.completedEventId, after },
+    });
+    const page = result.commitMemoryPage;
+    if (!page || page.eventId !== target ||
+        (page.nextAfter !== null && after !== null && page.nextAfter <= after))
+      throw new Error("Workspace commit memory returned a different or nonadvancing page");
+    marker = page.nextAfter === null
+      ? { completedEventId: target, pending: null }
+      : { completedEventId: marker.completedEventId, pending: { eventId: target, after: page.nextAfter } };
+    const next = canonicalJson(marker);
+    await index.recordHistoryCommitMemoryPage({ previousMarker: raw, marker: next, documents: page.documents });
+    raw = next;
+  }
 }
 
 export interface WorkspaceHistorySource {

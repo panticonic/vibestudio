@@ -34,7 +34,7 @@ import {
   nativeInvocationIdentitySchema,
 } from "@vibestudio/service-schemas/nativeInvocation";
 import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
-import type { HistoryCommitMemory } from "./vcsHost/workspaceHistoryHost.js";
+import type { HistoryCommitMemoryIndex } from "./vcsHost/workspaceHistoryHost.js";
 
 export interface WorkspaceSourceProviderRef {
   source: string;
@@ -113,7 +113,7 @@ type SemanticWireMethodName =
   | "vcsReadFiles"
   | "vcsListDirectory"
   | "vcsListFiles";
-export type WorkspaceSemanticPort = Pick<WorkspaceSemanticClient, SemanticWireMethodName> & {
+export type WorkspaceSemanticPort = Pick<WorkspaceSemanticClient, SemanticWireMethodName> & HistoryCommitMemoryIndex & {
   contentGcRoots: WorkspaceSemanticClient["vcsContentGcRoots"];
   referencesReachable: WorkspaceSemanticClient["vcsReferencesReachable"];
   listContexts: WorkspaceSemanticClient["vcsListContexts"];
@@ -137,7 +137,6 @@ export type WorkspaceSemanticPort = Pick<WorkspaceSemanticClient, SemanticWireMe
   readHistoryWalkInvocation(input: HistoryWalkInvocation): Promise<HistoryWalkPage>;
   readHistoryWalkCohortInvocations(input: HistoryWalkCohort): Promise<HistoryWalkInvocation[]>;
   readHistoryQueryTrajectory(causes: readonly HistorySearchCause[]): Promise<HistoryQueryTrajectory>;
-  recordHistoryCommitMemory?(document: HistoryCommitMemory): Promise<void>;
   searchHistoryTrajectory(input: HistoryTrajectorySearchInput):
     Promise<import("@vibestudio/service-schemas/vcs").VcsSearchHit[]>;
 };
@@ -240,6 +239,16 @@ export function createWorkspaceSemanticPort(
     recordHistoryCommitMemory: async (document) => {
       if (await dispatch.dispatch(provider, "recordHistoryCommitMemory", document) !== true)
         throw new Error("Workspace recall did not record the published event");
+    },
+    readHistoryCommitMemoryIndex: async () => {
+      const marker = await dispatch.dispatch(provider, "readHistoryCommitMemoryIndex");
+      if (marker !== null && typeof marker !== "string")
+        throw new Error("Workspace recall returned an invalid commit memory marker");
+      return marker;
+    },
+    recordHistoryCommitMemoryPage: async (page) => {
+      if (await dispatch.dispatch(provider, "recordHistoryCommitMemoryPage", page) !== true)
+        throw new Error("Workspace recall did not advance its commit memory index");
     },
     searchHistoryTrajectory: async (input) => HistoryTrajectorySearchMatchesSchema.parse(
       await dispatch.dispatch(provider, "searchHistoryTrajectory", HistoryTrajectorySearchInputSchema.parse(input)),
