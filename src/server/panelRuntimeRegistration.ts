@@ -129,8 +129,8 @@ export interface CommonDeps {
   /** Reload one exact current panel entity through the canonical unit driver. */
   reloadPanel?: (ctx: ServiceContext, panelId: string, runtimeEntityId: string) => Promise<void>;
   getGatewayPort: () => number | null;
-  /** Materialize a context's working folder; backs `workspace.ensureContextFolder`. */
-  ensureContextFolder?: (contextId: string) => Promise<{ source: string; scratch: string }>;
+  /** Create the context's scratch directory for `workspace.ensureContextFolder`. */
+  ensureContextScratch?: (contextId: string) => Promise<string>;
   approvalQueue?: ApprovalQueue;
   getEffectiveVersion?: (source: string) => Promise<string | undefined>;
   /**
@@ -322,7 +322,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
           },
         },
         hasClientCapability: deps.hasClientCapability,
-        ensureContextFolder: deps.ensureContextFolder,
+        ensureContextScratch: deps.ensureContextScratch,
       })
     );
   }

@@ -55,7 +55,6 @@
     "./contextBinding": "./src/contextBinding.ts",
     "./contextFolderManager": "./src/contextFolderManager.ts",
     "./contextIdToPartition": "./src/contextIdToPartition.ts",
-    "./contextMiddleware": "./src/contextMiddleware.ts",
     "./contextPaths": "./src/contextPaths.ts",
     "./derivedCache": "./src/derivedCache.ts",
     "./deviceCredentials": "./src/deviceCredentials.ts",

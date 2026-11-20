@@ -2671,11 +2671,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     });
   }
 
-  async ensureContextFolder(contextId: string): Promise<{ dir: string }> {
-    await this.ensureContext(contextId);
-    return { dir: this.projector.contextDir(contextId) };
-  }
-
   async resolveWorkingState(contextId: string): Promise<VcsStateNodeRef> {
     await this.whenSemanticReady();
     return this.locked(`context-lifecycle:${contextId}`, async () => {

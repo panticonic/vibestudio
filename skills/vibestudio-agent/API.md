@@ -151,6 +151,27 @@ Authority principals: `code`, `host`, `user`
 | `chromiumFetch.read` | Read an owner-bound chunk from an open Chromium response. |
 | `chromiumFetch.close` | Close an owner-bound Chromium response. |
 
+## `chronolog`
+
+Read and write authenticated Chronolog groups from this workspace.
+
+Authority principals: `code`, `user`
+
+| Method | Description |
+|--------|-------------|
+| `chronolog.groups.identity` | Get the verified account and workspace node keys for an invitation. |
+| `chronolog.groups.list` | List the locally installed groups where the account can read. |
+| `chronolog.groups.create` | Create an independently stored SQL group and admit the initiating account as administrator. |
+| `chronolog.groups.invite` | Sign a group invitation for one account and its workspace node. |
+| `chronolog.groups.join` | Install the exact invitation in this workspace and verify current membership. |
+| `chronolog.history.current` | Get the exact published workspace history revision for this group. |
+| `chronolog.history.share` | Authorize this Chronolog group to exchange published history with the workspace. |
+| `chronolog.history.publish` | Send one exact published workspace history update to an admitted group workspace. |
+| `chronolog.transact` | Submit one canonical change program signed by the initiating account. |
+| `chronolog.outcome` | Read the status of a transaction signed by the initiating account. |
+| `chronolog.query` | Run a read-only SQL query against the group's selected revision. |
+| `chronolog.subscribe` | Stream current query results as the selected revision changes. |
+
 ## `credentials`
 
 URL-bound userland credential storage and egress
@@ -722,7 +743,7 @@ Authority principals: `code`, `host`, `user`
 | `workspace.listSkills` | List repo-embedded workspace skills with identity, paths, and optional onboarding declarations parsed from each repo's top-level SKILL.md frontmatter. Context-bound runtimes use their verified ambient context; contextless host clients must provide an explicit contextId. |
 | `workspace.readSkill` | Return raw SKILL.md contents for a canonical workspace repo path (`skills/code-review`, `packages/foo`, `workers/bar`, or `meta`). Path traversal is rejected. Context-bound runtimes use their verified ambient context; contextless host clients must provide an explicit contextId. |
 | `workspace.sourceTree` | Return the workspace source tree, annotating units, launchables, and skills. |
-| `workspace.ensureContextFolder` | Materialize a context's working folder on the server host (idempotent) and return its absolute path. Used by launch orchestrators (e.g. the shell extension) to place context-scoped terminal sessions inside a real VCS-branched working tree. |
+| `workspace.ensureContextFolder` | Create the context's writable scratch directory on the server host and return its absolute path for context-scoped tools such as terminals. |
 | `workspace.findUnitForPath` | Resolve a workspace-relative path to its owning unit and the path relative to that unit, or null if no unit owns it. |
 
 ## `workspacePresence`

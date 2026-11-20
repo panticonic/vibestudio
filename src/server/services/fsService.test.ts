@@ -56,17 +56,6 @@ function makeStubFolderManager(root: string): ContextFolderManager {
       mkdirSync(scratch, { recursive: true });
       return scratch;
     },
-    async ensureContextFolder(contextId: string): Promise<string> {
-      const p = path.join(root, contextId);
-      mkdirSync(p, { recursive: true });
-      return p;
-    },
-    getContextFolderState(contextId: string) {
-      const p = path.join(root, contextId);
-      return existsSync(p)
-        ? { status: "ready" as const, path: p }
-        : { status: "missing" as const, path: p };
-    },
     getContextRoot(contextId: string): string | null {
       const p = path.join(root, contextId);
       return existsSync(p) ? p : null;
@@ -1684,9 +1673,6 @@ describe("FsService", () => {
       const batches = vi.spyOn(bridge, "readFiles");
       const folderManager = makeStubFolderManager(tmpRoot);
       const scratch = vi.spyOn(folderManager, "ensureContextScratch");
-      const projection = vi
-        .spyOn(folderManager, "ensureContextFolder")
-        .mockRejectedValue(new Error("Disk projection must not be required"));
       const svc = new FsService(folderManager, entityCache, {
         disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
@@ -1697,7 +1683,6 @@ describe("FsService", () => {
         { path: "/skills/skill0/SKILL.md", content: "first" },
         { path: "/skills/skill502/SKILL.md", content: "last" },
       ]);
-      expect(projection).not.toHaveBeenCalled();
       expect(scratch).not.toHaveBeenCalled();
       expect(batches.mock.calls.map(([input]) => input.files.length)).toEqual([500, 3]);
       expect(

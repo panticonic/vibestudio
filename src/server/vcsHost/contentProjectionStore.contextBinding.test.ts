@@ -1,7 +1,7 @@
 /**
  * Context-binding projection cleanliness (docs/…channels-plan §6.2 / §9.6).
  *
- * `WorkspaceVcs.ensureContextFolder` drops `.vibestudio-context.json` at the
+ * A materialized source projection includes `.vibestudio-context.json` at the
  * context folder root. It is host-owned bookkeeping, NOT workspace source, so
  * the VCS scan must never capture it: a context folder containing the binding
  * must produce exactly the same state (and file list) as the same folder

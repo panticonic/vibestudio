@@ -2035,7 +2035,6 @@ async function main() {
       },
     },
     contextProjectionsRoot: layout.contextProjections.current,
-    materialize: (contextId) => workspaceVcs.ensureContextFolder(contextId),
   });
 
   // Shared deps for the single context-boundary gate (runtime + panel layers).
@@ -7740,12 +7739,7 @@ async function main() {
     },
     getGatewayPort: () => gatewayPortResolved,
     eventService,
-    // Backs `workspace.ensureContextFolder` — launch orchestrators materialize a
-    // context's working folder to place context-scoped terminal sessions in it.
-    ensureContextFolder: async (contextId: string) => ({
-      source: await contextFolderManager.ensureContextFolder(contextId),
-      scratch: await contextFolderManager.ensureContextScratch(contextId),
-    }),
+    ensureContextScratch: (contextId) => contextFolderManager.ensureContextScratch(contextId),
     resolveCallerContext: (callerId: string) => getEntityStore().resolveContext(callerId),
     approvalQueue,
     registerSlotStateListener: (listener: (change?: SlotStateChange) => void) => {

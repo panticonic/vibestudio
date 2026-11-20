@@ -486,10 +486,9 @@ export const workspaceMethods = defineServiceMethods({
       },
     },
     description:
-      "Materialize a context's working folder on the server host (idempotent) and return its absolute path. Used by launch orchestrators (e.g. the shell extension) to place context-scoped terminal sessions inside a real VCS-branched working tree.",
-    args: z.tuple([z.string().describe("Context id whose working folder to materialize.")]),
+      "Create the context's writable scratch directory on the server host and return its absolute path for context-scoped tools such as terminals.",
+    args: z.tuple([z.string().describe("Context whose scratch directory to prepare.")]),
     returns: z.object({
-      source: z.string().describe("Read-only materialized source root."),
       scratch: z.string().describe("Writable context scratch root."),
     }),
     // Launch orchestration is an extension concern; panels/workers/DO drive it
