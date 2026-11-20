@@ -723,6 +723,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { gmailComposeHistoryWorlds },
     { unitIdentityWorlds },
     { transcriptCursorWorlds },
+    { retainedTriageWorlds },
     { githubSetupWorlds },
     { templateReleasePart, templateReleaseWorlds },
     { chatDeliveryWorlds, deliveryHistoryWorlds, deliveryOriginByMode },
@@ -792,6 +793,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "gmail-compose-history-worlds.ts",
       "unit-identity-worlds.ts",
       "transcript-cursor-worlds.ts",
+      "retained-triage-worlds.ts",
       "github-setup-worlds.ts",
       "template-release-worlds.ts",
       "delivery-history-worlds.ts",
@@ -866,6 +868,18 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of androidAuditWorlds) {
     cases.set(`android-audit-live-${assignment.id}`, { ...androidAuditWorkflow, assignment });
+  }
+  for (const assignment of retainedTriageWorlds) {
+    cases.set(`retained-triage-live-${assignment.id}`, {
+      family: "workspace-live-retained-system-test-triage",
+      namespace: "vibestudio:system-testing",
+      group: "retained-failure-diagnostics",
+      workspace: "system",
+      root: "reviewRetainedFailure",
+      validator: { template: "system-testing", path: "skills/system-testing/retained-triage-managed.ts" },
+      assignment,
+      evidence: retainedTriageEvidence,
+    });
   }
   for (const assignment of githubSetupWorlds) {
     cases.set(`github-setup-live-${assignment.id}`, {
@@ -2995,6 +3009,62 @@ function clientAdmissionEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: contextId, source, host, abi: workingAbi },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function retainedTriageEvidence(execution, exercise, _scenario, { assignment }) {
+  const fixture = execution.diagnostics.retainedTriage;
+  const verification = fixture?.verification;
+  const { request, native, expected, checks } = verification ?? {};
+  const report = exercise.report;
+  requireEvidence(
+    fixture?.contextId === execution.provenance?.contextId &&
+      verification?.caseId === assignment.id && verification.passed === true &&
+      ["sourceRun", "released", "exactRecord", "nativeFailure", "triage"].every(
+        (name) => checks?.[name] === true,
+      ) &&
+      request?.goal === assignment.goal && request.testName === assignment.testName &&
+      typeof request.operationId === "string" && !!request.operationId &&
+      typeof request.runId === "string" && request.runId.startsWith("retained-triage-") &&
+      native?.name === request.testName && native.failure?.phase === assignment.phase &&
+      native.failure.error.message === assignment.detail &&
+      (assignment.expectedClass === "validator"
+        ? native.validationFailure?.validator === "harness" : native.validationFailure === null) &&
+      expected?.class === assignment.expectedClass &&
+      Array.isArray(expected.evidence) && expected.evidence.some(
+        (item) => typeof item?.text === "string" && item.text.includes(assignment.detail),
+      ) &&
+      isDeepStrictEqual(report, {
+        runId: request.runId, testName: request.testName, status: "triaged", triage: expected,
+      }),
+    "Retained triage needs the exact failed and released native run and its diagnostic evidence",
+  );
+  const records = exercise.calls.map(({ record }) => record);
+  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const child = (parent, name) => parent && records.find(
+    (record) => record.parent_call_id === parent.call_id && record.definition.name === name,
+  );
+  const review = child(root, "reviewRetainedFailure");
+  const read = child(review, "readRetainedFailure");
+  const decide = child(review, "reviewSystemTest");
+  const triage = child(decide, "triageFailure");
+  const effect = read?.effects?.[0];
+  const packet = { runId: request.runId, failure: native };
+  requireEvidence(
+    matchesValue(review?.inputs?.request, request) && matchesValue(review.output, report) &&
+      matchesValue(read?.inputs?.operationId, request.operationId) && matchesValue(read.output, packet) &&
+      records.flatMap(({ effects }) => effects ?? []).length === 1 &&
+      effect?.service === "retainedTestFailure" && effect.method === "inspect" && !effect.error &&
+      matchesValue(effect.args, [request.operationId]) && matchesValue(effect.result, packet) &&
+      matchesValue(decide?.inputs?.request, {kind: "triage", goal: request.goal, failure: native}) &&
+      matchesValue(triage?.inputs?.failure, native) && matchesValue(triage.output, report.triage) &&
+      Date.parse(read.ended_at) <= Date.parse(decide.started_at),
+    "Retained triage needs the assigned native read before the nested failure review",
+  );
+  return {
+    world: { context_id: fixture.contextId, source_run_id: request.runId, test_name: request.testName },
     checks,
     evidence: { workspace: { fixture } },
   };

@@ -133,6 +133,13 @@ to read pull requests needs a panel before setup can continue. The checks
 leave credentials and workspace state untouched. Use the
 `github-setup-oracle-qualification-` cases for model-free validation.
 
+Retained triage cases run one deliberately failing system test in an owned
+workspace and release its execution scope. The shared Natlang program reads
+the native retained failure, checks its exact run and test assignment, and
+uses the existing triage tree to classify it and quote evidence. The
+`retained-triage-oracle-qualification-` checks cover a thrown validator and
+a stopped fixture orchestration without model calls.
+
 Gmail compose audits run in an owned channel in the Google Workspace template.
 The shared program calls the compose-history skill, projects a typed draft or
 delivery readback from that same native cursor, and calls the Gmail workflow

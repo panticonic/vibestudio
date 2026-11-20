@@ -105,6 +105,7 @@ test("authored template worlds flow into the collector without losing original s
       ["gmail-compose-history-worlds", "gmailComposeHistoryWorlds", []],
       ["unit-identity-worlds", "unitIdentityWorlds", []],
       ["transcript-cursor-worlds", "transcriptCursorWorlds", []],
+      ["retained-triage-worlds", "retainedTriageWorlds", []],
       ["github-setup-worlds", "githubSetupWorlds", []],
       ["template-release-worlds", "templateReleaseWorlds", []],
       ["delivery-history-worlds", "deliveryHistoryWorlds", []],
@@ -3028,6 +3029,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["gmail-compose-history-worlds", "export const gmailComposeHistoryWorlds = [];"],
       ["unit-identity-worlds", "export const unitIdentityWorlds = [];"],
       ["transcript-cursor-worlds", "export const transcriptCursorWorlds = [];"],
+      ["retained-triage-worlds", "export const retainedTriageWorlds = [];"],
       ["github-setup-worlds", "export const githubSetupWorlds = [];"],
       ["template-release-worlds", "export const templateReleaseWorlds = [];"],
       ["delivery-history-worlds", "export const deliveryHistoryWorlds = []; export const chatDeliveryWorlds = [];"],
@@ -7295,5 +7297,72 @@ test("GitHub setup export binds the access decision to the native route and surf
   assert.throws(
     () => workflow.evidence(execution, exercise, id, workflow),
     /nested least-access and presentation decisions/u,
+  );
+});
+
+test("retained triage export binds diagnosis to the exact released run record", async () => {
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(path.resolve(import.meta.dirname, ".."));
+  const cases = await loadLiveTeacherCases(checkouts);
+  const id = "retained-triage-live-validator-threw";
+  const workflow = cases.get(id);
+  const { assignment } = workflow;
+  const request = {
+    goal: assignment.goal, operationId: "assignment", runId: "retained-triage-owned",
+    testName: assignment.testName,
+  };
+  const native = {
+    name: assignment.testName, failure: { phase: "validation", error: { name: "Error", message: assignment.detail } },
+    validationFailure: { validator: "harness" },
+  };
+  const packet = { runId: request.runId, failure: native };
+  const expected = {
+    class: "validator",
+    evidence: [
+      { source: "validator-error", text: "the harness validator threw" },
+      { source: "phase", text: `validation: Error: ${assignment.detail}` },
+    ],
+  };
+  const report = { runId: request.runId, testName: request.testName, status: "triaged", triage: expected };
+  const execution = {
+    provenance: { contextId: "owned" },
+    diagnostics: { retainedTriage: {
+      contextId: "owned",
+      verification: {
+        caseId: assignment.id, request, native, expected, passed: true,
+        checks: { sourceRun: true, released: true, exactRecord: true, nativeFailure: true, triage: true },
+      },
+    } },
+  };
+  const ref = (value) => {
+    const bytes = JSON.stringify(value);
+    return { complete: true, hash: createHash("sha256").update(bytes).digest("hex"), bytes: Buffer.byteLength(bytes) };
+  };
+  const call = (name, parent, args, output, effects = []) => ({
+    record: {
+      call_id: name, parent_call_id: parent, definition: { name },
+      inputs: Object.fromEntries(Object.entries(args).map(([key, value]) => [key, ref(value)])),
+      output: ref(output), started_at: "2026-11-20T00:00:00Z", ended_at: "2026-11-20T00:00:00Z", effects,
+    },
+  });
+  const read = call("readRetainedFailure", "reviewRetainedFailure", { operationId: request.operationId }, packet, [{
+    service: "retainedTestFailure", method: "inspect", args: ref([request.operationId]), result: ref(packet),
+  }]);
+  const exercise = {
+    report, rootCallIds: ["runWorkflow"],
+    calls: [
+      call("runWorkflow", null, {}, null),
+      call("reviewRetainedFailure", "runWorkflow", { request }, report),
+      read,
+      call("reviewSystemTest", "reviewRetainedFailure", {
+        request: { kind: "triage", goal: request.goal, failure: native },
+      }, { kind: "triage", ...expected }),
+      call("triageFailure", "reviewSystemTest", { failure: native }, expected),
+    ],
+  };
+  assert.equal(workflow.evidence(execution, exercise, id, workflow).world.source_run_id, request.runId);
+  read.record.effects[0].result = ref({ ...packet, runId: "different-run" });
+  assert.throws(
+    () => workflow.evidence(execution, exercise, id, workflow),
+    /assigned native read before the nested failure review/u,
   );
 });
