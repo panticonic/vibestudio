@@ -99,6 +99,7 @@ test("authored template worlds flow into the collector without losing original s
       ["phone-setup-world", "phoneSetupUnavailable", null],
       ["client-admission-worlds", "managedClientAdmissionWorlds", []],
       ["log-cursor-worlds", "managedLogCursorWorlds", []],
+      ["log-handoff-worlds", "managedLogHandoffWorlds", []],
       ["build-performance-worlds", "buildPerformanceWorlds", []],
       ["tour-rehearsal-worlds", "tourRehearsalWorlds", []],
       ["explorer-probe-worlds", "explorerTextWorlds", []],
@@ -3142,6 +3143,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["phone-setup-world", "export const phoneSetupUnavailable = undefined;"],
       ["client-admission-worlds", "export const managedClientAdmissionWorlds = [];"],
       ["log-cursor-worlds", "export const managedLogCursorWorlds = [];"],
+      ["log-handoff-worlds", "export const managedLogHandoffWorlds = [];"],
       ["build-performance-worlds", "export const buildPerformanceWorlds = [];"],
       ["tour-rehearsal-worlds", "export const tourRehearsalWorlds = [];"],
       ["explorer-probe-worlds", "export const explorerTextWorlds = [];"],
@@ -5935,6 +5937,99 @@ test("log cursor export joins distinct classifier calls to the bounded live read
   review.record.output = ref(report);
   await save();
   await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /exact covered records/u);
+});
+
+test("host-log handoff export binds each classification to its own live window", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  const name = "log-handoff-live-different-startup-failure";
+  const { assignment } = cases.get(name);
+  const pins = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(options.pins, JSON.stringify({ ...pins, workspace: "system" }));
+  entry.test.name = name;
+  const seed = {
+    marker: "natlang-host-log-owned", boot: "boot", workspaceId: "workspace", start: 10, steps: [11, 21, 22],
+  };
+  const request = {
+    goal: assignment.goal, serverBootId: seed.boot,
+    earlier: { after: 10, through: 11 }, later: { after: 11, through: 22 }, tag: "WorkerdManager",
+  };
+  const reads = {};
+  const report = { status: assignment.status };
+  const ref = (value) => {
+    const text = JSON.stringify(value);
+    return {
+      complete: true, hash: createHash("sha256").update(text).digest("hex"), bytes: Buffer.byteLength(text),
+    };
+  };
+  const prototype = diagnostics.natlangTeacher.calls[0];
+  const call = (name, parent, inputs, output, effects = [], id = name) => ({
+    callId: id,
+    summary: { ...prototype.summary, call_id: id },
+    record: {
+      ...prototype.record, call_id: id, parent_call_id: parent, definition: { name }, outcome: "done",
+      inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+      output: ref(output), effects,
+    },
+  });
+  const briefCalls = [];
+  const queries = [];
+  for (const [side, seqs] of [["earlier", [11]], ["later", [21, 22]]]) {
+    const { line, label, repeat } = assignment[side][0];
+    const message = seed.marker + " " + line;
+    const records = seqs.map((seq) => ({ seq, level: "warn", tag: request.tag, message, pid: 1, timestamp: seq }));
+    reads[side] = { serverBootId: seed.boot, workspaceId: seed.workspaceId, latestSeq: 25, records };
+    const group = {
+      level: "warn", tag: request.tag, message, count: repeat, firstSeq: seqs[0], lastSeq: seqs.at(-1),
+    };
+    report[side] = {
+      serverBootId: seed.boot, latestSeq: 25, status: "incident",
+      window: { fromSeq: seqs[0], toSeq: seqs.at(-1), records: seqs.length },
+      findings: [{ class: label, ...group }],
+    };
+    const bounds = request[side];
+    const query = {
+      service: "serverLog", method: "query",
+      args: ref([{ sinceSeq: bounds.after, untilSeq: bounds.through, tag: request.tag, limit: 301 }]),
+      result: ref(reads[side]),
+    };
+    queries.push(query);
+    briefCalls.push(
+      call("briefServerLog", "reviewHostLogHandoff", { request: { bounds, tag: request.tag } }, report[side], [query], side),
+      call("classifyHostLogGroup", side, { group: { id: 0, ...group } }, label, [], side + "-classification"),
+    );
+  }
+  diagnostics.managedLogHandoff = {
+    caseId: assignment.id, contextId: "ctx", request, passed: true, seed, reads,
+    checks: { earlier: true, later: true, progress: true },
+  };
+  diagnostics.natlangTeacher = {
+    ...diagnostics.natlangTeacher,
+    programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+    rootCallIds: ["runWorkflow"],
+    report,
+    calls: [
+      call("runWorkflow", null, {}, null),
+      call("reviewHostLogHandoff", "runWorkflow", { request }, report),
+      ...briefCalls,
+      call("interpretLogProgress", "reviewHostLogHandoff", {
+        goal: request.goal, earlier: report.earlier, later: report.later,
+      }, report.status),
+    ],
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  const original = queries[1].result;
+  queries[1].result = queries[0].result;
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /exact live records/u);
+  queries[1].result = original;
+  briefCalls[3].record.inputs.group = briefCalls[1].record.inputs.group;
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /exact observed sequence range/u);
 });
 
 test("build performance export binds the handoff to measured payload and repeat keys", async (t) => {

@@ -468,6 +468,15 @@ classifier call to its original record group and checks the cited sequence
 ranges. Run a `log-cursor-oracle-<case-id>` system test for an individual
 live model-free check.
 
+Host-log handoff cases compare two ordered windows in the same VibeStudio
+server boot. They distinguish a recurring failure from a different incident,
+a quiet follow-up, and a degradation that survived a retry. The
+`log-handoff-oracle-*` cases check actual host queries, captured sequences,
+and scope rejection without a teacher model. Teacher admission also
+requires both nested briefs, their group classifications and the progress
+decision over those exact briefs.
+
+
 Eval recovery reviews a finite EvalDO result and its native journal. The
 cases cover an effect completed before a later exception, a journal-only
 confirmation, and a success-looking value with an absent store. The binding

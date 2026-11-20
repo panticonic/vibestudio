@@ -348,6 +348,15 @@ const logCursorWorkflow = {
   root: "reviewLogCursor",
   evidence: logCursorEvidence,
 };
+const logHandoffWorkflow = {
+  family: "system-live-host-log-handoff",
+  workspace: "system",
+  namespace: "vibestudio:server-logs",
+  group: "chronological-incident-handoff",
+  validator: { template: "system-testing", path: "skills/system-testing/log-handoff-managed.ts" },
+  root: "reviewHostLogHandoff",
+  evidence: logHandoffEvidence,
+};
 const evalRecoveryWorkflow = {
   family: "workspace-live-eval-recovery",
   workspace: "examples",
@@ -740,6 +749,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { phoneSetupUnavailable },
     { managedClientAdmissionWorlds },
     { managedLogCursorWorlds },
+    { managedLogHandoffWorlds },
     { buildPerformanceWorlds },
     { tourRehearsalWorlds },
     { explorerTextWorlds },
@@ -817,6 +827,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "phone-setup-world.ts",
       "client-admission-worlds.ts",
       "log-cursor-worlds.ts",
+      "log-handoff-worlds.ts",
       "build-performance-worlds.ts",
       "tour-rehearsal-worlds.ts",
       "explorer-probe-worlds.ts",
@@ -1112,6 +1123,9 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of managedLogCursorWorlds) {
     cases.set(`log-cursor-live-${assignment.id}`, { ...logCursorWorkflow, assignment });
+  }
+  for (const assignment of managedLogHandoffWorlds) {
+    cases.set(`log-handoff-live-${assignment.id}`, { ...logHandoffWorkflow, assignment });
   }
   for (const assignment of managedEvalRecoveryWorlds) {
     cases.set(`eval-recovery-live-${assignment.id}`, { ...evalRecoveryWorkflow, assignment });
@@ -5193,6 +5207,95 @@ function logCursorEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: contextId, server_boot_id: seed.boot, through_seq: last },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function logHandoffEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedLogHandoff;
+  const { caseId, contextId, request, seed, reads, checks } = fixture ?? {};
+  const { id, goal, status, earlier, later } = workflow.assignment;
+  const earlierCount = earlier.reduce((count, { repeat }) => count + repeat, 0);
+  const laterCount = later.reduce((count, { repeat }) => count + repeat, 0);
+  const report = exercise.report;
+  const records = exercise.calls.map(({ record }) => record);
+  const children = (parent, name) => parent
+    ? records.filter(({ parent_call_id, definition }) =>
+      parent_call_id === parent.call_id && definition.name === name)
+    : [];
+  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const [handoff] = children(root, "reviewHostLogHandoff");
+  const briefs = children(handoff, "briefServerLog");
+  const [progress] = children(handoff, "interpretLogProgress");
+  requireEvidence(
+    fixture?.passed === true &&
+      caseId === id && typeof contextId === "string" && contextId === execution.provenance?.contextId &&
+      ["earlier", "later", "progress"].every((key) => checks?.[key] === true) &&
+      typeof seed?.marker === "string" && seed.marker.startsWith("natlang-host-log-") &&
+      typeof seed.boot === "string" && typeof seed.workspaceId === "string" &&
+      Number.isSafeInteger(seed.start) && Array.isArray(seed.steps) &&
+      seed.steps.length === earlierCount + laterCount &&
+      seed.steps.every((seq, index) => Number.isSafeInteger(seq) && seq > (seed.steps[index - 1] ?? seed.start)) &&
+      request?.goal === goal && request.serverBootId === seed.boot && request.tag === "WorkerdManager" &&
+      isDeepStrictEqual(request.earlier, { after: seed.start, through: seed.steps[earlierCount - 1] }) &&
+      isDeepStrictEqual(request.later, { after: request.earlier.through, through: seed.steps.at(-1) }) &&
+      matchesValue(handoff?.inputs?.request, request) && matchesValue(handoff.output, report) &&
+      briefs.length === 2 && matchesValue(progress?.inputs?.goal, goal) &&
+      matchesValue(progress.inputs.earlier, report.earlier) &&
+      matchesValue(progress.inputs.later, report.later) &&
+      report.status === status && matchesValue(progress.output, status),
+    "Host-log handoff requires the two assigned bounds and the nested comparison of both briefs"
+  );
+  for (const [side, groups, seqs] of [
+    ["earlier", earlier, seed.steps.slice(0, earlierCount)],
+    ["later", later, seed.steps.slice(earlierCount)],
+  ]) {
+    const bounds = request[side];
+    const read = reads?.[side];
+    const result = report[side];
+    const brief = briefs.find(({ inputs }) => matchesValue(inputs?.request, { bounds, tag: request.tag }));
+    const query = brief?.effects?.filter(({ service, method }) => service === "serverLog" && method === "query");
+    requireEvidence(
+      read?.serverBootId === seed.boot && read.workspaceId === seed.workspaceId &&
+        Number.isSafeInteger(read.latestSeq) && read.latestSeq >= bounds.through &&
+        Array.isArray(read.records) && isDeepStrictEqual(read.records.map(({ seq }) => seq), seqs) &&
+        matchesValue(brief?.output, result) &&
+        query?.length === 1 && !query[0].error &&
+        matchesValue(query[0].args, [{ sinceSeq: bounds.after, untilSeq: bounds.through, tag: request.tag, limit: 301 }]) &&
+        matchesValue(query[0].result, read) &&
+        result?.serverBootId === seed.boot && result.latestSeq === read.latestSeq &&
+        isDeepStrictEqual(result.window, { fromSeq: seqs[0], toSeq: seqs.at(-1), records: seqs.length }),
+      "Host-log brief must cite the exact live records read by its assigned query"
+    );
+    const classifications = children(brief, "classifyHostLogGroup");
+    const findings = [];
+    let offset = 0;
+    requireEvidence(
+      classifications.length === groups.length && groups.every(({ label, line, repeat }, id) => {
+        const span = read.records.slice(offset, offset + repeat);
+        offset += repeat;
+        if (!span.every(({ tag, message }) => tag === request.tag &&
+          typeof message === "string" && message.includes(seed.marker + " " + line))) return false;
+        const { level, tag, message, seq: firstSeq } = span[0];
+        const group = { level, tag, message: message.slice(0, 300), count: repeat, firstSeq, lastSeq: span.at(-1).seq };
+        if (label !== "routine") findings.push({ class: label, ...group });
+        return classifications.some((call) =>
+          matchesValue(call.inputs?.group, { id, ...group }) && matchesValue(call.output, label));
+      }),
+      "Host-log brief must classify each distinct group with the exact observed sequence range"
+    );
+    findings.sort((left, right) =>
+      Number(right.class === "failure") - Number(left.class === "failure") || left.firstSeq - right.firstSeq);
+    requireEvidence(
+      isDeepStrictEqual(result.findings, findings) &&
+        result.status === (findings.some(({ class: label }) => label === "failure")
+          ? "incident" : findings.length ? "attention" : "normal"),
+      "Host-log handoff must preserve both briefs' verified findings"
+    );
+  }
+  return {
+    world: { context_id: contextId, workspace_id: seed.workspaceId, server_boot_id: seed.boot },
     checks,
     evidence: { workspace: { fixture } },
   };
