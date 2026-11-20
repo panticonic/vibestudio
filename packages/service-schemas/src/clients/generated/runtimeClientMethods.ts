@@ -269,7 +269,6 @@ export const GAD_WIRE_METHOD_NAMES = [
   "vcsIsStateDescendant",
   "vcsEnsureContext",
   "vcsContextMaterializationCommand",
-  "vcsForkContext",
   "vcsDropContext",
   "resolveRef",
   "updateRef",

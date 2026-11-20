@@ -2085,26 +2085,6 @@ const gadInternalWireMethods = defineServiceMethods({
     returns: materializationCommandSchema,
     agentFacing: false,
   },
-  vcsForkContext: {
-    website: {
-      kind: "closed",
-      reason:
-        "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
-    } as const,
-    description: "Fork one semantic context into another exact coordinate.",
-    args: z.tuple([
-      z
-        .object({
-          sourceContextId: nonemptyText,
-          targetContextId: nonemptyText,
-          commandId: nonemptyText,
-          ingress: semanticIngressSchema,
-        })
-        .strict(),
-    ]),
-    returns: genericSemanticResultSchema,
-    agentFacing: false,
-  },
   vcsDropContext: {
     website: {
       kind: "closed",
@@ -2663,7 +2643,6 @@ const GAD_AUTHORITY_GROUPS: readonly GadAuthorityGroup[] = [
       "vcsSemanticContentAck",
       "vcsEnsureContext",
       "vcsContextMaterializationCommand",
-      "vcsForkContext",
     ],
     capability: "workspace.source.write",
     principals: ["host"],
