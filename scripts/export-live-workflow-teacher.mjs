@@ -746,7 +746,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { gmailComposeHistoryWorlds },
     { unitIdentityWorlds },
     { transcriptCursorWorlds },
-    { remoteRouteWorlds },
+    { remoteRouteWorlds, cliContinuationWork },
     { retainedTriageWorlds },
     { githubSetupWorlds },
     { templateReleasePart, templateReleaseWorlds },
@@ -895,6 +895,7 @@ export async function loadLiveTeacherCases(checkouts) {
     cases.set(`android-audit-live-${assignment.id}`, { ...androidAuditWorkflow, assignment });
   }
   for (const assignment of remoteRouteWorlds) {
+    const routeGroup = "vibestudio:remote-access:authenticated-workspace-gateway";
     cases.set(`remote-route-live-${assignment.id}`, {
       family: "workspace-live-remote-route",
       namespace: "vibestudio:remote-access",
@@ -904,6 +905,12 @@ export async function loadLiveTeacherCases(checkouts) {
       validator: { template: "system-testing", path: "skills/system-testing/remote-route-managed.ts" },
       assignment,
       evidence: remoteRouteEvidence,
+      ...(assignment.cli ? {
+        family: "workspace-live-cli-continuation",
+        skills: cliContinuationWork.map(({ operation }) => operation),
+        sourceGroups: [routeGroup, "vibestudio:cli:context-selection-and-caller-tier"],
+        evidence: cliContinuationEvidence,
+      } : {}),
     });
   }
   for (const assignment of retainedTriageWorlds) {
@@ -3078,7 +3085,7 @@ function clientAdmissionEvidence(execution, exercise, _scenario, workflow) {
   };
 }
 
-function remoteRouteEvidence(execution, exercise, _scenario, { assignment }) {
+function remoteRouteEvidence(execution, exercise, _scenario, { assignment }, exactEffectCount = 1) {
   const fixture = execution.diagnostics.remoteRoute;
   const verification = fixture?.verification;
   const { request, native, checks } = verification ?? {};
@@ -3116,7 +3123,7 @@ function remoteRouteEvidence(execution, exercise, _scenario, { assignment }) {
   requireEvidence(
     matchesValue(review?.inputs?.request, request) && matchesValue(review.output, report) &&
       matchesValue(read?.inputs?.operationId, request.operationId) && matchesValue(read.output, native) &&
-      records.flatMap(({ effects }) => effects ?? []).length === 1 &&
+      records.flatMap(({ effects }) => effects ?? []).length === exactEffectCount &&
       effect?.service === "remoteGatewayIdentity" && effect.method === "observe" && !effect.error &&
       matchesValue(effect.args, [request.operationId]) && matchesValue(effect.result, native) &&
       matchesValue(layer?.inputs?.diagnosis, diagnostic) && matchesValue(layer.output, assignment.layer) &&
@@ -3129,6 +3136,74 @@ function remoteRouteEvidence(execution, exercise, _scenario, { assignment }) {
   return {
     world: { context_id: fixture.contextId, server_id: native.serverId, observed_workspace: native.workspaceId },
     checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function cliContinuationEvidence(execution, exercise, scenario, workflow) {
+  const fixture = execution.diagnostics.remoteRoute;
+  const verification = fixture?.verification;
+  const results = exercise.report?.results;
+  const observed = verification?.evidence;
+  const assigned = workflow.assignment.cli;
+  const request = verification?.gateway?.request;
+  const records = exercise.calls.map(({ record }) => record);
+  const child = (parent, name) => records.find(
+    (record) => record.parent_call_id === parent && record.definition.name === name,
+  );
+  const plan = child(exercise.rootCallIds[0], "planCliContinuation");
+  const source = child(plan?.call_id, "selectContextSource");
+  const assessment = child(plan?.call_id, "assessCliContext");
+  const decision = child(plan?.call_id, "chooseCliAction");
+  const coordinates = observed?.selectors;
+  const chosen = coordinates?.[assigned.source];
+  const choice = { source: assigned.source, coordinate: chosen };
+  const report = {
+    source: assigned.source, contextId: chosen?.contextId, status: assigned.status,
+    action: assigned.action, gateway: verification?.gateway?.native,
+  };
+  const effect = plan?.effects?.[0];
+  requireEvidence(
+    results?.length === 2 &&
+      results[0]?.domain === "remoteAccess" && results[0].operation === "reviewRemoteRoute" &&
+      results[1]?.domain === "remoteAccess" && results[1].operation === "planCliContinuation" &&
+      verification?.passed === true && verification.caseId === workflow.assignment.id &&
+      verification.checks?.verifiedGateway === true && verification.checks?.exactScope === true &&
+      observed && report.gateway && isDeepStrictEqual(observed.gateway, report.gateway) &&
+      isDeepStrictEqual(observed.credential, assigned.credential === "agent"
+        ? { kind: "agent", contextId: fixture.contextId } : { kind: "device" }) &&
+      observed.operation === assigned.operation &&
+      chosen && Object.keys(coordinates).length === Object.keys(assigned.selectors).length &&
+      Object.entries(assigned.selectors).every(([selector, relation]) => {
+        const coordinate = coordinates[selector];
+        return typeof coordinate?.contextId === "string" && coordinate.contextId.length > 0 &&
+          (coordinate.contextId === fixture.contextId) === (relation === "owned") &&
+          (["binding", "session", "default"].includes(selector)
+            ? typeof coordinate.workspaceId === "string" &&
+              (coordinate.workspaceId === observed.gateway.workspaceId) === (relation !== "foreign")
+            : coordinate.workspaceId === undefined) &&
+          (["session", "default"].includes(selector)
+            ? coordinate.serverId === observed.gateway.serverId : coordinate.serverId === undefined);
+      }) &&
+      isDeepStrictEqual(results[1].report, report) &&
+      plan?.effects?.length === 1 && effect?.service === "remoteCliScope" && effect.method === "evidence" &&
+      !effect.error && matchesValue(effect.args, [request?.operationId]) && matchesValue(effect.result, observed) &&
+      matchesValue(plan.inputs?.request, request) && matchesValue(plan.output, report) &&
+      matchesValue(source?.inputs?.selectors, coordinates) && matchesValue(source.output, choice) &&
+      matchesValue(assessment?.inputs?.choice, choice) && matchesValue(assessment.inputs.gateway, observed.gateway) &&
+      matchesValue(assessment.inputs.credential, observed.credential) && matchesValue(assessment.output, assigned.status) &&
+      matchesValue(decision?.inputs?.status, assigned.status) &&
+      matchesValue(decision.inputs.operation, observed.operation) &&
+      matchesValue(decision.inputs.credential, observed.credential) && matchesValue(decision.output, assigned.action),
+    "CLI continuation requires the verified gateway, selected context and caller-tier decision",
+  );
+  const gateway = remoteRouteEvidence({
+    ...execution,
+    diagnostics: { remoteRoute: { contextId: fixture.contextId, verification: verification.gateway } },
+  }, { ...exercise, report: results[0].report }, scenario, workflow, 2);
+  return {
+    world: { ...gateway.world, context_source: assigned.source },
+    checks: { ...gateway.checks, ...verification.checks },
     evidence: { workspace: { fixture } },
   };
 }

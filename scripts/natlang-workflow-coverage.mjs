@@ -209,7 +209,7 @@ export async function inspectWorkflowCoverage(checkouts, cases, sources) {
     };
   }));
   return {
-    scope: "Tracked template sources and declared task assignments, using each managed workspace's template dependencies",
+    scope: "Tracked host and template sources and declared task assignments, using each managed workspace's template dependencies",
     workspaceSources: Object.fromEntries(
       [...workspaceSources].map(([workspace, installed]) => [workspace, [...installed].sort()])
     ),

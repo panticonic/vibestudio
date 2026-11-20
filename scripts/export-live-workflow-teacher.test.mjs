@@ -7596,4 +7596,46 @@ test("remote route export binds the routing diagnosis to a live gateway read", a
     () => workflow.evidence(execution, exercise, id, workflow),
     /needs the native read before its diagnosis/u,
   );
+  const continuationId = "remote-route-live-cli-linked-agent-eval";
+  const continuation = cases.get(continuationId);
+  assert.deepEqual(continuation.skills, ["reviewRemoteRoute", "planCliContinuation"]);
+  Object.assign(request, { goal: continuation.assignment.goal, workspaceId: native.workspaceId });
+  const gatewayReport = { observed: native, verdict: "verified", layer: "healthy", next: "accept-identity" };
+  const gatewayVerification = execution.diagnostics.remoteRoute.verification;
+  gatewayVerification.caseId = continuation.assignment.id;
+  const selectors = {
+    ambient: { contextId: "owned" },
+    binding: { contextId: "other", workspaceId: native.workspaceId },
+  };
+  const evidence = { gateway: native, credential: { kind: "agent", contextId: "owned" }, operation: "eval", selectors };
+  const chosen = { source: "ambient", coordinate: selectors.ambient };
+  const plan = { source: "ambient", contextId: "owned", status: "usable", action: "ask-parent", gateway: native };
+  execution.diagnostics.remoteRoute.verification = {
+    caseId: continuation.assignment.id, passed: true,
+    checks: { verifiedGateway: true, exactScope: true }, gateway: gatewayVerification, evidence,
+  };
+  exercise.report = { results: [
+    { domain: "remoteAccess", operation: "reviewRemoteRoute", report: gatewayReport },
+    { domain: "remoteAccess", operation: "planCliContinuation", report: plan },
+  ] };
+  const action = call("chooseCliAction", "planCliContinuation", { status: "usable", credential: evidence.credential, operation: "eval" }, "ask-parent");
+  read.record.effects[0].result = ref(native);
+  exercise.calls = [
+    exercise.calls[0], read,
+    call("reviewRemoteRoute", "runWorkflow", { request }, gatewayReport),
+    call("remoteLayer", "reviewRemoteRoute", { diagnosis: "The server and workspace gateway identities match the assigned route." }, "healthy"),
+    call("routeHandoff", "reviewRemoteRoute", { verdict: "verified", layer: "healthy" }, "accept-identity"),
+    call("planCliContinuation", "runWorkflow", { request }, plan, [{
+      service: "remoteCliScope", method: "evidence", args: ref([request.operationId]), result: ref(evidence),
+    }]),
+    call("selectContextSource", "planCliContinuation", { selectors }, chosen),
+    call("assessCliContext", "planCliContinuation", { choice: chosen, gateway: native, credential: evidence.credential }, "usable"),
+    action,
+  ];
+  assert.equal(continuation.evidence(execution, exercise, continuationId, continuation).world.context_source, "ambient");
+  action.record.output = ref("run-assigned-command");
+  assert.throws(
+    () => continuation.evidence(execution, exercise, continuationId, continuation),
+    /requires the verified gateway, selected context and caller-tier decision/u,
+  );
 });

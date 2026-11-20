@@ -47,6 +47,10 @@ Read-only status commands identify the active tier and missing prerequisite.
 Do not retry a linked-session refusal through raw RPC or local projection
 writes.
 
+The [managed Natlang continuation](https://github.com/panticonic/vibestudio-system/blob/main/skills/remote-access/planCliContinuation.nl)
+uses the verified gateway, the CLI's context precedence, and caller tier to plan
+an assigned command. It returns a recommendation for the caller to carry out.
+
 ## Remote paths and output
 
 Filesystem, VCS, eval, and panel commands operate on the selected server

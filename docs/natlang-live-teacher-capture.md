@@ -10,7 +10,7 @@ The command reads source and makes no model calls. Managed-workspace cases have 
 Scoped-fixture cases use authored observations shaped by the owning template's Vibestudio contracts and have independent verifiers in that template.
 They are not recorded live effects or training examples.
 
-Use `pnpm natlang:tasks --coverage` to inspect the tracked skill documents, local
+Use `pnpm natlang:tasks --coverage` to inspect the tracked host and template skill documents, local
 Natlang sources, mounted callables, and managed and scoped case counts for each
 callable. The skill entries also show direct Markdown links to mounted Natlang
 programs elsewhere in the same template or in another configured template repository.
@@ -150,6 +150,14 @@ refresh step without changing the profile. Use the
 `remote-route-oracle-qualification-` cases for model-free validation. The
 separate host smoke `scripts/smoke-remote-workspace-access.ts` tests pairing
 and resume through the disposable managed instance's local transport.
+
+CLI continuation cases compose the authenticated gateway review with
+`planCliContinuation`. The gateway receipt comes from the running System
+workspace. The fixtures supply redacted CLI invocation coordinates for explicit,
+ambient, mirror, and saved-session selection. The planner checks the winning
+selector against the gateway and chooses an action for the paired or linked
+caller. The oracle checks the decision and rejects scope reads before route
+verification. These cases plan commands without dispatching them.
 
 Gmail compose audits run in an owned channel in the Google Workspace template.
 The shared program calls the compose-history skill, projects a typed draft or

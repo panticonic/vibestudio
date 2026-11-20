@@ -373,16 +373,17 @@ if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === imp
   });
   if ([values.summary, values.coverage, values.case].filter(Boolean).length > 1)
     throw new Error("Choose --summary, --coverage, or --case ID");
-  const { checkouts, sources } = requireDevelopmentTemplateCheckouts(
-    path.resolve(import.meta.dirname, "..")
-  );
+  const repoRoot = path.resolve(import.meta.dirname, "..");
+  const { checkouts, sources } = requireDevelopmentTemplateCheckouts(repoRoot);
   const cases = await loadWorkflowBank(checkouts);
   if (values.case) {
     const found = cases.find(({ id }) => id === values.case);
     if (!found) throw new Error(`Unknown Vibestudio workflow case ${values.case}`);
     console.log(JSON.stringify(found, null, 2));
   } else if (values.coverage) {
-    console.log(JSON.stringify(await inspectWorkflowCoverage(checkouts, cases, sources), null, 2));
+    console.log(
+      JSON.stringify(await inspectWorkflowCoverage({ ...checkouts, host: repoRoot }, cases, sources), null, 2)
+    );
   } else if (values.summary) {
     const counts = {};
     for (const { execution, family } of cases) {
