@@ -24,6 +24,8 @@ const { values } = parseArgs({
     list: { type: "boolean" },
     preflight: { type: "boolean" },
     "review-model": { type: "string" },
+    "test-timeout-ms": { type: "string" },
+    "approve-codex-session": { type: "boolean" },
     out: { type: "string" },
     model: { type: "string", default: "openai-codex:gpt-6-luna" },
     "open-goals": { type: "boolean" },
@@ -33,6 +35,14 @@ const { values } = parseArgs({
 const list = values.list && !values.preflight && values.case === undefined && values.out === undefined;
 const preflight = values.preflight && !values.list && values.out === undefined &&
   values["review-model"] === undefined;
+const caseTimeout = values["test-timeout-ms"];
+if (caseTimeout !== undefined && (!/^\d+$/u.test(caseTimeout) || !Number.isSafeInteger(Number(caseTimeout)) || Number(caseTimeout) <= 0)) {
+  throw new Error("--test-timeout-ms must be a positive integer");
+}
+if (values["approve-codex-session"] &&
+    (list || preflight || values.assignments || !values.model.startsWith("openai-codex:"))) {
+  throw new Error("--approve-codex-session requires a live open-goal capture with an openai-codex model");
+}
 const requested = values.case ?? [];
 if (
   (values.assignments && values["open-goals"]) ||
@@ -40,7 +50,7 @@ if (
   (!list && !preflight && (values.list || values.preflight || !values.out || !requested.length))
 ) {
   throw new Error(
-    "Usage: pnpm natlang:teacher --list | --preflight [--case CASE ...] | --case CASE [--case CASE ...] --out NEW_DIR [--model PROVIDER:MODEL] [--assignments]"
+    "Usage: pnpm natlang:teacher --list | --preflight [--case CASE ...] | --case CASE [--case CASE ...] --out NEW_DIR [--model PROVIDER:MODEL] [--test-timeout-ms MS] [--approve-codex-session] [--assignments]"
   );
 }
 
@@ -290,6 +300,8 @@ for (const group of groups.values()) {
           scenario,
           "--model",
           source.teacher,
+          ...(caseTimeout === undefined ? [] : ["--test-timeout-ms", caseTimeout]),
+          ...(values["approve-codex-session"] ? ["--approve-codex-session"] : []),
           "--out-dir",
           directory,
         ]);

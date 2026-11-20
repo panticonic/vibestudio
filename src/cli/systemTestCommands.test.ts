@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { SystemTestRunnerSnapshot } from "@vibestudio/service-schemas/systemTestRunner";
+import type { PendingCredentialApproval } from "@vibestudio/shared/approvals";
 import type { SessionScope } from "./agent/sessionContext.js";
 import {
   loadSystemTestArtifact,
@@ -13,6 +14,7 @@ import {
 import {
   type SystemTestRunnerCaller,
   isRetryableSystemTestStatusReadFailure,
+  isManagedCodexSessionApproval,
   settleSystemTestDoctor,
   settleSystemTestStartup,
   systemTestDoctorRecovery,
@@ -24,6 +26,36 @@ import {
 } from "./systemTestCommands.js";
 import { RpcError } from "./rpcClient.js";
 import { AuthError } from "./output.js";
+
+it("limits session approval to the exact Codex gateway credential", () => {
+  const approval: PendingCredentialApproval = {
+    kind: "credential",
+    callerId: "do:workers/model-gateway:ModelGatewayDO:workspace-model-gateway",
+    callerKind: "do",
+    repoPath: "workers/model-gateway",
+    effectiveVersion: "v1",
+    requestedAt: 0,
+    approvalId: "pending-codex",
+    allowedDecisions: ["once", "session"],
+    credentialId: "codex-login",
+    credentialLabel: "Codex",
+    accountIdentity: { providerUserId: "synthetic-test-account" },
+    scopes: [],
+    audience: [{ url: "https://chatgpt.com/backend-api", match: "path-prefix" }],
+    injection: { type: "header", name: "authorization", valueTemplate: "Bearer {token}" },
+    credentialUse: "fetch",
+  };
+  expect(isManagedCodexSessionApproval(approval)).toBe(true);
+  expect(isManagedCodexSessionApproval({ ...approval, callerId: "do:unrelated" })).toBe(false);
+  expect(isManagedCodexSessionApproval({ ...approval, allowedDecisions: ["once"] })).toBe(false);
+  expect(isManagedCodexSessionApproval({ ...approval, credentialUse: "publish" })).toBe(false);
+  expect(
+    isManagedCodexSessionApproval({
+      ...approval,
+      audience: [{ url: "https://chatgpt.com/backend-api-other", match: "path-prefix" }],
+    })
+  ).toBe(false);
+});
 
 describe("system-test status polling", () => {
   it("reports orchestration failure even when every completed case passed", () => {

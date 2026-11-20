@@ -3,6 +3,7 @@ import { schemaRpcCaller } from "@vibestudio/rpc/internal";
 import { isRemoteRpcError } from "@vibestudio/rpc";
 import { createHash, randomUUID } from "node:crypto";
 import * as path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import type { RuntimeEntityHandle } from "@vibestudio/shared/runtime/entitySpec";
 import {
   approvalObservationEnvironmentKey,
@@ -612,6 +613,47 @@ async function list(inv: ParsedInvocation): Promise<number> {
   }
 }
 
+export function isManagedCodexSessionApproval(approval: PendingApproval): boolean {
+  return (
+    approval.kind === "credential" &&
+    approval.callerKind === "do" &&
+    approval.callerId === "do:workers/model-gateway:ModelGatewayDO:workspace-model-gateway" &&
+    approval.repoPath === "workers/model-gateway" &&
+    approval.credentialUse === "fetch" &&
+    approval.injection.type === "header" &&
+    approval.injection.name.toLowerCase() === "authorization" &&
+    approval.audience.length === 1 &&
+    approval.audience[0]?.url === "https://chatgpt.com/backend-api" &&
+    approval.audience[0]?.match === "path-prefix" &&
+    approval.allowedDecisions.includes("session")
+  );
+}
+
+async function approveManagedCodexSession(scope: SessionScope, signal: AbortSignal): Promise<void> {
+  const client = typedClient("shellApproval", shellApprovalMethods, scope.client);
+  while (!signal.aborted) {
+    const candidates = (await client.listPending()).filter(isManagedCodexSessionApproval);
+    if (signal.aborted) return;
+    if (candidates.length > 1) {
+      throw new CliError(
+        "More than one Codex model credential awaits approval in the teacher workspace"
+      );
+    }
+    if (candidates.length === 1) {
+      await client.resolve(candidates[0]!.approvalId, "session");
+      console.error(
+        "[system-test] Approved Codex model credential for this managed workspace session"
+      );
+      return;
+    }
+    try {
+      await delay(DEFAULT_POLL_MS, undefined, { signal });
+    } catch (error) {
+      if (!signal.aborted) throw error;
+    }
+  }
+}
+
 async function run(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
@@ -621,6 +663,23 @@ async function run(inv: ParsedInvocation): Promise<number> {
     if (all && names.length > 0) throw new UsageError("choose --all or exact test names, not both");
     if (!all && names.length === 0 && !category) {
       throw new UsageError("select exact test names, --category CATEGORY, or --all");
+    }
+    const approveCodex = inv.flags["approve-codex-session"] === true;
+    if (
+      approveCodex &&
+      (process.env["VIBESTUDIO_MANAGED_TEACHER_INSTANCE"] !== process.env["VIBESTUDIO_INSTANCE"] ||
+        !process.env["VIBESTUDIO_INSTANCE"]?.startsWith("natlang-live-") ||
+        inv.flags["detach"] === true ||
+        category ||
+        all ||
+        names.length !== 1 ||
+        !names[0]?.startsWith("open-goal-") ||
+        typeof inv.flags["model"] !== "string" ||
+        !inv.flags["model"].startsWith("openai-codex:"))
+    ) {
+      throw new UsageError(
+        "--approve-codex-session requires one Codex open goal in an owned teacher workspace"
+      );
     }
     const observationJson = process.env[approvalObservationEnvironmentKey];
     const approvalObservation =
@@ -676,11 +735,18 @@ async function run(inv: ParsedInvocation): Promise<number> {
         printResult(value, { json });
         return 0;
       }
-      const status = await waitForRun(
+      const completion = waitForRun(
         scope,
         stored,
         positiveInt(inv, "poll-ms", DEFAULT_POLL_MS) ?? DEFAULT_POLL_MS
       );
+      const observation = new AbortController();
+      const status = await (approveCodex
+        ? Promise.race([
+            completion,
+            approveManagedCodexSession(scope, observation.signal).then(() => completion),
+          ]).finally(() => observation.abort())
+        : completion);
       if (await signalCancellation.ensureCancellation()) return 130;
       const value = resultValue(status, stored.runId);
       const artifact = writeSystemTestArtifact(stored.runId, "summary", value, stored.artifactDir);
@@ -1523,6 +1589,11 @@ const RUN_FLAGS = [
   { name: "category", takesValue: true, description: "Select one test category" },
   { name: "all", takesValue: false, description: "Run the complete catalog" },
   { name: "model", takesValue: true, description: "Model ref for spawned test agents" },
+  {
+    name: "approve-codex-session",
+    takesValue: false,
+    description: "Approve the Codex gateway credential in an owned teacher workspace session",
+  },
   {
     name: "thinking-level",
     takesValue: true,

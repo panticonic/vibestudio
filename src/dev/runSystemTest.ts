@@ -318,6 +318,10 @@ async function runCommand({
   await seedIntegrationReadinessFixture(ensured.instance, scopedCommand, signal);
   const cliEnv = { ...process.env };
   delete cliEnv[approvalObservationEnvironmentKey];
+  delete cliEnv["VIBESTUDIO_MANAGED_TEACHER_INSTANCE"];
+  if (ensured.managed && ensured.instance.id.startsWith("natlang-live-")) {
+    cliEnv["VIBESTUDIO_MANAGED_TEACHER_INSTANCE"] = ensured.instance.id;
+  }
   if (
     scopedCommand[0] === "run" &&
     approvalObservationRunNames.some((name) => scopedCommand.includes(name))
