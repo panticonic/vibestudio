@@ -6415,14 +6415,16 @@ test("Gmail compose export requires the native delivery history and reconciliati
     check,
     stage: "needs-setup",
     gmailEnabled: false,
-    inheritedLaunch: null,
+    inheritedLaunch: check.kind === "launch-gate" && check.afterReload ? false : null,
     ...(check.kind === "viewport" ? { viewportWidth: check.width, overflow: false } : {}),
   }));
   const setup = {
     status: "action-needed", action: "open-setup", ids: [], checkpoint: null,
     panelFindings: receipts.map(({ id, check }, index) => ({ check, code: world.codes[index], evidenceId: id })),
   };
-  const gate = { evidenceId: receipts[1].id, enabled: false };
+  const launchRows = receipts.filter(({ check }) => check.kind === "launch-gate");
+  assert.equal(launchRows.length, 2);
+  const gate = { evidenceId: launchRows.at(-1).id, enabled: false };
   const disposition = { launch: "held", action: "reconcile-before-retry", evidenceIds: [gate.evidenceId, latest.id] };
   const continuation = { audit: report, continuation: disposition };
   diagnostics.managedGoogleSetup = {
@@ -6447,11 +6449,12 @@ test("Gmail compose export requires the native delivery history and reconciliati
   }]);
   setupCall.record.ended_at = new Date(1).toISOString();
   continuationCall.record.started_at = new Date(2).toISOString();
+  const decisionCall = call("decideContinuation", "planComposeContinuation", { gate, audit: report }, disposition);
   diagnostics.natlangTeacher.calls.push(
     setupCall,
     call("reviewSetupJourney", "guideGoogleWorkspace", {}, setup),
     continuationCall,
-    call("decideContinuation", "planComposeContinuation", { gate, audit: report }, disposition),
+    decisionCall,
   );
   await save();
   await exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-continuation` });
@@ -6461,6 +6464,18 @@ test("Gmail compose export requires the native delivery history and reconciliati
     exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-wrong-launch-control` }),
     /requires the assigned launch observation/u
   );
+  gate.evidenceId = launchRows[0].id;
+  disposition.evidenceIds[0] = gate.evidenceId;
+  continuationCall.record.effects[0].result = ref(gate);
+  continuationCall.record.output = ref(continuation);
+  decisionCall.record.inputs.gate = ref(gate);
+  decisionCall.record.output = ref(disposition);
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-superseded-launch-control` }),
+    /requires the assigned launch observation/u
+  );
+
 });
 
 test("unit identity export rejects artwork that differs from the grounded catalog choice", async (t) => {

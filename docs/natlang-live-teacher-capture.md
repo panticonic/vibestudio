@@ -386,9 +386,10 @@ the installed panel to switch app scope and browser preference, reload, and chec
 guidance. The nested comparison checks the choice that changed, the choice that carried forward,
 and the disabled Connect Google and Open Gmail controls.
 The Gmail continuation cases link the setup review to a second Natlang skill
-that audits a retained compose card. It cites the observed launch control and
-the decisive channel event when recommending preserving a saved draft or
-reconciling an interrupted send before any retry. The system test
+that audits a retained compose card. It cites the latest observed launch
+control and the decisive channel event when recommending that the owner
+preserve a saved draft, reconcile an interrupted send, or review a conflicting
+draft identity or missing recipient before proceeding. The system test
 `google-setup-managed-compose-qualification` checks the actual panel and
 channel, including denial of launch evidence before the setup readback.
 Local model comparison cases query the installed local-model extension twice. The workflow assesses the

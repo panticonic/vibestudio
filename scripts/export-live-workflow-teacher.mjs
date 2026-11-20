@@ -7801,7 +7801,7 @@ function gmailContinuationEvidence(execution, exercise, scenario, workflow) {
   const results = exercise.report?.results;
   const { gate, setup, compose } = verification ?? {};
   const report = results?.[1]?.report;
-  const gateRow = setup?.receipts?.find(({ check }) => check.kind === "launch-gate");
+  const gateRow = setup?.receipts?.findLast(({ check }) => check.kind === "launch-gate");
   const continuation = exercise.calls.map(({ record }) => record).find(
     (record) =>
       record.parent_call_id === exercise.rootCallIds[0] &&
