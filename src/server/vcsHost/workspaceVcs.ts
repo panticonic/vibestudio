@@ -111,6 +111,7 @@ import { ContentProjectionStore } from "./contentProjectionStore.js";
 import { DiskProjector } from "./diskProjector.js";
 import { ContextMaterializer } from "./contextMaterializer.js";
 import { discoverRepos } from "@vibestudio/shared/runtime/repoDiscovery";
+import type { WorkspaceSourceInitializationReceipt } from "@vibestudio/workspace-contracts/workspaceSource";
 import type {
   WorkspaceSemanticPort,
   WorkspaceSourceProviderV1,
@@ -179,6 +180,7 @@ import type { WorkspaceRootTemplateBootstrap } from "../workspaceRootTemplateBoo
 import {
   installWorkspaceReplayBlobScopes,
   readWorkspaceHistoryReplayReceipt, registerWorkspaceHistoryReplayOwners,
+  restoreWorkspaceHistorySourceInitialization,
 } from "./workspaceHistoryMigration.js";
 import { retainedBlobDigests, withBlobContentLock } from "../storage/blobRetentions.js";
 
@@ -2682,18 +2684,28 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       : null;
     if (rootPin) {
       let spanStartedAt = performance.now();
-      const initialization = await this.workspaceSourceProvider().inspectInitialization();
-      timings.inspectMs = performance.now() - spanStartedAt;
-      if (initialization.state === "ready") {
+      const verifyPin = (receipt: WorkspaceSourceInitializationReceipt) => {
         if (
-          initialization.receipt.pin.url !== rootPin.url ||
-          initialization.receipt.pin.ref !== rootPin.ref ||
-          initialization.receipt.pin.commit !== rootPin.commit
+          receipt.pin.url !== rootPin.url ||
+          receipt.pin.ref !== rootPin.ref ||
+          receipt.pin.commit !== rootPin.commit
         ) {
           throw new Error(
             "Workspace source initialization receipt does not match the exact root template"
           );
         }
+      };
+      const inspectLegacy = () => this.workspaceSourceProvider().inspectInitialization();
+      const history = this.participantHistorySource;
+      const retained = this.retiredLegacyRetention;
+      const initialization = history && retained
+        ? await restoreWorkspaceHistorySourceInitialization({
+            ...history, receiptDigest: retained.receiptDigest, inspectLegacy, verifyPin,
+          })
+        : await inspectLegacy();
+      timings.inspectMs = performance.now() - spanStartedAt;
+      if (initialization.state === "ready") {
+        verifyPin(initialization.receipt);
         spanStartedAt = performance.now();
         const fresh = await this.ensureFresh();
         timings.ensureFreshMs = performance.now() - spanStartedAt;

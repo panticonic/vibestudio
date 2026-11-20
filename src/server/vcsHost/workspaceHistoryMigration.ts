@@ -1,6 +1,11 @@
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import { compareUtf16CodeUnits, sha256HexSyncText } from "@vibestudio/content-addressing";
 import { vcsStateNodeRefSchema, type VcsStateNodeRef } from "@vibestudio/service-schemas/vcs";
+import { gadWireMethods } from "@vibestudio/service-schemas/workspaceSource";
+import type {
+  WorkspaceSourceInitializationInspection,
+  WorkspaceSourceInitializationReceipt,
+} from "@vibestudio/workspace-contracts/workspaceSource";
 import { z } from "zod";
 import {
   finishWorkspaceReplayBlobScopes,
@@ -35,6 +40,9 @@ const freezeSchema = z.object({
 
 const freezeEvidenceSchema = freezeSchema.extend({
   verification: z.object({ generation: z.string().uuid(), sealed: z.boolean() }).strict().optional(),
+});
+const replayInitializationSchema = replayReceiptSchema.extend({
+  sourceInitialization: z.unknown().optional(),
 });
 type ReplayReceipt = z.infer<typeof replayReceiptSchema>;
 type InstalledFreeze = { generation: string; receipt: ReplayReceipt };
@@ -118,6 +126,43 @@ export async function readWorkspaceHistoryReplayReceipt(
   return replayReceiptSchema
     .nullable()
     .parse(await dispatch.dispatch(destination, "readHistoryReplayReceipt"));
+}
+
+/** Transfer the exact creation receipt of a verified, frozen workspace once. */
+export async function restoreWorkspaceHistorySourceInitialization(input: {
+  dispatch: Pick<DODispatch, "dispatch">;
+  canonical: WorkspaceSourceProviderRef;
+  receiptDigest: string;
+  inspectLegacy: () => Promise<WorkspaceSourceInitializationInspection>;
+  verifyPin: (receipt: WorkspaceSourceInitializationReceipt) => void;
+}): Promise<WorkspaceSourceInitializationInspection> {
+  const { dispatch, canonical, receiptDigest, inspectLegacy, verifyPin } = input;
+  const { sourceInitialization, ...replay } = replayInitializationSchema.parse(
+    await dispatch.dispatch(canonical, "readHistoryReplayReceipt", { includeSourceInitialization: true })
+  );
+  if (workspaceHistoryReplayReceiptDigest(replay) !== receiptDigest)
+    throw new Error("Source initialization belongs to a different replay receipt");
+  if (sourceInitialization === undefined) return inspectLegacy();
+  if (sourceInitialization === null) {
+    const current = await inspectLegacy();
+    if (current.state === "ready") {
+      verifyPin(current.receipt);
+      const recorded = await dispatch.dispatch(canonical, "rememberHistorySourceInitialization", {
+        replayReceiptDigest: receiptDigest,
+        receipt: current.receipt,
+      });
+      if (recorded !== true) throw new Error("Participant history did not record source initialization");
+      console.log("[Vcs] Archived root template initialization in participant history");
+    }
+    return current;
+  }
+  const initialization = gadWireMethods.workspaceSourceInspectInitialization.returns.parse({
+    state: "ready",
+    commandId: (sourceInitialization as Partial<WorkspaceSourceInitializationReceipt>)?.commandId,
+    receipt: sourceInitialization,
+  });
+  console.log("[Vcs] Restored root template initialization from participant history");
+  return initialization;
 }
 
 const replayContentPageSize = 1_024;

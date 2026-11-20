@@ -2068,6 +2068,65 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     expect(prepareInitialization).not.toHaveBeenCalled();
   });
 
+  it("preserves and checks the original template pin in sealed participant history", async () => {
+    const { deps, refs } = await harness();
+    const pin = { url: "https://example.test/root.git", ref: "refs/tags/v1", commit: "1".repeat(40) };
+    const replay = {
+      head: "main-head", eventId: "main-event", contexts: [],
+      frozenPlanDigest: "a".repeat(64),
+    };
+    const receipt = {
+      commandId: "workspace-source:root",
+      pin,
+      initializedEventId: "root-event",
+      initializedStateHash: EMPTY_STATE_HASH,
+    };
+    const inspectLegacy = vi.fn(async () => ({ state: "ready" as const, commandId: receipt.commandId, receipt }));
+    const prepareInitialization = vi.fn();
+    const prepareSource = vi.fn(async () => pin);
+    const canonical = { ...TEST_PROVIDER, objectKey: "canonical" };
+    const replayDigest = sha256HexSyncText(canonicalJson(replay));
+    let saved: typeof receipt | null = null;
+    const dispatch = vi.fn(async (_owner: typeof TEST_PROVIDER, method: string, input?: unknown) => {
+      switch (method) {
+        case "readHistoryMain": return { head: replay.head, eventId: replay.eventId };
+        case "readHistoryReplayReceipt": return input ? { ...replay, sourceInitialization: saved } : replay;
+        case "listHistoryAppliedPublications":
+        case "listHistoryRetainedParticipants":
+        case "registerHistoryReplayOwners":
+        case "readHistoryReplayPrivateContent": return [];
+        case "rememberHistorySourceInitialization":
+          expect(input).toEqual({ replayReceiptDigest: replayDigest, receipt });
+          saved = receipt;
+          return true;
+        default: throw new Error(`Unexpected history call ${method}`);
+      }
+    });
+    vi.spyOn(refs, "readMainSemanticState").mockReturnValue({ kind: "event", eventId: replay.eventId });
+    async function reopen(withLegacy: boolean) {
+      const vcs = new WorkspaceVcs({
+        ...deps,
+        rootTemplateBootstrap: { preparedBuildForContent: () => null, prepareSource, prepareInitialization },
+      });
+      vi.spyOn(vcs, "ensureFresh").mockResolvedValue({ stateHash: EMPTY_STATE_HASH });
+      if (withLegacy) {
+        await vcs.attachGad({ contentGcRoots: async () => ({ contentRoots: [], contentHashes: [] }) } as never);
+        vcs.attachWorkspaceSourceProvider({ inspectInitialization: inspectLegacy } as never);
+      }
+      await vcs.attachParticipantHistory({ dispatch: { dispatch }, canonical });
+      await vcs.retainSealedLegacyHistory(replayDigest);
+      return vcs;
+    }
+    const first = await reopen(true);
+    await expect(first.activateWorkspaceFromSource()).resolves.toMatchObject({ initialized: false });
+    const reopened = await reopen(false);
+    await expect(reopened.activateWorkspaceFromSource()).resolves.toMatchObject({ initialized: false });
+    prepareSource.mockResolvedValue({ ...pin, commit: "2".repeat(40) });
+    await expect(reopened.activateWorkspaceFromSource()).rejects.toThrow("does not match the exact root template");
+    expect(inspectLegacy).toHaveBeenCalledOnce();
+    expect(prepareInitialization).not.toHaveBeenCalled();
+  });
+
   it("recovers an interrupted initial publication and recognizes the initialized workspace", async () => {
     const { vcs, refs } = await harness();
     const contextId = "workspace-initialization:workspace:test";
