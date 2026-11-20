@@ -18,6 +18,12 @@ const templateGoalDomains = {
     checks: ["exactImageFrontiers", "exactImageBrief", "groundedImageAssessment", "independentlyReadImageOriginals",
       "groundedImageDecision", "verifiedPrivateImageHandoff", "preservedImageWorkspace", "rejectedForeignImage"],
   },
+  notificationState: {
+    namespace: "vibestudio:notification:durable-state",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-notification-state-managed.ts" },
+    callable: "reviewNotificationState",
+    checks: ["exactNotificationReadScope", "verifiedNotificationRefresh", "exactNotificationDisposition", "independentNotificationReadback"],
+  },
   mobileContinuity: {
     namespace: "vibestudio:mobile-continuity",
     validator: { template: "system-testing", path: "skills/mobile-system-testing/open-continuity.ts" },
@@ -1420,13 +1426,13 @@ export async function loadLiveTeacherCases(checkouts) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
     const distinctGoals = new Set();
-    const { openGoalWorlds, openAgentCapabilityWorlds = [], openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openImageCandidateWorlds = [], openApiReadinessWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
+    const { openGoalWorlds, openNotificationStateWorlds = [], openAgentCapabilityWorlds = [], openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openImageCandidateWorlds = [], openApiReadinessWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
       spectroliteGoalWorlds = [], openGoalGoogleWorlds = [], openGoalPersonalWorlds = [],
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
       openTerminalWorlds = [], openOwnedResearchWorlds = [], personalWelcomeWorlds = [], dictationHandoffWorlds = [], specialistHandoffWorlds = [], providerHandoffWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
-    for (const assignment of [...openGoalWorlds, ...openAgentCapabilityWorlds, ...openMobileContinuityWorlds, ...openInstalledPackageWorlds, ...openAssetIntegrityWorlds, ...openTendrilRouteWorlds, ...openExtensionDossierWorlds, ...openDeployedInterfaceWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
+    for (const assignment of [...openGoalWorlds, ...openNotificationStateWorlds, ...openAgentCapabilityWorlds, ...openMobileContinuityWorlds, ...openInstalledPackageWorlds, ...openAssetIntegrityWorlds, ...openTendrilRouteWorlds, ...openExtensionDossierWorlds, ...openDeployedInterfaceWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
       ...openApiReadinessWorlds, ...openImageCandidateWorlds, ...openNewsEvidenceWorlds, ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
@@ -8012,6 +8018,76 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
           isDeepStrictEqual(stage.result, proof.handoff) && isDeepStrictEqual(outcome.handoff, proof.handoff) :
           !stage && outcome.handoff === null && proof.handoff === null),
       "Expected exact owned client transitions, matching durable GAD records, and verified local handoff"
+    );
+  } else if (world.kind === "notificationState") {
+    const skillId = exercise.calls.find(({ record }) => record === skill)?.callId;
+    const by = (lambda, method) => exercise.calls.flatMap(({ record }) =>
+      record.parent_call_id === skillId && record.definition?.name === lambda
+        ? (record.effects ?? []).filter(effect =>
+          effect.service === "notificationState" && effect.method === method && !effect.error) : []);
+    const decide = exercise.calls.find(({ record }) => record.parent_call_id === skillId &&
+      record.definition?.name === "chooseNotificationAction" && record.outcome === "done");
+    const classify = exercise.calls.find(({ record }) => record.parent_call_id === decide?.callId &&
+      record.definition?.name === "findCurrentNotification" && record.outcome === "done");
+    const joined = (effect, args, result) =>
+      effect && matchesValue(effect.args, args) && matchesValue(effect.result, result);
+    const traced = effects.filter(effect => effect.service === "notificationState");
+    const journal = proof.journal ?? [];
+    const outcome = exercise.report.outcome;
+    const rows = journal.filter(row => row.method === "read");
+    const acknowledges = world.expected.action === "acknowledge";
+    const current = world.expected.attention !== null;
+    const expectedMethods = ["discover", "read", "refresh", ...(current ? ["read"] : []),
+      ...(acknowledges ? ["acknowledge", "read"] : [])];
+    const discover = by("locateNotificationLane", "discover");
+    const read = by("readNotificationLifecycle", "read");
+    const refresh = by("readNotificationLifecycle", "refresh");
+    const acknowledgement = by("finishNotificationReview", "acknowledge");
+    const readback = by("finishNotificationReview", "read");
+    const finding = outcome.decision?.finding;
+    const [id, revision] = world.expected.target ?? [null, null];
+    const cards = journal[0]?.result;
+    const active = proof.refresh?.lane;
+    requireEvidence(
+      skillId && decide && classify &&
+        matchesValue(decide.record.inputs?.goal, world.goal) &&
+        matchesValue(decide.record.inputs?.lifecycle, outcome.lifecycle) &&
+        matchesValue(decide.record.output, outcome.decision) &&
+        matchesValue(classify.record.inputs?.lifecycle, outcome.lifecycle) &&
+        matchesValue(classify.record.output, finding) &&
+        traced.length === expectedMethods.length && journal.length === expectedMethods.length &&
+        journal.every((row, index) => row.method === expectedMethods[index]) &&
+        discover.length === 1 && cards?.length === 2 &&
+        joined(discover[0], [], cards) && isDeepStrictEqual(cards[0], proof.assigned) &&
+        proof.assigned.label === world.desk && cards[1].id !== proof.assigned.id &&
+        read.length === (current ? 2 : 1) &&
+        joined(read[0], [proof.assigned], proof.initial) && isDeepStrictEqual(rows[0]?.result, proof.initial) &&
+        refresh.length === 1 && joined(refresh[0], [proof.assigned], proof.refresh) &&
+        proof.refresh?.discardedPriorRead === true && proof.refresh.producerReceipt === world.expected.receipt &&
+        (current ? active?.id === proof.assigned.id && joined(read[1], [active], proof.current) &&
+          isDeepStrictEqual(rows[1]?.result, proof.current) : active === null && proof.current === null) &&
+        acknowledgement.length === (acknowledges ? 1 : 0) &&
+        readback.length === (acknowledges ? 1 : 0) &&
+        (acknowledges ? joined(acknowledgement[0], [active, id, revision], proof.ack) &&
+          proof.ack?.status === "acknowledged" && joined(readback[0], [active], proof.final) &&
+          isDeepStrictEqual(rows[2]?.result, proof.final) : proof.ack === null) &&
+        journal.every(row => {
+          const index = traced.findIndex(effect => effect.method === row.method && joined(effect, row.args, row.result));
+          if (index < 0) return false;
+          traced.splice(index, 1);
+          return true;
+        }) &&
+        isDeepStrictEqual(outcome.lifecycle, { original: proof.initial, refresh: proof.refresh, current: proof.current }) &&
+        outcome.scope === "owned-notification-fixture" && outcome.decision?.action === world.expected.action &&
+        isDeepStrictEqual(finding, { id, revision, state: world.expected.state }) &&
+        isDeepStrictEqual(outcome.acknowledgement, proof.ack) &&
+        isDeepStrictEqual(outcome.final, proof.final) &&
+        isDeepStrictEqual(proof.final?.attention.map(row => row.id) ?? null, world.expected.attention) &&
+        isDeepStrictEqual(proof.final?.retained.map(row => row.id) ?? null, world.expected.retained) &&
+        proof.final?.unreadCount === (world.expected.attention?.length ?? undefined) &&
+        proof.final?.retainedCount === (world.expected.retained?.length ?? undefined) &&
+        Array.isArray(proof.durable?.rows),
+      "Expected current owned notification observation, exact acknowledgment events, and independent retained SQLite evidence"
     );
   } else if (world.kind === "mobileContinuity") {
     const traced = effects.filter(effect => effect.service === "mobileContinuity" && !effect.error);
