@@ -16,7 +16,8 @@ import type { ExecutionPublicationJournal } from "../executionPublicationJournal
 import {
   migrateWorkspaceHistory,
   readWorkspaceHistoryReplayFreeze,
-  readWorkspaceHistoryReplayReceipt,
+  readWorkspaceHistoryReplayState,
+  recordWorkspaceHistoryReplaySeal,
   sealWorkspaceHistoryReplay,
   workspaceHistoryReplayReceiptDigest,
   WORKSPACE_PARTICIPANT_HISTORY_MIGRATION,
@@ -87,7 +88,19 @@ async function restoreParticipantHistory(
     await deps.exportSharedHistorySeed?.(history);
     return true;
   }
-  const receipt = await readWorkspaceHistoryReplayReceipt(dispatch, canonical);
+  const replay = await readWorkspaceHistoryReplayState(dispatch, canonical);
+  const attachHistory = () => deps.workspaceVcs.attachParticipantHistory({
+    ...history, infrastructureContextId: contextId,
+    listReplayedSessionOwners: deps.listWorkspaceHistorySessionOwners,
+  });
+  if (replay?.legacySeal) {
+    await attachHistory();
+    await deps.workspaceVcs.retainSealedLegacyHistory(replay.legacySeal.receiptDigest);
+    await deps.exportSharedHistorySeed?.(history);
+    console.log("[Vcs] Restored participant history using its canonical replay seal");
+    return true;
+  }
+  const receipt = replay?.receipt;
   const held = await readWorkspaceHistoryReplayFreeze(dispatch, legacy, receipt ?? undefined);
   const expectedMainEventId = receipt?.eventId ?? deps.readProtectedMainEventId();
   if (!receipt && !held && !expectedMainEventId) return false;
@@ -117,15 +130,17 @@ async function restoreParticipantHistory(
     : (await migrateWorkspaceHistory({
         dispatch, source: legacy, destination: canonical, freeze,
       })).installedFreeze;
-  await deps.workspaceVcs.attachParticipantHistory({
-    ...history, infrastructureContextId: contextId,
-    listReplayedSessionOwners: deps.listWorkspaceHistorySessionOwners,
-  });
+  await attachHistory();
+  let seal: { receiptDigest: string; generation: string } | undefined;
   if (installed && await sealWorkspaceHistoryReplay({ dispatch, source: legacy, freeze, installed })) {
-    await deps.workspaceVcs.retainSealedLegacyHistory(workspaceHistoryReplayReceiptDigest(installed.receipt));
+    seal = { receiptDigest: workspaceHistoryReplayReceiptDigest(installed.receipt), generation: installed.generation };
   } else if (held?.verification?.sealed && receipt) {
-    await deps.workspaceVcs.retainSealedLegacyHistory(workspaceHistoryReplayReceiptDigest(receipt));
+    seal = { receiptDigest: workspaceHistoryReplayReceiptDigest(receipt), generation: held.verification.generation };
     console.log("[Vcs] Restored participant history from the sealed legacy freeze");
+  }
+  if (seal) {
+    await deps.workspaceVcs.retainSealedLegacyHistory(seal.receiptDigest);
+    await recordWorkspaceHistoryReplaySeal({ ...history, seal });
   }
   await deps.exportSharedHistorySeed?.(history);
   return true;

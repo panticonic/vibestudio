@@ -44,6 +44,11 @@ const freezeEvidenceSchema = freezeSchema.extend({
 const replayInitializationSchema = replayReceiptSchema.extend({
   sourceInitialization: z.unknown().optional(),
 });
+const replaySealSchema = z.object({
+  receiptDigest: z.string().regex(/^[0-9a-f]{64}$/u),
+  generation: z.string().uuid(),
+}).strict();
+const replayStateSchema = replayReceiptSchema.extend({ legacySeal: replaySealSchema.nullable().optional() });
 type ReplayReceipt = z.infer<typeof replayReceiptSchema>;
 type InstalledFreeze = { generation: string; receipt: ReplayReceipt };
 
@@ -126,6 +131,38 @@ export async function readWorkspaceHistoryReplayReceipt(
   return replayReceiptSchema
     .nullable()
     .parse(await dispatch.dispatch(destination, "readHistoryReplayReceipt"));
+}
+
+export async function readWorkspaceHistoryReplayState(
+  dispatch: Pick<DODispatch, "dispatch">,
+  destination: WorkspaceSourceProviderRef
+) {
+  const installed = replayStateSchema.nullable().parse(
+    await dispatch.dispatch(destination, "readHistoryReplayReceipt", { includeLegacySeal: true })
+  );
+  if (!installed) return null;
+  const { legacySeal, ...receipt } = installed;
+  if (legacySeal && (!receipt.frozenPlanDigest || legacySeal.receiptDigest !== workspaceHistoryReplayReceiptDigest(receipt))) {
+    throw new Error("Canonical history reports a seal for a different replay receipt");
+  }
+  return { receipt, legacySeal };
+}
+
+export async function recordWorkspaceHistoryReplaySeal(input: {
+  dispatch: Pick<DODispatch, "dispatch">;
+  canonical: WorkspaceSourceProviderRef;
+  seal: z.infer<typeof replaySealSchema>;
+}): Promise<void> {
+  const { dispatch, canonical, seal } = input;
+  const current = await readWorkspaceHistoryReplayState(dispatch, canonical);
+  if (!current || workspaceHistoryReplayReceiptDigest(current.receipt) !== seal.receiptDigest)
+    throw new Error("Canonical history changed before its legacy seal could be recorded");
+  if (current.legacySeal === undefined) return;
+  const recorded = replaySealSchema.parse(
+    await dispatch.dispatch(canonical, "recordHistoryReplaySeal", seal)
+  );
+  if (recorded.receiptDigest !== seal.receiptDigest || recorded.generation !== seal.generation)
+    throw new Error("Canonical history recorded a different legacy seal");
 }
 
 /** Transfer the exact creation receipt of a verified, frozen workspace once. */

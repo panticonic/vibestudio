@@ -271,7 +271,7 @@ describe("wireVcsDurability", () => {
     expect(manager.ensureDurableObjectEntity).toHaveBeenCalledOnce();
     expect(publishWorkspaceSourceEntity).toHaveBeenCalledOnce();
   });
-  it.each(["sealed", "installed", "before-freeze", "older-runtime", "new"] as const)(
+  it.each(["canonical-sealed", "sealed", "installed", "before-freeze", "older-runtime", "new"] as const)(
     "handles %s participant history in workspace activation order",
     async (resumeAt) => {
     const workspaceId = "workspace-1";
@@ -292,10 +292,13 @@ describe("wireVcsDurability", () => {
       head: "installed-head", eventId: main.eventId, contexts: [],
       frozenPlanDigest: sha256HexSyncText(canonicalJson({ source, freeze, plan, generation })),
     };
-    let installed = resumeAt === "installed" || resumeAt === "sealed";
+    const supportsSeal = resumeAt === "sealed" || resumeAt === "canonical-sealed" || resumeAt === "new";
+    let installed = resumeAt === "installed" || resumeAt === "sealed" || resumeAt === "canonical-sealed";
     let frozen = installed;
-    let sealed = resumeAt === "sealed";
+    let sealed = resumeAt === "sealed" || resumeAt === "canonical-sealed";
     const receiptDigest = sha256HexSyncText(canonicalJson(receipt));
+    const seal = { receiptDigest, generation };
+    let canonicalSeal = resumeAt === "canonical-sealed" ? seal : null;
     const retainSealedLegacyHistory = vi.fn(async () => {
       expect(sealed).toBe(true);
       expect(sequence.at(-1)).toBe("participant");
@@ -303,7 +306,14 @@ describe("wireVcsDurability", () => {
     const dispatch = vi.fn(async (_target: typeof source, method: string, input: unknown) => {
       switch (method) {
         case "readHistoryReplayReceipt":
-          return installed ? receipt : null;
+          return installed
+            ? supportsSeal && input ? { ...receipt, legacySeal: canonicalSeal } : receipt
+            : null;
+        case "recordHistoryReplaySeal":
+          expect(retainSealedLegacyHistory).toHaveBeenCalledExactlyOnceWith(receiptDigest);
+          expect(input).toEqual(seal);
+          canonicalSeal = seal;
+          return seal;
         case "readHistoryReplayFreeze":
           if (!frozen) return null;
           if (resumeAt === "installed" || input === undefined) return freeze;
@@ -374,14 +384,15 @@ describe("wireVcsDurability", () => {
       expect(dispatch).toHaveBeenCalledWith(source, "beginHistoryReplayFreeze", freeze);
       expect(dispatch).toHaveBeenCalledWith(source, "sealHistoryReplayFreeze", { freeze, generation, receiptDigest });
       expect(retainSealedLegacyHistory).toHaveBeenCalledExactlyOnceWith(receiptDigest);
+      expect(canonicalSeal).toEqual(seal);
       expect(sequence).toEqual(["initialization", "root active", "participant"]);
       return;
     }
     expect(readWorkspaceHistoryOwner).toHaveBeenCalledWith(targetId);
     expect(readProtectedMainEventId).toHaveBeenCalledTimes(
-      resumeAt === "sealed" || resumeAt === "installed" ? 0 : 1
+      resumeAt === "canonical-sealed" || resumeAt === "sealed" || resumeAt === "installed" ? 0 : 1
     );
-    if (resumeAt !== "installed" && resumeAt !== "sealed") {
+    if (resumeAt !== "installed" && resumeAt !== "sealed" && resumeAt !== "canonical-sealed") {
       expect(dispatch).toHaveBeenCalledWith(canonical, "supportsHistoryReplay");
     }
     if (resumeAt === "older-runtime") {
@@ -390,10 +401,15 @@ describe("wireVcsDurability", () => {
       expect(sequence).toEqual(["initialization"]);
       return;
     }
-    if (resumeAt === "sealed") {
-      expect(dispatch.mock.calls.map(([, method]) => method)).toEqual([
-        "readHistoryReplayReceipt", "readHistoryReplayFreeze",
+    if (resumeAt === "canonical-sealed") {
+      expect(dispatch.mock.calls).toEqual([
+        [canonical, "readHistoryReplayReceipt", { includeLegacySeal: true }],
       ]);
+    } else if (resumeAt === "sealed") {
+      expect(dispatch.mock.calls.map(([, method]) => method)).toEqual([
+        "readHistoryReplayReceipt", "readHistoryReplayFreeze", "readHistoryReplayReceipt", "recordHistoryReplaySeal",
+      ]);
+      expect(canonicalSeal).toEqual(seal);
     } else {
       expect(dispatch).toHaveBeenCalledWith(source, "beginHistoryReplayFreeze", freeze);
     }

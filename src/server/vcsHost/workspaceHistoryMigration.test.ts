@@ -3,7 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { privateWorkspaceBlobScopes, workspaceReplayBlobScopesReady } from "../storage/blobUploads.js";
-import { installWorkspaceReplayBlobScopes, migrateWorkspaceHistory, sealWorkspaceHistoryReplay } from "./workspaceHistoryMigration.js";
+import {
+  installWorkspaceReplayBlobScopes,
+  migrateWorkspaceHistory,
+  readWorkspaceHistoryReplayState,
+  sealWorkspaceHistoryReplay,
+} from "./workspaceHistoryMigration.js";
 
 const source = {
   source: "workers/workspace-source",
@@ -102,6 +107,18 @@ it("cannot seal a newer freeze with an earlier installation receipt", async () =
     dispatch: { dispatch }, source, freeze, installed: { receipt, generation },
   })).rejects.toThrow("Legacy history freeze generation changed before retirement");
   expect(dispatch).toHaveBeenCalledOnce();
+});
+
+it("rejects a canonical seal for a different replay", async () => {
+  const dispatch = vi.fn(async () => ({
+    eventId: main.eventId, head: "installed", contexts: [], frozenPlanDigest: "a".repeat(64),
+    legacySeal: {
+      receiptDigest: "0".repeat(64),
+      generation: "651b30c5-20f1-42b8-8b31-df2de5b13aed",
+    },
+  }));
+  await expect(readWorkspaceHistoryReplayState({ dispatch }, destination))
+    .rejects.toThrow("a seal for a different replay receipt");
 });
 
 it("resumes private replay content registration and skips rereads after a durable finish", async () => {
