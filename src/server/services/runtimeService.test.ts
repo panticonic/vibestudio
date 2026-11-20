@@ -5088,6 +5088,29 @@ describe("runtimeService.createSubagentContext", () => {
     expect(approvalQueue.request).not.toHaveBeenCalled();
   });
 
+  it("forks an orchestrator's prepared branch from the orchestrator's working copy", async () => {
+    const forkParticipantContext = vi.fn(async () => forkedRevision);
+    const { service } = await buildDeps({ semanticContexts: { forkParticipantContext } });
+    const orchestrator = await seedDO(service, "ctx-orchestrator", "orchestrator");
+    const caller = createVerifiedCaller(orchestrator.id, "do");
+    const source = (await service.handler({ caller }, "createContext", [{}])) as { contextId: string };
+    const owner = await seedDO(service, source.contextId, "fork-owner", caller);
+
+    const target = (await service.handler({ caller }, "createSubagentContext", [{
+      parentContextId: source.contextId,
+      ownerEntityId: owner.id,
+      targetKey: "fixture-fork",
+    }])) as { contextId: string };
+
+    expect(forkParticipantContext).toHaveBeenCalledWith({
+      caller,
+      sourceContextId: source.contextId,
+      targetContextId: target.contextId,
+      ownerContextId: "ctx-orchestrator",
+      retainForRuntime: true,
+    });
+  });
+
   it("allows the owner DO to create an entity inside its lifecycle child context without approval", async () => {
     const forkParticipantContext = vi.fn(async () => forkedRevision);
     const { service, approvalQueue } = await buildDeps({ semanticContexts: { forkParticipantContext } });
