@@ -293,3 +293,46 @@ test("the newly integrated families require the expected binding evidence for ev
     }
   }
 });
+
+test("commissioning uses fresh receipts and releases access only after a verified handoff", async () => {
+  const { world, scenario } = await loadAuthoredScopedWorkflow(
+    checkouts,
+    "remote-commission-fresh-install-and-pair"
+  );
+  const load = (source) => loadScopedWorkflowModule(checkouts.system, source);
+  const first = await prepareScopedWorkflowAdapter("remoteAccess", world, load);
+  const { bindings, verify } = await prepareScopedWorkflowAdapter("remoteAccess", world, load);
+  const id = scenario.request.work[0].input.operationId;
+  const unrelated = await first.bindings.remoteDeploymentRead.observe(id);
+  const baseline = await bindings.remoteDeploymentRead.observe(id);
+  await assert.rejects(bindings.remoteDeploymentApply.apply(unrelated.receipt), /current receipt/u);
+  await assert.rejects(bindings.remoteDeploymentHandoff.open(baseline.receipt), /current receipt/u);
+  await assert.rejects(bindings.remoteAccessRead.observe(id), /current receipt/u);
+  const install = await bindings.remoteDeploymentApply.apply(baseline.receipt);
+  const verified = await bindings.remoteDeploymentVerify.verify(install.receipt);
+  await assert.rejects(bindings.remoteDeploymentHandoff.open(install.receipt), /current receipt/u);
+  const handoff = await bindings.remoteDeploymentHandoff.open(verified.receipt);
+  const profile = await bindings.remoteAccessRead.observe(handoff.operationId);
+  await assert.rejects(bindings.remoteAccessRoute.select(profile.receipt), /current receipt/u);
+  const pair = await bindings.remoteAccessPair.pair(profile.receipt);
+  const route = await bindings.remoteAccessRoute.select(pair.receipt);
+  const child = await bindings.remoteAccessVerify.verify(route.receipt);
+  const report = {
+    deployment: {
+      status: "deployment-ready",
+      identity: verified.identity,
+      evidenceIds: [baseline.receipt, install.receipt, verified.receipt],
+    },
+    handoff,
+    access: {
+      status: "workspace-ready",
+      workspaceId: child.workspaceId,
+      evidenceIds: [profile.receipt, pair.receipt, route.receipt, child.receipt],
+    },
+  };
+  assert(verify(report));
+  assert.equal(first.verify(report), false);
+  assert.equal(verify({
+    ...report, access: { ...report.access, workspaceId: "different-child" },
+  }), false);
+});

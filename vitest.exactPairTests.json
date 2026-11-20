@@ -2,6 +2,7 @@
   "exactPairTests": [
     { "path": "tests/invocation-terminal-outcome.test.ts", "template": "base" },
     { "path": "tests/mobile-native-asset-store.test.ts", "template": "system" },
+    { "path": "tests/workspace-integration/natlang-remote-commission.test.ts", "template": "system" },
     { "path": "tests/onboardingTemplate.test.ts", "template": "personal" },
     { "path": "tests/typed-service-client-guard.test.ts", "template": "base" },
     { "path": "tests/vcs-skill-release-generator.test.ts", "template": "base" },

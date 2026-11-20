@@ -39,6 +39,12 @@ const simple = {
 };
 
 const bound = {
+  async remoteAccess(world, load) {
+    const { createRemoteCommissionFixture } = await load(
+      "skills/remote-commission-fixtures/fixture.ts"
+    );
+    return createRemoteCommissionFixture(world);
+  },
   async mobileSystem(world, load) {
     const { createMobileScenarioFixture } = await load(
       "skills/mobile-system-testing-fixtures/fixture.ts"

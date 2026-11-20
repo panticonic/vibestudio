@@ -11,6 +11,13 @@ const program = "skills/vibestudio-workflows/runWorkflow.nl";
 
 const domains = [
   {
+    domain: "remoteAccess",
+    template: "system",
+    source: "skills/remote-commission-fixtures/worlds.ts",
+    exported: "remoteCommissionWorlds",
+    identify: (world) => [`remote-commission-${world.id}`, [world.sourceGroup]],
+  },
+  {
     domain: "capabilities",
     template: "base",
     source: "skills/approval-visibility-fixtures/worlds.ts",

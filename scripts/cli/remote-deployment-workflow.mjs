@@ -14,6 +14,8 @@ export async function inspectDeploymentIdentity({
   readyFile,
   port,
   workspace = "default",
+  // A caller with a verified assignment may inspect a workspace created after startup.
+  expectedWorkspaceId,
   active = true,
 }) {
   const unverified = { state: active ? "unverified" : "inactive", identity: null };
@@ -33,8 +35,13 @@ export async function inspectDeploymentIdentity({
     )
       return unverified;
     const matching = ready.workspaces.filter(({ name }) => name === workspace);
-    if (matching.length !== 1 || typeof matching[0].workspaceId !== "string") return unverified;
-    const { workspaceId } = matching[0];
+    if (matching.length > 1) return unverified;
+    const registered = matching[0]?.workspaceId;
+    if (matching.length === 1 && (typeof registered !== "string" || !registered)) return unverified;
+    if (expectedWorkspaceId !== undefined &&
+      (typeof expectedWorkspaceId !== "string" || !expectedWorkspaceId ||
+        (registered !== undefined && registered !== expectedWorkspaceId))) return unverified;
+    const workspaceId = registered ?? (active ? expectedWorkspaceId : undefined);
     if (!workspaceId) return unverified;
     const { serverId, serverBootId: bootId, buildId, pid } = ready;
     const identity = { serverId, bootId, buildId, workspaceId };

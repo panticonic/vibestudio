@@ -390,6 +390,19 @@ as above. The host consumes the final successful deployment receipt and rechecks
 identity before assigning the device route. The caller can supply invite material through
 `pairingFor`. The already-running path uses the same handoff and can create a new device
 profile or reopen a previously paired profile.
+
+Remote commissioning adds a scoped bank for deployment, device access, and
+the full commissioning workflow. They share the mounted Natlang code and
+cover fresh installs, reused installations, and holds at the installer,
+boot, handoff, profile, and child-verification stages. Each attempt mints
+its own receipts. The oracle checks the exact call order, reported identity,
+and that held paths do not issue a later effect. The native deployment
+readiness smoke uses actual hub and child health, pairing, and device-route
+verification against a disposable VibeStudio instance. With the name of
+that instance in `VIBESTUDIO_REMOTE_COMMISSION_INSTANCE`, the System
+userland integration test runs the mounted Natlang call tree with these
+same live host bindings and a scripted executor.
+
 The Examples integration readiness cases compare a live catalog fetch binding with
 an optional path outside its audience or a required publication transport on the same URL.
 The managed launcher seeds a synthetic binding on a reserved hostname inside the disposable
