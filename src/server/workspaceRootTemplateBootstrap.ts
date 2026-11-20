@@ -540,10 +540,10 @@ export class WorkspaceRootTemplateBootstrap {
    * materialization receipt exists, restart no longer depends on the original
    * remote template being reachable.
    */
-  async prepareSource(): Promise<WorkspaceTemplatePin> {
+  async prepareSource(opts?: { restoredProtectedSource: true }): Promise<WorkspaceTemplatePin> {
     const descriptor = this.readDescriptor();
     if (this.preparedInitialization) return this.preparedInitialization.pin;
-    if (this.validateMaterializedSource(descriptor.rootTemplate)) {
+    if (this.validateMaterializedSource(descriptor.rootTemplate, opts?.restoredProtectedSource)) {
       return descriptor.rootTemplate;
     }
     const startedAt = performance.now();
@@ -764,7 +764,7 @@ export class WorkspaceRootTemplateBootstrap {
     };
   }
 
-  private validateMaterializedSource(pin: WorkspaceTemplatePin): boolean {
+  private validateMaterializedSource(pin: WorkspaceTemplatePin, restoredProtectedSource?: true): boolean {
     const receiptPath = path.join(this.deps.statePath, MATERIALIZATION_RECEIPT_PATH);
     if (!fs.existsSync(receiptPath)) return false;
     const receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8")) as unknown;
@@ -786,11 +786,15 @@ export class WorkspaceRootTemplateBootstrap {
     if (!fs.existsSync(manifestPath)) {
       throw new Error("Workspace root materialization receipt exists but its source is missing");
     }
-    parseWorkspaceConfigContentWithId(
-      fs.readFileSync(manifestPath, "utf8"),
-      this.deps.workspaceId,
-      (source) => fs.readFileSync(path.join(this.deps.sourcePath, source, "package.json"), "utf8")
-    );
+    // On restart the protected source already supplied the current runtime
+    // configuration. The original scaffold serves only as materialization evidence.
+    if (!restoredProtectedSource) {
+      parseWorkspaceConfigContentWithId(
+        fs.readFileSync(manifestPath, "utf8"),
+        this.deps.workspaceId,
+        (source) => fs.readFileSync(path.join(this.deps.sourcePath, source, "package.json"), "utf8")
+      );
+    }
     return true;
   }
 

@@ -406,6 +406,10 @@ describe("WorkspaceRootTemplateBootstrap", () => {
     });
 
     await expect(restarted.prepareSource()).resolves.toEqual(fx.pin);
+    const manifest = path.join(fx.sourcePath, "meta", "vibestudio.yml");
+    fs.writeFileSync(manifest, canonicalTemplateYaml({ systemEpoch: WORKSPACE_SYSTEM_EPOCH + 1 }));
+    await expect(restarted.prepareSource()).rejects.toThrow(/requires workspace host epoch/);
+    await expect(restarted.prepareSource({ restoredProtectedSource: true })).resolves.toEqual(fx.pin);
     expect(unavailableAcquire).not.toHaveBeenCalled();
   });
 

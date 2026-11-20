@@ -1818,7 +1818,10 @@ async function main() {
       };
     },
   });
-  await rootTemplateBootstrap.prepareSource();
+  if (restoredLaunch && !protectedRefStore.readMainSemanticState()) {
+    throw new Error("Workspace launch has no protected semantic main");
+  }
+  await rootTemplateBootstrap.prepareSource(restoredLaunch ? { restoredProtectedSource: true } : undefined);
   if (sharedHistorySeed) {
     // The template supplies bootstrap code, while the imported revision's
     // units carry their own creation review. Retire any provisional inventory
@@ -1833,9 +1836,6 @@ async function main() {
   const buildDependencyWorkspaceRoot = workspacePath;
   const bootstrapStateHash =
     restoredLaunch?.stateHash ?? (await rootTemplateBootstrap.prepareBootstrapState());
-  if (restoredLaunch && !protectedRefStore.readMainSemanticState()) {
-    throw new Error("Workspace launch has no protected semantic main");
-  }
   if (!restoredLaunch) {
     replaceWorkspaceConfig(workspaceConfig, await readPublishedConfig(layout.blobsDir, bootstrapStateHash));
   }
