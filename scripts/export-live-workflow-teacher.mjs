@@ -10,6 +10,14 @@ import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
 
 const sharedProgram = "skills/vibestudio-workflows/runWorkflow.nl";
 const templateGoalDomains = {
+  "terminal-handoff": {
+    namespace: "vibestudio:terminal-handoff",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-terminal-managed.ts" },
+    callable: "workOnTerminalGoal",
+    skill: "terminalHandoff",
+    checks: ["exactLiveChecklist", "verifiedTerminalContinuity", "exactNativeExit", "exactNativeChecks", "exactTerminalDiscovery",
+      "verifiedLocalHandoff", "protectedOwnedContext", "resultGrounded", "rejectedForeignAction"],
+  },
   "eval-handoff": {
     namespace: "vibestudio:eval-handoff",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-eval-handoff-managed.ts" },
@@ -1175,13 +1183,13 @@ export async function loadLiveTeacherCases(checkouts) {
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
-      openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
+      openTerminalWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
     for (const assignment of [...openGoalWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
       ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
       ...openGoalCalendarWorlds, ...openPersonalArtifactWorlds, ...openPersonalHistoryWorlds,
-      ...openGoalEvalHandoffWorlds, ...openGoalProgramRunWorlds, ...openGoalAuthoringWorlds, ...openGoalGoogleHandoffWorlds, ...openPersonalAutomationWorlds, ...openGoalOwnedPreviewWorlds, ...openDiagnosticWorlds, ...openLocalDeliveryWorlds, ...openGoalPanelRecoveryWorlds, ...openBrowserMigrationWorlds]) {
+      ...openTerminalWorlds, ...openGoalEvalHandoffWorlds, ...openGoalProgramRunWorlds, ...openGoalAuthoringWorlds, ...openGoalGoogleHandoffWorlds, ...openPersonalAutomationWorlds, ...openGoalOwnedPreviewWorlds, ...openDiagnosticWorlds, ...openLocalDeliveryWorlds, ...openGoalPanelRecoveryWorlds, ...openBrowserMigrationWorlds]) {
       const split = assignment.split ?? "train";
       const sourceGroups = [assignment.sourceGroup, assignment.relatedSourceGroup].filter(Boolean);
       const scenario = `open-goal-${assignment.id}`;
@@ -6910,7 +6918,59 @@ function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
     "Expected a verified live goal and its actual installed Natlang skill call"
   );
   const evidence = { workspace: { proof } };
-  if (world.kind === "eval-handoff") {
+  if (world.kind === "terminal-handoff") {
+    const outcome = exercise.report.outcome;
+    const performedBy = (lambda, service, method) => exercise.calls.flatMap(({ record }) =>
+      record.definition?.name === lambda ? (record.effects ?? []).filter(effect =>
+        effect.service === service && effect.method === method && !effect.error) : []);
+    const opened = performedBy("openTerminal", "openTerminalRead", "open");
+    const edits = performedBy("applyChecklistChange", "openTerminalInput", "change");
+    const transitions = performedBy("advanceTerminal", "openTerminalLifecycle", "advance");
+    const stages = performedBy("stageTerminalHandoff", "openTerminalHandoff", "stage");
+    const lookups = performedBy("discoverTerminalOptions", "openTerminalDiscovery", "open");
+    const searches = performedBy("discoverTerminalOptions", "openTerminalDiscovery", "search");
+    const reads = performedBy("discoverTerminalOptions", "openTerminalDiscovery", "load");
+    const terminalChecks = performedBy("performCheck", "terminalCheckRun", "execute");
+    const nativeChecks = proof.checkResults ?? [];
+    const nativeEdits = outcome.events.filter(event => event.operation === "change");
+    const nativeTransitions = outcome.events.filter(event => event.operation !== "change");
+    requireEvidence(
+      opened.length === 1 && matchesValue(opened[0].result?.screen, outcome.initial) && matchesValue(outcome.initial, proof.initial) &&
+        matchesValue(outcome.events, proof.events) &&
+        edits.length === nativeEdits.length &&
+        nativeEdits.every((event, index) => matchesValue(edits[index].args, [event.change]) && matchesValue(edits[index].result, event)) &&
+        transitions.length === nativeTransitions.length &&
+        nativeTransitions.every((event, index) => {
+          const effect = transitions[index];
+          const expected = "to" in event ? {operation: event.operation, size: event.to.cols === 100 ? "wide" : "small"} : {operation: event.operation};
+          return matchesValue(effect.args, [expected]) && matchesValue(effect.result, event) &&
+            (!("to" in event) || exercise.calls.some(({ record }) =>
+              record.definition?.name === "reviewTransition" && record.outcome === "done" &&
+              matchesValue(record.inputs?.event, event) && matchesValue(record.output, true)));
+        }) &&
+        terminalChecks.length === nativeChecks.length &&
+        nativeChecks.every((result, index) => terminalChecks.some(effect =>
+          matchesValue(effect.args, [proof.checkPlan?.receipt, result.id]) && matchesValue(effect.result, result))) &&
+        (world.checks ? exercise.calls.some(({ record }) =>
+          record.definition?.name === "runTerminalChecks" && record.outcome === "done" && matchesValue(record.output, outcome.checkReport))
+          : outcome.checkReport === null) &&
+        (world.discovery ? Array.isArray(outcome.discovery?.routes) &&
+          outcome.discovery.routes.length === world.discovery.methods.length &&
+          outcome.discovery.routes.every(route => proof.discovery?.routes?.some(row => matchesValue(row, route)) &&
+            lookups.some(effect => matchesValue(effect.args, [route.id]) && matchesValue(effect.result, route)) &&
+            searches.some(effect => Array.isArray(effect.result) && effect.result.some(hit => hit.id === route.id))) &&
+          outcome.discovery.guidance.length === world.discovery.guidance.length &&
+          outcome.discovery.guidance.every(citation => reads.some(effect =>
+            effect.result?.skillPath === citation.skillPath && effect.result.sha256 === citation.sha256 &&
+            effect.result.passages.some(passage => passage.includes(citation.quote)))) &&
+          performedBy("discoverTerminalOptions", "openTerminalDiscovery", "installed").length === 1
+          : (outcome.discovery ?? null) === null) &&
+        stages.length === Number(world.expected.sequence.includes("stage")) &&
+        (stages.length ? matchesValue(stages[0].result, outcome.handoff) && matchesValue(outcome.handoff, proof.handoff) &&
+          typeof proof.stagedText === "string" && hash(proof.stagedText) === outcome.handoff?.sha256 : outcome.handoff === null),
+      "Expected actual open terminal and interaction calls, observed PTY continuity, bounded native checks, and a verified authorized handoff"
+    );
+  } else if (world.kind === "eval-handoff") {
     const outcome = exercise.report.outcome;
     const observed = (service, method) => effects.filter(effect =>
       effect.service === service && effect.method === method && !effect.error);
