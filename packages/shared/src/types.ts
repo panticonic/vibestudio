@@ -125,6 +125,33 @@ export interface PackageManifest {
       className: string;
       /** Stable host-reviewed typed receiver contract used by build discovery. */
       rpcSchema?: string;
+      /**
+       * Code this class may host in its own cell (`hostCode`, docs/dolt-redesign.md
+       * §7.2). Hosting is declared by the host class; the hosted class declares
+       * what it needs (`hosted`). The host decides each grant from both.
+       */
+      hosts?: Array<{ source: string; className: string }>;
+      /**
+       * Marks a class that is only ever hosted by another entity's root, and
+       * the runtime grants it needs: `codegen` (compile from strings),
+       * `residency` (a heap that storage cannot rebuild), a Dolt facet store,
+       * and a bounded CPU time per invocation.
+       */
+      hosted?: HostedClassManifest;
+      /**
+       * The class's own storage engine (docs/dolt-redesign.md §6, §9.1). Absent is
+       * SQLite. `"dolt"` makes the object's cell a Dolt store: its tables are
+       * versioned, a fork can be taken at a commit, and `doltLocal` names the
+       * tables (SQL name patterns, `%` for any run) that belong to the object and
+       * not to its history: a fork starts them empty and a reset never rewinds
+       * them. The engine is fixed when an object is created; an object that
+       * already holds SQLite state is imported once, by the runtime, on its
+       * first activation under a Dolt declaration.
+       */
+      storage?: "dolt";
+      doltLocal?: string[];
+      /** Allow this class's Dolt facet to exchange commits through grants. */
+      doltRemotes?: boolean;
     }>;
   };
   /**
@@ -135,6 +162,18 @@ export interface PackageManifest {
   agent?: { displayName?: string; description?: string };
   /** Named service contracts exported by this repository. Workspace wiring selects source/name. */
   services?: import("@vibestudio/workspace-contracts/types").WorkspaceServiceExport[];
+}
+
+/** What a hosted class needs from the runtime (see `durable.classes[].hosted`). */
+export interface HostedClassManifest {
+  /** The class's engine, fixed when its cell is created. */
+  storage?: "dolt";
+  /** SQL name patterns kept out of every commit, fork and reset. */
+  doltLocal?: string[];
+  codegen?: boolean;
+  residency?: boolean;
+  /** Bounded CPU time per invocation of the loaded unit (celld `limits.cpuMs`). */
+  limits?: { cpuMs: number };
 }
 
 export type WorkspaceTestRuntime = "browser" | "workerd" | "native";

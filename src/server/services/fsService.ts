@@ -223,6 +223,7 @@ interface TrackedHandle {
   nativeId: number;
   path: string;
   panelId: string;
+  sourceRoot: string;
   ownerCallerIds: readonly string[];
 }
 
@@ -714,6 +715,10 @@ async function managedWorkspaceFilesMatching(
  */
 export type FsContextAuthority =
   | { kind: "semantic"; bridge: FsVcsBridge }
+  | {
+      kind: "semantic";
+      bind(ctx: ServiceContext, contextId: string): Promise<{ bridge: FsVcsBridge; sourceRoot: string }>;
+    }
   | { kind: "scratch-only" };
 
 export interface FsCallTelemetry {
@@ -919,9 +924,13 @@ export class FsService {
     }
   }
 
-  private semanticBridge(scope: FsCallScope): FsVcsBridge | null {
-    if (!scope.contextId) return null;
-    return this.contextAuthority.kind === "semantic" ? this.contextAuthority.bridge : null;
+  private async bindCallScope(ctx: ServiceContext, args: unknown[]) {
+    const scope = await this.resolveContextRoot(ctx, args);
+    const authority = this.contextAuthority;
+    if (!scope.contextId || authority.kind !== "semantic") return { scope, bridge: null };
+    if ("bridge" in authority) return { scope, bridge: authority.bridge };
+    const { bridge, sourceRoot } = await authority.bind(ctx, scope.contextId);
+    return { scope: { ...scope, sourceRoot }, bridge };
   }
 
   /**
@@ -941,8 +950,7 @@ export class FsService {
     ) {
       throw new Error("Managed file reads require non-empty glob patterns");
     }
-    const scope = await this.resolveContextRoot(ctx, options ? [options.explicitContextId] : []);
-    const bridge = this.semanticBridge(scope);
+    const { scope, bridge } = await this.bindCallScope(ctx, options ? [options.explicitContextId] : []);
     if (!bridge || !scope.contextId) {
       throw codedError(
         "ESEMANTICAUTHORITY",
@@ -1150,11 +1158,7 @@ export class FsService {
    *   the args array). Shell callers must name an existing
    *   context; server callers may create one on the fly.
    */
-  private async resolveContextRoot(
-    ctx: ServiceContext,
-    args: unknown[],
-    demandProjection = false
-  ): Promise<FsCallScope> {
+  private async resolveContextRoot(ctx: ServiceContext, args: unknown[]): Promise<FsCallScope> {
     let contextId: string;
     let panelId: string;
 
@@ -1187,21 +1191,13 @@ export class FsService {
           );
         }
         contextId = cid;
-        const state = this.contextFolderManager.getContextFolderState(contextId);
-        if (state.status !== "ready" && !demandProjection) {
-          throw codedError(
-            "ENOTREADY",
-            `Context folder ${contextId} is ${state.status}; scoped extension filesystem calls must wait for context materialization`
-          );
-        }
-        const root = demandProjection
-          ? this.contextFolderManager.contextSourcePath(contextId)
-          : await this.contextFolderManager.ensureContextFolder(contextId);
+        // Resolving a scoped address must not require its source projection:
+        // ensureMaterialized is itself an extension filesystem operation.
+        // The semantic owner establishes the projection on explicit demand.
+        const root = this.contextFolderManager.contextSourcePath(contextId);
         return {
           sourceRoot: root,
-          root: demandProjection
-            ? this.contextFolderManager.contextScratchPath(contextId)
-            : await this.contextFolderManager.ensureContextScratch(contextId),
+          root: await this.contextFolderManager.ensureContextScratch(contextId),
           panelId,
           ownerCallerIds: this.callerOwners(ctx),
           contextId,
@@ -1258,15 +1254,16 @@ export class FsService {
       nativeId,
       path: logicalPath,
       panelId,
+      sourceRoot: scope.sourceRoot,
       ownerCallerIds: scope.ownerCallerIds,
     });
     return id;
   }
 
-  private getTrackedHandle(id: number, callerId: string): TrackedHandle {
+  private getTrackedHandle(id: number, scope: FsCallScope): TrackedHandle {
     const tracked = this.openHandles.get(id);
     if (!tracked) throw new Error(`Invalid file handle: ${id}`);
-    if (tracked.panelId !== callerId)
+    if (tracked.panelId !== scope.panelId || tracked.sourceRoot !== scope.sourceRoot)
       throw new Error(`File handle ${id} does not belong to caller`);
     return tracked;
   }
@@ -1707,10 +1704,20 @@ export class FsService {
         if (!srcTracked && !dstTracked) return { handled: false };
         if (srcTracked && dstTracked) {
           const snapshot = await managedWorkspaceSnapshot(bridge, contextId);
+          const sourceRepoPath = taxonomyRepoForPath(srcRel);
+          const sourceRepository = snapshot.repositories.find((entry) => entry.repoPath === sourceRepoPath);
           const prefix = `${srcRel}/`;
-          const sourcePaths = (await managedWorkspaceFiles(bridge, snapshot))
-            .map((candidate) => `${candidate.repoPath}/${candidate.path}`)
-            .filter((candidate) => candidate === srcRel || candidate.startsWith(prefix));
+          const exactSource = sourceRepository && srcRel.startsWith(`${sourceRepository.repoPath}/`)
+            ? await managedFile(
+                bridge, snapshot, sourceRepository.repositoryId,
+                srcRel.slice(sourceRepository.repoPath.length + 1),
+              )
+            : null;
+          const sourcePaths = exactSource
+            ? [srcRel]
+            : (await managedWorkspaceFiles(bridge, snapshot))
+                .map((candidate) => `${candidate.repoPath}/${candidate.path}`)
+                .filter((candidate) => candidate === srcRel || candidate.startsWith(prefix));
           if (sourcePaths.length === 0) {
             throw codedError("ENOENT", `rename: source not found: ${String(args[0])}`);
           }
@@ -1724,7 +1731,7 @@ export class FsService {
               const destinationRoute = router.route(destinationPath);
               const sourceRepository = managedRepository(snapshot, sourceRoute.repoPath);
               const destinationRepository = managedRepository(snapshot, destinationRoute.repoPath);
-              const source = await managedFile(
+              const source = (sourcePath === srcRel ? exactSource : null) ?? await managedFile(
                 bridge,
                 snapshot,
                 sourceRepository.repositoryId,
@@ -2015,7 +2022,7 @@ export class FsService {
     if (!websiteAuthorityIdentity(ctx.caller))
       return preparedAuthorityState([], { args: rawArgs, accesses: [] });
     const args = [...rawArgs];
-    const scope = await this.resolveContextRoot(ctx, args);
+    const { scope, bridge } = await this.bindCallScope(ctx, args);
     await this.prepareDiskScope(scope);
     const accesses: WorkspaceFileAccess[] = [];
     const add = async (
@@ -2029,7 +2036,6 @@ export class FsService {
       let directory = folder;
       if (requiresSemanticAuthority(logical)) {
         if (method === "rename") {
-          const bridge = this.semanticBridge(scope);
           if (!bridge || !scope.contextId)
             throw codedError("EACCES", "Semantic filesystem authority is unavailable");
           const snapshot = await managedWorkspaceSnapshot(bridge, scope.contextId);
@@ -2051,7 +2057,7 @@ export class FsService {
     if (method === "handleClose")
       return preparedAuthorityState([], { args: rawArgs, accesses: [] });
     if (method.startsWith("handle")) {
-      const handle = this.getTrackedHandle(args[0] as number, scope.panelId);
+      const handle = this.getTrackedHandle(args[0] as number, scope);
       accesses.push({
         effect: method === "handleRead" ? "read" : method === "handleWrite" ? "write" : "list",
         path: handle.path,
@@ -2108,19 +2114,13 @@ export class FsService {
     const args = [...rawArgs];
     const projection = method === "ensureMaterialized" ? extensionProjectionScope(args[0]) : null;
     const scopeStartedAt = Date.now();
-    const scope = await this.resolveContextRoot(
-      ctx,
-      args,
-      projection !== null && this.contextAuthority.kind === "semantic"
-    );
+    const { scope, bridge } = await this.bindCallScope(ctx, args);
     this.emitTelemetry({
       method,
       phase: "scope",
       durationMs: Date.now() - scopeStartedAt,
       ...(scope.contextId ? { contextId: scope.contextId } : {}),
     });
-    const { panelId } = scope;
-    const bridge = this.semanticBridge(scope);
     this.assertScratchOnlyCall(scope, method, args);
 
     if (method === "nativeRoots") {
@@ -2159,7 +2159,7 @@ export class FsService {
     if (method.startsWith("handle")) {
       const id = args[0] as number;
       if (method === "handleClose" && !this.openHandles.has(id)) return;
-      const tracked = this.getTrackedHandle(id, panelId);
+      const tracked = this.getTrackedHandle(id, scope);
       args[0] = tracked.nativeId;
       if (method === "handleClose") {
         closedHandleId = id;

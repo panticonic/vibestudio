@@ -1,0 +1,337 @@
+import { canonicalJson } from "@vibestudio/shared/canonicalJson";
+import { compareUtf16CodeUnits, sha256HexSyncText } from "@vibestudio/content-addressing";
+import { vcsStateNodeRefSchema, type VcsStateNodeRef } from "@vibestudio/service-schemas/vcs";
+import { gadWireMethods } from "@vibestudio/service-schemas/workspaceSource";
+import type {
+  WorkspaceSourceInitializationInspection,
+  WorkspaceSourceInitializationReceipt,
+} from "@vibestudio/workspace-contracts/workspaceSource";
+import { z } from "zod";
+import {
+  finishWorkspaceReplayBlobScopes,
+  markPrivateWorkspaceBlobs,
+  workspaceReplayBlobScopesReady,
+} from "../storage/blobUploads.js";
+import type { DODispatch } from "../doDispatch.js";
+import type { WorkspaceSourceProviderRef } from "../workspaceSourceProvider.js";
+
+export const WORKSPACE_PARTICIPANT_HISTORY_MIGRATION = "workspace-participant-history-v1";
+
+const headSchema = z.object({ head: z.string().min(1) }).strict();
+const replayReceiptSchema = headSchema
+  .extend({
+    eventId: z.string().min(1),
+    frozenPlanDigest: z.string().regex(/^[0-9a-f]{64}$/u).optional(),
+    contexts: z.array(
+      z
+        .object({
+          id: z.string().min(1),
+          committed: z.string().min(1),
+          working: z.string().min(1),
+        })
+        .strict()
+    ),
+  })
+  .strict();
+const freezeSchema = z.object({
+  operationId: z.string().min(1),
+  expectedMainEventId: z.string().min(1),
+}).strict();
+
+const freezeEvidenceSchema = freezeSchema.extend({
+  verification: z.object({ generation: z.string().uuid(), sealed: z.boolean() }).strict().optional(),
+});
+const replayInitializationSchema = replayReceiptSchema.extend({
+  sourceInitialization: z.unknown().optional(),
+});
+const replaySealSchema = z.object({
+  receiptDigest: z.string().regex(/^[0-9a-f]{64}$/u),
+  generation: z.string().uuid(),
+}).strict();
+const replayStateSchema = replayReceiptSchema.extend({ legacySeal: replaySealSchema.nullable().optional() });
+type ReplayReceipt = z.infer<typeof replayReceiptSchema>;
+type InstalledFreeze = { generation: string; receipt: ReplayReceipt };
+
+export function workspaceHistoryReplayReceiptDigest(receipt: ReplayReceipt): string {
+  return sha256HexSyncText(canonicalJson(receipt));
+}
+
+export async function readWorkspaceHistoryReplayFreeze(
+  dispatch: Pick<DODispatch, "dispatch">,
+  source: WorkspaceSourceProviderRef,
+  receipt?: ReplayReceipt
+) {
+  const received = receipt
+    ? await dispatch.dispatch(source, "readHistoryReplayFreeze", {
+        receiptDigest: workspaceHistoryReplayReceiptDigest(receipt),
+      })
+    : await dispatch.dispatch(source, "readHistoryReplayFreeze");
+  return freezeEvidenceSchema.nullable().parse(received);
+}
+
+export async function sealWorkspaceHistoryReplay(input: {
+  dispatch: Pick<DODispatch, "dispatch">;
+  source: WorkspaceSourceProviderRef;
+  freeze: z.infer<typeof freezeSchema>;
+  installed: InstalledFreeze;
+}): Promise<boolean> {
+  const { dispatch, source, freeze, installed: { receipt, generation } } = input;
+  if (!receipt.frozenPlanDigest || receipt.eventId !== freeze.expectedMainEventId)
+    throw new Error("Cannot retire legacy history without its exact installed receipt");
+  const held = await readWorkspaceHistoryReplayFreeze(dispatch, source, receipt);
+  if (held?.operationId !== freeze.operationId || held.expectedMainEventId !== freeze.expectedMainEventId)
+    throw new Error("Legacy history changed before retirement");
+  if (!held.verification) return false;
+  if (held.verification.generation !== generation)
+    throw new Error("Legacy history freeze generation changed before retirement");
+  if (!held.verification.sealed) {
+    await dispatch.dispatch(source, "sealHistoryReplayFreeze", {
+      freeze,
+      generation,
+      receiptDigest: workspaceHistoryReplayReceiptDigest(receipt),
+    });
+  }
+  return true;
+}
+
+const planSchema = z
+  .object({
+    main: vcsStateNodeRefSchema.nullable(),
+    contexts: z.array(
+      z
+        .object({
+          id: z.string().min(1),
+          committed: vcsStateNodeRefSchema,
+          working: vcsStateNodeRefSchema,
+        })
+        .strict()
+    ),
+    steps: z.array(vcsStateNodeRefSchema),
+  })
+  .strict();
+
+type HistoryReplayPlan = z.infer<typeof planSchema>;
+
+const replayStepIdentity = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("event"), record: z.object({ eventId: z.string().min(1) }) }),
+  z.object({
+    kind: z.literal("application"),
+    record: z.object({ applicationId: z.string().min(1) }),
+  }),
+]);
+
+function stateId(ref: VcsStateNodeRef): string {
+  return ref.kind === "event" ? `event:${ref.eventId}` : `application:${ref.applicationId}`;
+}
+
+export async function readWorkspaceHistoryReplayReceipt(
+  dispatch: Pick<DODispatch, "dispatch">,
+  destination: WorkspaceSourceProviderRef
+) {
+  return replayReceiptSchema
+    .nullable()
+    .parse(await dispatch.dispatch(destination, "readHistoryReplayReceipt"));
+}
+
+export async function readWorkspaceHistoryReplayState(
+  dispatch: Pick<DODispatch, "dispatch">,
+  destination: WorkspaceSourceProviderRef
+) {
+  const installed = replayStateSchema.nullable().parse(
+    await dispatch.dispatch(destination, "readHistoryReplayReceipt", { includeLegacySeal: true })
+  );
+  if (!installed) return null;
+  const { legacySeal, ...receipt } = installed;
+  if (legacySeal && (!receipt.frozenPlanDigest || legacySeal.receiptDigest !== workspaceHistoryReplayReceiptDigest(receipt))) {
+    throw new Error("Canonical history reports a seal for a different replay receipt");
+  }
+  return { receipt, legacySeal };
+}
+
+export async function recordWorkspaceHistoryReplaySeal(input: {
+  dispatch: Pick<DODispatch, "dispatch">;
+  canonical: WorkspaceSourceProviderRef;
+  seal: z.infer<typeof replaySealSchema>;
+}): Promise<void> {
+  const { dispatch, canonical, seal } = input;
+  const current = await readWorkspaceHistoryReplayState(dispatch, canonical);
+  if (!current || workspaceHistoryReplayReceiptDigest(current.receipt) !== seal.receiptDigest)
+    throw new Error("Canonical history changed before its legacy seal could be recorded");
+  if (current.legacySeal === undefined) return;
+  const recorded = replaySealSchema.parse(
+    await dispatch.dispatch(canonical, "recordHistoryReplaySeal", seal)
+  );
+  if (recorded.receiptDigest !== seal.receiptDigest || recorded.generation !== seal.generation)
+    throw new Error("Canonical history recorded a different legacy seal");
+}
+
+/** Transfer the exact creation receipt of a verified, frozen workspace once. */
+export async function restoreWorkspaceHistorySourceInitialization(input: {
+  dispatch: Pick<DODispatch, "dispatch">;
+  canonical: WorkspaceSourceProviderRef;
+  receiptDigest: string;
+  inspectLegacy: () => Promise<WorkspaceSourceInitializationInspection>;
+  verifyPin: (receipt: WorkspaceSourceInitializationReceipt) => void;
+}): Promise<WorkspaceSourceInitializationInspection> {
+  const { dispatch, canonical, receiptDigest, inspectLegacy, verifyPin } = input;
+  const { sourceInitialization, ...replay } = replayInitializationSchema.parse(
+    await dispatch.dispatch(canonical, "readHistoryReplayReceipt", { includeSourceInitialization: true })
+  );
+  if (workspaceHistoryReplayReceiptDigest(replay) !== receiptDigest)
+    throw new Error("Source initialization belongs to a different replay receipt");
+  if (sourceInitialization === undefined) return inspectLegacy();
+  if (sourceInitialization === null) {
+    const current = await inspectLegacy();
+    if (current.state === "ready") {
+      verifyPin(current.receipt);
+      const recorded = await dispatch.dispatch(canonical, "rememberHistorySourceInitialization", {
+        replayReceiptDigest: receiptDigest,
+        receipt: current.receipt,
+      });
+      if (recorded !== true) throw new Error("Participant history did not record source initialization");
+      console.log("[Vcs] Archived root template initialization in participant history");
+    }
+    return current;
+  }
+  const initialization = gadWireMethods.workspaceSourceInspectInitialization.returns.parse({
+    state: "ready",
+    commandId: (sourceInitialization as Partial<WorkspaceSourceInitializationReceipt>)?.commandId,
+    receipt: sourceInitialization,
+  });
+  console.log("[Vcs] Restored root template initialization from participant history");
+  return initialization;
+}
+
+const replayContentPageSize = 1_024;
+const replayContentPage = z.array(z.string().regex(/^[0-9a-f]{64}$/u)).max(replayContentPageSize);
+
+/** Mark private bytes before the first admission. Each completed page is safe to repeat. */
+export async function installWorkspaceReplayBlobScopes(input: {
+  dispatch: Pick<DODispatch, "dispatch">;
+  destination: WorkspaceSourceProviderRef;
+  blobsDir: string;
+  planDigest: string;
+}): Promise<void> {
+  const { dispatch, destination, blobsDir, planDigest } = input;
+  if (workspaceReplayBlobScopesReady(blobsDir, planDigest)) return;
+  let after: string | null = null;
+  for (;;) {
+    const hashes = replayContentPage.parse(
+      await dispatch.dispatch(destination, "readHistoryReplayPrivateContent", { planDigest, after })
+    );
+    let previous: string = after ?? "";
+    for (const hash of hashes) {
+      if (hash <= previous) throw new Error("Workspace replay content returned an inconsistent page");
+      previous = hash;
+    }
+    markPrivateWorkspaceBlobs(blobsDir, hashes);
+    if (hashes.length < replayContentPageSize) break;
+    after = previous;
+  }
+  finishWorkspaceReplayBlobScopes(blobsDir, planDigest);
+}
+
+const replayOwnersSchema = z.array(z.object({
+  contextId: z.string().min(1),
+  participantId: z.string().min(1),
+}).strict());
+
+export async function registerWorkspaceHistoryReplayOwners(
+  dispatch: Pick<DODispatch, "dispatch">,
+  destination: WorkspaceSourceProviderRef,
+  owners: z.infer<typeof replayOwnersSchema>
+) {
+  return replayOwnersSchema.parse(
+    await dispatch.dispatch(destination, "registerHistoryReplayOwners", { owners })
+  );
+}
+
+/** The caller owns source quiescence and admission of the destination's hosted executable. */
+export async function migrateWorkspaceHistory(input: {
+  dispatch: Pick<DODispatch, "dispatch">;
+  source: WorkspaceSourceProviderRef;
+  destination: WorkspaceSourceProviderRef;
+  freeze?: { operationId: string; expectedMainEventId: string };
+}): Promise<{
+  main: string;
+  contexts: Array<{ id: string; committed: string; working: string }>;
+  installedFreeze?: InstalledFreeze;
+}> {
+  const { dispatch, source, destination, freeze } = input;
+  const readPlan = async (): Promise<HistoryReplayPlan> =>
+    planSchema.parse(await dispatch.dispatch(source, "exportHistoryReplayPlan"));
+  const { generation, ...plan } = freeze
+    ? planSchema.extend({ generation: z.string().uuid() }).parse(
+        await dispatch.dispatch(source, "beginHistoryReplayFreeze", freeze)
+      )
+    : { ...(await readPlan()), generation: undefined };
+  if (plan.main?.kind !== "event")
+    throw new Error("Workspace replay requires an initialized source");
+  if (freeze && plan.main.eventId !== freeze.expectedMainEventId)
+    throw new Error("Workspace history froze a different source event");
+  const frozenPlanDigest = generation
+    ? sha256HexSyncText(canonicalJson({ source, freeze, plan, generation }))
+    : undefined;
+  if (frozenPlanDigest) {
+    const existing = await readWorkspaceHistoryReplayReceipt(dispatch, destination);
+    if (existing?.frozenPlanDigest) {
+      if (existing.frozenPlanDigest !== frozenPlanDigest || existing.eventId !== plan.main.eventId)
+        throw new Error("Workspace replay already installed a different frozen source");
+      return {
+        main: existing.head, contexts: existing.contexts,
+        ...(generation ? { installedFreeze: { generation, receipt: existing } } : {}),
+      };
+    }
+  }
+  const installed = new Map<string, string>();
+  for (const ref of plan.steps) {
+    const step = await dispatch.dispatch(source, "exportHistoryReplayStep", ref);
+    const identity = replayStepIdentity.parse(z.object({ step: z.unknown() }).parse(step).step);
+    const exported =
+      identity.kind === "event"
+        ? `event:${identity.record.eventId}`
+        : `application:${identity.record.applicationId}`;
+    if (exported !== stateId(ref))
+      throw new Error("Workspace replay returned a different source revision");
+    const { head } = headSchema.parse(
+      await dispatch.dispatch(destination, "stageHistoryReplayStep", step)
+    );
+    installed.set(stateId(ref), head);
+  }
+  const resolve = (ref: VcsStateNodeRef): string => {
+    const head = installed.get(stateId(ref));
+    if (!head) throw new Error(`Workspace replay omitted ${stateId(ref)}`);
+    return head;
+  };
+  const main = resolve(plan.main);
+  const contexts = plan.contexts
+    .map(({ id, working, committed }) => ({
+      id,
+      working: resolve(working),
+      committed: resolve(committed),
+    }))
+    .sort((left, right) => compareUtf16CodeUnits(left.id, right.id));
+  if (canonicalJson(plan) !== canonicalJson(await readPlan())) {
+    throw new Error("Workspace source advanced during replay");
+  }
+  const receipt = {
+    eventId: plan.main.eventId, head: main, contexts,
+    ...(frozenPlanDigest ? { frozenPlanDigest } : {}),
+  };
+  const result = headSchema.parse(
+    await dispatch.dispatch(destination, "finishHistoryReplay", receipt)
+  );
+  if (result.head !== main) throw new Error("Workspace replay installed a different head");
+  const recorded = await readWorkspaceHistoryReplayReceipt(dispatch, destination);
+  if (!recorded ||
+      canonicalJson({
+        eventId: recorded.eventId, head: recorded.head, contexts: recorded.contexts,
+        ...(frozenPlanDigest ? { frozenPlanDigest: recorded.frozenPlanDigest } : {}),
+      }) !== canonicalJson(receipt)) {
+    throw new Error("Workspace replay recorded different context revisions");
+  }
+  return {
+    main, contexts,
+    ...(generation ? { installedFreeze: { generation, receipt: recorded } } : {}),
+  };
+}

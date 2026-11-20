@@ -95,11 +95,17 @@ are `AgentVesselBase` (`agent-vessel.ts`) and `AgentWorkerBase`
 ## How fork works
 
 `canFork(channelId)` (`agent-vessel.ts`) only requires a subscription for that
-channel. Conversation state moves through the knowledge export/import pair
-`exportChannelKnowledge` / `importChannelKnowledge` on `AgentVesselBase`, which
-use `native-channel-knowledge.ts`; the original agent settings and domain
-configuration travel with it. Subagents are launched through
-`native-child-launch.ts`.
+channel. An agent's cell is a Dolt cell: its conversation (entries and the documents that
+are conversation knowledge) is versioned, everything operational (tasks, submissions,
+receipts, the owner) is local, and each closed turn is one commit
+(`native-agent-commits.ts`). A conversation fork forks the agent's whole cell at the last
+closed turn that holds nothing beyond the fork point: `forkFrontier` on `AgentVesselBase`
+names that commit (`native-channel-knowledge.ts`), the host forks the cell there, and the
+fork's first activation is `adoptChannelKnowledge`, which binds the conversation it already
+holds to the fork channel; the original agent settings and domain configuration travel
+with the frontier. A subagent launched with `mode: "fork"` is a fork of its parent's cell
+the same way (`runtime.createEntity` with `forkStorage`). Subagents are launched through
+`native-child-launch.ts`. `docs/dolt-redesign.md` §6.11 has the details.
 
 ## How to add a new skill
 
@@ -129,7 +135,7 @@ model-call evidence by `native-model-evidence.ts`.
 Agent session state is owned by the pi-durable `Harness` and persisted in the
 agent DO's storage. Vibestudio framework state uses internal Durable Objects:
 
-- `EvalDO` for per-owner sandbox-eval REPL scopes (behind the `eval` service).
+- Eval REPL scopes are not an internal DO: each owner's kernel (`EvalKernel`, a Dolt class) is hosted by a per-owner session entity (`workers/session`), admitted through the `dynamicCode` service (docs/dolt-redesign.md §7).
 - `WorkspaceDO` for panel tree and search (replaced the former `PanelStoreDO`).
 - `BrowserDataDO` for imported browser data.
 - `WebhookStoreDO` for webhook subscriptions.

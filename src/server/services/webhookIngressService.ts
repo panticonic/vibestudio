@@ -171,7 +171,7 @@ export interface WebhookIngressServiceDeps {
   /** Effective direct-ingress ceiling after operator configuration validation. */
   directMaxBodyBytes?: number;
   /**
-   * Resolve a trusted internal runtime (currently an owner-scoped EvalDO) to
+   * Resolve a trusted internal runtime (currently an owner-scoped eval kernel) to
    * the runtime on whose behalf its ergonomic client operates. The resolver is
    * host-supplied and must use server-authored entity lineage, never call args.
    */

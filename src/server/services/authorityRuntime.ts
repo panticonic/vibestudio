@@ -6,6 +6,7 @@ import type {
 } from "@vibestudio/rpc";
 import type { DirectAuthorityAttestation } from "@vibestudio/rpc/internal";
 import { randomUUID } from "node:crypto";
+import { isEvalHostRuntimeId } from "@vibestudio/shared/evalRuntimeIdentity";
 import { requirementForPrincipals, scopeCovers } from "@vibestudio/shared/authorization";
 import { isHostIntrinsicDirectMethod } from "@vibestudio/shared/authority/hostIntrinsicDirectMethods";
 import { codePrincipal } from "@vibestudio/shared/authority/codePrincipal";
@@ -32,13 +33,13 @@ export function isAttestedSystemTestHarness(
 ): boolean {
   const executionSession = caller.executionSession;
   const executor = executionSession?.executor;
-  const outerRunId = executor?.kind === "eval" ? executor.evalRunId : null;
+  const outerRunId = executor?.kind === "dynamic-code" ? executor.runId : null;
   const code = caller.code;
   const executionImage = executionSession?.executionImage;
   return Boolean(
     caller.runtime.kind === "do" &&
-    caller.runtime.id.startsWith("do:vibestudio/internal:EvalDO:") &&
-    executor?.kind === "eval" &&
+    isEvalHostRuntimeId(caller.runtime.id) &&
+    executor?.kind === "dynamic-code" &&
     executor.runtimeId === caller.runtime.id &&
     outerRunId?.startsWith("system-test-runner:") &&
     code?.repoPath === "workers/system-test-runner" &&

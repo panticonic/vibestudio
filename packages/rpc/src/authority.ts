@@ -198,11 +198,10 @@ export type ExecutionAdmissionExecutor =
       turnId: string;
     }
   | {
-      kind: "eval";
+      kind: "dynamic-code";
       runtimeId: string;
-      evalRunId: string;
+      runId: string;
       authorityManifest: EvalAuthorityManifest;
-      eventSinkNonce?: string;
     }
   | {
       kind: "method";
@@ -278,7 +277,7 @@ export interface AgentExecutionTestPolicySpec {
 }
 
 /**
- * Host-created proof that one concrete EvalDO run belongs to a live task,
+ * Host-created proof that one concrete eval kernel run belongs to a live task,
  * approved mission, or test policy. It is relationship evidence, never a
  * capability token and never accepted from caller input.
  */
@@ -356,6 +355,8 @@ export interface AuthorizationContext {
   initiatorChain: readonly string[];
   ownerChain: readonly `user:${string}`[];
   agentBinding: { entity: EntityPrincipal; contextId: string; channelId: string } | null;
+  /** Exact invocation coordinates admitted for this workspace memory recall. */
+  workspaceRecallCauses?: readonly (readonly [logId: string, head: string, invocationId: string])[];
   executionSession: ExecutionAdmissionFact | null;
   /**
    * Host-attested unattended-test policy for the live execution context.

@@ -1,24 +1,17 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { createHash } from "node:crypto";
-import { DatabaseSync } from "node:sqlite";
-import { canonicalJson } from "@vibestudio/content-addressing";
 import { serializeRpcFailure, type RpcFailure } from "@vibestudio/rpc";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import * as esbuild from "esbuild";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TokenManager } from "@vibestudio/shared/tokenManager";
 import { SingletonRegistry } from "@vibestudio/workspace/singletonRegistry";
 import { DODispatch } from "./doDispatch.js";
-import { INTERNAL_DO_SOURCE, type InternalDOPrograms } from "./internalDOs/internalDoLoader.js";
-import { internalDoProgramsFromCompiler } from "../../tests/fixtures/internalDoPrograms.js";
-import {
-  internalDoBuildOptions,
-  internalDoCompilerOutputs,
-} from "../../scripts/internal-do-build.mjs";
+import { INTERNAL_DO_SOURCE } from "./internalDOs/internalDoLoader.js";
+import { celldTestBinary, nodeProxy } from "../../tests/helpers/celldNodeHarness.js";
 import { postToDurableObject, type DORef } from "./workerdRpcRelay.js";
 import {
   schemaProbeEnvironmentForFixture,
@@ -26,10 +19,10 @@ import {
 } from "../../tests/fixtures/schemaProbeEnvironment.js";
 useSchemaProbeFixtureCache();
 import {
-  WorkerdManager,
-  type WorkerdManagerDeps,
+  RuntimeManager,
+  type RuntimeManagerDeps,
   type WorkerdWorkspaceProvider,
-} from "./workerdManager.js";
+} from "./runtimeManager.js";
 import { LifecycleDriver } from "./services/lifecycleDriver.js";
 import { prepareDurableWorkOwnerRelease } from "./services/durableWorkRelease.js";
 import { AlarmDriver } from "./services/alarmDriver.js";
@@ -65,18 +58,15 @@ import {
   type WorkspaceRpcMethodDoc,
 } from "./buildV2/workspaceRpcCatalog.js";
 import { workspaceRpcSchema, workspaceRpcSchemaMetadata } from "./buildV2/workspaceRpcSchemas.js";
-import { createHostDoAuthorityAttester } from "./bootstrap/workerd.js";
-import {
-  buildWorkerdPrograms,
-  type WorkerdProgramSources,
-} from "../../scripts/build-workerd-programs.mjs";
+import { createHostDoAuthorityAttester } from "./bootstrap/runtime.js";
 import {
   cleanupStoredBuildFixtures,
   storedBuildFixture,
 } from "../../tests/helpers/storedBuildFixture.js";
 
-let compiledWorkerdPrograms: WorkerdProgramSources;
-let compiledInternalDOPrograms: InternalDOPrograms;
+const EGRESS_SECRET = "internal-storage-egress-secret";
+// The product's runtime application (dist/runtime-app.json) on the fork's node.
+const celldBinary = celldTestBinary();
 
 function runtimeArtifact(source: string, ref = "main"): ExecutionArtifactRefV1 {
   const contentRoots = [
@@ -102,17 +92,6 @@ function runtimeArtifact(source: string, ref = "main"): ExecutionArtifactRefV1 {
   });
 }
 
-beforeAll(async () => {
-  const [internalDoBuild, programs] = await Promise.all([
-    esbuild.build({ ...internalDoBuildOptions(), logLevel: "silent" }),
-    buildWorkerdPrograms({ write: false }),
-  ]);
-  compiledInternalDOPrograms = internalDoProgramsFromCompiler(
-    internalDoCompilerOutputs(internalDoBuild)
-  );
-  compiledWorkerdPrograms = programs;
-});
-
 // Loader gateway servers started by harnesses; closed in afterEach. Userland
 // DOs route through the UniversalDO facet host, which fetches `/_docode` from
 // `getServerUrl`, so the harness must serve those loader endpoints.
@@ -120,7 +99,7 @@ const activeLoaderServers: Server[] = [];
 const activeFixtureRoots: string[] = [];
 
 async function createWorkerdHarness(
-  overrides: Partial<WorkerdManagerDeps> & {
+  overrides: Partial<RuntimeManagerDeps> & {
     getBuild?: (source: string, ref?: string) => Promise<BuildResult>;
     mainRpc?: (method: string, args: unknown[], target: string) => Promise<unknown>;
     bindWorkspaceProvider?: boolean;
@@ -135,31 +114,30 @@ async function createWorkerdHarness(
   const workspacePath = mkdtempSync(join(tmpdir(), "vibestudio-workerd-workspace-"));
   const statePath = mkdtempSync(join(tmpdir(), "vibestudio-workerd-state-"));
   activeFixtureRoots.push(workspacePath, statePath);
-  const manager = new WorkerdManager({
-    schemaProbeEnvironment: schemaProbeEnvironmentForFixture(compiledWorkerdPrograms),
+  const manager = new RuntimeManager({
+    schemaProbeEnvironment: schemaProbeEnvironmentForFixture("internal-storage-test"),
     schemaProbeReleaseRoot: join(statePath, "installed-resources"),
     tokenManager,
     fsService: {
       closeHandlesForCaller: () => {},
-    } as unknown as WorkerdManagerDeps["fsService"],
+    } as unknown as RuntimeManagerDeps["fsService"],
     getServerUrl: () => `http://127.0.0.1:${portHolder.value}`,
     workspaceId: "workspace:internal-workerd-test",
-    workerdPrograms: compiledWorkerdPrograms,
-    internalDOPrograms: compiledInternalDOPrograms,
     getInternalDoEnv: () => ({}),
     workspacePath,
     statePath,
     // Internal DO outbound RPCs route through the same loopback harness. The
     // port is resolved only when a DO class is registered, after the server
     // below has bound and populated the holder.
-    getProxyPort: () => (mainRpc ? portHolder.value : 9),
-    getSharedEgressPort: () => Promise.resolve(mainRpc ? portHolder.value : 10),
+    // The node sends all egress, product classes' RPC callbacks included, and
+    // reaches the gateway, through the one proxy listener below.
+    getSharedEgressPort: () => Promise.resolve(portHolder.value),
     registerEgressCaller: () => {},
     unregisterEgressCaller: () => {},
-    egressSecret: "internal-storage-egress-secret",
+    egressSecret: EGRESS_SECRET,
     getWorkerdGatewayToken: () => "internal-test-workerd-gateway-token",
     ...managerOverrides,
-  } satisfies WorkerdManagerDeps);
+  } satisfies RuntimeManagerDeps);
   const provider: WorkerdWorkspaceProvider = {
     bindRuntimeImage: async (source: string, ref?: string) => {
       if (!getBuild) throw new Error("workspace builds are not used by internal DO tests");
@@ -200,7 +178,10 @@ async function createWorkerdHarness(
     },
   });
 
-  const loaderServer = createServer(async (req, res) => {
+  const gatewayHandler = async (
+    req: import("node:http").IncomingMessage,
+    res: import("node:http").ServerResponse
+  ): Promise<void> => {
     const u = req.url ?? "";
     if (u === "/rpc" && req.method === "POST" && mainRpc) {
       const chunks: Buffer[] = [];
@@ -234,7 +215,7 @@ async function createWorkerdHarness(
       return;
     }
     if (u.startsWith("/_doadmission/")) {
-      if (req.headers["x-vibestudio-loader-secret"] !== manager.getLoaderSecret()) {
+      if (req.headers["x-vibestudio-loader-secret"] !== manager.getDoLoaderSecret()) {
         res.writeHead(403);
         res.end("forbidden");
         return;
@@ -267,7 +248,7 @@ async function createWorkerdHarness(
       return;
     }
     if (u.startsWith("/_docode/")) {
-      if (req.headers["x-vibestudio-loader-secret"] !== manager.getLoaderSecret()) {
+      if (req.headers["x-vibestudio-loader-secret"] !== manager.getDoLoaderSecret()) {
         res.writeHead(403);
         res.end("forbidden");
         return;
@@ -297,7 +278,20 @@ async function createWorkerdHarness(
     }
     res.writeHead(404);
     res.end("nf");
+  };
+  // A product class's callback to `/rpc` arrives through the proxy under its
+  // service identity; the runtime application's own programs arrive as host
+  // programs. Both are served by the one gateway fixture.
+  const proxy = nodeProxy({
+    secret: EGRESS_SECRET,
+    gateway: (req, res) => void gatewayHandler(req, res),
+    other: ({ request }, res) => {
+      const target = new URL(request.url ?? "", "http://gateway");
+      request.url = `${target.pathname}${target.search}`;
+      void gatewayHandler(request, res);
+    },
   });
+  const loaderServer = createServer(proxy.listener);
   portHolder.value = await new Promise<number>((r) =>
     loaderServer.listen(0, "127.0.0.1", () => {
       const a = loaderServer.address();
@@ -308,7 +302,7 @@ async function createWorkerdHarness(
 
   const sealedEntities = new Map<
     string,
-    Parameters<WorkerdManager["restoreDurableObjectEntity"]>[0]
+    Parameters<RuntimeManager["restoreDurableObjectEntity"]>[0]
   >();
   const attachDurableObject = async (ref: DORef): Promise<void> => {
     const targetId = `do:${ref.source}:${ref.className}:${ref.objectKey}`;
@@ -367,7 +361,7 @@ async function createWorkerdHarness(
 }
 
 function createDODispatch(
-  manager: WorkerdManager,
+  manager: RuntimeManager,
   tokenManager: TokenManager,
   ensureUserlandDoReady: (ref: DORef) => Promise<void>
 ): DODispatch {
@@ -496,8 +490,12 @@ function buildResult(
   };
 }
 
-describe("internal storage DOs under workerd", () => {
-  let manager: WorkerdManager | null = null;
+describe.skipIf(!celldBinary)("internal storage DOs on celld", () => {
+  let manager: RuntimeManager | null = null;
+
+  beforeEach(() => {
+    vi.stubEnv("VIBESTUDIO_CELLD_BIN", celldBinary!);
+  });
 
   afterEach(async () => {
     if (manager) {
@@ -512,70 +510,7 @@ describe("internal storage DOs under workerd", () => {
     cleanupStoredBuildFixtures();
   });
 
-  it("reopens retained EvalDO storage using the descriptor of its native executable", async () => {
-    const workspaceRef = {
-      source: INTERNAL_DO_SOURCE,
-      className: "WorkspaceDO",
-      objectKey: "eval-reopen-workspace",
-    };
-    const harness = await createWorkerdHarness({
-      mainRpc: async (method, args) => {
-        if (method !== "workspace-state.alarmClear") {
-          throw new Error(`Unexpected storage host callback ${method}`);
-        }
-        return harness.callDurableObject(workspaceRef, "alarmClear", ...args);
-      },
-    });
-    manager = harness.manager;
-    await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "WorkspaceDO" },
-      { source: INTERNAL_DO_SOURCE, className: "EvalDO" },
-    ]);
-    const ref = { source: INTERNAL_DO_SOURCE, className: "EvalDO", objectKey: "retained-eval" };
-    const storage = manager as unknown as {
-      quiesceDurableObjectStorage(ref: DORef): Promise<void>;
-      durableObjectStorageLocation(ref: DORef): { dir: string; hash: string };
-    };
-    expect(await harness.callDurableObject(ref, "getRunReceipt", "retained")).toBeNull();
-    await storage.quiesceDurableObjectStorage(ref);
-    const { dir, hash } = storage.durableObjectStorageLocation(ref);
-    const db = new DatabaseSync(join(dir, `${hash}.sqlite`));
-    const result = { success: true, console: "retained domain truth", returnValue: 42 };
-    const runDigest = "a".repeat(64);
-    const resultDigest = createHash("sha256").update(canonicalJson(result)).digest("hex");
-    try {
-      db.prepare(
-        "INSERT INTO runs(run_id,args,status,result,started_at) VALUES(?,?, 'done',?,1)"
-      ).run("retained", JSON.stringify({ code: "return 42", runDigest }), JSON.stringify(result));
-      db.prepare("INSERT INTO state(key,value) VALUES(?,?)").run(
-        'eval-result-ack:"retained"',
-        JSON.stringify({ runDigest, resultDigest })
-      );
-    } finally {
-      db.close();
-    }
-    expect(await harness.callDurableObject(ref, "getRunReceipt", "retained")).toEqual({
-      runId: "retained",
-      runDigest,
-      resultDigest,
-      result,
-      acknowledged: true,
-    });
-    await storage.quiesceDurableObjectStorage(ref);
-    const reopened = new DatabaseSync(join(dir, `${hash}.sqlite`));
-    try {
-      expect(reopened.prepare("SELECT version FROM _vibestudio_schema").get()).toEqual({
-        version: 5,
-      });
-      expect(reopened.prepare("SELECT result FROM runs WHERE run_id='retained'").get()).toEqual({
-        result: JSON.stringify(result),
-      });
-    } finally {
-      reopened.close();
-    }
-  }, 60_000);
-
-  it("resets and restores internal DO storage through a graceful workerd stop", async () => {
+  it("keeps internal DO storage across a node replacement and leaves its maintenance to the class", async () => {
     // BrowserVaultDO writes are host-capability attested, which requires the
     // installed product identity; synthesize one for this process the same way
     // a packaged build ships it.
@@ -603,7 +538,7 @@ describe("internal storage DOs under workerd", () => {
     const ref = {
       source: INTERNAL_DO_SOURCE,
       className: "BrowserVaultDO",
-      objectKey: "resettable-browser-environment",
+      objectKey: "durable-browser-environment",
     };
 
     await doDispatch.dispatch(ref, "addPassword", {
@@ -615,16 +550,18 @@ describe("internal storage DOs under workerd", () => {
     });
     expect((await doDispatch.dispatch(ref, "listPasswordSummaries")) as unknown[]).toHaveLength(1);
 
-    // Internal quiesce is a graceful workerd stop (no per-facet abort exists);
-    // the next dispatch lazily restarts workerd against fresh storage.
-    const reset = await manager.resetDOStorage(ref, "exercise internal maintenance");
-    expect((await doDispatch.dispatch(ref, "listPasswordSummaries")) as unknown[]).toHaveLength(0);
-    expect(await manager.listDOStorageBackups(ref)).toEqual([
-      expect.objectContaining({ operationId: reset.operationId }),
-    ]);
-
-    await manager.restoreDOStorageBackup(ref, reset.operationId, "restore the password");
+    // Replacing the node (as crash recovery does) keeps the object's storage:
+    // it lives in the bucket, not in the process.
+    const generation = manager.getBootGeneration();
+    await manager.recoverUnresponsiveSandbox("test: replace the node");
+    expect(manager.getBootGeneration()).toBe(generation + 1);
     expect((await doDispatch.dispatch(ref, "listPasswordSummaries")) as unknown[]).toHaveLength(1);
+
+    // Maintenance (reset, backup, restore) is the userland surface; a product
+    // class owns its own storage and refuses it.
+    await expect(manager.resetDOStorage(ref, "not for product objects")).rejects.toThrow(
+      "not supported for internal DO source"
+    );
   }, 60_000);
 
   // Manual empirical probe (~37s; opt-in via `.only` or removing `.skip`) behind
@@ -801,121 +738,28 @@ describe("internal storage DOs under workerd", () => {
   }, 240_000);
 
   it("starts internal workerd before a workspace provider is attached", async () => {
-    // Regression: the EvalDO binding was emitted as `unsafeEval = ()` (empty
-    // struct), which workerd rejects with "Type mismatch; expected Void", so the
-    // whole runtime failed to boot once EvalDO was registered. Other workerd tests
-    // register only WorkspaceDO/BrowserVaultDO, so they never exercised this binding.
+    // Regression: the whole runtime failed to boot once a product class was registered
+    // with a malformed binding. Other tests register only WorkspaceDO/BrowserVaultDO,
+    // so they never exercised the other classes' registration.
     const harness = await createWorkerdHarness({ bindWorkspaceProvider: false });
     manager = harness.manager;
     // registerAllDOClasses writes the capnp config and (re)starts workerd; a
     // malformed config makes workerd exit before accepting HTTP and this rejects.
     await expect(
-      manager.registerAllDOClasses([{ source: INTERNAL_DO_SOURCE, className: "EvalDO" }])
+      manager.registerAllDOClasses([{ source: INTERNAL_DO_SOURCE, className: "WebhookStoreDO" }])
     ).resolves.not.toThrow();
     expect(manager.getBootGeneration()).toBeGreaterThanOrEqual(1);
   });
 
-  it("EvalDO durable job queue: startRun schedules, remains idempotent, and persists a terminal", async () => {
-    // With no eval engine declared, background execution fails immediately. That is useful here:
-    // the real workerd test proves startRun acknowledges the durable row, schedules under the DO
-    // lifetime, and makes the terminal failure observable without a held host request.
-    const workspaceRef = {
-      source: INTERNAL_DO_SOURCE,
-      className: "WorkspaceDO",
-      objectKey: "job-queue-workspace",
-    };
-    const harness = await createWorkerdHarness({
-      mainRpc: async (method, args): Promise<unknown> => {
-        // Eval owns its delivery schedule through the host workspace service,
-        // even when this run has no result receiver. Exercise that real store.
-        if (method !== "workspace-state.alarmClear") {
-          throw new Error(`Unexpected job queue host callback ${method}`);
-        }
-        return harness.callDurableObject(workspaceRef, "alarmClear", ...args);
-      },
-    });
-    manager = harness.manager;
-    await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "EvalDO" },
-      { source: INTERNAL_DO_SOURCE, className: "WorkspaceDO" },
-    ]);
-    const ref = { source: INTERNAL_DO_SOURCE, className: "EvalDO", objectKey: "job-queue-test" };
-
-    // The first call acknowledges the newly inserted row before background guest work runs.
-    expect(
-      await harness.callDurableObject(ref, "startRun", {
-        runId: "run-1",
-        code: "1+1",
-        gatewayToken: "gateway-job-queue-test",
-      })
-    ).toMatchObject({
-      runId: "run-1",
-      status: "pending",
-      existing: false,
-      scopeInputRevision: "scope:initial",
-      runDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
-    });
-
-    // Idempotent on runId and exact input: replay returns the same row in whichever durable state
-    // it has reached, while different work cannot alias the identity.
-    const replay = (await harness.callDurableObject(ref, "startRun", {
-      runId: "run-1",
-      code: "1+1",
-      gatewayToken: "gateway-job-queue-test",
-    })) as { runId: string; status: string };
-    expect(replay.runId).toBe("run-1");
-    expect(["pending", "running", "done"]).toContain(replay.status);
-    await expect(
-      harness.callDurableObject(ref, "startRun", {
-        runId: "run-1",
-        code: "DIFFERENT",
-        gatewayToken: "gateway-job-queue-test",
-      })
-    ).rejects.toThrow("runId run-1 was reused with different input");
-
-    // getRun reaches the canonical terminal without relying on a held executeRun response.
-    let observed = (await harness.callDurableObject(ref, "getRun", "run-1")) as {
-      status: string;
-      result?: { success?: boolean; error?: RpcFailure };
-    };
-    for (let attempt = 0; attempt < 20 && observed.status !== "done"; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      observed = (await harness.callDurableObject(ref, "getRun", "run-1")) as typeof observed;
-    }
-    expect(observed).toMatchObject({ status: "done", result: { success: false } });
-    expect(observed.result?.error).toMatchObject({
-      name: "Error",
-      errorKind: "application",
-      message: expect.stringContaining("no `providers.evalEngine` is declared"),
-      stack: expect.stringContaining("requireDeclaredProviderSource"),
-    });
-    const terminal = observed.result;
-    expect(await harness.callDurableObject(ref, "getRun", "nope")).toEqual({ status: "unknown" });
-
-    // Reset preserves terminal history.
-    expect(await harness.callDurableObject(ref, "reset")).toEqual({ ok: true });
-    expect(await harness.callDurableObject(ref, "getRun", "run-1")).toMatchObject({
-      status: "done",
-      result: terminal,
-    });
-
-    // A fresh run after reset is independent.
-    expect(
-      await harness.callDurableObject(ref, "startRun", {
-        runId: "run-2",
-        code: "2+2",
-        gatewayToken: "gateway-job-queue-test",
-      })
-    ).toMatchObject({ runId: "run-2" });
-  }, 30_000);
-
   it("round-trips entity activate / resolve / retire / gc through WorkspaceDO under workerd", async () => {
     const harness = await createWorkerdHarness();
     manager = harness.manager;
-    await manager.registerAllDOClasses([{ source: INTERNAL_DO_SOURCE, className: "WorkspaceDO" }]);
+    await manager.registerAllDOClasses([
+      { source: INTERNAL_DO_SOURCE, className: "WorkspaceStateDO" },
+    ]);
     const ref = {
       source: INTERNAL_DO_SOURCE,
-      className: "WorkspaceDO",
+      className: "WorkspaceStateDO",
       objectKey: "workspace-test",
     };
 
@@ -1057,7 +901,7 @@ describe("internal storage DOs under workerd", () => {
     });
     manager = harness.manager;
     await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "WorkspaceDO" },
+      { source: INTERNAL_DO_SOURCE, className: "WorkspaceStateDO" },
       { source: probeRef.source, className: probeRef.className },
     ]);
     dispatch = createDODispatch(manager, harness.tokenManager, harness.attachDurableObject);
@@ -1091,7 +935,7 @@ describe("internal storage DOs under workerd", () => {
           credentialSessionGrantStore: { dropForCaller: () => 0 },
           tokenManager: harness.tokenManager,
           releaseBlobRetentions: async () => {},
-          getWorkerdManager: () => manager,
+          getRuntimeManager: () => manager,
           getFsService: () => null,
           getWebhookIngress: () => null,
         }),
@@ -1243,7 +1087,7 @@ describe("internal storage DOs under workerd", () => {
     manager = harness.manager;
     const doDispatch = createDODispatch(manager, harness.tokenManager, harness.attachDurableObject);
     const lifecycleDriver = new LifecycleDriver({
-      workerdManager: manager,
+      runtimeManager: manager,
       doDispatch,
       workspaceId: "workspace-lifecycle",
       concurrency: 2,
@@ -1262,7 +1106,7 @@ describe("internal storage DOs under workerd", () => {
     });
     const workspaceRef = {
       source: INTERNAL_DO_SOURCE,
-      className: "WorkspaceDO",
+      className: "WorkspaceStateDO",
       objectKey: "workspace-lifecycle",
     };
     const probeRef = {
@@ -1272,7 +1116,7 @@ describe("internal storage DOs under workerd", () => {
     };
 
     await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "WorkspaceDO" },
+      { source: INTERNAL_DO_SOURCE, className: "WorkspaceStateDO" },
       { source: "workers/lifecycle-probe", className: "LifecycleProbeDO" },
     ]);
     lifecycleDriver.start();
@@ -1357,7 +1201,7 @@ describe("internal storage DOs under workerd", () => {
     const alarmDriver = new AlarmDriver({ doDispatch, workspaceId: "workspace-alarm" });
     const workspaceRef = {
       source: INTERNAL_DO_SOURCE,
-      className: "WorkspaceDO",
+      className: "WorkspaceStateDO",
       objectKey: "workspace-alarm",
     };
     const probeRef = {
@@ -1367,7 +1211,7 @@ describe("internal storage DOs under workerd", () => {
     };
 
     await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "WorkspaceDO" },
+      { source: INTERNAL_DO_SOURCE, className: "WorkspaceStateDO" },
       { source: "workers/lifecycle-probe", className: "LifecycleProbeDO" },
     ]);
 

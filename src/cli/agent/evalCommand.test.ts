@@ -6,7 +6,9 @@ import { clearShellTokenCache } from "../rpcClient.js";
 import { evalRuntimeId } from "@vibestudio/shared/evalRuntimeIdentity";
 
 /**
- * `vibestudio eval` drives the server-side `eval` service (eval.start/get / eval.reset)
+ * `vibestudio eval` admits a run with the host's `dynamicCode` service, starts it on the
+ * session entity that hosts the kernel, and pulls its events and result from there
+ * (dynamicCode.admit / start / await / events / dynamicCode.release; dynamicCode.reset)
  * over the paired CLI transport. These tests keep strict v2 Iroh credentials
  * and replace only the signaling/data-channel boundary with an in-process RPC
  * server, then assert the calls, output, and exit codes.
@@ -151,13 +153,55 @@ const OK_RESULT: RunResult = {
   scopeKeys: ["x"],
 };
 
-const terminalStart = (result: RunResult) => ({
-  runId: "server-echoes-caller-id",
-  runDigest: "a".repeat(64),
-  authorityManifestDigest: "b".repeat(64),
-  status: "terminal",
-  snapshot: { status: "done", result },
-});
+const HOST_ID = `do:workers/session:SessionDO:${"c".repeat(40)}`;
+
+type PulledEvent = { sequence: number; at: number; kind: string; payload: unknown };
+
+/**
+ * The server side of the pull protocol: `dynamicCode.admit`, then the session entity's
+ * `start`, `await` and `events`, then `dynamicCode.release`. `onCall` sees every request first.
+ */
+function pullServer(
+  result: RunResult,
+  options: {
+    events?: PulledEvent[];
+    onCall?: (body: RpcRequest) => void;
+    /** Statuses `await` answers before the terminal one. */
+    pending?: number;
+    fallback?: (body: RpcRequest) => unknown;
+  } = {}
+): (body: RpcRequest) => unknown {
+  let awaits = 0;
+  return (body) => {
+    options.onCall?.(body);
+    switch (body.method) {
+      case "dynamicCode.admit": {
+        const runId = (body.args[0] as { runId: string }).runId;
+        return {
+          runId,
+          runDigest: "a".repeat(64),
+          authorityManifestDigest: "b".repeat(64),
+          host: { source: "workers/session", className: "SessionDO", objectKey: "c".repeat(40) },
+          hostId: HOST_ID,
+          nonce: "nonce-1",
+          start: { runId, code: "x" },
+        };
+      }
+      case "start":
+        return { runId: (body.args[0] as { runId: string }).runId, status: "pending" };
+      case "await":
+        return awaits++ < (options.pending ?? 0)
+          ? { status: "running" }
+          : { status: "done", result };
+      case "events":
+        return { events: options.events ?? [], next: options.events?.length ?? 0, hasMore: false };
+      case "dynamicCode.release":
+        return { released: true };
+      default:
+        return options.fallback ? options.fallback(body) : null;
+    }
+  };
+}
 
 function jsonOutput(): Record<string, unknown> {
   const lines = vi.mocked(console.log).mock.calls.map((call) => String(call[0]));
@@ -197,17 +241,28 @@ describe("vibestudio eval commands", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("eval run composes eval.start with the session scope and exits 0", async () => {
+  it("eval run admits the run, starts it on the session entity, pulls the result and releases", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
-    const { rpcBodies } = stubServer((body) =>
-      body.method === "eval.start" ? terminalStart(OK_RESULT) : null
-    );
+    const { rpcBodies } = stubServer(pullServer(OK_RESULT));
 
     const { main } = await import("../client.js");
     await expect(main(["eval", "run", "-e", "return 42;", "--json"])).resolves.toBe(0);
 
-    expect(rpcBodies.map((b) => b.method)).toEqual(["eval.start"]);
+    expect(rpcBodies.map((b) => b.method)).toEqual([
+      "dynamicCode.admit",
+      "start",
+      "await",
+      "events",
+      "dynamicCode.release",
+    ]);
+    // The run goes to the entity the admission named, with the admission's nonce.
+    expect(rpcBodies[1]).toMatchObject({ targetId: HOST_ID, args: [expect.anything(), "nonce-1"] });
+    expect(rpcBodies[2]!.args[0]).toBe((rpcBodies[0]!.args[0] as { runId: string }).runId);
+    expect(rpcBodies[4]!.args[0]).toEqual({
+      runId: (rpcBodies[0]!.args[0] as { runId: string }).runId,
+      hostId: HOST_ID,
+    });
     expect(rpcBodies[0]!.args[0]).toEqual({
       runId: expect.any(String),
       target: { kind: "owner-session", sessionId: "session:default" },
@@ -226,19 +281,18 @@ describe("vibestudio eval commands", () => {
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
-  it("eval run --fresh-scope resets atomically with execution admission", async () => {
+  it("eval run --fresh-scope resets atomically with the run's admission", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
-    const { rpcBodies } = stubServer((body) =>
-      body.method === "eval.reset" ? { ok: true } : terminalStart(OK_RESULT)
-    );
+    const { rpcBodies } = stubServer(pullServer(OK_RESULT));
 
     const { main } = await import("../client.js");
     await expect(main(["eval", "run", "-e", "return 1;", "--fresh-scope", "--json"])).resolves.toBe(
       0
     );
 
-    expect(rpcBodies.map((b) => b.method)).toEqual(["eval.start"]);
+    // The reset rides on the admission; there is no separate reset call.
+    expect(rpcBodies.map((b) => b.method)).not.toContain("dynamicCode.reset");
     expect(rpcBodies[0]!.args[0]).toMatchObject({
       target: { kind: "owner-session", sessionId: "session:default" },
       scope: { key: "default" },
@@ -249,7 +303,7 @@ describe("vibestudio eval commands", () => {
   it("eval run forwards syntax + imports", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
-    const { rpcBodies } = stubServer(() => terminalStart(OK_RESULT));
+    const { rpcBodies } = stubServer(pullServer(OK_RESULT));
 
     const { main } = await import("../client.js");
     await expect(
@@ -275,26 +329,27 @@ describe("vibestudio eval commands", () => {
   it("eval run enables invocation-local full-auto approval explicitly", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
-    const { rpcBodies } = stubServer((body) => {
-      if (body.method === "shellApproval.listPending") return [];
-      return terminalStart(OK_RESULT);
-    });
+    const { rpcBodies } = stubServer(
+      pullServer(OK_RESULT, {
+        fallback: (body) => (body.method === "shellApproval.listPending" ? [] : null),
+      })
+    );
 
     const { main } = await import("../client.js");
     await expect(
       main(["eval", "run", "-e", "return 1;", "--approval-level", "2", "--json"])
     ).resolves.toBe(0);
 
-    expect(rpcBodies.map((body) => body.method)).toEqual([
+    expect(rpcBodies.map((body) => body.method).slice(0, 2)).toEqual([
       "shellApproval.listPending",
-      "eval.start",
+      "dynamicCode.admit",
     ]);
   });
 
   it("eval run --path lets the server read the file (no inline code)", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
-    const { rpcBodies } = stubServer(() => terminalStart(OK_RESULT));
+    const { rpcBodies } = stubServer(pullServer(OK_RESULT));
 
     const { main } = await import("../client.js");
     await expect(main(["eval", "run", "--path", "/snippets/a.ts", "--json"])).resolves.toBe(0);
@@ -312,7 +367,7 @@ describe("vibestudio eval commands", () => {
   it("eval run reads code from a local FILE positional", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
-    const { rpcBodies } = stubServer(() => terminalStart(OK_RESULT));
+    const { rpcBodies } = stubServer(pullServer(OK_RESULT));
     const codeFile = path.join(tmpDir, "snippet.ts");
     fs.writeFileSync(codeFile, "return 42;");
 
@@ -327,8 +382,8 @@ describe("vibestudio eval commands", () => {
   it("eval run maps a failed result to exit 1", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
-    stubServer(() =>
-      terminalStart({
+    stubServer(
+      pullServer({
         success: false,
         console: "",
         error: { message: "boom", errorKind: "application" },
@@ -356,27 +411,30 @@ describe("vibestudio eval commands", () => {
       effectiveVersion: "ev-1",
       requestedAt: 1,
     };
-    stubServer((body) => {
-      if (body.method === "eval.start") {
-        transportMock.watchControllers[0]?.enqueue(
-          new TextEncoder().encode(
-            `${JSON.stringify({
-              kind: "event",
-              event: "shell-approval:pending-changed",
-              sequence: 1,
-              payload: {
-                pending: [
-                  { ...approval, approvalId: "unrelated", callerId: "another-agent" },
-                  { ...approval, approvalId: "preparing", lifecycle: { state: "preparing" } },
-                  { ...approval, approvalId: "actionable", lifecycle: { state: "ready" } },
-                ],
-              },
-            })}\n`
-          )
-        );
-      }
-      return terminalStart(OK_RESULT);
-    });
+    stubServer(
+      pullServer(OK_RESULT, {
+        onCall: (body) => {
+          if (body.method === "dynamicCode.admit") {
+            transportMock.watchControllers[0]?.enqueue(
+              new TextEncoder().encode(
+                `${JSON.stringify({
+                  kind: "event",
+                  event: "shell-approval:pending-changed",
+                  sequence: 1,
+                  payload: {
+                    pending: [
+                      { ...approval, approvalId: "unrelated", callerId: "another-agent" },
+                      { ...approval, approvalId: "preparing", lifecycle: { state: "preparing" } },
+                      { ...approval, approvalId: "actionable", lifecycle: { state: "ready" } },
+                    ],
+                  },
+                })}\n`
+              )
+            );
+          }
+        },
+      })
+    );
     const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     const { main } = await import("../client.js");
     await expect(main(["eval", "run", "-e", "return 1", "--json"])).resolves.toBe(0);
@@ -386,34 +444,14 @@ describe("vibestudio eval commands", () => {
     expect(text).not.toContain("approval preparing");
   });
 
-  it("eval run streams matching console events in text mode without printing them twice", async () => {
+  it("eval run prints console events it pulls in text mode without printing them twice", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
-    stubServer((body) => {
-      if (body.method === "eval.start") {
-        const runId = (body.args[0] as { runId: string }).runId;
-        transportMock.watchControllers[0]?.enqueue(
-          new TextEncoder().encode(
-            `${JSON.stringify({
-              kind: "event",
-              event: "eval:run-event",
-              sequence: 1,
-              payload: {
-                runId,
-                scopeKey: "default",
-                event: {
-                  sequence: 1,
-                  at: 1,
-                  kind: "console",
-                  payload: { text: OK_RESULT.console },
-                },
-              },
-            })}\n`
-          )
-        );
-      }
-      return terminalStart(OK_RESULT);
-    });
+    stubServer(
+      pullServer(OK_RESULT, {
+        events: [{ sequence: 1, at: 1, kind: "console", payload: { text: OK_RESULT.console } }],
+      })
+    );
     const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
     const { main } = await import("../client.js");
@@ -425,10 +463,37 @@ describe("vibestudio eval commands", () => {
     expect(consoleWrites).toEqual(["hello\n[WARN] careful\n"]);
   });
 
+  it("eval run waits through pending pulls and reports an authority wait it pulled", async () => {
+    writeCredentials(tmpDir);
+    writeSession(tmpDir);
+    const { rpcBodies } = stubServer(
+      pullServer(OK_RESULT, {
+        pending: 2,
+        events: [
+          {
+            sequence: 1,
+            at: 1,
+            kind: "authority-requested",
+            payload: { capability: "workspace.publish", acquisitionId: "acq-1" },
+          },
+        ],
+      })
+    );
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    const { main } = await import("../client.js");
+    await expect(main(["eval", "run", "-e", "return 42;", "--json"])).resolves.toBe(0);
+
+    expect(rpcBodies.filter((body) => body.method === "await")).toHaveLength(3);
+    expect(rpcBodies.at(-1)!.method).toBe("dynamicCode.release");
+    // The diagnostic is delayed 500 ms; the run ended first, so nothing is printed late.
+    expect(stderr.mock.calls.map((call) => String(call[0])).join("")).not.toContain("approval");
+  });
+
   it("eval run maps a slow server call to a timeout (exit 4)", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
-    // The in-process Iroh server never resolves eval.start, so the command's
+    // The in-process Iroh server never resolves dynamicCode.admit, so the command's
     // client-side timeout remains deterministic without signaling or network.
     stubServer(() => new Promise<never>(() => {}));
 
@@ -461,7 +526,7 @@ describe("vibestudio eval commands", () => {
     await expect(main(["eval", "run", "-e", "1", "--json"])).resolves.toBe(3);
   });
 
-  it("eval repl-reset calls eval.reset with the session scope key", async () => {
+  it("eval repl-reset calls dynamicCode.reset with the session scope key", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
     const { rpcBodies } = stubServer(() => ({ ok: true }));
@@ -470,7 +535,7 @@ describe("vibestudio eval commands", () => {
     await expect(main(["eval", "repl-reset", "--json"])).resolves.toBe(0);
 
     expect(rpcBodies).toHaveLength(1);
-    expect(rpcBodies[0]!.method).toBe("eval.reset");
+    expect(rpcBodies[0]!.method).toBe("dynamicCode.reset");
     expect(rpcBodies[0]!.args[0]).toEqual({
       target: { kind: "owner-session", sessionId: "session:default" },
       scopeKey: "default",

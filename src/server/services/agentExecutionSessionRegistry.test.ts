@@ -27,9 +27,9 @@ function admission(
       executionDigest: "a".repeat(64),
     },
     executor: {
-      kind: "eval",
+      kind: "dynamic-code",
       runtimeId,
-      evalRunId: runId,
+      runId,
       authorityManifest: {
         mode: "adaptive",
         effects: "read-write",
@@ -62,7 +62,7 @@ describe("AgentExecutionSessionRegistry test policy", () => {
     const first = registry.admit(input);
     expect(registry.admit(input)).toBe(first);
     expect(() => registry.admit(admission())).toThrow();
-    registry.close(first.executor.runtimeId, first.executor.evalRunId);
+    registry.close(first.executor.runtimeId, first.executor.runId);
     expect(() => registry.admit(admission(first.executor.runtimeId, "run:two"))).toThrow(
       /authorityOrigin/
     );
@@ -112,9 +112,9 @@ describe("AgentExecutionSessionRegistry test policy", () => {
       })
     ).toThrow(/already belongs to test policy/);
 
-    expect(registry.close(second.executor.runtimeId, second.executor.evalRunId)).toBe(true);
+    expect(registry.close(second.executor.runtimeId, second.executor.runId)).toBe(true);
     expect(registry.testPolicyForContext("ctx:durable-receiver")).toBe(policy);
-    expect(registry.close(first.executor.runtimeId, first.executor.evalRunId)).toBe(true);
+    expect(registry.close(first.executor.runtimeId, first.executor.runId)).toBe(true);
     expect(registry.testPolicyForContext("ctx:runner")).toBe(policy);
     expect(registry.resolve(first.executor.runtimeId, 2_000)).toBeNull();
     expect(registry.testPolicyForContext("ctx:runner")).toBeNull();
@@ -250,7 +250,7 @@ describe("AgentExecutionSessionRegistry test policy", () => {
       testPolicy: casePolicy,
     });
 
-    expect(registry.close(root.executor.runtimeId, root.executor.evalRunId)).toBe(true);
+    expect(registry.close(root.executor.runtimeId, root.executor.runId)).toBe(true);
     expect(registry.resolve(child.executor.runtimeId)).toBe(child);
     expect(registry.resolve(root.executor.runtimeId, 2_000)).toBeNull();
     expect(registry.resolve(child.executor.runtimeId)).toBeNull();
@@ -266,7 +266,7 @@ describe("AgentExecutionSessionRegistry admission", () => {
     const registry = new AgentExecutionSessionRegistry();
     const fact = registry.admit({ ...admission(), expiresAt: 2_000 });
     expect(registry.resolve(fact.executor.runtimeId, 1_999)).toBe(fact);
-    expect(registry.admit(admission(fact.executor.runtimeId, fact.executor.evalRunId))).toBe(fact);
+    expect(registry.admit(admission(fact.executor.runtimeId, fact.executor.runId))).toBe(fact);
     expect(() => registry.admit(admission(fact.executor.runtimeId, "run:replay"))).toThrow(
       /already admitted/
     );
@@ -279,7 +279,7 @@ describe("AgentExecutionSessionRegistry admission", () => {
     const first = registry.admit(admission());
     expect(registry.close(first.executor.runtimeId, "run:wrong-owner")).toBe(false);
     expect(registry.resolve(first.executor.runtimeId)).toBe(first);
-    expect(registry.close(first.executor.runtimeId, first.executor.evalRunId)).toBe(true);
+    expect(registry.close(first.executor.runtimeId, first.executor.runId)).toBe(true);
     expect(registry.resolve(first.executor.runtimeId)).toBe(first);
     expect(registry.resolveInvocation(first.executor.runtimeId, first.nonce)).toBeNull();
     const second = registry.admit(admission(first.executor.runtimeId, "run:two"));
@@ -292,7 +292,7 @@ describe("AgentExecutionSessionRegistry admission", () => {
   it("names trust dimensions without exposing their values when a warm notebook drifts", () => {
     const registry = new AgentExecutionSessionRegistry();
     const first = registry.admit(admission());
-    expect(registry.close(first.executor.runtimeId, first.executor.evalRunId)).toBe(true);
+    expect(registry.close(first.executor.runtimeId, first.executor.runId)).toBe(true);
 
     expect(() =>
       registry.admit({
@@ -322,25 +322,25 @@ describe("AgentExecutionSessionRegistry admission", () => {
     const secondPromise = registry
       .admitWhenAvailable(admission(first.executor.runtimeId, "run:two"))
       .then((fact) => {
-        order.push(fact.executor.evalRunId);
+        order.push(fact.executor.runId);
         return fact;
       });
     const thirdPromise = registry
       .admitWhenAvailable(admission(first.executor.runtimeId, "run:three"))
       .then((fact) => {
-        order.push(fact.executor.evalRunId);
+        order.push(fact.executor.runId);
         return fact;
       });
 
     await Promise.resolve();
     expect(order).toEqual([]);
-    expect(registry.close(first.executor.runtimeId, first.executor.evalRunId)).toBe(true);
+    expect(registry.close(first.executor.runtimeId, first.executor.runId)).toBe(true);
     const second = await secondPromise;
     expect(order).toEqual(["run:two"]);
-    expect(registry.close(second.executor.runtimeId, second.executor.evalRunId)).toBe(true);
+    expect(registry.close(second.executor.runtimeId, second.executor.runId)).toBe(true);
     const third = await thirdPromise;
     expect(order).toEqual(["run:two", "run:three"]);
-    expect(registry.close(third.executor.runtimeId, third.executor.evalRunId)).toBe(true);
+    expect(registry.close(third.executor.runtimeId, third.executor.runId)).toBe(true);
   });
 
   it("removes a cancelled admission wait without blocking the next run", async () => {
@@ -355,9 +355,9 @@ describe("AgentExecutionSessionRegistry admission", () => {
 
     controller.abort();
     await expect(cancelled).rejects.toMatchObject({ name: "AbortError" });
-    registry.close(first.executor.runtimeId, first.executor.evalRunId);
+    registry.close(first.executor.runtimeId, first.executor.runId);
     await expect(next).resolves.toMatchObject({
-      executor: { kind: "eval", evalRunId: "run:next" },
+      executor: { kind: "dynamic-code", runId: "run:next" },
     });
   });
 
@@ -366,7 +366,7 @@ describe("AgentExecutionSessionRegistry admission", () => {
     const first = registry.admit(admission());
     expect(() =>
       registry.admit({
-        ...admission(first.executor.runtimeId, first.executor.evalRunId),
+        ...admission(first.executor.runtimeId, first.executor.runId),
         contextId: "context:other",
       })
     ).toThrow(/different admission facts/);

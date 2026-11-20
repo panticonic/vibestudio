@@ -208,15 +208,15 @@ describe("author-bound authority plan lifecycle", () => {
     ).rejects.toMatchObject({ code: "EACCES" });
   });
 
-  it("matches the immediate EvalDO author rather than the root review initiator", async () => {
+  it("matches the immediate eval kernel author rather than the root review initiator", async () => {
     const f = fixture();
     const rootPlan = await f.compile();
-    const evalId = "do:vibestudio/internal:EvalDO:one";
+    const evalId = "do:workers/session:SessionDO:one";
     const evalEntity = {
       ...f.entity,
       id: evalId,
       authoritySessionId: "lifecycle:eval",
-      className: "EvalDO",
+      className: "SessionDO",
       source: { repoPath: "vibestudio/internal", effectiveVersion: "d".repeat(64) },
       activeBuildKey: "build:eval",
       activeExecutionDigest: "d".repeat(64),

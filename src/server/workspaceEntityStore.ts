@@ -12,13 +12,13 @@ import {
  * matters: a durable entity mutation and its cache mirror must ALWAYS happen
  * together. Previously that was upheld by convention — every caller had to
  * remember to call `entityCache._onActivate` after dispatching `entityActivate`
- * — and the eval service forgot, so every EvalDO→main RPC 403'd with
- * "Unknown principal kind" (the EvalDO's id wasn't in the cache).
+ * — and the eval service forgot, so every eval kernel→main RPC 403'd with
+ * "Unknown principal kind" (the eval kernel's id wasn't in the cache).
  *
  * This store makes the invariant STRUCTURAL: it is the only thing that
  * dispatches `entityActivate`/`entityRetire` to the WorkspaceDO, and each
  * mutation pairs the durable write with the cache update and post-commit
- * execution materialization. The write-owners (`runtimeService`, `evalService`)
+ * execution materialization. The write-owners (`runtimeService`, `dynamicCodeService`)
  * receive the store and never touch raw entity dispatch or the cache mutators,
  * so they CAN'T publish an executable identity that its runtime cannot load.
  *
@@ -53,7 +53,7 @@ import {
 } from "@vibestudio/shared/execution/retention";
 import { canonicalEntityId } from "@vibestudio/shared/runtime/entitySpec";
 
-const WORKSPACE_DO_CLASS = "WorkspaceDO";
+const WORKSPACE_DO_CLASS = "WorkspaceStateDO";
 
 /** Input accepted by `WorkspaceDO.entityActivate` (built by the write-owners). */
 export type EntityActivateInput = EntityActivationInput;

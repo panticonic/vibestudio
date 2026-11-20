@@ -1,3 +1,5 @@
+import { retryOnStaleAttestation } from "@vibestudio/shared/directRpcEnforcement";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { deserializeRpcFailure } from "@vibestudio/rpc";
 /**
  * DODispatch -- source-scoped HTTP dispatch to Durable Objects.
@@ -545,6 +547,8 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
   private preparingTargetReady:
     | ((ref: DORef, witness: LifecycleCloneInput) => Promise<void>)
     | null = null;
+  private internalTargetReadiness: ((ref: DORef) => Promise<unknown> | undefined) | null = null;
+  private readonly readinessBypass = new AsyncLocalStorage<true>();
   private withdrawDecisionWaits: ((callerId: string, reason: unknown) => void) | null = null;
   constructor(private readonly ensureUserlandTargetReady: (ref: DORef) => Promise<void>) {
     if (typeof ensureUserlandTargetReady !== "function") {
@@ -572,7 +576,7 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
 
   /**
    * Set a function that returns the current per-process dispatch secret
-   * (`WorkerdManager.getDispatchSecret()`). Stamped onto every `/_w/`
+   * (`RuntimeManager.getDispatchSecret()`). Stamped onto every `/_w/`
    * request as `X-Vibestudio-Dispatch-Secret` and verified by the
    * auto-generated workerd router worker. Closes audit finding 4.8.
    *
@@ -640,7 +644,7 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
 
   /**
    * Set a probe reporting whether a workerd generation transition is in
-   * flight (`WorkerdManager.isGenerationTransitionInFlight`). While it is,
+   * flight (`RuntimeManager.isGenerationTransitionInFlight`). While it is,
    * dispatches fail with the typed `runtime_restarting` error instead of a
    * generic "workerd not running" — so gateway callers can distinguish a
    * restarting runtime (retry after ready) from a broken one.
@@ -651,6 +655,20 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
 
   setPreparingTargetReady(fn: (ref: DORef, witness: LifecycleCloneInput) => Promise<void>): void {
     this.preparingTargetReady = fn;
+  }
+
+  /**
+   * A barrier for internal objects whose store is still being moved (the
+   * workspace state's one-time import). Every dispatch to such an object waits
+   * for what this returns, except the work running under
+   * {@link withoutInternalReadiness}, which is the move itself.
+   */
+  setInternalTargetReadiness(fn: (ref: DORef) => Promise<unknown> | undefined): void {
+    this.internalTargetReadiness = fn;
+  }
+
+  withoutInternalReadiness<T>(run: () => Promise<T>): Promise<T> {
+    return this.readinessBypass.run(true, run);
   }
 
   private requireWorkerdUrl(): string {
@@ -667,7 +685,10 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
       throw new Error("DODispatch requires token-backed workerd configuration");
     }
     if (this.runtimeRestartingProbe?.()) throw runtimeRestartingError();
-    if (isInternalDOSource(ref.source)) return;
+    if (isInternalDOSource(ref.source)) {
+      if (!this.readinessBypass.getStore()) await this.internalTargetReadiness?.(ref);
+      return;
+    }
     await this.ensureUserlandTargetReady(ref);
   }
 
@@ -721,7 +742,7 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
 
   /**
    * Like `dispatch`, but labels a deliberately long-running handler (the
-   * EvalDO's `executeRun`) so slow-call reporting is informational and coarse.
+   * eval kernel's `executeRun`) so slow-call reporting is informational and coarse.
    * All process-local DO dispatches leave semantic lifetime to their owner;
    * this method expresses observability intent, not a separate transport path.
    */
@@ -766,6 +787,13 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     report: (message: string) => void = console.warn
   ): Promise<T> {
     const startedAt = Date.now();
+    // Diagnostic: `VIBESTUDIO_DO_CALL_TRACE=<substring of a call label>` logs the
+    // latency of every dispatch whose label contains it (`1` or `all`: every call).
+    const trace = process.env["VIBESTUDIO_DO_CALL_TRACE"];
+    const traceStart =
+      trace && (trace === "1" || trace === "all" || label.includes(trace))
+        ? performance.now()
+        : null;
     let reported = false;
     const timer = setInterval(() => {
       reported = true;
@@ -778,6 +806,11 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
       return await fn();
     } finally {
       clearInterval(timer);
+      if (traceStart !== null) {
+        console.info(
+          `[DOTrace] ${label} ${(performance.now() - traceStart).toFixed(1)}ms t=${Date.now()}`
+        );
+      }
       if (reported && state === "working") {
         report(
           `[DODispatch] state=completed ${label} finished after ${Math.round((Date.now() - startedAt) / 1000)}s`
@@ -799,7 +832,7 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     // `DODispatch.dispatch` is the SERVER's internal service→DO channel (eval.start,
     // workspace methods, …), so the caller is always the server — stamp it so the
     // DO's converged envelope dispatch surfaces `callerKind: "server"` (e.g. the
-    // EvalDO server-only gate). Mirrors dispatchLifecycle/dispatchAlarm.
+    // eval kernel server-only gate). Mirrors dispatchLifecycle/dispatchAlarm.
     const serverCaller = await this.serverCaller(ref, method, args);
     signal?.throwIfAborted();
     const authorization = assertPresent(serverCaller.authorization);
@@ -818,13 +851,17 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     }
     const result = await this.authorityParentRunner(doTargetId(ref), authorization, () =>
       this.withRelayAdmission(ref, () =>
-        postRpcToDOWithToken(
-          ref,
-          method,
-          dispatchedArgs,
-          this.buildPostDeps(ref),
-          serverCaller,
-          signal
+        // A receiver refuses an attestation that predates its activation before
+        // it runs anything; the host re-stamps it and sends it once more.
+        retryOnStaleAttestation(serverCaller.authorization, (attestation) =>
+          postRpcToDOWithToken(
+            ref,
+            method,
+            dispatchedArgs,
+            this.buildPostDeps(ref),
+            attestation ? { ...serverCaller, authorization: attestation } : serverCaller,
+            signal
+          )
         )
       )
     );
@@ -850,11 +887,17 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     arg: unknown
   ): Promise<unknown> {
     const label = `${doRefKey(ref)}.__lifecycle/${method}`;
-    const input = arg as { mode?: unknown; reason?: unknown; epoch?: unknown } | null;
+    const input = arg as {
+      mode?: unknown;
+      reason?: unknown;
+      epoch?: unknown;
+      phase?: unknown;
+    } | null;
     console.info(`[DODispatch] lifecycle started ${label}`, {
       mode: input?.mode,
       reason: input?.reason,
       epoch: input?.epoch,
+      phase: input?.phase,
     });
     try {
       const result = await this.withProgressReport(label, () =>

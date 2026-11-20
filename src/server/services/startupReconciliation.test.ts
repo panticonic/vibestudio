@@ -1,9 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { vi } from "vitest";
-import { createTestDO } from "@vibestudio/durable/test-utils";
 
-import { WorkspaceDO } from "@panticonic/builtin/workspace-state";
-import { WorkspaceDOTestable } from "@panticonic/builtin/workspace-state/test-fixture";
+import type { WorkspaceStateDO } from "@panticonic/builtin/workspace-state";
+import { createWorkspaceStateTestDO } from "@panticonic/builtin/workspace-state/test-fixture";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import { canonicalEntityId, type EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import {
@@ -16,10 +15,10 @@ import {
 } from "./startupReconciliation.js";
 
 describe("runStartupReconciliation", () => {
-  let workspaceDO: WorkspaceDO;
+  let workspaceDO: WorkspaceStateDO;
   let cleanup: EntityRetirementCleanup;
   beforeEach(async () => {
-    ({ instance: workspaceDO } = await createTestDO(WorkspaceDOTestable));
+    ({ instance: workspaceDO } = await createWorkspaceStateTestDO());
     cleanup = createEntityRetirementCleanup({
       resolveRecord: async (id) => workspaceDO.entityResolve(id),
       cleanup: async () => {},

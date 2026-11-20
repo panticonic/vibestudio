@@ -866,24 +866,25 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
 
   it("uses the narrow validator for an epoch-transition publication", async () => {
     const blobsDir = path.join(tempStatePath(), "blobs");
+    const old = await stageTree(blobsDir, [{ path: "vibestudio.yml", body: "systemEpoch: 0\n" }]);
+    const next = await stageTree(blobsDir, [{ path: "vibestudio.yml", body: "systemEpoch: 1\n" }]);
     const transitionValidator = vi.fn(async () => undefined);
     const ordinaryValidator = vi.fn(async () => {
       throw new Error("ordinary parser must not inspect a future manifest");
     });
+    const trustDeltaForCommit = vi.fn(ordinaryValidator);
+    const deps = gateDeps();
+    const getProviders = vi.fn(deps.getProviders);
     const transitionGate = createMainRefAdvanceGate({
       blobsDir,
-      approvalGate: {
-        approve: async () => undefined,
-        approveSemanticAdvance: async () => undefined,
-        approveRepoDeletion: async () => undefined,
-      },
+      approvalGate: createMainAdvanceApprovalGate({ ...deps, getProviders, trustDeltaForCommit }),
       ensureStateMirrored: async () => undefined,
       validateCandidateWorkspaceState: ordinaryValidator,
       validateEpochTransitionCandidate: transitionValidator,
     });
     await transitionGate(
       batch(
-        [],
+        [{ repoPath: "meta", old, next }],
         callerContext({
           epochTransition: true,
           getCandidateWorkspaceState: async () => "state:future-workspace",
@@ -893,11 +894,24 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
 
     expect(transitionValidator).toHaveBeenCalledWith(
       "state:future-workspace",
-      [],
+      ["meta"],
       undefined,
       expect.any(Function)
     );
     expect(ordinaryValidator).not.toHaveBeenCalled();
+    expect(trustDeltaForCommit).not.toHaveBeenCalled();
+    expect(getProviders).not.toHaveBeenCalled();
+    expect(deps.authorizeEffect).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ authorityAcquisition: "wait" }),
+      expect.objectContaining({
+        capability: "workspace.publish",
+        tier: "critical",
+        challenge: expect.objectContaining({
+          title: "Switch workspace host version",
+          diffReview: [expect.objectContaining({ repoPath: "meta" })],
+        }),
+      })
+    );
   });
 
   it("approves a content-identical semantic main advance", async () => {

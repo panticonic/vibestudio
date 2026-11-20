@@ -92,8 +92,8 @@
       "parityAssertion": "test:execution.durable-object-push-rebuild"
     },
     {
-      "surface": "eval-do",
-      "selector": "exact-product-seed",
+      "surface": "eval-kernel",
+      "selector": "resolved-exact-artifact",
       "executableIdentity": "full-execution-digest",
       "adoption": "new-eval-incarnation",
       "rollback": "last-good-remains-authoritative",
@@ -107,7 +107,7 @@
         "artifact-digest",
         "execution-digest"
       ],
-      "parityAssertion": "test:execution.eval-do"
+      "parityAssertion": "test:execution.eval-kernel"
     },
     {
       "surface": "vcs-store",

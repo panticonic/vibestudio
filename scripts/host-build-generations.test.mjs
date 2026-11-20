@@ -13,6 +13,7 @@ import {
   readCurrentHostBuildGeneration,
   releaseHostBuildGeneration,
   readHostPreparationRecipe,
+  restorePackagedHostPreparationRecipes,
   HOST_PREPARATION_RECIPES,
 } from "./host-build-generations.mjs";
 import {
@@ -54,7 +55,7 @@ function admittedSourceFixture() {
   fs.writeFileSync(path.join(root, "package.json"), '{"name":"fixture"}');
   fs.mkdirSync(path.join(root, "node_modules"));
   writeSourcePrerequisites(root, "admission");
-  for (const name of ["headless-host", "workerd-programs"]) {
+  for (const name of ["headless-host"]) {
     fs.rmSync(path.join(root, "dist", name));
     fs.mkdirSync(path.join(root, "dist", name));
   }
@@ -258,7 +259,7 @@ test("publishes immutable complete generations and leaves the prior one readable
       })
     );
     fs.mkdirSync(path.join(root, "node_modules"), { recursive: true });
-    fs.mkdirSync(path.join(root, "dist/workerd-programs"), { recursive: true });
+    fs.mkdirSync(path.join(root, "dist"), { recursive: true });
     for (const entry of [
       "server.mjs",
       "prepare-workspace-templates.mjs",
@@ -271,14 +272,14 @@ test("publishes immutable complete generations and leaves the prior one readable
       "fs-disk-worker.cjs",
       ...Object.values(NATIVE_WORKSPACE_ENTRIES),
       "dependency-content-maintenance.cjs",
-      "internal-do-programs.json",
+      "runtime-app.json",
       "host-build-fingerprint.json",
     ])
       fs.writeFileSync(path.join(root, "dist", entry), entry);
     for (const entry of ["headless-host", "assets"]) fs.mkdirSync(path.join(root, "dist", entry));
     fs.writeFileSync(path.join(root, "dist/main.cjs"), "main-a");
     fs.writeFileSync(path.join(root, "dist/panelPreload.cjs"), "preload-a");
-    fs.writeFileSync(path.join(root, "dist/workerd-programs/router.mjs"), "router-a");
+    fs.writeFileSync(path.join(root, "dist/runtime-app.json"), "router-a");
     writeSourcePrerequisites(root, "a");
     const first = publishFixtureGeneration(root, {
       kind: "desktop",
@@ -323,7 +324,7 @@ test("publishes immutable complete generations and leaves the prior one readable
     });
 
     cleanHostBuildOutput(root);
-    fs.mkdirSync(path.join(root, "dist/workerd-programs"), { recursive: true });
+    fs.mkdirSync(path.join(root, "dist"), { recursive: true });
     for (const entry of [
       "server-electron.cjs",
       "connectionProcess.cjs",
@@ -333,7 +334,7 @@ test("publishes immutable complete generations and leaves the prior one readable
       "fs-disk-worker.cjs",
       ...Object.values(NATIVE_WORKSPACE_ENTRIES),
       "dependency-content-maintenance.cjs",
-      "internal-do-programs.json",
+      "runtime-app.json",
       "host-build-fingerprint.json",
     ])
       fs.writeFileSync(path.join(root, "dist", entry), entry);
@@ -346,7 +347,7 @@ test("publishes immutable complete generations and leaves the prior one readable
     );
     fs.writeFileSync(path.join(root, "dist/main.cjs"), "main-b");
     fs.writeFileSync(path.join(root, "dist/panelPreload.cjs"), "preload-b");
-    fs.writeFileSync(path.join(root, "dist/workerd-programs/router.mjs"), "router-b");
+    fs.writeFileSync(path.join(root, "dist/runtime-app.json"), "router-b");
     const second = publishFixtureGeneration(root, {
       kind: "desktop",
       mode: "development",
@@ -362,7 +363,7 @@ test("publishes immutable complete generations and leaves the prior one readable
       assert.equal(fs.readFileSync(path.join(source, entry), "utf8"), entry);
     }
     assert.equal(
-      fs.readFileSync(path.join(first, "workerd-programs/router.mjs"), "utf8"),
+      fs.readFileSync(path.join(first, "runtime-app.json"), "utf8"),
       "router-a"
     );
     assert.equal(fs.readFileSync(path.join(second, "panelPreload.cjs"), "utf8"), "preload-b");
@@ -371,6 +372,28 @@ test("publishes immutable complete generations and leaves the prior one readable
     assert.equal(fs.existsSync(first), false);
     assert.equal(fs.existsSync(second), true);
   } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("restores a packaging receipt for matching compiler output after a rebuild", () => {
+  const { root, published } = admittedSourceFixture();
+  const dist = path.join(root, "dist");
+  const receipt = path.join(dist, HOST_PREPARATION_RECIPES);
+  const entry = "prepare-workspace-templates.mjs";
+  try {
+    fs.rmSync(receipt);
+    restorePackagedHostPreparationRecipes(root, published);
+    assert.equal(readHostPreparationRecipe(dist, entry), readHostPreparationRecipe(published, entry));
+    fs.rmSync(receipt);
+    fs.writeFileSync(path.join(dist, entry), "another build");
+    assert.throws(
+      () => restorePackagedHostPreparationRecipes(root, published),
+      /differs from the published host build/u
+    );
+    assert.equal(fs.existsSync(receipt), false);
+  } finally {
+    releaseHostBuildGeneration(published);
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
@@ -411,7 +434,7 @@ test("relocated source and desktop generations resolve relative to the new check
       JSON.stringify({ name: "product", productName: "Product", version: "1.0.0" })
     );
     fs.mkdirSync(path.join(root, "node_modules"), { recursive: true });
-    fs.mkdirSync(path.join(root, "dist/workerd-programs"), { recursive: true });
+    fs.mkdirSync(path.join(root, "dist"), { recursive: true });
     for (const entry of [
       "server.mjs",
       "prepare-workspace-templates.mjs",
@@ -426,14 +449,14 @@ test("relocated source and desktop generations resolve relative to the new check
       "fs-disk-worker.cjs",
       ...Object.values(NATIVE_WORKSPACE_ENTRIES),
       "dependency-content-maintenance.cjs",
-      "internal-do-programs.json",
+      "runtime-app.json",
       "host-build-fingerprint.json",
     ]) {
       fs.writeFileSync(path.join(root, "dist", entry), `${suffix}:${entry}`);
     }
     for (const entry of ["headless-host", "assets"])
       fs.mkdirSync(path.join(root, "dist", entry), { recursive: true });
-    fs.writeFileSync(path.join(root, "dist/workerd-programs/router.mjs"), `${suffix}:router`);
+    fs.writeFileSync(path.join(root, "dist/runtime-app.json"), `${suffix}:router`);
     writeSourcePrerequisites(root, suffix);
   };
 
@@ -579,7 +602,7 @@ test("refuses an incomplete generation without replacing current", () => {
       JSON.stringify({ name: "product", version: "1.0.0" })
     );
     fs.mkdirSync(path.join(root, "node_modules"), { recursive: true });
-    fs.mkdirSync(path.join(root, "dist/workerd-programs"), { recursive: true });
+    fs.mkdirSync(path.join(root, "dist"), { recursive: true });
     for (const entry of [
       "server.mjs",
       "prepare-workspace-templates.mjs",
@@ -588,7 +611,7 @@ test("refuses an incomplete generation without replacing current", () => {
       "fs-disk-worker.cjs",
       ...Object.values(NATIVE_WORKSPACE_ENTRIES),
       "dependency-content-maintenance.cjs",
-      "internal-do-programs.json",
+      "runtime-app.json",
       "host-build-fingerprint.json",
     ])
       fs.writeFileSync(path.join(root, "dist", entry), entry);

@@ -17,6 +17,9 @@ files:
   - "!dist/host-build.lock"
   - "scripts/cli/**/*"
   - "scripts/historical-host-snapshot.mjs"
+  # The runtime payload staged for this target; the CI-built inputs are not shipped.
+  - "native/celld/**/*"
+  - "!native/celld/artifacts/**/*"
   # Package source exports are compiler inputs, not independent npm installs.
   # Only electron-builder's production dependency collector owns node_modules,
   # including any genuine nested versions required by the installed graph.
@@ -35,6 +38,8 @@ asarUnpack:
   - "package.json"
   # MXC enforcement payloads must be executable outside ASAR.
   - "dist/mxc/**/*"
+  # The celld runtime executes the workspace's isolates; it must be a real file.
+  - "native/celld/**/*"
   # Worker threads resolve their entries beside the physical server bundle.
   - "dist/*-worker.cjs"
   # Linked provider hooks and MCP run the installed CLI with the native runtime.

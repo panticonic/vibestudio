@@ -172,7 +172,7 @@ describe("EntityCache", () => {
         activeExecutionDigest: "bootstrap-execution",
         activeAuthority: { requests: [], provides: [] },
         contextId: bootstrap.contextId,
-        className: "WorkspaceDO",
+        className: "WorkspaceStateDO",
         key: "workspace",
       });
       const bootstrapLifetime = cache.resolve(bootstrap.id)?.authoritySessionId;

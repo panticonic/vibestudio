@@ -12,8 +12,8 @@ export const runtimeFoundationEvidence = Object.freeze({
     "execution.panel": {
       path: "hosts/desktop/main/panelOrchestrator.test.ts",
     },
-    "execution.eval-do": {
-      path: "src/server/services/evalService.test.ts",
+    "execution.eval-kernel": {
+      path: "src/server/services/dynamicCodeService.test.ts",
     },
     "execution.extension": {
       path: "packages/extension-host/src/service.test.ts",
@@ -28,13 +28,13 @@ export const runtimeFoundationEvidence = Object.freeze({
       path: "src/server/clients/clientRegistry.test.ts",
     },
     "execution.vcs-store": {
-      path: "packages/builtin/src/workspace-state/WorkspaceDO.test.ts",
+      path: "packages/builtin/src/workspace-state/WorkspaceStateDO.test.ts",
     },
     "execution.worker-push-rebuild": {
-      path: "src/server/workerdManager.test.ts",
+      path: "src/server/runtimeManager.test.ts",
     },
     "execution.workerd-start-worker": {
-      path: "src/server/workerdManager.test.ts",
+      path: "src/server/runtimeManager.test.ts",
     },
   }),
   sourceContracts: Object.freeze({}),

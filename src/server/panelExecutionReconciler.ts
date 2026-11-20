@@ -107,17 +107,9 @@ export class PanelExecutionReconciler {
   ): Promise<void> {
     const existing = this.executions.get(slotId);
     if (existing?.entityId === entityId) return existing.promise;
-    const startedAt = performance.now();
-    console.info(
-      `[PanelExecution] Activating ${entityId} for ${slotId} (${desiredSpec ? "committed handoff" : "durable recovery"})`
-    );
     let failed = false;
     const work = this.activateCurrent(slotId, entityId, desiredSpec)
-      .then(() => {
-        console.info(
-          `[PanelExecution] Activated ${entityId} for ${slotId} in ${Math.round(performance.now() - startedAt)}ms`
-        );
-      })
+      .then(() => undefined)
       .catch((error) => {
         failed = true;
         if (this.executions.get(slotId)?.promise === work) {
@@ -144,7 +136,7 @@ export class PanelExecutionReconciler {
     // can enter execution directly; querying it back first adds no validation
     // and lets unrelated WorkspaceDO traffic head-of-line block first paint.
     if (desiredSpec) {
-      await this.deps.activate(desiredSpec);
+      await this.activate(slotId, entityId, desiredSpec, "committed handoff");
       return;
     }
     const detail = await this.deps.getDetail(slotId);
@@ -168,17 +160,42 @@ export class PanelExecutionReconciler {
       options.artifact && typeof options.artifact === "object"
         ? (options.artifact as { buildKey: string; executionDigest: string })
         : undefined;
-    await this.deps.activate({
-      kind: "panel",
-      execution: {
-        surface: "code",
-        source: detail.currentHistory.source,
-        ...(ref ? { ref } : {}),
-        ...(artifact ? { artifact } : {}),
+    await this.activate(
+      slotId,
+      entityId,
+      {
+        kind: "panel",
+        execution: {
+          surface: "code",
+          source: detail.currentHistory.source,
+          ...(ref ? { ref } : {}),
+          ...(artifact ? { artifact } : {}),
+        },
+        key: detail.entity.key,
+        contextId: detail.entity.contextId,
+        stateArgs,
       },
-      key: detail.entity.key,
-      contextId: detail.entity.contextId,
-      stateArgs,
-    });
+      "durable recovery"
+    );
+  }
+
+  /**
+   * The one place an activation is logged. `ensureExecutable` runs the
+   * level-triggered check on every acquire and every `ensureSlot`, and almost
+   * all of them find the entity already active and activate nothing; logging
+   * the check read as the panel being materialized again.
+   */
+  private async activate(
+    slotId: string,
+    entityId: string,
+    spec: RuntimeCodePanelEntityCreateSpec,
+    why: "committed handoff" | "durable recovery"
+  ): Promise<void> {
+    const startedAt = performance.now();
+    console.info(`[PanelExecution] Activating ${entityId} for ${slotId} (${why})`);
+    await this.deps.activate(spec);
+    console.info(
+      `[PanelExecution] Activated ${entityId} for ${slotId} in ${Math.round(performance.now() - startedAt)}ms`
+    );
   }
 }

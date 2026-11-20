@@ -12,6 +12,7 @@ export const RUNTIME_METHOD_NAMES = [
   "reserveEntity",
   "activateReservedEntity",
   "faultAbortAgentVessel",
+  "forwardHistoryPacket",
   "retireEntity",
   "releaseResourceBindings",
   "replaceResourceBindings",

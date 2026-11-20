@@ -571,7 +571,7 @@ describe("terminalApps launch service", () => {
         credentialSessionGrantStore: { dropForCaller: (_callerId) => 0 },
         tokenManager: { revokeToken: (_callerId) => false },
         releaseBlobRetentions: async () => {},
-        getWorkerdManager: () => null,
+        getRuntimeManager: () => null,
         getFsService: () => null,
         getWebhookIngress: () => null,
       });

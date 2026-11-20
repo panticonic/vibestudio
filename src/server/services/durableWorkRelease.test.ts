@@ -182,7 +182,11 @@ describe("durable-work release scheduling", () => {
   });
 
   it("captures admission before scheduling and joins the original exact frontier", async () => {
-    const barrier = { channelId: owner.objectKey, headSequence: 3, headHash: "retained-three" };
+    const barrier = {
+      channelId: owner.objectKey,
+      headSequence: 3,
+      headEnvelopeId: "retained-three",
+    };
     const calls: string[] = [];
     let finish!: () => void;
     const held = new Promise<void>((resolve) => {

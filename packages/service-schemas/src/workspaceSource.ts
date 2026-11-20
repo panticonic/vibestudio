@@ -36,11 +36,95 @@ import {
   type MethodSchema,
   type ServiceMethodSchemas,
 } from "@vibestudio/shared/typedServiceClient";
-import { vcsFileLineageSchema, vcsMethods, vcsStateNodeRefSchema } from "./vcs.js";
+import { vcsFileLineageSchema, vcsMethods, vcsQueryInputSchema, vcsSearchHitSchema, vcsSearchInputSchema, vcsStateNodeRefSchema, vcsTrajectoryInvocationRefSchema, vcsTrajectoryTurnRefSchema, vcsWalkEntrySchema, vcsWalkInputSchema } from "./vcs.js";
 
 const readAccess = { sensitivity: "read" as const };
 const writeAccess = { sensitivity: "write" as const };
 const adminAccess = { sensitivity: "admin" as const };
+
+/** Host-only search carrier between independently stored facts and trajectories. */
+const historySearchCoordinate = z.string().min(1).max(512);
+const historySearchRevision = z.string().min(1).max(128);
+const historySearchCause = z.tuple([historySearchCoordinate, historySearchCoordinate, historySearchCoordinate]);
+export const HISTORY_SEARCH_CAUSE_LIMIT = 256;
+export const HistorySearchCausePageSchema = z.array(historySearchCause).max(HISTORY_SEARCH_CAUSE_LIMIT);
+export type HistorySearchCause = z.infer<typeof historySearchCause>;
+export const HistorySearchCauseRequestSchema = z.object({
+  revision: historySearchRevision, after: historySearchCause.nullable(),
+}).strict();
+export const HistoryRecallBasisRequestSchema = z.object({
+  contextId: z.string().min(1), protectedEventId: z.string().min(1),
+}).strict();
+export const HistoryRecallBasisSchema = z.array(historySearchRevision).min(1).max(2);
+export const HistoryCommitMemoryMarkerSchema = z.object({
+  completedEventId: z.string().min(1).nullable(),
+  pending: z.object({ eventId: z.string().min(1), after: z.string().min(1) }).strict().nullable(),
+}).strict();
+export const HistorySearchBasisSchema = z.object({
+  revisions: z.array(historySearchRevision).min(1).max(514),
+  hits: z.array(vcsSearchHitSchema).max(50),
+  truncated: z.boolean(),
+}).strict();
+export const HistoryTrajectorySearchInputSchema = vcsSearchInputSchema.pick({ text: true, limit: true })
+  .extend({ causes: HistorySearchCausePageSchema }).strict();
+export type HistoryTrajectorySearchInput = z.infer<typeof HistoryTrajectorySearchInputSchema>;
+export const HistoryTrajectorySearchMatchesSchema = z.array(vcsSearchHitSchema).max(51);
+
+/** Bounded data crossing the native-history and trajectory owner boundary. */
+export const HistoryWalkPageSchema = z.object({
+  entries: z.array(vcsWalkEntrySchema).max(2_000),
+  notes: z.array(z.string().min(1).max(400)).max(20),
+}).strict();
+const historyWalkRevisions = z.array(historySearchRevision).min(1).max(514);
+export const HistoryWalkCohortSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("turn"), turn: vcsTrajectoryTurnRefSchema }).strict(),
+  z.object({
+    kind: z.literal("invocation"), invocation: vcsTrajectoryInvocationRefSchema, workUnitId: z.string().min(1),
+  }).strict(),
+]);
+export const HistoryWalkPlanSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("page"), page: HistoryWalkPageSchema, revisions: historyWalkRevisions,
+    invocation: vcsTrajectoryInvocationRefSchema.nullable(),
+  }).strict(),
+  z.object({
+    kind: z.literal("cohort"), seed: HistoryWalkCohortSchema, revisions: historyWalkRevisions,
+  }).strict(),
+]);
+export const HistoryWalkInvocationsSchema = z.array(vcsTrajectoryInvocationRefSchema).max(2_000);
+export const HistoryWalkCohortRequestSchema = z.object({
+  walk: vcsWalkInputSchema,
+  revisions: historyWalkRevisions,
+  seed: HistoryWalkCohortSchema,
+  invocations: HistoryWalkInvocationsSchema,
+}).strict();
+export type HistoryWalkCohort = z.infer<typeof HistoryWalkCohortSchema>;
+export type HistoryWalkInvocation = z.infer<typeof vcsTrajectoryInvocationRefSchema>;
+export type HistoryWalkPage = z.infer<typeof HistoryWalkPageSchema>;
+
+export const HISTORY_QUERY_CAUSE_LIMIT = 2_000;
+export const HISTORY_QUERY_TRAJECTORY_ROW_LIMIT = 1_600;
+export const HistoryQueryCausesSchema = z.array(historySearchCause).max(HISTORY_QUERY_CAUSE_LIMIT);
+export const HistoryQueryBasisSchema = z.object({
+  state: vcsStateNodeRefSchema,
+  revisions: historyWalkRevisions,
+  needsTrajectory: z.boolean(),
+}).strict();
+const projectedSqlCell = z.union([z.string().max(2_000), z.number(), z.null()]);
+const projectedSqlRows = z.array(z.array(projectedSqlCell).max(12)).max(HISTORY_QUERY_TRAJECTORY_ROW_LIMIT);
+export const HistoryQueryTrajectorySchema = z.object({
+  invocations: projectedSqlRows,
+  turns: projectedSqlRows,
+  messages: projectedSqlRows,
+  truncated: z.boolean(),
+}).strict();
+export const HistoryQueryRequestSchema = z.object({
+  query: vcsQueryInputSchema,
+  basis: HistoryQueryBasisSchema,
+  trajectory: HistoryQueryTrajectorySchema,
+}).strict();
+export type HistoryQueryBasis = z.infer<typeof HistoryQueryBasisSchema>;
+export type HistoryQueryTrajectory = z.infer<typeof HistoryQueryTrajectorySchema>;
 
 /** Exact coordinate returned by semantic context initialization and forking. */
 export const SemanticContextResultSchema = z
@@ -190,8 +274,6 @@ const logEnvelopeSchema = z
     annotations: PolymorphicJsonRecordSchema.optional(),
     causality: LogEventCausalityWireSchema.optional(),
     appendedAt: z.string().datetime({ offset: true }),
-    prevHash: z.string().min(1),
-    hash: z.string().min(1),
   })
   .strict();
 
@@ -1489,7 +1571,7 @@ const semanticEffectSchema = z
     createdAt: z.string(),
   })
   .strict();
-const semanticFileHostReadSchema = z
+export const semanticFileHostReadSchema = z
   .object({
     kind: z.literal("read-semantic-blob"),
     state: vcsStateNodeRefSchema,

@@ -21,7 +21,7 @@ import {
   type PreparedDevelopmentBuild,
 } from "./developmentExecutor.js";
 import { developmentRecipeFixture } from "./developmentRecipeFixture.test-helper.js";
-import type { ExactRepositorySnapshotPlan } from "../vcsHost/workspaceVcs.js";
+import type { ExactRepositorySnapshotPlan, ExactRepositorySnapshotSelection } from "../vcsHost/workspaceVcs.js";
 import { DevelopmentRunRoots } from "./developmentRunRoots.js";
 
 const roots: string[] = [];
@@ -98,6 +98,14 @@ function sourcePlan(
     },
   };
   return { ...base, planDigest: digest("f") };
+}
+
+async function planSources({ repositories }: { repositories: readonly ExactRepositorySnapshotSelection[] }) {
+  return repositories.map(({ repositoryId }) =>
+    repositoryId === "repository:vibestudio"
+      ? sourcePlan()
+      : sourcePlan(repositoryId, `templates/${repositoryId.split(":")[1]}`)
+  );
 }
 
 function runFor(plan: PreparedDevelopmentBuild): DevelopmentRun {
@@ -298,18 +306,14 @@ describe("DevelopmentExecutor exact private execution", () => {
   });
 
   it("prepares stable exact identities without creating a run root or process", async () => {
-    const planSource = vi.fn(async (input: { repositoryId: string }) =>
-      input.repositoryId === "repository:vibestudio"
-        ? sourcePlan()
-        : sourcePlan(input.repositoryId, `templates/${input.repositoryId.split(":")[1]}`)
-    );
+    const plans = vi.fn(planSources);
     const executor = new DevelopmentExecutor({
       workspaceId: "workspace:test",
       hostExecutionDigest: digest("9"),
       buildSystem,
       runRoots: runRoots(root),
       ownership: openOwnership,
-      planSource,
+      planSources: plans,
       materializeSource: vi.fn(),
     });
 
@@ -336,24 +340,19 @@ describe("DevelopmentExecutor exact private execution", () => {
     expect(first.snapshot.declaredEnvironment).not.toHaveProperty("PATH");
     expect(first.snapshot.pair.kind).toBe("combined");
     expect(first.snapshot.pair.pairDigest).toMatch(/^[a-f0-9]{64}$/u);
-    expect(planSource).toHaveBeenCalledTimes(8);
+    expect(plans).toHaveBeenCalledTimes(2);
     await expect(fsp.stat(path.join(root, "runs"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("verifies the host lockfile and the Base manifest, and no Base lockfile", async () => {
-    const planSource = vi.fn(
-      async ({ repositoryId }: { repositoryId: string; requiredFiles: readonly string[] }) =>
-        repositoryId === "repository:vibestudio"
-          ? sourcePlan()
-          : sourcePlan(repositoryId, `templates/${repositoryId.split(":")[1]}`)
-    );
+    const plans = vi.fn(planSources);
     const executor = new DevelopmentExecutor({
       workspaceId: "workspace:test",
       hostExecutionDigest: digest("9"),
       buildSystem,
       runRoots: runRoots(root),
       ownership: openOwnership,
-      planSource,
+      planSources: plans,
       materializeSource: vi.fn(),
     });
 
@@ -365,7 +364,7 @@ describe("DevelopmentExecutor exact private execution", () => {
     });
 
     const required = Object.fromEntries(
-      planSource.mock.calls.map(([input]) => [input.repositoryId, input.requiredFiles])
+      plans.mock.calls[0]![0].repositories.map(({ repositoryId, requiredFiles }) => [repositoryId, requiredFiles])
     );
     expect(required["repository:vibestudio"]).toEqual(["pnpm-lock.yaml"]);
     // A workspace template has no root lockfile — its dependencies
@@ -381,10 +380,7 @@ describe("DevelopmentExecutor exact private execution", () => {
       buildSystem,
       runRoots: runRoots(root),
       ownership: openOwnership,
-      planSource: async ({ repositoryId }) =>
-        repositoryId === "repository:vibestudio"
-          ? sourcePlan()
-          : sourcePlan(repositoryId, `templates/${repositoryId.split(":")[1]}`),
+      planSources,
       materializeSource: vi.fn(),
     });
     const recipe = developmentRecipeFixture(process.platform, process.arch);
@@ -411,6 +407,29 @@ describe("DevelopmentExecutor exact private execution", () => {
     ).rejects.toMatchObject({ code: "EIDENTITYDRIFT" });
   });
 
+  it("refuses to prepare a build from repositories captured at different revisions", async () => {
+    const materializeSource = vi.fn();
+    const executor = new DevelopmentExecutor({
+      workspaceId: "workspace:test",
+      hostExecutionDigest: digest("9"),
+      buildSystem,
+      runRoots: runRoots(root),
+      ownership: openOwnership,
+      planSources: async (input) => (await planSources(input)).map((plan, index) =>
+        index === 2 ? { ...plan, sourceState: { kind: "event", eventId: "wrong-revision" } } : plan
+      ),
+      materializeSource,
+    });
+    await expect(executor.prepareExact({
+      session: session(),
+      runId: "run-mixed-basis",
+      recipe: developmentRecipeFixture(process.platform, process.arch),
+      pair,
+    })).rejects.toMatchObject({ code: "EREVISIONCHANGED" });
+    expect(materializeSource).not.toHaveBeenCalled();
+    await expect(fsp.stat(path.join(root, "runs"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("builds only inside the marker-owned root, strips ambient secrets, redacts logs, and publishes artifacts", async () => {
     const logs: string[] = [];
     const pnpmCli = await pnpmFixture(root, "pnpm-test", "process.exit(0);\n");
@@ -420,7 +439,7 @@ describe("DevelopmentExecutor exact private execution", () => {
       buildSystem,
       runRoots: runRoots(root),
       ownership: openOwnership,
-      planSource: async () => sourcePlan(),
+      planSources,
       async materializeSource(_source, destination) {
         await fsp.writeFile(path.join(destination, "pnpm-lock.yaml"), "lock");
         await fsp.mkdir(path.join(destination, "workspace"), { recursive: true });
@@ -501,7 +520,7 @@ describe("DevelopmentExecutor exact private execution", () => {
       buildSystem,
       runRoots: runRoots(root),
       ownership: openOwnership,
-      planSource: async () => sourcePlan(),
+      planSources,
       materializeSource: async () => {},
     });
     const pnpmCli = await pnpmFixture(root, "pnpm-test", "process.exit(0);\n");
@@ -532,7 +551,7 @@ describe("DevelopmentExecutor exact private execution", () => {
       buildSystem,
       runRoots: runRoots(root),
       ownership: openOwnership,
-      planSource: async () => sourcePlan(),
+      planSources,
       async materializeSource(_source, destination) {
         await fsp.writeFile(path.join(destination, "build.mjs"), "");
       },
@@ -569,7 +588,7 @@ describe("DevelopmentExecutor exact private execution", () => {
       buildSystem,
       runRoots: runRoots(root),
       ownership: openOwnership,
-      planSource: async () => sourcePlan(),
+      planSources,
       async materializeSource(_source, destination) {
         materializations += 1;
         if (materializations > 1) {

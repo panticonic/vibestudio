@@ -1,5 +1,5 @@
 {
-  "censusDigest": "sha256:8a68c7f58598676edcc428bbf658086b4cf9b9408d91b1e06e179ad222468366",
+  "censusDigest": "sha256:571f2b63d03046c72c3ef79c38de00cd6058220e260b01145c281c8916198f7f",
   "decisions": {
     "host:terminalApps.launch": {
       "review": "single-prepared-terminal-program-consent",
@@ -25,111 +25,75 @@
       "review": "host-only-protected-password-inventory",
       "change": "The vault receiver now admits only host principals. Workspace code cannot enumerate even password metadata; Electron uses this method only behind its host-owned credential UI and origin-bound autofill controller."
     },
-    "direct:packages/builtin/src/eval-engine/EvalDO.ts:acknowledgeRunResult": {
-      "review": "exact-owned-eval-terminal-acknowledgement",
-      "change": "Acknowledges only the exact retained run and result digests through the existing owner relationship. Commits acknowledgement before removing redelivery debt, preserves result history, and grants no execution or reset authority."
-    },
-    "direct:packages/builtin/src/eval-engine/EvalDO.ts:acquireKernelLease": {
-      "review": "host-only-eval-kernel-residency-refresh",
-      "change": "Adds a host-only, gated code-execution authority that creates or refreshes the exact EvalDO incarnation's bounded idle residency lease. The receiver validates the lease identity and duration, and no user or code principal may invoke it directly."
-    },
-    "direct:packages/builtin/src/eval-engine/EvalDO.ts:appendAuthorityEvent": {
-      "review": "host-only-eval-authority-event-ingress",
-      "change": "Adds the typed host-only write used to append one already receiver-bound authority lifecycle event to an exact eval run. It cannot choose another owner, execute code, or grant authority."
-    },
-    "direct:packages/builtin/src/eval-engine/EvalDO.ts:attachKernelLeaseHolder": {
-      "review": "host-only-eval-kernel-holder-claim",
-      "change": "Adds a host-only, gated code-execution authority that atomically claims the single held-request slot for an already-active exact kernel lease. It cannot create, widen, or extend a lease."
-    },
-    "direct:packages/builtin/src/eval-engine/EvalDO.ts:getRunEvents": {
-      "review": "host-only-bounded-eval-event-page",
-      "change": "Adds a host-only bounded cursor read of durable events for an exact EvalDO run. It performs no execution, mutation, or authority acquisition."
-    },
-    "direct:packages/builtin/src/eval-engine/EvalDO.ts:getRunReceipt": {
-      "review": "exact-owned-eval-terminal-receipt",
-      "change": "Returns the retained terminal result and immutable run/result digests for the authenticated Eval owner. A delivery hint supplies no result or authority. Nonterminal cancellation remains owned until actual cleanup ends."
-    },
-    "direct:packages/builtin/src/eval-engine/EvalDO.ts:holdKernelLease": {
-      "review": "host-only-bounded-eval-kernel-hold",
-      "change": "Adds a host-only, gated code-execution authority whose request remains held only for the exact attached lease and settles on expiry, release, or replacement. It exposes no scope data and cannot outlive the receiver-owned lease deadline."
-    },
-    "direct:packages/builtin/src/eval-engine/EvalDO.ts:listRetainedExecutionRoots": {
-      "review": "host-only-eval-execution-root-census",
-      "change": "Adds a host-only bounded read of immutable execution roots already retained by one EvalDO so the mandatory retention provider can fail closed. It exposes no eval source, result, credential, or mutation path."
-    },
-    "direct:packages/builtin/src/eval-engine/EvalDO.ts:retainExecutionRoot": {
-      "review": "host-only-exact-eval-execution-retention",
-      "change": "Adds a host-only write of one validated immutable execution artifact reference joined to its exact eval run. It cannot fabricate an artifact, widen executable authority, or delete retention."
-    },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmAdoptWorker": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmAdoptWorker": {
       "review": "host-only-alarm-worker-generation-adoption",
       "change": "Adds the explicit host scheduler generation boundary. It atomically fences prior scheduler claims and installs one exact active worker identity; elapsed time cannot transfer alarm ownership."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmClaimDue": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmClaimDue": {
       "review": "host-only-generation-fenced-alarm-claim",
       "change": "Replaces the unfenced due-alarm listing path with a bounded host-only atomic claim carrying an adopted worker identity and claim generation. Claims never expire by elapsed time."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmComplete": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmComplete": {
       "review": "exact-native-wake-claim-completion",
       "change": "Settles only the authenticated claimed alarm generation and combines acknowledgement with the actual remaining wake. Stale completion cannot erase a newer durable hint."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmListScheduled": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmListScheduled": {
       "review": "host-only-bounded-alarm-census",
       "change": "Replaces the prior due-alarm execution feed with a read-only startup census of exact scheduled Durable Object targets. It exposes no alarm payload and grants no claim or execution authority."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmSourceList": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmSourceList": {
       "review": "host-owned-native-wake-recovery-inventory",
       "change": "Lists retained source registrations for the existing host-owned alarm recovery path. It creates no registration, execution authority, or scheduler policy."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmSourcePublish": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmSourcePublish": {
       "review": "exact-native-source-schedule-publication",
       "change": "Accepts schedules only for the authenticated registered source incarnation and increasing publication generation. Null source schedules do not erase independent host wake hints."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmSourceRequest": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmSourceRequest": {
       "review": "host-owned-native-source-checkup-hint",
       "change": "Records an independently retained checkup hint for the exact registered source. It asks the source to inspect canonical native work; it cannot supply a task outcome or acquire authority."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:durableWorkOwnerList": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:durableWorkOwnerList": {
       "review": "host-only-bounded-durable-owner-scan",
       "change": "Adds the host recovery driver's bounded read of registered durable-work owners; owner-local state remains readiness authority."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityListExecutionRoots": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityListExecutionRoots": {
       "review": "host-only-sealed-entity-execution-root-census",
       "change": "Returns host-only EntityRecord execution roots retained by active entities, sealed preparing entities, and panel-history references for the mandatory retention provider. It performs no lifecycle mutation and retention grants no ordinary execution admission or outbound authority."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityPrepareExecution": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityPrepareExecution": {
       "review": "host-only-exact-preactive-clone-execution-seal",
       "change": "Seals one already reserved preparing entity to its exact runtime image and authority lifetime before receiver-owned clone initialization. Only host principals may invoke this gated internal write; preparing image retention does not admit ordinary incoming calls, outbound code authority, activation, or queue publication."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityRebindAgentChannel": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityRebindAgentChannel": {
       "review": "host-only-cloned-agent-binding-persistence",
       "change": "Adds a typed host-only write that moves one active local agent entity to an exact channel and atomically replaces its self agent-binding. The receiver accepts only Durable Object, worker, or session entities, rejects external relay identities, and grants no channel membership or caller-selected authority."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityReserve": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityReserve": {
       "review": "host-only-generic-entity-reservation",
       "change": "Generalizes the WorkspaceDO reservation write from panels to the enumerated buildable entity kinds. The host supplies the already validated immutable identity fields, and the receiver atomically creates or returns the exact reserved entity without executing code or widening caller authority."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:initializePanels": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:initializePanels": {
       "review": "host-owned-once-only-template-panel-initialization",
       "change": "Adds a host-only workspace.runtime-state.manage write that reserves template initial panels and creates their slots with one durable initialization marker in the same workspace transaction. Existing panel history is adopted without recreating user-deleted panels. The host supplies the workspace configuration; the receiver grants no user identity or execution authority, and existing sealed execution reconciliation activates the reserved panels. Hosted panel connections still require the current authenticated viewer and exact runtime lease."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:runtimeResourceBindingEntities": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:runtimeResourceBindingEntities": {
       "review": "host-only-runtime-resource-binding-lookup",
       "change": "Returns active entity ids bound to an exact resource kind and bounded id list so the runtime can apply resource-owned lifecycle events. It is a host-only read and exposes no user content or capability grant material."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:runtimeResourceBindingsForEntity": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:runtimeResourceBindingsForEntity": {
       "review": "host-only-entity-resource-binding-lookup",
       "change": "Returns the durable host-validated resource relationships already owned by one exact runtime entity so eval can recover structural panel parentage when an orchestrator, rather than the bound panel, owns the lifecycle lineage. The method is a host-only read; it creates no relationship, grants no capability, and supplies no caller-authored parent identity."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:runtimeResourceBindingsRelease": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:runtimeResourceBindingsRelease": {
       "review": "host-only-runtime-resource-binding-release",
       "change": "Deletes every durable resource relationship owned by one runtime entity. This removes authority and lifecycle coupling only; it cannot create a relationship or grant a capability."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:runtimeResourceBindingsReplace": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:runtimeResourceBindingsReplace": {
       "review": "host-only-runtime-resource-binding-commit",
       "change": "Commits the generic resource relationships already validated by runtime.createEntity into the workspace runtime registry. The method is host-only, requires runtime-state authority, accepts no executable policy, and records only entity, resource, capability, and agent-channel coordinates."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotPatchCurrentStateArgs": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotPatchCurrentStateArgs": {
       "review": "owner-serialized-current-panel-state-patch",
       "change": "Replaces whole stateArgs updates with an RFC 7386 merge patch serialized and schema-validated by the Workspace owner. Preserves runtime-state.manage and the prepared context boundary, rejects an entry or active-build conflict, and grants no navigation, cross-owner access, or website authority."
     },
@@ -625,53 +589,9 @@
       "review": "bounded-payload-free-scheduler-diagnostics",
       "change": "Adds an open, read-only bounded inspection of host durable-work counters and phase timings. It exposes no work payloads, transcript content, credentials, or mutation authority."
     },
-    "host:eval.acknowledge": {
-      "review": "owner-authenticated-eval-acknowledgement-relay",
-      "change": "Routes exact immutable run/result digest acknowledgement to its owning EvalDO. Preserves terminal history and rejects mismatched receipt identity rather than treating it as successful cleanup."
-    },
-    "host:eval.cancel": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
-    },
-    "host:eval.deleteScopeValue": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
-    },
-    "host:eval.dispose": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Adds explicit release for an EvalDO whose immutable first activation declared it finite. The receiver derives the exact object from the verified owner and subkey, rejects persistent scopes, erases the finite object's durable records and loaded runtime, and retires it through the normal sealed lifecycle and cleanup reaper. Closing this owned finite resource is open and cannot address another caller's eval state. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
-    },
-    "host:eval.events": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Adds the bounded durable cursor catch-up page for one caller-owned eval run. Live delivery remains on watched events; this read performs no execution, cancellation, reset, or authority acquisition. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
-    },
-    "host:eval.get": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Replaces the former asynchronous status method with the sole read-only recovery backstop for the caller-owned run id. The receiver derives the exact owner-scoped EvalDO from verified caller or live owner-session binding and returns only its bounded durable status, progress, and terminal result. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
-    },
-    "host:eval.readScopeTextPage": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
-    },
-    "host:eval.receipt": {
-      "review": "owner-authenticated-eval-receipt-relay",
-      "change": "Routes receipt inspection to the exact retained Eval run under the existing authenticated owner relationship. Receipt delivery never trusts a hint's result or imports foreign run ownership."
-    },
-    "host:eval.reset": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
-    },
-    "host:eval.start": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Replaces the split blocking and asynchronous public eval entry points with one gated owner-scoped acceptance method. The caller must choose the run id before transport; the receiver derives owner, context, channel binding, and execution admission from verified host state, rejects semantic replay drift, and preserves the existing EvalDO terminal push. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
-    },
-    "host:evalEventIngress.publish": {
-      "review": "sealed-eval-kernel-observability",
-      "change": "Adds a host-only internal publication path for a persisted EvalDO event. The receiver validates the nonce-bound run and re-derives owner and initiating caller before emitting to watched transports; it accepts no caller-supplied audience. Only the live sealed EvalDO may publish through the host-minted sink for its exact runtime, context, and run. Guest execution sessions cannot impersonate kernel bookkeeping. Callback lifetime is detached from the completed initiating RPC."
-    },
     "host:evalExecutionRoots.retain": {
       "review": "sealed-eval-kernel-retention",
-      "change": "Adds host-only typed lifecycle bookkeeping that retains the exact validated execution artifact for the originating eval run. It creates no executable admission, changes no workspace or user state, and cannot widen or delete retention. Retention is authenticated as the live sealed EvalDO and rechecks the exact active execution admission, run, and immutable imported artifact. Evaluated code cannot call this kernel-only bookkeeping receiver."
+      "change": "Adds host-only typed lifecycle bookkeeping that retains the exact validated execution artifact for the originating eval run. It creates no executable admission, changes no workspace or user state, and cannot widen or delete retention. Retention is authenticated as the live sealed session entity that hosts the kernel and rechecks the exact active execution admission, run, and immutable imported artifact. Evaluated code cannot call this kernel-only bookkeeping receiver."
     },
     "host:extensions.fetchRequestBodyChunk": {
       "review": "authenticated-website-extension-boundary",

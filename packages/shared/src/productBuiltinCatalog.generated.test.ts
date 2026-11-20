@@ -11,9 +11,9 @@ describe("generated product builtin catalog", () => {
   const source = "vibestudio/internal";
   it("catalogs every product-owned internal Durable Object", () => {
     expect(INTERNAL_DO_CLASSES).toEqual([
+      "WorkspaceStateDO",
       "WorkspaceDO",
       "BrowserVaultDO",
-      "EvalDO",
       "WebhookStoreDO",
     ]);
   });
@@ -22,17 +22,18 @@ describe("generated product builtin catalog", () => {
     expect(productBuiltinMethodCapability(source, "BrowserVaultDO", "listPasswordSummaries")).toBe(
       "browser-data.read"
     );
-    expect(productBuiltinMethodCapability(source, "WorkspaceDO", "entityListExecutionRoots")).toBe(
-      "workspace.runtime-state.inspect"
-    );
-    expect(productBuiltinMethodCapability(source, "EvalDO", "listRetainedExecutionRoots")).toBe(
-      "runtime.code-execution.manage"
-    );
+    expect(
+      productBuiltinMethodCapability(source, "WorkspaceStateDO", "entityListExecutionRoots")
+    ).toBe("workspace.runtime-state.inspect");
     expect(productBuiltinMethodCapability(source, "WebhookStoreDO", "create")).toBe(
       "webhooks.manage"
     );
     expect(productBuiltinMethodPolicy(source, "BrowserVaultDO", "listPasswordSummaries")).toEqual({
-      website: { kind: "closed", reason: "Browser profile data requires the browser privacy UI and cannot be exported to websites." },
+      website: {
+        kind: "closed",
+        reason:
+          "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+      },
       capability: "browser-data.read",
       tier: "gated",
       session: "family",
@@ -48,21 +49,21 @@ describe("generated product builtin catalog", () => {
   });
 
   it("does not confer builtin identity on a userland class-name collision", () => {
-    expect(productBuiltinByIdentity("workers/untrusted", "EvalDO")).toBeNull();
-    expect(productBuiltinMethodCapability("workers/untrusted", "EvalDO", "executeRun")).toBeNull();
-    expect(productBuiltinMethodPolicy("workers/untrusted", "EvalDO", "executeRun")).toBeNull();
-    expect(productBuiltinMethodRequests("workers/untrusted", "EvalDO", "executeRun")).toEqual([]);
+    expect(productBuiltinByIdentity("workers/untrusted", "WorkspaceStateDO")).toBeNull();
+    expect(
+      productBuiltinMethodCapability("workers/untrusted", "WorkspaceStateDO", "entityResolve")
+    ).toBeNull();
+    expect(
+      productBuiltinMethodPolicy("workers/untrusted", "WorkspaceStateDO", "entityResolve")
+    ).toBeNull();
+    expect(
+      productBuiltinMethodRequests("workers/untrusted", "WorkspaceStateDO", "entityResolve")
+    ).toEqual([]);
   });
 
-  it("projects outbound authority only for the active builtin method", () => {
-    expect(productBuiltinMethodRequests(source, "EvalDO", "executeRun")).toEqual([
-      {
-        capability: "external.open",
-        resource: { kind: "prefix", prefix: "" },
-      },
-    ]);
-    expect(productBuiltinMethodRequests(source, "EvalDO", "listRetainedExecutionRoots")).toEqual(
-      []
-    );
+  it("projects no outbound authority for a product method: eval is hosted code, not a product class", () => {
+    expect(productBuiltinMethodRequests(source, "EvalDO", "executeRun")).toEqual([]);
+    expect(productBuiltinByIdentity(source, "EvalDO")).toBeNull();
+    expect(productBuiltinMethodRequests(source, "WorkspaceStateDO", "entityResolve")).toEqual([]);
   });
 });

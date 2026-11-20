@@ -16,12 +16,12 @@ export const evalExecutionRootsMethods = defineServiceMethods({
       residency: "untrusted-execution",
       family: "evalExecutionRoots.control",
       rationale:
-        "Sealed eval kernel bookkeeping; exact live EvalDO/run admission and immutable artifact identity are re-derived and verified",
+        "Sealed eval kernel bookkeeping; exact live eval kernel/run admission and immutable artifact identity are re-derived and verified",
     },
     args: z.tuple([z.string().min(1), z.string().min(1), executionArtifactRefSchema]),
     returns: z.object({ retained: z.literal(true) }).strict(),
     description:
-      "Internal host-journaled acceptance of an immutable workspace bundle retained by an EvalDO.",
+      "Internal host-journaled acceptance of an immutable workspace bundle retained by an eval kernel.",
     // Retention is lifecycle bookkeeping for an already admitted immutable
     // build. It changes no workspace/user state and must not make an otherwise
     // read-only eval fail while its imports are rooted for execution GC.

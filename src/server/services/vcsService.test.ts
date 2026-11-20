@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { sha256HexSyncText } from "@vibestudio/content-addressing";
 import {
   createVerifiedCaller,
   ServiceDispatcher,
@@ -19,7 +20,7 @@ import type {
   WorkspaceSemanticOutput,
   WorkspaceVcs,
 } from "../vcsHost/workspaceVcs.js";
-import { createVcsService } from "./vcsService.js";
+import { createVcsService, type VcsServiceDeps } from "./vcsService.js";
 import { gadWireMethods } from "@vibestudio/service-schemas/workspaceSource";
 import type { RpcCausalParent } from "@vibestudio/rpc";
 
@@ -63,6 +64,7 @@ function service(options?: {
   result?: unknown;
   failure?: unknown;
   relayBinding?: { entityId: string; contextId: string; channelId: string };
+  resolveActive?: NonNullable<VcsServiceDeps["entityCache"]>["resolveActive"];
   referencesReachable?:
     | boolean
     | ((
@@ -82,6 +84,7 @@ function service(options?: {
     input: { contextId: string; sourceDeltaId: string }
   ) => Promise<void>;
   onEpochTransitionPublished?: () => void;
+  participantWorkspace?: VcsServiceDeps["participantWorkspace"];
 }) {
   const semanticCall = vi.fn<WorkspaceVcs["semanticCausalCall"]>(
     async <M extends WorkspaceSemanticMethod>(
@@ -120,6 +123,7 @@ function service(options?: {
     return (options?.result ?? { contextId: "context:own" }) as WorkspaceSemanticOutput<"vcsPush">;
   });
   const definition = createVcsService({
+    participantWorkspace: options?.participantWorkspace,
     workspaceVcs: {
       semanticCausalCall: semanticCall,
       semanticPublishCall,
@@ -133,10 +137,10 @@ function service(options?: {
     },
     entityCache: {
       resolveContext: () => options?.context ?? null,
-      resolveActive: (id: string) =>
+      resolveActive: options?.resolveActive ?? ((id: string) =>
         options?.relayBinding
           ? ({ id, status: "active", agentBinding: options.relayBinding } as never)
-          : null,
+          : null),
     },
     listOwnedContexts: async () => ({ contexts: options?.owned ?? [] }),
     ...(options?.testPolicyForContext
@@ -158,6 +162,260 @@ function service(options?: {
 }
 
 describe("canonical vcsService", () => {
+  it("uses the admitted participant copy for exact reads and protected writes", async () => {
+    const caller = createVerifiedCaller("worker:reader", "worker", null, null, {
+      userId: "user:owner",
+      handle: "owner",
+    });
+    const ctx = { ...workerContext(), caller };
+    const canonical = {
+      source: "workers/workspace-source",
+      className: "GadHistoryDO",
+      objectKey: "canonical",
+    };
+    const identity = JSON.stringify(["user", "user:owner", caller.runtime.id, "context:own"]);
+    const owner = { ...canonical, objectKey: `work-${sha256HexSyncText(identity)}` };
+    const dispatch = vi.fn().mockResolvedValue(true);
+    const scope = {
+      dispatch: { dispatch },
+      canonical,
+      owner,
+      caller,
+      contextId: "context:own",
+      ownerContextId: "context:own",
+      workingHead: "native-head",
+    };
+    const saved = {
+      contextId: scope.contextId,
+      event: EVENT,
+      committedApplicationIds: [],
+      integrationSourceEventIds: [],
+    };
+    const published = {
+      contextId: scope.contextId,
+      eventId: EVENT.eventId,
+      mainEventId: EVENT.eventId,
+      effectId: "effect:push",
+      appliedAt: 1,
+    };
+    const workspace = {
+      participantHistoryAttached: true,
+      openParticipantScope: vi.fn().mockResolvedValue(scope),
+      readParticipantMain: vi.fn().mockResolvedValue(EVENT),
+      editParticipantContext: vi.fn(),
+      transferParticipantContext: vi.fn(),
+      revertParticipantContext: vi.fn(),
+      importParticipantSnapshot: vi.fn(),
+      registerParticipantExternalDelta: vi.fn(),
+      setParticipantExternalDeltaStatus: vi.fn(),
+      saveParticipantContext: vi.fn().mockResolvedValue(saved),
+      discardParticipantContext: vi.fn().mockResolvedValue({
+        contextId: scope.contextId,
+        workingHead: EVENT,
+        discardedApplicationIds: ["old-application"],
+      }),
+      publishParticipantContext: vi.fn().mockResolvedValue(published),
+      readParticipantFiles: vi.fn().mockResolvedValue([null]),
+      readParticipantMemory: vi.fn(),
+      walkParticipantHistory: vi.fn(),
+      queryParticipantHistory: vi.fn(),
+      searchParticipantHistory: vi.fn().mockResolvedValue({
+        text: "retained provenance", indexMode: "scan", hits: [], truncated: false,
+      }),
+      reviewParticipantMerge: vi.fn(),
+      mergeParticipantContext: vi.fn(),
+    };
+    const onEpochTransitionPublished = vi.fn();
+    const { definition, semanticCall, semanticPublishCall, semanticEpochTransitionPublishCall } = service({
+      context: scope.contextId,
+      participantWorkspace: workspace,
+      onEpochTransitionPublished,
+    });
+    await expect(
+      definition.handler(ctx, "status", [{ contextId: "context:foreign" }])
+    ).rejects.toMatchObject({ code: "EACCES" });
+    await expect(definition.handler(ctx, "mainState", [])).resolves.toEqual(EVENT);
+    expect(workspace.openParticipantScope).not.toHaveBeenCalled();
+
+    const file = { repositoryId: "repo:one", file: { kind: "path", path: "hello.txt" } };
+    await expect(
+      definition.handler(ctx, "readFile", [{ state: EVENT, ...file }])
+    ).resolves.toBeNull();
+    expect(workspace.openParticipantScope).toHaveBeenCalledWith({
+      caller,
+      contextId: scope.contextId,
+      ownerContextId: scope.contextId,
+    });
+    expect(dispatch).toHaveBeenCalledWith(owner, "readHistoryReferenceVisibility", {
+      contextIds: [scope.contextId],
+      references: [EVENT],
+    });
+    expect(workspace.readParticipantFiles).toHaveBeenCalledWith({
+      ...scope,
+      read: { state: EVENT, files: [file] },
+    });
+    dispatch.mockResolvedValueOnce(false);
+    await expect(
+      definition.handler(ctx, "readFile", [{ state: EVENT, ...file }])
+    ).rejects.toMatchObject({ code: "EINVAL" });
+    expect(workspace.readParticipantFiles).toHaveBeenCalledOnce();
+
+    const childContext = "context:child";
+    const childState = { kind: "application", applicationId: "child-edit" };
+    const { definition: withChild } = service({
+      context: scope.contextId,
+      owned: [{ contextId: childContext, kind: "lifecycle", ownerEntityId: caller.runtime.id }],
+      participantWorkspace: workspace,
+    });
+    dispatch.mockResolvedValueOnce(true).mockResolvedValueOnce(childContext);
+    await expect(withChild.handler(ctx, "readFile", [{ state: childState, ...file }])).resolves.toBeNull();
+    expect(dispatch).toHaveBeenLastCalledWith(owner, "readHistoryReferenceContext", {
+      contextIds: [scope.contextId, childContext], reference: childState,
+    });
+    expect(workspace.readParticipantFiles).toHaveBeenLastCalledWith({
+      ...scope, contextId: childContext, read: { state: childState, files: [file] },
+    });
+    dispatch.mockResolvedValueOnce(true).mockResolvedValueOnce("context:unrelated");
+    await expect(withChild.handler(ctx, "readFile", [{ state: childState, ...file }])).rejects.toThrow(
+      "selected an unauthorized context"
+    );
+
+    const neighbors = { root: EVENT, limit: 2 };
+    const page = { root: EVENT, edges: [], nextCursor: null };
+    dispatch.mockResolvedValueOnce(true).mockResolvedValueOnce(page);
+    await expect(definition.handler(ctx, "neighbors", [neighbors])).resolves.toEqual(page);
+    expect(dispatch).toHaveBeenCalledWith(owner, "readHistoryNeighbors", {
+      contextId: scope.contextId, neighbors,
+    });
+    const blame = { state: EVENT, repositoryId: "repo:one", fileId: "file:one", range: { start: 0, end: 0 }, limit: 1 };
+    const lineage = { state: EVENT, fileId: blame.fileId, coordinateKind: "utf16", spans: [], nextCursor: null };
+    dispatch.mockResolvedValueOnce(true).mockResolvedValueOnce(lineage);
+    await expect(definition.handler(ctx, "blame", [blame])).resolves.toEqual(lineage);
+    expect(dispatch).toHaveBeenCalledWith(owner, "readHistoryBlame", { contextId: scope.contextId, blame });
+    const history = { root: EVENT, direction: "past", limit: 2 };
+    const timeline = { root: EVENT, entries: [], nextCursor: null };
+    dispatch.mockResolvedValueOnce(true).mockResolvedValueOnce(timeline);
+    await expect(definition.handler(ctx, "history", [history])).resolves.toEqual(timeline);
+    expect(dispatch).toHaveBeenCalledWith(owner, "readHistoryTimeline", { contextId: scope.contextId, history });
+
+    const query = { contextId: scope.contextId, query: "SELECT * FROM prov_work_units", limit: 2 };
+    const rows = { schemaVersion: 1, state: EVENT, columns: [], rows: [], rowsRead: 0, truncated: false, refusal: null };
+    workspace.queryParticipantHistory.mockResolvedValue(rows);
+    await expect(withChild.handler(ctx, "query", [
+      { ...query, visibilityContextIds: ["context:unrelated"] },
+    ])).resolves.toEqual(rows);
+    expect(workspace.queryParticipantHistory).toHaveBeenCalledWith({
+      ...scope, query: { ...query, visibilityContextIds: [childContext, scope.contextId] },
+    });
+
+    const walk = { contextId: scope.contextId, walk: "cause", subject: EVENT, limit: 2 };
+    const walked = { walk: "cause", subject: EVENT, scope: null, entries: [], omitted: [], notes: [], nextCursor: null };
+    workspace.walkParticipantHistory.mockResolvedValue(walked);
+    dispatch.mockResolvedValueOnce(true);
+    await expect(withChild.handler(ctx, "walk", [
+      { ...walk, visibilityContextIds: ["context:unrelated"] },
+    ])).resolves.toEqual(walked);
+    expect(workspace.walkParticipantHistory).toHaveBeenCalledWith({
+      ...scope, walk: { ...walk, scope: "turn", visibilityContextIds: [childContext, scope.contextId] },
+    });
+
+    const memory = {
+      contextId: scope.contextId, path: "projects/one/file.txt",
+      expectedContentHash: "a".repeat(64), range: { start: 0, end: 1 },
+    };
+    const unmanaged = { status: "unmanaged", path: memory.path };
+    workspace.readParticipantMemory.mockResolvedValue(unmanaged);
+    await expect(definition.handler(ctx, "readMemory", [memory])).resolves.toEqual(unmanaged);
+    expect(workspace.readParticipantMemory).toHaveBeenCalledWith({
+      ...scope, memory: { ...memory, episodeLimit: 4, historyLimit: 3 },
+    });
+    await expect(definition.handler(ctx, "readMemory", [
+      { ...memory, contextId: "context:unrelated" },
+    ])).rejects.toMatchObject({ code: "EACCES" });
+    expect(workspace.readParticipantMemory).toHaveBeenCalledTimes(1);
+
+    const search = { contextId: scope.contextId, text: "retained provenance", limit: 2 };
+    await expect(withChild.handler(ctx, "search", [
+      { ...search, visibilityContextIds: ["context:unrelated"] },
+    ])).resolves.toEqual({
+      text: search.text, indexMode: "scan", hits: [], truncated: false,
+    });
+    expect(workspace.searchParticipantHistory).toHaveBeenCalledWith({
+      ...scope, search: { ...search, visibilityContextIds: [childContext, scope.contextId] },
+    });
+
+    const discard = {
+      contextId: scope.contextId,
+      commandId: "command:discard",
+      expectedWorkingHead: { kind: "application", applicationId: "old-application" },
+    };
+    dispatch.mockResolvedValueOnce(false).mockResolvedValueOnce(false);
+    await expect(definition.handler(ctx, "discard", [discard])).rejects.toMatchObject({
+      code: "EINVAL",
+    });
+    expect(workspace.discardParticipantContext).not.toHaveBeenCalled();
+    dispatch.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    await expect(definition.handler(ctx, "discard", [discard])).resolves.toMatchObject({
+      discardedApplicationIds: ["old-application"],
+    });
+    expect(dispatch).toHaveBeenCalledWith(owner, "hasHistoryDiscardReceipt", {
+      discard,
+      cause: { parent: null },
+    });
+
+    const commit = {
+      contextId: scope.contextId,
+      commandId: "command:commit",
+      expectedWorkingHead: EVENT,
+    };
+    await expect(definition.handler(ctx, "commit", [commit])).resolves.toEqual(saved);
+    expect(workspace.saveParticipantContext).toHaveBeenCalledWith({
+      ...scope,
+      head: scope.workingHead,
+      cause: { parent: null },
+      commit,
+    });
+    const source = { kind: "event", eventId: "event:shared" };
+    const merge = { ...commit, commandId: "command:merge", source };
+    const work = { status: "working", contextId: scope.contextId };
+    workspace.mergeParticipantContext.mockResolvedValue({ result: work });
+    await expect(definition.handler(ctx, "merge", [merge])).resolves.toEqual(work);
+    expect(workspace.mergeParticipantContext).toHaveBeenCalledWith({
+      ...scope,
+      cause: { parent: null },
+      readableContextIds: ["context:own"],
+      merge,
+    });
+    const push = {
+      contextId: scope.contextId,
+      commandId: "command:push",
+      expectedCommittedEventId: EVENT.eventId,
+      expectedMainEventId: "event:main",
+    };
+    await expect(definition.handler(ctx, "push", [push])).resolves.toEqual(published);
+    expect(workspace.publishParticipantContext).toHaveBeenCalledWith({
+      ...scope,
+      push,
+      gateContext: { kind: "caller", caller },
+    });
+    expect(onEpochTransitionPublished).not.toHaveBeenCalled();
+    const epochPush = { ...push, commandId: "command:participant-epoch" };
+    const failure = new Error("foreign candidate rejected");
+    workspace.publishParticipantContext.mockRejectedValueOnce(failure);
+    await expect(definition.handler(ctx, "push", [{ ...epochPush, epochTransition: true }])).rejects.toBe(failure);
+    expect(onEpochTransitionPublished).not.toHaveBeenCalled();
+    await expect(definition.handler(ctx, "push", [{ ...epochPush, epochTransition: true }])).resolves.toEqual(published);
+    expect(workspace.publishParticipantContext).toHaveBeenLastCalledWith({
+      ...scope,
+      push: epochPush,
+      gateContext: { kind: "caller", caller, epochTransition: true },
+    });
+    expect(onEpochTransitionPublished).toHaveBeenCalledOnce();
+    expect(semanticCall).not.toHaveBeenCalled();
+    expect(semanticPublishCall).not.toHaveBeenCalled();
+    expect(semanticEpochTransitionPublishCall).not.toHaveBeenCalled();
+  });
+
   it("keeps installation provenance restricted to reviewed source consumers", async () => {
     const { definition, semanticPublishCall } = service({ context: "context:own" });
     await expect(
@@ -312,7 +570,7 @@ describe("canonical vcsService", () => {
       },
     });
     const ctx: ServiceContext = {
-      caller: createVerifiedCaller("do:EvalDO:one", "do"),
+      caller: createVerifiedCaller("do:SessionDO:one", "do"),
       causalParent: {
         kind: "trajectory-invocation",
         ...trajectory,
@@ -388,6 +646,36 @@ describe("canonical vcsService", () => {
         commandId: "command:discard-child",
       },
     ]);
+    expect(semanticCall).toHaveBeenCalledOnce();
+  });
+
+  it("recognizes the exact lifecycle owner through its live eval admission", async () => {
+    const callerId = "do:workers/session:SessionDO:executor";
+    const ownerId = "session:owner";
+    const { definition, semanticCall } = service({
+      context: "context:own",
+      resolveActive: (id) => id === callerId ? {
+        id, kind: "do", className: "SessionDO", key: "executor",
+        source: { repoPath: "workers/session", effectiveVersion: "build:one" },
+        contextId: "context:own", parentId: ownerId, createdAt: 1, status: "active",
+        cleanupComplete: true,
+      } : null,
+      owned: [{ contextId: "context:child", kind: "lifecycle", ownerEntityId: ownerId }],
+    });
+    const caller = createVerifiedCaller(callerId, "do");
+    const discardArgs = [{
+      contextId: "context:child", expectedWorkingHead: EVENT, commandId: "command:discard-child",
+    }];
+    const ctx = { caller, authorization: INTERNAL_AUTHORIZATION };
+    await expect(definition.handler(ctx, "discard", discardArgs)).rejects.toThrow(/outside the caller's authority/);
+    const admitted = (contextId: string) => ({
+      ...ctx, caller: {
+        ...caller,
+        executionSession: { contextId, executor: { runtimeId: callerId } } as NonNullable<typeof caller.executionSession>,
+      },
+    });
+    await expect(definition.handler(admitted("context:other"), "discard", discardArgs)).rejects.toThrow(/outside the caller's authority/);
+    await definition.handler(admitted("context:own"), "discard", discardArgs);
     expect(semanticCall).toHaveBeenCalledOnce();
   });
 

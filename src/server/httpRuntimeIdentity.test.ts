@@ -5,17 +5,17 @@ describe("resolveHttpRuntimeCaller", () => {
   it("projects a class-scoped Durable Object service bearer to its concrete object", () => {
     expect(
       resolveHttpRuntimeCaller(
-        "do-service:vibestudio/internal:EvalDO",
+        "do-service:workers/session:SessionDO",
         "worker",
-        "do:vibestudio/internal:EvalDO:owner-1"
+        "do:workers/session:SessionDO:owner-1"
       )
-    ).toBe("do:vibestudio/internal:EvalDO:owner-1");
+    ).toBe("do:workers/session:SessionDO:owner-1");
   });
 
   it("does not let a service bearer cross a source or class boundary", () => {
     expect(() =>
       resolveHttpRuntimeCaller(
-        "do-service:vibestudio/internal:EvalDO",
+        "do-service:workers/session:SessionDO",
         "worker",
         "do:vibestudio/internal:WorkspaceDO:owner-1"
       )
@@ -25,9 +25,9 @@ describe("resolveHttpRuntimeCaller", () => {
   it("rejects a class identity with no concrete object key", () => {
     expect(() =>
       resolveHttpRuntimeCaller(
-        "do-service:vibestudio/internal:EvalDO",
+        "do-service:workers/session:SessionDO",
         "worker",
-        "do:vibestudio/internal:EvalDO:"
+        "do:workers/session:SessionDO:"
       )
     ).toThrow(/cannot act as/);
   });

@@ -1,3 +1,4 @@
+import { vcsReadMemoryCauseSchema, vcsTrajectoryInvocationRefSchema } from "@vibestudio/service-schemas/vcs";
 import type { RpcCausalParent } from "@vibestudio/rpc";
 import type {
   InitializeExactWorkspaceSnapshotInput,
@@ -6,7 +7,23 @@ import type {
 import type { DODispatch } from "./doDispatch.js";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
-import { GadJsonRecordSchema, gadWireMethods } from "@vibestudio/service-schemas/workspaceSource";
+import {
+  GadJsonRecordSchema,
+  HistoryQueryCausesSchema,
+  HistoryQueryTrajectorySchema,
+  type HistoryQueryTrajectory,
+  type HistorySearchCause,
+  HistoryTrajectorySearchInputSchema,
+  HistoryTrajectorySearchMatchesSchema,
+  HistoryWalkCohortSchema,
+  HistoryWalkInvocationsSchema,
+  HistoryWalkPageSchema,
+  type HistoryWalkCohort,
+  type HistoryWalkInvocation,
+  type HistoryWalkPage,
+  gadWireMethods,
+  type HistoryTrajectorySearchInput,
+} from "@vibestudio/service-schemas/workspaceSource";
 import { WorkspaceTemplateInstallationSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import {
@@ -17,11 +34,29 @@ import {
   nativeInvocationIdentitySchema,
 } from "@vibestudio/service-schemas/nativeInvocation";
 import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
+import type { HistoryCommitMemoryIndex } from "./vcsHost/workspaceHistoryHost.js";
 
 export interface WorkspaceSourceProviderRef {
   source: string;
   className: string;
   objectKey: string;
+}
+
+/** Share only an outstanding read of the same canonical original input.
+ * Each ingress still inspects its native task and rechecks its runtime owner.
+ * Neither successful evidence nor failures survive the read's settlement. */
+export function createCausalEnvelopeReader(
+  read: (ref: WorkspaceSourceProviderRef, envelopeId: string) => Promise<unknown>
+): (ref: WorkspaceSourceProviderRef, envelopeId: string) => Promise<unknown> {
+  const pending = new Map<string, Promise<unknown>>();
+  return (ref, envelopeId) => {
+    const key = canonicalJson([ref.source, ref.className, ref.objectKey, envelopeId]);
+    const existing = pending.get(key);
+    if (existing) return existing;
+    const flight = read(ref, envelopeId).finally(() => pending.delete(key));
+    pending.set(key, flight);
+    return flight;
+  };
 }
 
 /**
@@ -78,7 +113,7 @@ type SemanticWireMethodName =
   | "vcsReadFiles"
   | "vcsListDirectory"
   | "vcsListFiles";
-export type WorkspaceSemanticPort = Pick<WorkspaceSemanticClient, SemanticWireMethodName> & {
+export type WorkspaceSemanticPort = Pick<WorkspaceSemanticClient, SemanticWireMethodName> & HistoryCommitMemoryIndex & {
   contentGcRoots: WorkspaceSemanticClient["vcsContentGcRoots"];
   referencesReachable: WorkspaceSemanticClient["vcsReferencesReachable"];
   listContexts: WorkspaceSemanticClient["vcsListContexts"];
@@ -97,6 +132,13 @@ export type WorkspaceSemanticPort = Pick<WorkspaceSemanticClient, SemanticWireMe
   appendLogEvent: WorkspaceSemanticClient["appendLogEvent"];
   getLogEvent: WorkspaceSemanticClient["getLogEvent"];
   inspectInvocationState: WorkspaceSemanticClient["inspectInvocationState"];
+  readHistoryMemoryCause(input: ReturnType<typeof vcsTrajectoryInvocationRefSchema.parse>):
+    Promise<ReturnType<typeof vcsReadMemoryCauseSchema.parse> | null>;
+  readHistoryWalkInvocation(input: HistoryWalkInvocation): Promise<HistoryWalkPage>;
+  readHistoryWalkCohortInvocations(input: HistoryWalkCohort): Promise<HistoryWalkInvocation[]>;
+  readHistoryQueryTrajectory(causes: readonly HistorySearchCause[]): Promise<HistoryQueryTrajectory>;
+  searchHistoryTrajectory(input: HistoryTrajectorySearchInput):
+    Promise<import("@vibestudio/service-schemas/vcs").VcsSearchHit[]>;
 };
 type RawWorkspaceSourceSemanticDispatchResult = Awaited<
   ReturnType<WorkspaceSemanticClient[SemanticWireMethodName]>
@@ -182,6 +224,35 @@ export function createWorkspaceSemanticPort(
     appendLogEvent: (input) => client.appendLogEvent(input),
     getLogEvent: (input) => client.getLogEvent(input),
     inspectInvocationState: (input) => client.inspectInvocationState(input),
+    readHistoryMemoryCause: async (input) => vcsReadMemoryCauseSchema.nullable().parse(
+      await dispatch.dispatch(provider, "readHistoryMemoryCause", vcsTrajectoryInvocationRefSchema.parse(input)),
+    ),
+    readHistoryWalkInvocation: async (input) => HistoryWalkPageSchema.parse(
+      await dispatch.dispatch(provider, "readHistoryWalkInvocation", vcsTrajectoryInvocationRefSchema.parse(input)),
+    ),
+    readHistoryWalkCohortInvocations: async (input) => HistoryWalkInvocationsSchema.parse(
+      await dispatch.dispatch(provider, "readHistoryWalkCohortInvocations", HistoryWalkCohortSchema.parse(input)),
+    ),
+    readHistoryQueryTrajectory: async (causes) => HistoryQueryTrajectorySchema.parse(
+      await dispatch.dispatch(provider, "readHistoryQueryTrajectory", HistoryQueryCausesSchema.parse(causes)),
+    ),
+    recordHistoryCommitMemory: async (document) => {
+      if (await dispatch.dispatch(provider, "recordHistoryCommitMemory", document) !== true)
+        throw new Error("Workspace recall did not record the published event");
+    },
+    readHistoryCommitMemoryIndex: async () => {
+      const marker = await dispatch.dispatch(provider, "readHistoryCommitMemoryIndex");
+      if (marker !== null && typeof marker !== "string")
+        throw new Error("Workspace recall returned an invalid commit memory marker");
+      return marker;
+    },
+    recordHistoryCommitMemoryPage: async (page) => {
+      if (await dispatch.dispatch(provider, "recordHistoryCommitMemoryPage", page) !== true)
+        throw new Error("Workspace recall did not advance its commit memory index");
+    },
+    searchHistoryTrajectory: async (input) => HistoryTrajectorySearchMatchesSchema.parse(
+      await dispatch.dispatch(provider, "searchHistoryTrajectory", HistoryTrajectorySearchInputSchema.parse(input)),
+    ),
   } satisfies WorkspaceSemanticPort;
 }
 

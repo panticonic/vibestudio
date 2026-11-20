@@ -16,7 +16,7 @@ flow. This is separate from the server's content-addressed
 | `pnpm server`                            | Run the already-built standalone `dist/server.mjs`.                                                                                 |
 | `pnpm server:live`                       | Run `src/server/index.ts`; callers must first build source-server prerequisites.                                                    |
 | `node build.mjs --source-server-prereqs` | Rebuild infrastructure packages, `dist/headless-host`, browser transport, and the embedded internal DO for live source-server runs. |
-| `node build.mjs --internal-do-only`      | Rebuild the catalog-derived per-class programs in `dist/internal-do-programs.json`.                                                 |
+| `node build.mjs --runtime-app-only`      | Rebuild the runtime application (router, worker host, UniversalDO, product classes) in `dist/runtime-app.json`.                      |
 
 The CLI's live-server launcher runs `--source-server-prereqs` automatically so
 source host code does not run with stale RPC, headless-host, or internal-DO

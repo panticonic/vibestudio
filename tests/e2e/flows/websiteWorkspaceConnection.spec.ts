@@ -78,13 +78,20 @@ test("website SDK requires explicit connection and retires access on document re
       const runId = crypto.randomUUID();
       const scope = { key: 'website-authority-acceptance', lifecycle: 'finite' };
       const code = "const runtime = await import('@workspace/runtime'); const entries = await runtime.services.docs.listSurfaces(); let closed = false; try { await runtime.services.websiteHosting.list(); } catch (error) { closed = /closed to websites/.test(error.message); } return { discovered: Array.isArray(entries), closed };";
-      await callMain('eval.start', { runId, scope, source: { kind: 'inline', code } });
-      for (let attempt = 0; attempt < 120; attempt++) {
-        const state = await callMain('eval.get', { runId, scopeKey: scope.key });
-        if (state.result) return 'eval:' + JSON.stringify(state.result);
-        await new Promise(resolve => setTimeout(resolve, 500));
+      // Dynamic code is admitted by the host and run by the entity that hosts it: the website starts the run on
+      // that entity and pulls its committed result (docs/dolt-redesign.md §7.5), then releases the admission.
+      const hosted = name => ({ name, invoke: (args, dispatch) => dispatch(args), parseArgs: async args => args });
+      const admission = await callMain('dynamicCode.admit', { runId, scope, source: { kind: 'inline', code } });
+      try {
+        await rpc.call(admission.hostId, hosted('start'), [admission.start, admission.nonce]);
+        for (let attempt = 0; attempt < 120; attempt++) {
+          const state = await rpc.call(admission.hostId, hosted('await'), [runId, { waitMs: 1000 }]);
+          if (state.result) return 'eval:' + JSON.stringify(state.result);
+        }
+        throw new Error('Scoped eval did not settle');
+      } finally {
+        await callMain('dynamicCode.release', { runId, hostId: admission.hostId }).catch(() => undefined);
       }
-      throw new Error('Scoped eval did not settle');
     });
     document.querySelector('#inspect').onclick = () => attempt(async () => { const result = await templates.inspect({ pin: templatePin }); return 'inspected:' + result.pin.commit; });
     document.querySelector('#create').onclick = () => attempt(async () => { const result = await workspaces.create({ operationId, workspace: 'website-installation-acceptance', rootTemplate: templatePin }); sessionStorage.setItem('createdWorkspaceId', result.workspaceId); return 'created:' + result.workspaceId; });

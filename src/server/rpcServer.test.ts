@@ -919,7 +919,7 @@ describe("RpcServer relay behavior", () => {
     const { server } = createServer();
     await expect(
       testServer(server).relayCall(
-        "do:workers/eval:EvalDO:eval",
+        "do:workers/session:SessionDO:eval",
         "do",
         {
           kind: "durable-object",
@@ -1197,7 +1197,7 @@ describe("RpcServer relay behavior", () => {
   it("retains the immediate artifact author separately from the root initiator in one live parent", () => {
     const { server } = createServer();
     const root = createVerifiedCaller("agent:root", "agent");
-    const immediate = createVerifiedCaller("do:vibestudio/internal:EvalDO:one", "do");
+    const immediate = createVerifiedCaller("do:workers/session:SessionDO:one", "do");
     const receiver = createVerifiedCaller("do:workers/missions:MissionsDO:workspace", "do");
     const nonce = "verified-parent-artifact-author";
     const release = testServer(server).beginAuthorityParent(
@@ -1238,7 +1238,7 @@ describe("RpcServer relay behavior", () => {
   it("preserves the exact invoking author at the HTTP unary dispatch boundary", async () => {
     const { server, entityCache } = createServer();
     const root = createVerifiedCaller("agent:root", "agent");
-    const immediate = createVerifiedCaller("do:vibestudio/internal:EvalDO:author", "do");
+    const immediate = createVerifiedCaller("do:workers/session:SessionDO:author", "do");
     const receiverId = "do:workers/missions:MissionsDO:workspace";
     entityCache._onActivate(makeRecord(receiverId, "do", { repoPath: "workers/missions" }));
     const nonce = "http-unary-artifact-author-parent";
@@ -3242,10 +3242,10 @@ describe("RpcServer relay behavior", () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({}), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
-    // A connectionless DO participant (e.g. an EvalDO subscribed to a channel via
+    // A connectionless DO participant (e.g. an internal DO subscribed to a channel via
     // connectViaRpc) holds NO ws connection. Pre-fix, this event was silently dropped
     // (getCallerConnections empty → the WS loop no-ops), hanging the subscriber.
-    handleRoute(server, createClient(), "do:vibestudio/internal:EvalDO:k", {
+    handleRoute(server, createClient(), "do:vibestudio/internal:WebhookStoreDO:k", {
       type: "event",
       fromId: "panel:nav-a",
       event: "channel:message",
@@ -3255,7 +3255,7 @@ describe("RpcServer relay behavior", () => {
     // Fire-and-forget HTTP delivery — assert the postToDO actually happened.
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
     const [url, init] = fetchMock.mock.calls[0]!;
-    expect(String(url)).toContain("EvalDO");
+    expect(String(url)).toContain("WebhookStoreDO");
     const body = String((init as RequestInit | undefined)?.body ?? "");
     expect(body).toContain("channel:message");
     expect(body).toContain("world");
@@ -3616,7 +3616,7 @@ describe("RpcServer relay behavior", () => {
         caller,
         ref: {
           source: "vibestudio/internal",
-          className: "WorkspaceDO",
+          className: "WorkspaceStateDO",
           objectKey: "workspace",
         },
         method: "slotMove",
@@ -3626,7 +3626,7 @@ describe("RpcServer relay behavior", () => {
     expect(resolveProductBuiltinPreparedAuthority).toHaveBeenCalledWith(
       expect.objectContaining({
         source: "vibestudio/internal",
-        className: "WorkspaceDO",
+        className: "WorkspaceStateDO",
         method: "slotMove",
         contextBoundary: { operation: "movePanel", targetArgument: 0 },
       })
@@ -3668,7 +3668,7 @@ describe("RpcServer relay behavior", () => {
     await testServer(server).directDOAuthorization({
       caller: extension,
       authorizingCaller: initiator,
-      ref: { source: "vibestudio/internal", className: "WorkspaceDO", objectKey: "workspace" },
+      ref: { source: "vibestudio/internal", className: "WorkspaceStateDO", objectKey: "workspace" },
       method: "slotMove",
       args: ["slot-a", "slot-b"],
     });
@@ -3988,6 +3988,52 @@ describe("RpcServer relay behavior", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
+  it("attests native recall causes after workspace service admission", async () => {
+    const causes = [["log:reader", "main", "invocation:reader"]] as [string, string, string][];
+    const workspaceRecallCauses = vi.fn(async () => causes);
+    const { server, entityCache } = createServer({
+      workspaceRecallCauses,
+      resolveWorkspaceDirectAuthority: async () => [
+        {
+          capability: "workspace-service:gad.workspace",
+          serviceBinding: "declared",
+          methodEffect: { kind: "open" },
+          methodTier: "open",
+          principals: ["code"],
+          presentation: { domain: "automation", verb: "manage" },
+          title: "Workspace data",
+          action: "read workspace memory",
+          declaredBy: "workers/workspace-source",
+        },
+      ],
+    });
+    const ref = { source: "workers/workspace-source", className: "GadWorkspaceDO", objectKey: "workspace" };
+    const args = [{ query: "remember" }];
+    const caller = createVerifiedCaller("do:workers/history-reader:Reader:reader", "do", {
+      callerId: "do:workers/history-reader:Reader:reader",
+      callerKind: "do",
+      repoPath: "workers/history-reader",
+      effectiveVersion: "ev-reader",
+      executionDigest: "a".repeat(64),
+      requested: [{ capability: "workspace-service:gad.workspace", resource: { kind: "prefix", prefix: "" } }],
+    }, {
+      entityId: "entity:reader", contextId: "context:reader", channelId: "channel:reader",
+    });
+    entityCache._onActivate(makeRecord(caller.runtime.id, "do", {
+      repoPath: "workers/history-reader",
+      effectiveVersion: "ev-reader",
+    }));
+    const authorize = (method: string) =>
+      testServer(server).directDOAuthorization({ caller, ref, method, args });
+    await expect(authorize("otherRead")).resolves.toMatchObject({
+      context: expect.not.objectContaining({ workspaceRecallCauses: expect.anything() }),
+    });
+    await expect(authorize("recallMemory")).resolves.toMatchObject({
+      context: { workspaceRecallCauses: causes },
+    });
+    expect(workspaceRecallCauses).toHaveBeenCalledExactlyOnceWith(ref, caller, args, undefined);
+  });
+
   it("treats a declared-for workspace-service binding as wiring only for named units", async () => {
     const request = vi.fn(() => ({
       acquisitionId: "acq:flowboard-store",
@@ -4068,7 +4114,7 @@ describe("RpcServer relay behavior", () => {
   it("preserves admitted test-session policy in direct workspace-service acquisitions", async () => {
     const request = vi.fn(() => ({
       acquisitionId: "acq:test-models",
-      ownerRuntimeId: "do:vibestudio/internal:EvalDO:test-run",
+      ownerRuntimeId: "do:workers/session:SessionDO:test-run",
       snapshotDigest: "d".repeat(64),
       capability: "workspace-service:models",
       resourceKey: "do:workers/model-settings:ModelSettingsDO:workspace-model-settings",
@@ -4101,7 +4147,7 @@ describe("RpcServer relay behavior", () => {
         invalidate: vi.fn(),
       },
     });
-    const runtimeId = "do:vibestudio/internal:EvalDO:test-run";
+    const runtimeId = "do:workers/session:SessionDO:test-run";
     const digest = "a".repeat(64);
     const caller = createVerifiedCaller(
       runtimeId,
@@ -4139,9 +4185,9 @@ describe("RpcServer relay behavior", () => {
           executionDigest: digest,
         },
         executor: {
-          kind: "eval",
+          kind: "dynamic-code",
           runtimeId,
-          evalRunId: "doctor",
+          runId: "doctor",
           authorityManifest: {
             mode: "adaptive",
             effects: "read-write",
@@ -4298,10 +4344,10 @@ describe("RpcServer relay behavior", () => {
   it("admits hidden workspace-service test seams only for an attested system-test harness", async () => {
     const capability = "service:development.faultFailBuildAfterSnapshotRetained";
     const caller = createVerifiedCaller(
-      "do:vibestudio/internal:EvalDO:test-development-fault",
+      "do:workers/session:SessionDO:test-development-fault",
       "do",
       {
-        callerId: "do:vibestudio/internal:EvalDO:test-development-fault",
+        callerId: "do:workers/session:SessionDO:test-development-fault",
         callerKind: "do",
         repoPath: "workers/system-test-runner",
         effectiveVersion: "ev-runner",
@@ -4377,8 +4423,8 @@ describe("RpcServer relay behavior", () => {
     });
   });
 
-  it("attributes only explicitly marked EvalDO effects to the admitted execution", async () => {
-    const runtimeId = "do:vibestudio/internal:EvalDO:session-boundary";
+  it("attributes only explicitly marked eval kernel effects to the admitted execution", async () => {
+    const runtimeId = "do:workers/session:SessionDO:session-boundary";
     const nonce = "eval-session-nonce-1234";
     const session = {
       v: 2,
@@ -4401,9 +4447,9 @@ describe("RpcServer relay behavior", () => {
         executionDigest: "b".repeat(64),
       },
       executor: {
-        kind: "eval",
+        kind: "dynamic-code",
         runtimeId,
-        evalRunId: "run:session-boundary",
+        runId: "run:session-boundary",
         authorityManifest: {
           mode: "adaptive",
           effects: "read-write",
@@ -4952,35 +4998,23 @@ describe("RpcServer relay behavior", () => {
 
   it("binds a builtin's outbound request ceiling to the exact active method", () => {
     const { server } = createServer();
-    const receiver = "do:vibestudio/internal:EvalDO:owner";
+    const receiver = "do:vibestudio/internal:WorkspaceStateDO:ws";
 
-    const admittedNonce = "host-minted-eval-execute-run-nonce";
-    const releaseAdmitted = testServer(server).beginAuthorityParent(receiver, {
-      nonce: admittedNonce,
-      method: "executeRun",
+    // A product class declares no method-scoped request today (eval, which did, is hosted code):
+    // the ceiling is the empty list, not the absence of one.
+    const nonce = "host-minted-builtin-method-nonce";
+    const release = testServer(server).beginAuthorityParent(receiver, {
+      nonce,
+      method: "entityResolve",
       context: {},
     } as import("@vibestudio/rpc/internal").DirectAuthorityAttestation);
-    expect(testServer(server).authorityParentFor(receiver, admittedNonce)?.requested).toEqual([
-      {
-        capability: "external.open",
-        resource: { kind: "prefix", prefix: "" },
-      },
-    ]);
-    releaseAdmitted();
-
-    const deniedNonce = "host-minted-eval-inspection-nonce";
-    const releaseDenied = testServer(server).beginAuthorityParent(receiver, {
-      nonce: deniedNonce,
-      method: "listRetainedExecutionRoots",
-      context: {},
-    } as import("@vibestudio/rpc/internal").DirectAuthorityAttestation);
-    expect(testServer(server).authorityParentFor(receiver, deniedNonce)?.requested).toEqual([]);
-    releaseDenied();
+    expect(testServer(server).authorityParentFor(receiver, nonce)?.requested).toEqual([]);
+    release();
   });
 
   it("does not inherit builtin requests for a userland class-name collision", () => {
     const { server } = createServer();
-    const receiver = "do:workers/untrusted:EvalDO:owner";
+    const receiver = "do:workers/untrusted:SessionDO:owner";
     const nonce = "host-minted-userland-eval-collision-nonce";
     const release = testServer(server).beginAuthorityParent(receiver, {
       nonce,

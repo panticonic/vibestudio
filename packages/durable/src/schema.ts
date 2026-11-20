@@ -1,4 +1,5 @@
 import { parseDurableWorkReady, type DurableWorkQueue } from "@vibestudio/shared/durableWork";
+import type { DoltStorage, DoltTransactionOptions } from "./dolt.js";
 
 export interface SchemaSqlResult {
   toArray(): Record<string, unknown>[];
@@ -11,7 +12,10 @@ export interface SchemaSqlStorage {
 
 export interface DurableObjectSchemaStorage {
   readonly sql: SchemaSqlStorage;
-  transaction<T>(callback: () => Promise<T>): Promise<T>;
+  /** Present on a Dolt cell or a Dolt facet: the install is then committed. */
+  readonly dolt?: DoltStorage;
+  /** On a Dolt store `options.commit` makes the writes and the commit one durable step (F2). */
+  transaction<T>(callback: () => Promise<T>, options?: DoltTransactionOptions<T>): Promise<T>;
 }
 
 export interface DurableObjectSchemaDescriptor {
@@ -84,7 +88,29 @@ export interface DurableObjectSchemaUpgrade {
 }
 
 const SCHEMA_TABLE = "_vibestudio_schema";
-const FRAMEWORK_OBJECTS = new Set([SCHEMA_TABLE, "_vibestudio_direct_rpc_nonces"]);
+
+/**
+ * SQL predicate excluding objects the runtime owns rather than the class:
+ * SQLite's own (`sqlite_*`), celld's bookkeeping (`_cf_*`, `_litestream*`),
+ * and Dolt's system names (`dolt_*`, `doltlite_*`), which a celld cell keeps
+ * in the same database as application tables. LIKE treats `_` as a wildcard,
+ * so the reserved prefixes are matched with substr.
+ */
+const APPLICATION_OBJECT =
+  "name NOT LIKE 'sqlite_%' AND substr(name, 1, 4) <> '_cf_' AND substr(name, 1, 11) <> '_litestream'" +
+  " AND substr(name, 1, 5) <> 'dolt_' AND substr(name, 1, 9) <> 'doltlite_'";
+/** Tables the base owns, outside every class's schema. `vsl_*` is the local (Dolt) naming. */
+const FRAMEWORK_OBJECTS = new Set([
+  SCHEMA_TABLE,
+  "_vibestudio_direct_rpc_nonces",
+  "vsl_direct_rpc_nonces",
+]);
+/**
+ * The `vsl_` prefix is the framework's local-table naming (a Dolt cell never versions it): a table under it belongs to
+ * a library store that is created when its session opens (Pi's composite storage keeps its operational set there),
+ * not to the class's sealed schema, so an object that predates such a table opens without a shape difference.
+ */
+const FRAMEWORK_PREFIX = "vsl_";
 
 function normalizedShape(sql: SchemaSqlStorage, schemaTables?: readonly string[]): string {
   const ownedTables = schemaTables === undefined ? null : new Set(["state", ...schemaTables]);
@@ -93,7 +119,7 @@ function normalizedShape(sql: SchemaSqlStorage, schemaTables?: readonly string[]
       .exec(
         `SELECT type, name, tbl_name, sql FROM sqlite_master
          WHERE type IN ('table', 'index', 'view', 'trigger')
-           AND name NOT LIKE 'sqlite_%'
+           AND ${APPLICATION_OBJECT}
          ORDER BY type, name`
       )
       .toArray()
@@ -101,6 +127,7 @@ function normalizedShape(sql: SchemaSqlStorage, schemaTables?: readonly string[]
         const name = String(row["name"]);
         const table = String(row["tbl_name"] ?? "");
         if (FRAMEWORK_OBJECTS.has(name) || FRAMEWORK_OBJECTS.has(table)) return false;
+        if (name.startsWith(FRAMEWORK_PREFIX) || table.startsWith(FRAMEWORK_PREFIX)) return false;
         if (!ownedTables) return true;
         return ownedTables.has(name) || ownedTables.has(table);
       })
@@ -122,11 +149,106 @@ export function durableObjectSchemaFingerprint(
   return normalizedShape(sql, schemaTables);
 }
 
-function normalizeIndexSql(value: string): string {
-  return value
-    .replace(/\bIF\s+NOT\s+EXISTS\b/giu, "")
+/**
+ * The form of a statement that the engine's rendering leaves unchanged.
+ *
+ * DoltLite re-renders `sqlite_master.sql` when the creating transaction commits
+ * (celld `docs/services/dolt-cells.md`, "Schema text"): whitespace runs become
+ * one space, none stays before `(`, `)` and `,`, comments are gone, and a name
+ * is quoted only when it has to be; string literals and quoted names that need
+ * their quotes are kept. This function removes every one of those differences
+ * (and, being loose, the spacing after `(` and `,` as well), so the text as
+ * written and the text as rendered compare equal. Equality under it admits
+ * nothing a store could forge: the declared text is code.
+ */
+export function looseSql(value: string): string {
+  // Text the engine keeps as written is set aside while the rest is loosened.
+  const kept: string[] = [];
+  const keep = (text: string): string => `\u0000${kept.push(text) - 1}\u0000`;
+  let out = "";
+  let at = 0;
+  const length = value.length;
+  while (at < length) {
+    const char = value[at]!;
+    const next = value[at + 1];
+    if (char === "-" && next === "-") {
+      while (at < length && value[at] !== "\n") at++;
+      out += " ";
+    } else if (char === "/" && next === "*") {
+      const end = value.indexOf("*/", at + 2);
+      at = end === -1 ? length : end + 2;
+      out += " ";
+    } else if (char === "'") {
+      let end = at + 1;
+      while (end < length && !(value[end] === "'" && value[end + 1] !== "'")) {
+        end += value[end] === "'" ? 2 : 1;
+      }
+      out += keep(value.slice(at, end + 1));
+      at = end + 1;
+    } else if (char === '"' || char === "`" || char === "[") {
+      const close = char === "[" ? "]" : char;
+      let end = at + 1;
+      while (end < length && !(value[end] === close && value[end + 1] !== close)) {
+        end += value[end] === close ? 2 : 1;
+      }
+      const quoted = value.slice(at, end + 1);
+      const name = value.slice(at + 1, end);
+      out += /^[A-Za-z_][A-Za-z0-9_]*$/u.test(name) ? name : keep(quoted);
+      at = end + 1;
+    } else {
+      out += char;
+      at++;
+    }
+  }
+  return out
     .replace(/\s+/gu, " ")
-    .trim();
+    .replace(/\s*([(),])\s*/gu, "$1")
+    .trim()
+    .replace(/\u0000(\d+)\u0000/gu, (_match, index: string) => kept[Number(index)]!);
+}
+
+/** `normalizedShape` output with each statement's punctuation spacing ignored. */
+function looseShape(shape: string): string {
+  try {
+    const rows = JSON.parse(shape) as unknown;
+    if (!Array.isArray(rows)) return shape;
+    return JSON.stringify(
+      rows.map((row: unknown) =>
+        row && typeof row === "object" && typeof (row as { sql?: unknown }).sql === "string"
+          ? { ...(row as object), sql: looseSql((row as { sql: string }).sql) }
+          : row
+      )
+    );
+  } catch {
+    return shape;
+  }
+}
+
+/**
+ * A Dolt store drops `--` comments from the DDL it keeps, and the shape of an object is taken from
+ * text whose line breaks are already gone, so a line comment swallows the rest of its statement in
+ * the fingerprint the build trusts and the shape no longer matches once the engine has rendered the
+ * text. Refuse it where it is written, not at a later activation.
+ */
+function assertNoLineComments(definition: DurableObjectSchemaDefinition): void {
+  const rows = definition.storage.sql
+    .exec(`SELECT name, sql FROM sqlite_master WHERE sql IS NOT NULL AND ${APPLICATION_OBJECT}`)
+    .toArray();
+  for (const row of rows) {
+    const text = String(row["sql"]).replace(/'(?:[^']|'')*'/gu, "''");
+    if (/--/u.test(text))
+      throw new Error(
+        `${definition.className}: the DDL of ${String(row["name"])} has a "--" comment. A Dolt store drops ` +
+          "comments, so its shape would not match the fingerprint the build trusts: move it out of the SQL"
+      );
+  }
+}
+
+function normalizeIndexSql(value: string): string {
+  // Index definitions are compared loosely everywhere: the declared text is
+  // code, so equality under looser spacing admits nothing a store could forge,
+  // and a Dolt store re-renders `ON notes (body)` as `ON notes(body)`.
+  return looseSql(value.replace(/\bIF\s+NOT\s+EXISTS\b/giu, ""));
 }
 
 export function validateDurableObjectSchemaIndexes(
@@ -144,7 +266,7 @@ export function validateDurableObjectSchemaIndexes(
   const actual = sql
     .exec(
       `SELECT tbl_name, sql FROM sqlite_master
-       WHERE type = 'index' AND name NOT LIKE 'sqlite_%'
+       WHERE type = 'index' AND ${APPLICATION_OBJECT}
        ORDER BY name`
     )
     .toArray()
@@ -227,7 +349,7 @@ function schemaObjects(sql: SchemaSqlStorage): string[] {
     .exec(
       `SELECT name FROM sqlite_master
        WHERE type IN ('table', 'index', 'view', 'trigger')
-         AND name NOT LIKE 'sqlite_%'`
+         AND ${APPLICATION_OBJECT}`
     )
     .toArray()
     .map((row) => String(row["name"]));
@@ -325,15 +447,31 @@ export async function installDurableObjectSchema(
   definition: DurableObjectSchemaDefinition
 ): Promise<void> {
   validateDurableObjectSchemaDefinition(definition);
-  await definition.storage.transaction(async () => {
+  const { dolt } = definition.storage;
+  if (dolt) checkpointBeforeUpgrade(definition, dolt);
+  // What the transaction did, so a Dolt store commits exactly that (F2): the
+  // commit is in the transaction's own root record, so no crash can leave the
+  // install uncommitted and nothing needs recovering at activation.
+  let outcome: SchemaInstallOutcome = { kind: "current" };
+  // A Dolt store renders `sqlite_master.sql` itself once the creating
+  // transaction ends (`notes (id` becomes `notes(id`, `CHECK (` becomes
+  // `CHECK(`), so a shape taken inside that transaction is not the shape read
+  // at the next activation. Every comparison on a Dolt store ignores that
+  // punctuation spacing; SQLite stores keep the exact text.
+  const comparable = (shape: string): string => (dolt ? looseShape(shape) : shape);
+  const shapeNow = (): string =>
+    comparable(normalizedShape(definition.storage.sql, definition.schemaTables));
+  const install = async (): Promise<void> => {
     const objects = schemaObjects(definition.storage.sql);
     if (objects.length === 0) {
       definition.storage.sql.exec(`CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
       await definition.createSchema();
       await definition.validateSchema();
-      const shape = normalizedShape(definition.storage.sql, definition.schemaTables);
-      validateTargetFingerprint(definition, shape);
+      if (dolt) assertNoLineComments(definition);
+      const shape = shapeNow();
+      validateTargetFingerprint(definition, shape, comparable);
       createMetadata(definition, shape);
+      outcome = { kind: "fresh" };
       return;
     }
 
@@ -355,7 +493,7 @@ export async function installDurableObjectSchema(
         `no supported upgrade from v${persisted.version} to v${definition.version}`
       );
     }
-    const actualShape = normalizedShape(definition.storage.sql, definition.schemaTables);
+    const actualShape = shapeNow();
     // An isolated fresh probe generates the target fingerprint. Requiring it
     // while merely declaring upgrades makes that probe impossible. Persisted
     // upgrades still require the trusted target before invoking any upgrader.
@@ -364,9 +502,10 @@ export async function installDurableObjectSchema(
         `${definition.className} schema upgrades require the trusted target fingerprint`
       );
     }
-    const trustedSource =
-      path[0]?.fromFingerprint ?? definition.expectedFingerprint ?? persisted.shape;
-    if (actualShape !== persisted.shape || actualShape !== trustedSource) {
+    const trustedSource = comparable(
+      path[0]?.fromFingerprint ?? definition.expectedFingerprint ?? persisted.shape
+    );
+    if (actualShape !== comparable(persisted.shape) || actualShape !== trustedSource) {
       throw incompatible(
         definition,
         "shape-drift",
@@ -376,9 +515,7 @@ export async function installDurableObjectSchema(
     }
     for (let index = 0; index < path.length; index++) {
       const upgrade = path[index]!;
-      if (
-        normalizedShape(definition.storage.sql, definition.schemaTables) !== upgrade.fromFingerprint
-      ) {
+      if (shapeNow() !== comparable(upgrade.fromFingerprint)) {
         throw incompatible(
           definition,
           "shape-drift",
@@ -388,7 +525,7 @@ export async function installDurableObjectSchema(
       }
       await upgrade.upgrade();
       const expected = path[index + 1]?.fromFingerprint ?? definition.expectedFingerprint;
-      if (normalizedShape(definition.storage.sql, definition.schemaTables) !== expected) {
+      if (shapeNow() !== (expected === undefined ? expected : comparable(expected))) {
         throw incompatible(
           definition,
           "shape-drift",
@@ -398,25 +535,96 @@ export async function installDurableObjectSchema(
       }
     }
     await definition.validateSchema();
-    validateTargetFingerprint(definition);
+    validateTargetFingerprint(definition, undefined, comparable);
     if (path.length > 0) {
       definition.storage.sql.exec(
         `UPDATE ${SCHEMA_TABLE} SET version = ?, shape_json = ? WHERE singleton = 1`,
         definition.version,
-        normalizedShape(definition.storage.sql, definition.schemaTables)
+        shapeNow()
       );
+      outcome = { kind: "upgraded", fromVersion: persisted.version };
     }
+  };
+  if (dolt) {
+    await definition.storage.transaction(install, {
+      commit: () => schemaCommitMessage(definition, outcome),
+    });
+  } else {
+    await definition.storage.transaction(install);
+  }
+}
+
+type SchemaInstallOutcome =
+  | { readonly kind: "current" }
+  | { readonly kind: "fresh" }
+  | { readonly kind: "upgraded"; readonly fromVersion: number };
+
+/** `schema: C vN` or `schema: C vN→vM`; `null` when the install changed nothing. */
+function schemaCommitMessage(
+  definition: DurableObjectSchemaDefinition,
+  outcome: SchemaInstallOutcome
+): string | null {
+  switch (outcome.kind) {
+    case "current":
+      return null;
+    case "fresh":
+      return `schema: ${definition.className} v${definition.version}`;
+    case "upgraded":
+      return `schema: ${definition.className} v${outcome.fromVersion}→v${definition.version}`;
+  }
+}
+
+/**
+ * Before an upgrade path runs, state a class left uncommitted (an agent's
+ * working set) is committed as a known restore point, so the upgrade commit
+ * holds exactly the migration. A plain commit taken before the transaction:
+ * Dolt operations throw inside one. A crash after it leaves the checkpoint,
+ * which is harmless.
+ */
+function checkpointBeforeUpgrade(
+  definition: DurableObjectSchemaDefinition,
+  dolt: DoltStorage
+): void {
+  const persisted = peekPersistedVersion(definition.storage.sql);
+  if (persisted === null || persisted >= definition.version) return;
+  const dirty = dolt
+    .status()
+    .some(
+      (entry) =>
+        !entry.table.startsWith("dolt_") &&
+        !entry.table.startsWith("doltlite_") &&
+        !entry.table.startsWith("_cf_")
+    );
+  if (!dirty) return;
+  dolt.commit({
+    message: `schema: checkpoint before ${definition.className} v${persisted}→v${definition.version}`,
   });
+}
+
+/** The persisted schema version, read without trusting it; `null` when absent or malformed. */
+function peekPersistedVersion(sql: SchemaSqlStorage): number | null {
+  const exists = sql
+    .exec(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, SCHEMA_TABLE)
+    .toArray();
+  if (exists.length === 0) return null;
+  try {
+    const row = sql.exec(`SELECT version FROM ${SCHEMA_TABLE} WHERE singleton = 1`).toArray()[0];
+    const version = Number(row?.["version"]);
+    return Number.isSafeInteger(version) && version >= 1 ? version : null;
+  } catch {
+    return null;
+  }
 }
 
 function validateTargetFingerprint(
   definition: DurableObjectSchemaDefinition,
-  shape?: string
+  shape?: string,
+  comparable: (shape: string) => string = (value) => value
 ): void {
   if (
     definition.expectedFingerprint !== undefined &&
-    (shape ?? normalizedShape(definition.storage.sql, definition.schemaTables)) !==
-      definition.expectedFingerprint
+    comparable(shape ?? normalizedShape(definition.storage.sql, definition.schemaTables)) !==
+      comparable(definition.expectedFingerprint)
   ) {
     throw incompatible(
       definition,

@@ -30,7 +30,7 @@ export function createTestExecutionSession(input: {
   mode?: "interactive" | "mission" | "test";
   testPolicy?: import("@vibestudio/rpc").AgentExecutionTestPolicy;
 }): import("@vibestudio/rpc").ExecutionAdmissionFact & {
-  executor: Extract<import("@vibestudio/rpc").ExecutionAdmissionFact["executor"], { kind: "eval" }>;
+  executor: Extract<import("@vibestudio/rpc").ExecutionAdmissionFact["executor"], { kind: "dynamic-code" }>;
 } {
   const now = Date.now();
   const repoPath = input.repoPath ?? "tests/harness";
@@ -66,9 +66,9 @@ export function createTestExecutionSession(input: {
       executionDigest: input.executionDigest ?? TEST_DIGEST,
     },
     executor: {
-      kind: "eval",
+      kind: "dynamic-code",
       runtimeId: input.runtimeId,
-      evalRunId: `run:${input.runtimeId}`,
+      runId: `run:${input.runtimeId}`,
       authorityManifest: {
         mode: "adaptive",
         effects: "read-write",

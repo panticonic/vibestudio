@@ -21,6 +21,8 @@ describe("stateLayout", () => {
     });
     expect(currentContextProjectionsPath(root)).toBe(layout.contextProjections.current);
     expect(layout.gitCheckoutsDir).toBe(gitCheckoutsPath(root));
-    expect(layout.databases.workerdDoDir).toBe(path.join(root, ".databases", "workerd-do"));
+    expect(layout.celldDir).toBe(path.join(root, "celld"));
+    expect(layout.blobsDir).toBe(path.join(root, "blobs"));
+    expect(layout.databases.legacyWorkerdDoDir).toBe(path.join(root, ".databases", "workerd-do"));
   });
 });

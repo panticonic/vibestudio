@@ -65,6 +65,19 @@ function withStore<T>(blobsDir: string, action: (db: DatabaseSync) => T): T {
   }
 }
 
+/** Configure the host-owned shared registry before admitting native producers. */
+export function initializeBlobRetentions(blobsDir: string): void {
+  withStore(blobsDir, (db) => {
+    // The native bucket and the host share this stock SQLite file. Rollback
+    // journaling makes each native publication exclude even GC-root readers.
+    // WAL permits those snapshots while keeping durable, serialized writes.
+    const mode = db.prepare("PRAGMA journal_mode = WAL").get();
+    if (mode?.["journal_mode"] !== "wal") {
+      throw new Error(`Cannot enable WAL for blob retention registry in ${databasePath(blobsDir)}`);
+    }
+  });
+}
+
 /** Call while holding withBlobContentLock, after verifying the local CAS bytes exist. */
 export function retainBlob(
   blobsDir: string,

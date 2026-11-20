@@ -113,11 +113,13 @@ export interface AppArtifactHandler {
   ): Promise<void> | void;
 }
 
-/** Subset of WorkerdManager the gateway needs to serve worker-host loader code.
+/** Subset of RuntimeManager the gateway needs to serve worker-host loader code.
  *  These endpoints expose worker bundles + per-instance env (RPC tokens,
  *  STATE_ARGS), so they are gated by the workerd-only `loaderSecret`. */
 export interface WorkerHostCodeProvider {
   getLoaderSecret(): string;
+  /** The UniversalDO class's own secret for `/_docode` and `/_doadmission`. */
+  getDoLoaderSecret(): string;
   getWorkerAdmission(name: string): Promise<WorkerExecutableAdmission | null>;
   getWorkerCode(
     name: string,
@@ -136,6 +138,11 @@ export interface WorkerHostCodeProvider {
     className: string,
     objectKey?: string
   ): import("./doExecutableDispatch.js").DoExecutableAdmission | null;
+  /** Code an entity hosts in its own cell (`hostCode`): exact executable, grants, host identity. */
+  admitHostedCode?(
+    host: { source: string; className: string; objectKey: string },
+    hosted: { source: string; className: string }
+  ): Promise<import("./workerdPrograms/executableVersion.js").HostedCodeAdmission>;
   /** Userland DO class code+env for the UniversalDO facet host. */
   getDoCode(
     source: string,
@@ -158,6 +165,7 @@ export interface GatewayDeps {
   rpcHandler?: RpcHandler;
   /** Dynamic in-process RPC handler getter. */
   getRpcHandler?: () => RpcHandler | null | undefined;
+  handleChronologHistory?: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
   /** In-process panel HTTP handler */
   panelHttpHandler?: PanelHttpHandler;
   /** Dynamic in-process panel HTTP handler getter. */
@@ -226,6 +234,14 @@ export class Gateway {
       const extensionHttpHandler = this.deps.getExtensionHttpHandler?.();
       const appArtifactHandler = this.deps.getAppArtifactHandler?.();
       const workerdPort = this.deps.getWorkerdPort?.() ?? this.deps.workerdPort;
+
+      if (
+        (url === "/_chronolog-history" || url.startsWith("/_chronolog-history?")) &&
+        this.deps.handleChronologHistory
+      ) {
+        await this.deps.handleChronologHistory(req, res);
+        return;
+      }
 
       if (url === "/_r/s/internal/workspace-rpc" && rpcHandler) {
         void rpcHandler.handleWorkspaceRpcHttp(req, res);
@@ -317,7 +333,7 @@ export class Gateway {
         const provided = req.headers["x-vibestudio-loader-secret"];
         if (
           typeof provided !== "string" ||
-          !constantTimeStringEqual(provided, host.getLoaderSecret())
+          !constantTimeStringEqual(provided, host.getDoLoaderSecret())
         ) {
           res.writeHead(403, { "Content-Type": "text/plain" });
           res.end("Forbidden");
@@ -350,6 +366,56 @@ export class Gateway {
         return;
       }
 
+      // Code an entity hosts in its own cell: the exact executable and grants its
+      // manifests permit. Reached only by the UniversalDO root of the host.
+      if (url.startsWith("/_dohost/")) {
+        const host = this.deps.getWorkerHost?.();
+        if (!host?.admitHostedCode) {
+          res.writeHead(503, { "Content-Type": "text/plain" });
+          res.end("Worker host unavailable");
+          return;
+        }
+        const provided = req.headers["x-vibestudio-loader-secret"];
+        if (
+          typeof provided !== "string" ||
+          !constantTimeStringEqual(provided, host.getDoLoaderSecret())
+        ) {
+          res.writeHead(403, { "Content-Type": "text/plain" });
+          res.end("Forbidden");
+          return;
+        }
+        const requestUrl = new URL(url, "http://localhost");
+        const segments = requestUrl.pathname.slice("/_dohost/".length).split("/");
+        const hostedSource = decodeURIComponent(segments[0] ?? "");
+        const hostedClass = decodeURIComponent(segments[1] ?? "");
+        const hostKey = requestUrl.searchParams.get("host") ?? "";
+        const [hostSource, hostClass, hostObjectKey] = hostKey
+          .split("|")
+          .map((part) => decodeURIComponent(part));
+        if (!hostedSource || !hostedClass || !hostSource || !hostClass || !hostObjectKey) {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("Missing hosted code identity");
+          return;
+        }
+        void host
+          .admitHostedCode(
+            { source: hostSource, className: hostClass, objectKey: hostObjectKey },
+            { source: hostedSource, className: hostedClass }
+          )
+          .then((admission) => {
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify(admission));
+          })
+          .catch((error: unknown) => {
+            const code = (error as { code?: unknown })?.code;
+            res.writeHead(code === "EACCES" ? 403 : code === "ENOTFOUND" ? 404 : 409, {
+              "Content-Type": "application/json",
+            });
+            res.end(JSON.stringify({ error: serializeRpcFailure(error) }));
+          });
+        return;
+      }
+
       // Executable code is fetched only when an admitted incarnation is absent.
       if (url.startsWith("/_docode/")) {
         const host = this.deps.getWorkerHost?.();
@@ -361,7 +427,7 @@ export class Gateway {
         const provided = req.headers["x-vibestudio-loader-secret"];
         if (
           typeof provided !== "string" ||
-          !constantTimeStringEqual(provided, host.getLoaderSecret())
+          !constantTimeStringEqual(provided, host.getDoLoaderSecret())
         ) {
           res.writeHead(403, { "Content-Type": "text/plain" });
           res.end("Forbidden");
@@ -1166,14 +1232,16 @@ async function handleRouteRequest(
     return true;
   }
 
-  if (!(await enforceAuth(result, req, url, adminToken, tokenManager))) {
+  const authServiceCaller = result.kind === "service" && result.auth === "caller-token";
+  const caller = authServiceCaller ? await validateCallerBearer(req, tokenManager) : null;
+  if (!(authServiceCaller ? caller : await enforceAuth(result, req, url, adminToken, tokenManager))) {
     res.writeHead(401, { "Content-Type": "text/plain" });
     res.end("Unauthorized");
     return true;
   }
 
   if (result.kind === "service") {
-    void Promise.resolve(result.handler(req, res, result.params)).catch((err) => {
+    void Promise.resolve(result.handler(req, res, result.params, caller ?? undefined)).catch((err) => {
       log.warn(`Service route handler error (${result.serviceName}):`, err);
       if (!res.headersSent) {
         res.writeHead(500, { "Content-Type": "text/plain" });

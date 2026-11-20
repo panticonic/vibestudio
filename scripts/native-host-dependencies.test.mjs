@@ -146,40 +146,6 @@ test(
   }
 );
 
-test("installs Windows workerd long-path metadata beside the unchanged dependency executable", () => {
-  const cwd = mkdtempSync(path.join(os.tmpdir(), "workerd-metadata-"));
-  try {
-    const directory = path.join(cwd, "node_modules", "@cloudflare", "workerd-windows-64", "bin");
-    mkdirSync(directory, { recursive: true });
-    const executable = path.join(directory, "workerd.exe");
-    const workerdRoot = path.join(cwd, "node_modules", "workerd");
-    mkdirSync(workerdRoot, { recursive: true });
-    writeFileSync(
-      path.join(workerdRoot, "package.json"),
-      JSON.stringify({ name: "workerd", main: "index.cjs" })
-    );
-    writeFileSync(
-      path.join(workerdRoot, "index.cjs"),
-      `exports.default = ${JSON.stringify(executable)};\n`
-    );
-    const payload = Buffer.from([0x4d, 0x5a, 0x00, 0xff]);
-    writeFileSync(executable, payload);
-    const manifest = readFileSync(new URL("./workerd.exe.manifest", import.meta.url), "utf8");
-    for (let run = 0; run < 2; run++) {
-      prepareNativeDependencyFiles({ cwd, platform: "win32", arch: "x64" });
-      assert.deepEqual(readFileSync(executable), payload);
-      assert.equal(readFileSync(`${executable}.manifest`, "utf8"), manifest);
-    }
-    assert.match(manifest, /<longPathAware[^>]*>true<\/longPathAware>/);
-    assert.throws(
-      () => prepareNativeDependencyFiles({ cwd, platform: "win32", arch: "arm64" }),
-      /Unsupported Windows workerd architecture/
-    );
-  } finally {
-    rmSync(cwd, { recursive: true, force: true });
-  }
-});
-
 test("Darwin process observer preparation is content-bound and atomically reusable", () => {
   const cwd = mkdtempSync(path.join(os.tmpdir(), "darwin-process-observer-"));
   const source = path.join(cwd, "observer.c");

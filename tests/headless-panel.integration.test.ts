@@ -18,6 +18,7 @@ import {
   type RpcEnvelope,
 } from "@vibestudio/rpc";
 import { mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
+import { startDynamicCodeRun } from "@vibestudio/service-schemas/dynamicCode";
 import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
 import {
   requestRpcWebSocketAdmission,
@@ -622,34 +623,33 @@ async function openBrowserPanelFromWorker(
 ): Promise<BrowserPanelHandle> {
   await shellConnection?.rpc.call("main", mainRpcMethods["shellPresence.heartbeat"], []);
   const runId = `headless-panel-open-${randomUUID()}`;
-  await connection.rpc.call("main", mainRpcMethods["eval.start"], [
-    {
-      runId,
-      source: {
-        kind: "inline",
-        code: `const panel = await createPanelSlot(${JSON.stringify(url)}); const observation = await panel.observe(); return { id: panel.id, title: panel.title, kind: panel.kind, runtimeEntityId: observation.runtimeEntityId };`,
-      },
-      authority: {
-        approvals: "prompt",
-        requests: [
-          {
-            capability: "workspace.runtime-state.manage",
-            resource: { kind: "prefix", prefix: "" },
-          },
-          {
-            capability: "context.boundary",
-            resource: { kind: "prefix", prefix: "context/" },
-          },
-        ],
-      },
-      timeoutMs: 90_000,
+  // Admit the run with the host and start it on the entity that hosts it; pull its status from there.
+  const { observer } = await startDynamicCodeRun(connection.rpc, {
+    runId,
+    source: {
+      kind: "inline",
+      code: `const panel = await createPanelSlot(${JSON.stringify(url)}); const observation = await panel.observe(); return { id: panel.id, title: panel.title, kind: panel.kind, runtimeEntityId: observation.runtimeEntityId };`,
     },
-  ]);
+    authority: {
+      approvals: "prompt",
+      requests: [
+        {
+          capability: "workspace.runtime-state.manage",
+          resource: { kind: "prefix", prefix: "" },
+        },
+        {
+          capability: "context.boundary",
+          resource: { kind: "prefix", prefix: "context/" },
+        },
+      ],
+    },
+    timeoutMs: 90_000,
+  });
 
   const deadline = Date.now() + 90_000;
   let lastSnapshot: unknown = null;
   while (Date.now() < deadline) {
-    const snapshot = await connection.rpc.call("main", mainRpcMethods["eval.get"], [{ runId }]);
+    const snapshot = await observer.get();
     lastSnapshot = snapshot;
     if (
       snapshot.activity &&

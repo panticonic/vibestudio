@@ -71,6 +71,8 @@ export interface MainAdvanceApprovalCandidate {
   /** Host-computed diff-review payload for the whole batch (§5.1), surfaced on
    *  the approval so the reviewer sees the full server-side diff. */
   diffReview?: DiffReviewEntry[];
+  /** The compatible target host has been verified by the protected-ref gate. */
+  epochTransition?: true;
 }
 
 /**
@@ -83,6 +85,10 @@ export interface MainAdvanceApprovalCandidate {
 export type RefAdvanceGateContext =
   | {
       kind: "workspace-initialization";
+      getCandidateWorkspaceState: () => Promise<string>;
+    }
+  | {
+      kind: "chronolog";
       getCandidateWorkspaceState: () => Promise<string>;
     }
   | {
@@ -142,7 +148,9 @@ export function createMainRefAdvanceGate(deps: {
 }): RefGate {
   return async (batch: RefGateBatch): Promise<RefGateCompletion | undefined> => {
     const context = batch.gateContext as RefAdvanceGateContext | undefined;
-    if (!context || (context.kind !== "workspace-initialization" && context.kind !== "caller")) {
+    if (!context || (
+      context.kind !== "workspace-initialization" && context.kind !== "caller" && context.kind !== "chronolog"
+    )) {
       // Fail CLOSED: a protected-main update without an explicit advance
       // context is a programming error, never an implicit allow.
       throw new Error(`Protected main update carries no gate context`);
@@ -156,6 +164,17 @@ export function createMainRefAdvanceGate(deps: {
       // admitted by the creation review, held in the new workspace immediately
       // after it opens (§5.2, §7.1). This records that obligation durably.
       deps.onWorkspaceInitialized?.();
+      return;
+    }
+
+    if (context.kind === "chronolog") {
+      if (!deps.validateCandidateWorkspaceState) {
+        throw new Error("Shared workspace candidate validation is unavailable");
+      }
+      await deps.validateCandidateWorkspaceState(
+        await context.getCandidateWorkspaceState(),
+        batch.entries.map(({ repoPath }) => repoPath)
+      );
       return;
     }
 
@@ -301,6 +320,7 @@ export function createMainRefAdvanceGate(deps: {
           publicationId: batch.publication.publicationId,
           diffReview,
           ...(context.via ? { via: context.via } : {}),
+          ...(context.epochTransition ? { epochTransition: true } : {}),
         });
         if (completion) completions.push(completion);
         deps.discardCandidateReview?.(batch.publication.publicationId);
@@ -620,16 +640,16 @@ export function createMainAdvanceApprovalGate(deps: {
       const metaChanged = candidate.changedPaths.some(isMetaPath);
 
       const runtimeKind = candidate.caller.runtime.kind;
-      // A change to which clients hold device-level power is a trust change,
-      // and a trust change is critical for every publisher: no once, task,
-      // envelope, mission or standing grant satisfies it, and the click that
-      // started a chrome publication is not consent to it (§4.4.1).
-      const trustDelta =
+      // Changes to device-level client power require fresh confirmation,
+      // including publications initiated by interactive chrome.
+      if (
+        !candidate.epochTransition &&
         deps.trustDeltaForCommit &&
         candidate.changedPaths.some((changed) => isMetaPath(changed) || isClientPath(changed))
-          ? await deps.trustDeltaForCommit(candidate.stateHash)
-          : [];
-      if (trustDelta.length > 0) await approveTrustChange(deps, candidate, trustDelta);
+      ) {
+        const trustDelta = await deps.trustDeltaForCommit(candidate.stateHash);
+        if (trustDelta.length > 0) await approveTrustChange(deps, candidate, trustDelta);
+      }
       // Trusted first-party UI writing for the user in front of it — setup,
       // settings, layout. The click IS the consent, so these publications record
       // admission and stay silent (§5.2). A `server` or `headless-host`
@@ -649,6 +669,14 @@ export function createMainAdvanceApprovalGate(deps: {
         if (!identity || identity.callerKind !== runtimeKind) {
           throw new Error(`Unknown caller identity: ${candidate.caller.runtime.id}`);
         }
+      }
+
+      if (candidate.epochTransition) {
+        // The target host owns runtime and unit validation on startup. The
+        // current host presents the exact source diff for fresh confirmation
+        // without trying to resolve another epoch's clients and trust policy.
+        await approveWorkspaceMainAdvance(deps, candidate);
+        return;
       }
 
       const providers = deps
@@ -1013,7 +1041,8 @@ async function approveWorkspaceMainAdvance(
     ...(candidate.signal ? { signal: candidate.signal } : {}),
     capability: WORKSPACE_PUBLISH_CAPABILITY,
     resourceKey,
-    tier: "gated",
+    tier: candidate.epochTransition ? "critical" : "gated",
+    ...(candidate.epochTransition ? { principals: ["user", "code", "website"] } : {}),
     args: [
       candidate.publicationId,
       candidate.repoPaths,
@@ -1022,16 +1051,21 @@ async function approveWorkspaceMainAdvance(
     ],
     preparedState: candidate,
     challenge: {
+      ...(candidate.epochTransition ? { severity: "severe" as const } : {}),
       dedupKey: groupKey,
       resource: { type: "vcs-head", label: "Head", value: repoLabel },
       operation: {
         kind: "workspace",
-        verb: "update workspace main",
+        verb: candidate.epochTransition ? "switch workspace host version" : "update workspace main",
         object: { type: "vcs-head", label: "Head", value: repoLabel },
         groupKey,
       },
-      title: installReview?.title ?? mainAdvanceTitle(candidate),
-      description: installReview?.description ?? mainAdvanceDescription(candidate),
+      title: candidate.epochTransition
+        ? "Switch workspace host version"
+        : (installReview?.title ?? mainAdvanceTitle(candidate)),
+      description: candidate.epochTransition
+        ? "Publish these reviewed changes and reopen the workspace on its compatible installed host. The target host will load the new workspace configuration, including client trust."
+        : (installReview?.description ?? mainAdvanceDescription(candidate)),
       details: mainAdvanceDetails(candidate),
       ...(candidate.diffReview ? { diffReview: candidate.diffReview } : {}),
       ...(installReview ? { installReview: presentedInstallReview(installReview) } : {}),

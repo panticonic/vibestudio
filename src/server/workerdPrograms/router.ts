@@ -3,9 +3,9 @@ import { DIRECT_AUTHORITY_ACCEPTED_AT_HEADER } from "@vibestudio/rpc/internal";
 type RouterBinding = string | Fetcher | DurableObjectNamespace | Readonly<Record<string, string>>;
 
 interface RouterEnv extends Record<string, RouterBinding> {
-  WORKERD_DISPATCH_SECRET: string;
-  WORKERD_DO_BINDINGS: Readonly<Record<string, string>>;
-  WORKERD_GATEWAY_TOKEN: string;
+  RUNTIME_DISPATCH_SECRET: string;
+  RUNTIME_DO_BINDINGS: Readonly<Record<string, string>>;
+  RUNTIME_GATEWAY_TOKEN: string;
   WORKER_HOST: Fetcher;
   UNIVERSAL_DO: DurableObjectNamespace;
   EXECUTABLE_PREPARATION: Fetcher;
@@ -39,9 +39,81 @@ async function fetchDurableObject(stub: DurableObjectStub, request: Request): Pr
   }
 }
 
+/**
+ * Whole-object operations the runtime provides on a namespace (celld
+ * docs/services/object-fork.md): a copy of a cell with its facets, and the
+ * replacement of a quiesced cell's state by another's.
+ */
+interface ForkableNamespace extends DurableObjectNamespace {
+  fork(
+    sourceId: DurableObjectId,
+    options?: {
+      to?: DurableObjectId;
+      replaceUnfinished?: boolean;
+      facets?: Record<string, { at?: string }>;
+    }
+  ): Promise<DurableObjectId>;
+  deleteUnfinished(id: DurableObjectId): Promise<{ deleted: number }>;
+  restore(
+    targetId: DurableObjectId,
+    fromId: DurableObjectId,
+    options?: { stop?: boolean }
+  ): Promise<{ restored: boolean }>;
+}
+
+interface ObjectOperation {
+  op: "fork" | "restore" | "deleteUnfinished";
+  /** `UNIVERSAL_DO`, or the binding name of a product class. */
+  namespace: string;
+  /** Cell names (`idFromName`). */
+  from: string;
+  to: string;
+  stop?: boolean;
+  /** `fork`: take over a target an interrupted fork left unfinished. */
+  replaceUnfinished?: boolean;
+  /** `fork`: each named Dolt facet is copied at its own commit (`at`), not at its newest. */
+  facets?: Record<string, { at?: string }>;
+}
+
+async function objectOperation(env: RouterEnv, request: Request): Promise<Response> {
+  const input = (await request.json()) as ObjectOperation;
+  const bindings = new Set<string>(["UNIVERSAL_DO", ...Object.values(env.RUNTIME_DO_BINDINGS)]);
+  const binding = bindings.has(input.namespace) ? env[input.namespace] : undefined;
+  if (!isDurableObjectNamespace(binding)) {
+    return new Response(`Unknown namespace ${input.namespace}`, { status: 404 });
+  }
+  const namespace = binding as ForkableNamespace;
+  try {
+    if (input.op === "fork") {
+      const id = await namespace.fork(namespace.idFromName(input.from), {
+        to: namespace.idFromName(input.to),
+        ...(input.replaceUnfinished ? { replaceUnfinished: true } : {}),
+        ...(input.facets ? { facets: input.facets } : {}),
+      });
+      return Response.json({ id: id.toString() });
+    }
+    if (input.op === "deleteUnfinished") {
+      return Response.json(await namespace.deleteUnfinished(namespace.idFromName(input.to)));
+    }
+    if (input.op === "restore") {
+      await namespace.restore(namespace.idFromName(input.to), namespace.idFromName(input.from), {
+        stop: input.stop === true,
+      });
+      return Response.json({ restored: true });
+    }
+    return new Response(`Unknown operation ${String(input.op)}`, { status: 400 });
+  } catch (error) {
+    const code = (error as { code?: unknown }).code;
+    return new Response(error instanceof Error ? error.message : String(error), {
+      status: 409,
+      headers: typeof code === "string" ? { "X-Vibestudio-Object-Error": code } : {},
+    });
+  }
+}
+
 const router: ExportedHandler<RouterEnv> = {
   async fetch(request, env): Promise<Response> {
-    const expectedAuth = `Bearer ${env.WORKERD_GATEWAY_TOKEN}`;
+    const expectedAuth = `Bearer ${env.RUNTIME_GATEWAY_TOKEN}`;
     if (request.headers.get("Authorization") !== expectedAuth) {
       return new Response("Unauthorized", { status: 401 });
     }
@@ -61,18 +133,32 @@ const router: ExportedHandler<RouterEnv> = {
       return new Response(null, { status: 204 });
     }
     if (
-      (prefix === "_w" || prefix === "_u" || prefix === "_prepare_executable") &&
-      request.headers.get("X-Vibestudio-Dispatch-Secret") !== env.WORKERD_DISPATCH_SECRET
+      (prefix === "_w" ||
+        prefix === "_u" ||
+        prefix === "_prepare_executable" ||
+        prefix === "_chronolog" ||
+        prefix === "_object") &&
+      request.headers.get("X-Vibestudio-Dispatch-Secret") !== env.RUNTIME_DISPATCH_SECRET
     ) {
       return new Response("Forbidden", { status: 403 });
     }
     if (prefix === "_w" || prefix === "_u") {
       strippedHeaders.set(DIRECT_AUTHORITY_ACCEPTED_AT_HEADER, String(Date.now()));
     }
+    if (prefix === "_object") return objectOperation(env, request);
     if (prefix === "_prepare_executable") {
       return env.EXECUTABLE_PREPARATION.fetch(new Request(request, { headers: strippedHeaders }));
     }
-    const doLookup = env.WORKERD_DO_BINDINGS;
+    if (prefix === "_chronolog") {
+      const directory = env["CHRONOLOG_DIRECTORY"];
+      if (!isDurableObjectNamespace(directory))
+        return new Response("Chronolog is unavailable", { status: 404 });
+      return fetchDurableObject(
+        directory.get(directory.idFromName("chronolog")),
+        new Request(request, { headers: strippedHeaders })
+      );
+    }
+    const doLookup = env.RUNTIME_DO_BINDINGS;
     // Semantic DO dispatch carries a complete serialized envelope. Own those
     // bytes at the physical HTTP ingress before crossing a service binding:
     // a warming facet can return without reading its request, and leaving the

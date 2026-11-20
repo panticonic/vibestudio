@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { VcsImportSnapshotResult, VcsStateNodeRef } from "@vibestudio/service-schemas/vcs";
 import { canonicalJson } from "@vibestudio/content-addressing";
+import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import {
   applyPreparedTemplateRepositoryExchangeTarget,
   completeTemplateRepositoryExchange,
@@ -13,7 +14,8 @@ import {
   type PendingTemplateExchange,
   type TemplateExchangePlan,
 } from "@vibestudio/workspace/templateRepositoryExchange";
-import type { ExactRepositorySnapshotPlan } from "../vcsHost/workspaceVcs.js";
+import type { ExactRepositorySnapshotPlan, ParticipantRepositoryAccess } from "../vcsHost/workspaceVcs.js";
+import { workspaceParticipantIdentity } from "../vcsHost/workspaceHistoryHost.js";
 import {
   scanNativeSnapshot,
   type NativeDevelopmentSemanticAdapter,
@@ -29,6 +31,7 @@ interface Marker {
   contextId: string;
   repositoryId: string;
   expectedWorkingHead: VcsStateNodeRef;
+  participant?: string;
   sourcePlanDigest: string;
   repoPath: string;
   plan: TemplateExchangePlan;
@@ -54,7 +57,8 @@ export class TemplateRepositoryExchangeExecutor {
         contextId: string;
         repositoryId: string;
         requiredFiles: readonly string[];
-      }): Promise<ExactRepositorySnapshotPlan>;
+      }, access?: ParticipantRepositoryAccess): Promise<ExactRepositorySnapshotPlan>;
+      resolveAccess?(contextId: string, ctx?: ServiceContext): Promise<ParticipantRepositoryAccess | undefined>;
       materializeSource(plan: ExactRepositorySnapshotPlan, destination: string): Promise<void>;
       semantic: NativeDevelopmentSemanticAdapter;
     }
@@ -67,9 +71,11 @@ export class TemplateRepositoryExchangeExecutor {
     repositoryId: string;
     expectedWorkingHead: VcsStateNodeRef;
     idempotencyKey: string;
-  }): Promise<{ intentDigest: string; plan: TemplateExchangePlan }> {
+  }, ctx?: ServiceContext): Promise<{ intentDigest: string; plan: TemplateExchangePlan }> {
+    const access = await this.deps.resolveAccess?.(input.contextId, ctx);
+    const participant = access && hash(workspaceParticipantIdentity(access.caller, access.ownerContextId));
     const checkout = await exactCheckout(input.checkout);
-    const intent = { ...input, checkout };
+    const intent = { ...input, checkout, ...(participant ? { participant } : {}) };
     const intentDigest = hash(canonicalJson(intent));
     const operationRoot = path.join(this.deps.root, intentDigest);
     const markerPath = path.join(operationRoot, "operation.json");
@@ -90,12 +96,18 @@ export class TemplateRepositoryExchangeExecutor {
         contextId: input.contextId,
         repositoryId: input.repositoryId,
         requiredFiles: ["meta/vibestudio.yml"],
-      });
+      }, access);
       if (
         sourcePlan.contextId !== input.contextId ||
         sourcePlan.repositoryId !== input.repositoryId
       ) {
         throw coded("EIDENTITYDRIFT", "Semantic template repository identity changed");
+      }
+      if (canonicalJson(sourcePlan.sourceState) !== canonicalJson(input.expectedWorkingHead)) {
+        throw coded("EREVISIONCHANGED", "The template repository changed before the exchange was prepared");
+      }
+      if (access && input.direction === "import" && sourcePlan.sourceState.kind !== "event") {
+        throw coded("EREVISIONCHANGED", "Save the working copy before importing template changes");
       }
       await this.deps.materializeSource(sourcePlan, semanticRoot);
       const plan = planTemplateRepositoryExchange({
@@ -112,6 +124,7 @@ export class TemplateRepositoryExchangeExecutor {
         contextId: input.contextId,
         repositoryId: input.repositoryId,
         expectedWorkingHead: input.expectedWorkingHead,
+        ...(participant ? { participant } : {}),
         sourcePlanDigest: sourcePlan.planDigest,
         repoPath: sourcePlan.repoPath,
         plan,
@@ -131,7 +144,7 @@ export class TemplateRepositoryExchangeExecutor {
     intentDigest: string;
     checkout: string;
     ingress: NativeDevelopmentSemanticIngress;
-  }): Promise<TemplateExchangeApplyReceipt> {
+  }, ctx?: ServiceContext): Promise<TemplateExchangeApplyReceipt> {
     const operationRoot = path.join(this.deps.root, input.intentDigest);
     assertWithin(this.deps.root, operationRoot);
     const markerPath = path.join(operationRoot, "operation.json");
@@ -139,6 +152,10 @@ export class TemplateRepositoryExchangeExecutor {
     if (marker.operationId !== input.operationId || marker.intentDigest !== input.intentDigest) {
       throw coded("EIDEMPOTENCYDRIFT", "Exchange apply does not match its reviewed plan");
     }
+    const access = await this.deps.resolveAccess?.(marker.contextId, ctx);
+    const participant = access && hash(workspaceParticipantIdentity(access.caller, access.ownerContextId));
+    if (participant !== marker.participant)
+      throw coded("EACCES", "The template exchange belongs to a different working copy");
     if ((await exactCheckout(input.checkout)) !== marker.checkout) {
       throw coded("EIDEMPOTENCYDRIFT", "Exchange checkout does not match its reviewed plan");
     }
@@ -152,6 +169,7 @@ export class TemplateRepositoryExchangeExecutor {
     applyPreparedTemplateRepositoryExchangeTarget(marker.plan, pending);
     let imported: VcsImportSnapshotResult | null = null;
     if (marker.direction === "import") {
+      const uploadPrincipal = participant && `template-exchange:${participant}:${marker.intentDigest}`;
       const descriptor = await scanNativeSnapshot({
         repositoryRoot: marker.plan.target,
         repositoryId: marker.repositoryId,
@@ -159,6 +177,7 @@ export class TemplateRepositoryExchangeExecutor {
         sessionId: `template-exchange-${marker.operationId}`,
         blobsDir: this.deps.blobsDir,
         persist: true,
+        ...(uploadPrincipal ? { uploadPrincipal } : {}),
       });
       imported = await this.deps.semantic.importSnapshot({
         developmentContextId: marker.contextId,
@@ -166,7 +185,9 @@ export class TemplateRepositoryExchangeExecutor {
         expectedWorkingHead: marker.expectedWorkingHead,
         commandId: `template-exchange:${marker.operationId}`,
         descriptor,
-        ingress: input.ingress,
+        ingress: access && uploadPrincipal
+          ? { ...input.ingress, participant: { access, uploadPrincipal } }
+          : input.ingress,
       });
     }
     const exchange = completeTemplateRepositoryExchange(marker.plan, pending);

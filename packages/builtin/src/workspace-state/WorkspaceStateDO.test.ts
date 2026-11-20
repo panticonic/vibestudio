@@ -1,0 +1,2584 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ledgerTest } from "../../../../tests/helpers/ledgerTest.js";
+
+import { canonicalEntityId, type EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
+import { WORKSPACE_STATE_DOLT_LOCAL, WorkspaceStateDO } from "./WorkspaceStateDO.js";
+import { FakeDoltStorage } from "@vibestudio/durable/test-dolt";
+import { createWorkspaceStateTestDO, type WorkspaceDOTestable } from "./testFixture.js";
+import type { UnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
+
+const SOURCE = "panels/example";
+const VERSION = "v1";
+const WORKSPACE_TABLES = [
+  "entities",
+  "runtime_resource_bindings",
+  "slots",
+  "panel_close_cleanup",
+  "slot_history",
+  "workspace_meta",
+  "lifecycle_epochs",
+  "lifecycle_leases",
+  "lifecycle_ops",
+  "do_alarms",
+  "do_alarm_test_policies",
+  "durable_work_owners",
+  "context_edges",
+];
+const CURRENT_SCHEMA_VERSION = WorkspaceStateDO.schemaVersion;
+const ACTIVE_AUTHORITY: UnitAuthorityManifest = {
+  provides: [],
+  requests: [
+    {
+      capability: "service:panel.getInfo",
+      resource: { kind: "exact", key: "panel:getInfo" },
+      tier: "gated",
+      evidence: "exact",
+    },
+  ],
+  // A validated envelope always carries its protocol declarations, so the
+  // round trip through activation returns exactly what went in.
+  serviceRequests: [],
+};
+
+function panelInput(overrides: Partial<Parameters<WorkspaceStateDO["entityReserve"]>[0]> = {}) {
+  return {
+    nativeOwner: null,
+    durableWorkQueues: [],
+    kind: "panel" as const,
+    source: { repoPath: SOURCE, effectiveVersion: VERSION },
+    contextId: "ctx-1",
+    key: "entry-1",
+    ...overrides,
+  };
+}
+
+function preparedPanelInput(
+  overrides: Partial<Parameters<WorkspaceStateDO["entityActivate"]>[0]> = {}
+) {
+  return panelInput({
+    activeBuildKey: "b".repeat(64),
+    activeExecutionDigest: "a".repeat(64),
+    activeAuthority: ACTIVE_AUTHORITY,
+    ...overrides,
+  });
+}
+
+function doInput(overrides: Partial<Parameters<WorkspaceStateDO["entityActivate"]>[0]> = {}) {
+  return {
+    nativeOwner: null,
+    durableWorkQueues: [],
+    kind: "do" as const,
+    source: { repoPath: SOURCE, effectiveVersion: VERSION },
+    contextId: "ctx-1",
+    className: "MyDO",
+    key: "k1",
+    ...overrides,
+  };
+}
+
+function activateAlarmKey(
+  instance: WorkspaceStateDO,
+  key: { source: string; className: string; objectKey: string }
+): EntityRecord {
+  return instance.entityActivate(
+    doInput({
+      source: { repoPath: key.source, effectiveVersion: VERSION },
+      className: key.className,
+      key: key.objectKey,
+    })
+  );
+}
+
+describe("workspace template panel initialization", () => {
+  const seeds = [{ source: SOURCE, stateArgs: { mode: "initial" } }, { source: "panels/second" }];
+
+  it("commits one durable set of preparing roots and resumes after restart without duplicates", async () => {
+    const { instance, fake } = await createWorkspaceStateTestDO();
+    const first = instance.initializePanels(seeds);
+    expect(first).toHaveLength(2);
+    expect(first.map((detail) => detail.entity.status)).toEqual(["preparing", "preparing"]);
+    expect(first[0]?.entity.stateArgs).toEqual({ mode: "initial" });
+    expect(
+      instance
+        .panelTreePage({ group: { kind: "roots", ownerUserId: null }, limit: 10 })
+        .nodes.map((node) => node.slotId)
+    ).toEqual(first.map((detail) => detail.slot.slot_id));
+    expect(
+      first.every(
+        (detail) => detail.slot.parent_slot_id === null && detail.slot.owner_user_id === null
+      )
+    ).toBe(true);
+    const restarted = await createWorkspaceStateTestDO({ fake: await fake.restart() });
+    expect(restarted.instance.initializePanels([{ source: "panels/changed-template" }])).toEqual(
+      first
+    );
+    expect(restarted.instance.entityListPreparingByKind("panel")).toHaveLength(2);
+  });
+
+  it("gives a private workspace's seeded panels their owner as a runtime principal", async () => {
+    // The seed is a panel principal, not just a slot: everything it launches
+    // inherits this stamp, and an ownerless principal attributes a person's
+    // effects to nobody.
+    const { instance } = await createWorkspaceStateTestDO();
+    const seeded = instance.initializePanels([{ source: "panels/chat" }], "alice");
+    expect(seeded).toHaveLength(1);
+    expect(seeded[0]?.entity.ownerUserId).toBe("alice");
+    expect(seeded[0]?.slot.owner_user_id).toBe("alice");
+
+    const { instance: shared } = await createWorkspaceStateTestDO();
+    const sharedSeed = shared.initializePanels([{ source: "panels/chat" }]);
+    expect(sharedSeed[0]?.entity.ownerUserId).toBeUndefined();
+  });
+
+  it("never places a terminal app in a panel slot", async () => {
+    const { instance } = await createWorkspaceStateTestDO();
+    expect(() =>
+      instance.slotCreate({
+        slotId: "terminal-root",
+        parentSlotId: null,
+        initialEntry: {
+          entryKey: "nav-1",
+          entityId: "panel:nav-1",
+          source: "terminal-apps/chat",
+          contextId: "ctx-1",
+        },
+      })
+    ).toThrow(/is a terminal app/);
+  });
+
+  it("seeds and migrates a private workspace into one durable owner tree", async () => {
+    const { instance } = await createWorkspaceStateTestDO();
+    instance.slotCreate({ slotId: "seeded-root", parentSlotId: null });
+    instance.slotCreate({
+      slotId: "seeded-child",
+      parentSlotId: "seeded-root",
+    });
+    instance.slotCreate({
+      slotId: "human-root",
+      parentSlotId: null,
+      ownerUserId: "alice",
+    });
+
+    expect(instance.initializePanels([], "alice")).toEqual([]);
+    expect(instance.panelTreeRootGroups({ limit: 10 }).groups).toEqual([
+      { ownerUserId: "alice", rootCount: 2 },
+    ]);
+    expect(
+      instance
+        .panelTreePage({ group: { kind: "roots", ownerUserId: "alice" }, limit: 10 })
+        .nodes.map((node) => node.slotId)
+    ).toEqual(["human-root", "seeded-root"]);
+    expect(instance.slotGet("seeded-child")?.owner_user_id).toBe("alice");
+
+    // These roots came from different persisted owner groups. Once normalized,
+    // the same root placement grammar used by desktop drag-and-drop can reorder
+    // them with an exact sibling anchor.
+    expect(() =>
+      instance.slotMove("seeded-root", null, { afterSlotId: "human-root" }, "alice")
+    ).not.toThrow();
+    expect(
+      instance
+        .panelTreePage({ group: { kind: "roots", ownerUserId: "alice" }, limit: 10 })
+        .nodes.map((node) => node.slotId)
+    ).toEqual(["seeded-root", "human-root"]);
+    const settledRevision = instance.panelTreeRootGroups({ limit: 10 }).revision;
+    expect(instance.initializePanels([], "alice")).toEqual([]);
+    expect(instance.panelTreeRootGroups({ limit: 10 }).revision).toBe(settledRevision);
+  });
+
+  it("assigns private ownership while creating template roots", async () => {
+    const { instance } = await createWorkspaceStateTestDO();
+    const initialized = instance.initializePanels(seeds, "alice");
+    expect(initialized).toHaveLength(2);
+    expect(initialized.every((detail) => detail.slot.owner_user_id === "alice")).toBe(true);
+    expect(instance.panelTreeRootGroups({ limit: 10 }).groups).toEqual([
+      { ownerUserId: "alice", rootCount: 2 },
+    ]);
+  });
+
+  it("rolls reservations, slots, history and initialization back together on a partial failure", async () => {
+    const { instance, sql } = await createWorkspaceStateTestDO();
+    const create = instance.slotCreate.bind(instance);
+    const failure = vi
+      .spyOn(instance, "slotCreate")
+      .mockImplementationOnce(create)
+      .mockImplementationOnce(() => {
+        throw new Error("injected seed failure");
+      });
+    expect(() => instance.initializePanels(seeds)).toThrow("injected seed failure");
+    failure.mockRestore();
+    for (const table of ["entities", "slots", "slot_history"]) {
+      expect(sql.exec(`SELECT COUNT(*) AS count FROM ${table}`).one()).toEqual({ count: 0 });
+    }
+    expect(
+      sql.exec("SELECT value FROM workspace_meta WHERE key = 'initial-panels'").toArray()
+    ).toEqual([]);
+    expect(instance.initializePanels(seeds)).toHaveLength(2);
+  });
+
+  it("preserves seed deletions on retry and after restart", async () => {
+    const { instance, fake } = await createWorkspaceStateTestDO();
+    for (const detail of instance.initializePanels(seeds)) instance.slotClose(detail.slot.slot_id);
+    const restarted = await createWorkspaceStateTestDO({ fake: await fake.restart() });
+    expect(restarted.instance.initializePanels(seeds)).toEqual([]);
+    expect(restarted.instance.panelTreeRootGroups({ limit: 10 }).groups).toEqual([]);
+  });
+
+  it("adopts previous client initialization including closed roots", async () => {
+    const { instance } = await createWorkspaceStateTestDO();
+    instance.slotCreate({ slotId: "old-root", parentSlotId: null });
+    instance.slotClose("old-root");
+    expect(instance.initializePanels(seeds)).toEqual([]);
+    expect(instance.entityListPreparingByKind("panel")).toEqual([]);
+  });
+
+  it("records an empty template as initialized", async () => {
+    const { instance } = await createWorkspaceStateTestDO();
+    expect(instance.initializePanels([])).toEqual([]);
+    expect(instance.initializePanels(seeds)).toEqual([]);
+  });
+});
+
+describe("WorkspaceStateDO schema", () => {
+  it("requires a fresh database for the current topology schema", async () => {
+    const fake = await FakeDoltStorage.create({ doltLocal: WORKSPACE_STATE_DOLT_LOCAL });
+    const sql = fake.storage.sql;
+    sql.exec(`CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
+    sql.exec(`INSERT INTO state (key, value) VALUES ('application_marker', 'preserved')`);
+    await expect(createWorkspaceStateTestDO({ fake })).rejects.toThrow(
+      /no current schema identity/u
+    );
+  });
+
+  ledgerTest("execution.vcs-store", async () => {
+    const { sql } = await createWorkspaceStateTestDO();
+    for (const table of WORKSPACE_TABLES) {
+      expect(
+        sql.exec(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).one()
+      ).toEqual({ name: table });
+    }
+    expect(
+      sql
+        .exec(`PRAGMA table_info(entities)`)
+        .toArray()
+        .map((column) => column["name"])
+    ).toEqual(
+      expect.arrayContaining(["active_build_key", "active_execution_digest", "active_authority"])
+    );
+    expect(
+      sql
+        .exec(`PRAGMA table_info(do_alarms)`)
+        .toArray()
+        .map((column) => column["name"])
+    ).toEqual([
+      "source",
+      "class_name",
+      "object_key",
+      "wake_at",
+      "dispatch_generation",
+      "dispatch_owner",
+    ]);
+    expect(sql.exec(`SELECT singleton, version FROM _vibestudio_schema`).one()).toEqual({
+      singleton: 1,
+      version: CURRENT_SCHEMA_VERSION,
+    });
+  });
+
+  it("rejects drift in a stamped current schema", async () => {
+    const fake = await FakeDoltStorage.create({ doltLocal: WORKSPACE_STATE_DOLT_LOCAL });
+    const sql = fake.storage.sql;
+    sql.exec(`CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
+    sql.exec(`CREATE TABLE _vibestudio_schema (singleton INTEGER PRIMARY KEY, version INTEGER)`);
+    sql.exec(
+      `INSERT INTO _vibestudio_schema (singleton, version) VALUES (1, ?)`,
+      CURRENT_SCHEMA_VERSION
+    );
+    await expect(createWorkspaceStateTestDO({ fake })).rejects.toThrow(
+      /schema identity table is malformed/
+    );
+  });
+});
+
+describe("WorkspaceStateDO.entityActivate", () => {
+  let instance: WorkspaceStateDO;
+  beforeEach(async () => {
+    ({ instance } = await createWorkspaceStateTestDO());
+  });
+
+  it("inserts a new active record when no prior row exists", () => {
+    const rec = instance.entityActivate(panelInput());
+    expect(rec).toMatchObject({
+      id: canonicalEntityId({ kind: "panel", key: "entry-1" }),
+      kind: "panel",
+      status: "active",
+      contextId: "ctx-1",
+      key: "entry-1",
+      cleanupComplete: true,
+    });
+    expect(rec.retiredAt).toBeUndefined();
+  });
+
+  it("is idempotent when called twice with identical identity on an active row", () => {
+    const a = instance.entityActivate(panelInput());
+    const b = instance.entityActivate(panelInput());
+    expect(b.id).toBe(a.id);
+    expect(b.status).toBe("active");
+    expect(b.createdAt).toBe(a.createdAt);
+    expect(b.authoritySessionId).toBe(a.authoritySessionId);
+  });
+
+  it("persists the validated authority envelope with the active incarnation", () => {
+    const rec = instance.entityActivate(
+      panelInput({
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+      })
+    );
+
+    expect(rec.activeAuthority).toEqual(ACTIVE_AUTHORITY);
+    expect(instance.entityResolve(rec.id)?.activeAuthority).toEqual(ACTIVE_AUTHORITY);
+  });
+
+  it("persists and exposes the immutable build key with the active incarnation", () => {
+    const rec = instance.entityActivate(
+      panelInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+      })
+    );
+
+    expect(rec.activeBuildKey).toBe("b".repeat(64));
+    expect(instance.entityResolve(rec.id)?.activeBuildKey).toBe("b".repeat(64));
+  });
+
+  it("restores the complete active executable incarnation after restart", async () => {
+    const first = await createWorkspaceStateTestDO();
+    const activated = first.instance.entityActivate(preparedPanelInput());
+
+    const restarted = await createWorkspaceStateTestDO({ fake: await first.fake.restart() });
+    expect(restarted.instance.entityResolveActive(activated.id)).toMatchObject({
+      id: activated.id,
+      status: "active",
+      activeBuildKey: "b".repeat(64),
+      activeExecutionDigest: "a".repeat(64),
+      activeAuthority: ACTIVE_AUTHORITY,
+      authoritySessionId: activated.authoritySessionId,
+    });
+  });
+
+  it("seals a reserved image without admitting it and rejects changed preparation", () => {
+    const reserved = instance.entityReserve(
+      panelInput({ source: { repoPath: SOURCE, effectiveVersion: "" } })
+    );
+    const sealed = instance.entityPrepareExecution(preparedPanelInput());
+    expect(sealed).toMatchObject({
+      status: "preparing",
+      authoritySessionId: reserved.authoritySessionId,
+      activeBuildKey: "b".repeat(64),
+      activeExecutionDigest: "a".repeat(64),
+    });
+    expect(instance.entityResolveActive(reserved.id)).toBeNull();
+    expect(instance.entityPrepareExecution(preparedPanelInput())).toEqual(sealed);
+    expect(() =>
+      instance.entityPrepareExecution({ ...preparedPanelInput(), activeBuildKey: "c".repeat(64) })
+    ).toThrow(/sealed preparation changed/);
+    expect(instance.entityAdvanceExecution(preparedPanelInput()).status).toBe("active");
+    expect(() => instance.entityPrepareExecution(preparedPanelInput())).toThrow(
+      /reserved incarnation/
+    );
+  });
+
+  it("reserves a non-executable panel and activates that same incarnation in place", () => {
+    const reserved = instance.entityReserve(
+      panelInput({ source: { repoPath: SOURCE, effectiveVersion: "" } })
+    );
+
+    expect(reserved).toMatchObject({
+      id: canonicalEntityId({ kind: "panel", key: "entry-1" }),
+      status: "preparing",
+      source: { repoPath: SOURCE, effectiveVersion: "" },
+    });
+    expect(instance.entityResolveActive(reserved.id)).toBeNull();
+
+    const activated = instance.entityAdvanceExecution(preparedPanelInput());
+    expect(activated).toMatchObject({
+      id: reserved.id,
+      status: "active",
+      source: { repoPath: SOURCE, effectiveVersion: expect.any(String) },
+      activeBuildKey: "b".repeat(64),
+      activeExecutionDigest: "a".repeat(64),
+      activeAuthority: ACTIVE_AUTHORITY,
+      createdAt: reserved.createdAt,
+      authoritySessionId: reserved.authoritySessionId,
+    });
+    expect(instance.entityResolveActive(reserved.id)?.id).toBe(reserved.id);
+  });
+
+  it("reserves every code-backed kind through the same durable operation", () => {
+    const input = {
+      kind: "worker" as const,
+      source: { repoPath: "workers/example", effectiveVersion: "" },
+      contextId: "ctx-worker",
+      key: "worker-1",
+    };
+    const reserved = instance.entityReserve(input);
+
+    expect(reserved).toMatchObject({
+      id: canonicalEntityId({
+        kind: "worker",
+        source: "workers/example",
+        key: "worker-1",
+      }),
+      kind: "worker",
+      status: "preparing",
+    });
+    expect(
+      instance.entityAdvanceExecution({
+        ...input,
+        source: { repoPath: "workers/example", effectiveVersion: "ev-worker" },
+        nativeOwner: null,
+        durableWorkQueues: [],
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+      })
+    ).toMatchObject({ kind: "worker", status: "active" });
+  });
+
+  it("commits a fresh panel's lifecycle owner in the reservation transaction", () => {
+    const reserved = instance.entityReserve(
+      panelInput({
+        source: { repoPath: SOURCE, effectiveVersion: "" },
+        lifecycleOwner: { contextId: "ctx-owner", entityId: "do:creator" },
+      })
+    );
+
+    expect(instance.contextEdgeListByChild(reserved.contextId)).toEqual([
+      {
+        ownerContextId: "ctx-owner",
+        kind: "lifecycle",
+        ownerEntityId: "do:creator",
+      },
+    ]);
+  });
+
+  it("rejects a second lifecycle parent and rolls back the conflicting reservation", () => {
+    instance.entityReserve(
+      panelInput({
+        source: { repoPath: SOURCE, effectiveVersion: "" },
+        lifecycleOwner: { contextId: "ctx-owner-a", entityId: "do:creator-a" },
+      })
+    );
+
+    expect(() =>
+      instance.entityReserve(
+        panelInput({
+          source: { repoPath: "panels/other", effectiveVersion: "" },
+          key: "entry-2",
+          lifecycleOwner: { contextId: "ctx-owner-b", entityId: "do:creator-b" },
+        })
+      )
+    ).toThrow(/already belongs to lifecycle owner ctx-owner-a/);
+    expect(instance.entityResolve(canonicalEntityId({ kind: "panel", key: "entry-2" }))).toBeNull();
+  });
+
+  it("rejects malformed or unbound immutable build keys at the durable boundary", () => {
+    expect(() =>
+      instance.entityActivate(
+        panelInput({ activeBuildKey: "not-a-build-key", activeExecutionDigest: "a".repeat(64) })
+      )
+    ).toThrow(/lowercase SHA-256 build key/);
+    expect(() => instance.entityActivate(panelInput({ activeBuildKey: "b".repeat(64) }))).toThrow(
+      /requires an activeExecutionDigest/
+    );
+  });
+
+  it("never rebinds an incarnation that already selected a different build key", () => {
+    instance.entityActivate(
+      panelInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+      })
+    );
+
+    expect(() =>
+      instance.entityActivate(
+        panelInput({
+          activeBuildKey: "c".repeat(64),
+          activeExecutionDigest: "d".repeat(64),
+          activeAuthority: ACTIVE_AUTHORITY,
+        })
+      )
+    ).toThrow(/activeBuildKey/);
+  });
+
+  it("advances a live identity only through the complete sealed execution transition", () => {
+    const initial = instance.entityActivate(preparedPanelInput());
+    const advanced = instance.entityAdvanceExecution(
+      preparedPanelInput({
+        source: { repoPath: SOURCE, effectiveVersion: "v2" },
+        activeBuildKey: "c".repeat(64),
+        activeExecutionDigest: "d".repeat(64),
+      })
+    );
+
+    expect(advanced).toMatchObject({
+      id: initial.id,
+      source: { repoPath: SOURCE, effectiveVersion: "v2" },
+      activeBuildKey: "c".repeat(64),
+      activeExecutionDigest: "d".repeat(64),
+      activeAuthority: ACTIVE_AUTHORITY,
+      createdAt: initial.createdAt,
+      authoritySessionId: initial.authoritySessionId,
+    });
+    expect(() =>
+      instance.entityAdvanceExecution(
+        preparedPanelInput({
+          source: { repoPath: "panels/other", effectiveVersion: "v3" },
+          activeBuildKey: "e".repeat(64),
+          activeExecutionDigest: "f".repeat(64),
+        })
+      )
+    ).toThrow(/Identity collision/);
+  });
+
+  it("advances a source publication as one durable transaction", () => {
+    instance.entityActivate(preparedPanelInput({ key: "one" }));
+    instance.entityActivate(preparedPanelInput({ key: "two" }));
+
+    expect(() =>
+      instance.entityAdvanceExecutions([
+        preparedPanelInput({
+          key: "one",
+          source: { repoPath: SOURCE, effectiveVersion: "v2" },
+          activeBuildKey: "c".repeat(64),
+          activeExecutionDigest: "d".repeat(64),
+        }),
+        preparedPanelInput({
+          key: "two",
+          contextId: "ctx-other",
+          source: { repoPath: SOURCE, effectiveVersion: "v2" },
+          activeBuildKey: "c".repeat(64),
+          activeExecutionDigest: "d".repeat(64),
+        }),
+      ])
+    ).toThrow(/Identity collision/);
+
+    const records = instance.entityListActiveByKind("panel");
+    expect(records).toHaveLength(2);
+    expect(records.every((record) => record.activeBuildKey === "b".repeat(64))).toBe(true);
+  });
+
+  it("rejects malformed active authority at the durable write boundary", () => {
+    expect(() =>
+      instance.entityActivate(
+        panelInput({
+          activeAuthority: { requests: [], extra: true } as never,
+        })
+      )
+    ).toThrow(/unknown field.*extra/);
+  });
+
+  it("rejects non-canonical execution identity on new activations", () => {
+    expect(() =>
+      instance.entityActivate(panelInput({ activeExecutionDigest: "0123456789abcdef" }))
+    ).toThrow(/lowercase SHA-256 digest/);
+  });
+
+  it("rejects authority that is not bound to an exact execution identity", () => {
+    expect(() =>
+      instance.entityActivate(panelInput({ activeAuthority: ACTIVE_AUTHORITY }))
+    ).toThrow(/requires an activeExecutionDigest/);
+  });
+
+  it("treats a missing-to-bound owner transition as an identity collision", () => {
+    const initial = instance.entityActivate(doInput());
+    expect(initial.ownerUserId).toBeUndefined();
+
+    expect(() => instance.entityActivate(doInput({ ownerUserId: "usr_alice" }))).toThrow(
+      /ownerUserId/
+    );
+  });
+
+  it("treats a missing-to-bound agent binding transition as an identity collision", () => {
+    instance.entityActivate(doInput());
+
+    expect(() =>
+      instance.entityActivate(
+        doInput({
+          agentBinding: {
+            entityId: "agent-1",
+            contextId: "ctx-1",
+            channelId: "channel-1",
+          },
+        })
+      )
+    ).toThrow(/agentBinding/);
+  });
+
+  it("retains execution authority across recovery and refuses scope substitution", async () => {
+    const executionAuthority = {
+      kind: "website" as const,
+      website: {
+        subject: "website:one" as const,
+        userId: "user:one" as const,
+        workspaceId: "workspace:one",
+        origin: "https://example.com",
+        binding: { subject: "website:one" as const, generation: 0 },
+      },
+    };
+    const input = doInput({
+      executionAuthority,
+      activeBuildKey: "b".repeat(64),
+      activeExecutionDigest: "a".repeat(64),
+      activeAuthority: ACTIVE_AUTHORITY,
+    });
+    const created = instance.entityActivate(input);
+    expect(created.executionAuthority).toEqual(executionAuthority);
+    expect(instance.entityActivate(input).executionAuthority).toEqual(executionAuthority);
+    expect(() => instance.entityActivate(doInput())).toThrow(/executionAuthority/);
+    expect(() =>
+      instance.entityAdvanceExecution({ ...input, executionAuthority: undefined })
+    ).toThrow(/executionAuthority/);
+    expect(
+      instance.entityAdvanceExecution({
+        ...input,
+        source: { ...input.source, effectiveVersion: "v2" },
+      }).executionAuthority
+    ).toEqual(executionAuthority);
+  });
+
+  it("normalizes agent bindings into only the non-derivable entity edge and channel", async () => {
+    const { instance: isolated, sql } = await createWorkspaceStateTestDO();
+    const sessionId = canonicalEntityId({ kind: "session", key: "external" });
+    const session = isolated.entityActivate({
+      nativeOwner: null,
+      durableWorkQueues: [],
+      kind: "session",
+      source: { repoPath: "external-agent", effectiveVersion: "" },
+      contextId: "ctx-agent",
+      key: "external",
+      agentBinding: {
+        entityId: sessionId,
+        contextId: "ctx-agent",
+        channelId: "channel:external",
+      },
+    });
+    const relay = isolated.entityActivate(
+      doInput({
+        contextId: "ctx-agent",
+        agentBinding: {
+          entityId: session.id,
+          contextId: "ctx-agent",
+          channelId: "channel:external",
+        },
+      })
+    );
+
+    expect(
+      sql
+        .exec(`SELECT agent_entity_id, agent_channel_id FROM entities WHERE id = ?`, session.id)
+        .one()
+    ).toEqual({ agent_entity_id: null, agent_channel_id: "channel:external" });
+    expect(
+      sql
+        .exec(`SELECT agent_entity_id, agent_channel_id FROM entities WHERE id = ?`, relay.id)
+        .one()
+    ).toEqual({ agent_entity_id: session.id, agent_channel_id: "channel:external" });
+    expect(
+      sql
+        .exec(`PRAGMA table_info(entities)`)
+        .toArray()
+        .map((row) => row["name"])
+    ).not.toContain("agent_binding");
+    expect(isolated.entityResolve(session.id)?.agentBinding).toEqual({
+      entityId: session.id,
+      contextId: "ctx-agent",
+      channelId: "channel:external",
+    });
+    expect(isolated.entityResolve(relay.id)?.agentBinding).toEqual({
+      entityId: session.id,
+      contextId: "ctx-agent",
+      channelId: "channel:external",
+    });
+  });
+
+  it("idempotently binds an unbound cloned agent to its child channel", () => {
+    const agent = instance.entityActivate(
+      doInput({
+        source: { repoPath: "workers/agent-worker", effectiveVersion: VERSION },
+        className: "AiChatWorker",
+        key: "agent-fork",
+        contextId: "ctx-fork",
+      })
+    );
+
+    const first = instance.entityRebindAgentChannel(agent.id, "chat-fork");
+    const second = instance.entityRebindAgentChannel(agent.id, "chat-fork");
+
+    expect(first.agentBinding).toEqual({
+      entityId: agent.id,
+      contextId: "ctx-fork",
+      channelId: "chat-fork",
+    });
+    expect(second).toEqual(first);
+  });
+
+  it("does not convert an external relay into a self-hosted agent", () => {
+    const relay = instance.entityActivate(
+      doInput({
+        agentBinding: {
+          entityId: "session:external",
+          contextId: "ctx-1",
+          channelId: "chat-parent",
+        },
+      })
+    );
+
+    expect(() => instance.entityRebindAgentChannel(relay.id, "chat-fork")).toThrow(
+      /relays another agent/
+    );
+  });
+
+  it("reactivates a retired row with identical identity", () => {
+    const initial = instance.entityActivate(panelInput());
+    instance.entityRetire(initial.id);
+    const retired = instance.entityResolve(initial.id);
+    expect(retired?.status).toBe("retired");
+    expect(retired?.retiredAt).toBeTypeOf("number");
+
+    expect(() => instance.entityActivate(panelInput())).toThrow(/retirement cleanup/);
+    instance.entityCleanupComplete(initial.id, initial.authoritySessionId!);
+
+    const reactivated = instance.entityActivate(panelInput());
+    expect(reactivated.id).toBe(initial.id);
+    expect(reactivated.status).toBe("active");
+    expect(reactivated.retiredAt).toBeUndefined();
+    expect(reactivated.cleanupComplete).toBe(true);
+    expect(reactivated.authoritySessionId).toBeTypeOf("string");
+    expect(reactivated.authoritySessionId).not.toBe(initial.authoritySessionId);
+  });
+
+  it("fences stale cleanup completion across repeated lifetimes of the same entity", () => {
+    const initial = instance.entityActivate(doInput());
+    instance.entityRetire(initial.id);
+    instance.entityCleanupComplete(initial.id, "foreign-lifetime");
+    expect(instance.entityResolve(initial.id)?.cleanupComplete).toBe(false);
+    expect(() => instance.entityActivate(doInput())).toThrow(/retirement cleanup/);
+
+    instance.entityCleanupComplete(initial.id, initial.authoritySessionId!);
+    const reattached = instance.entityActivate(doInput());
+    instance.entityCleanupComplete(initial.id, initial.authoritySessionId!);
+    expect(instance.entityResolveActive(initial.id)).toEqual(reattached);
+    instance.entityRetire(reattached.id);
+    instance.entityCleanupComplete(initial.id, initial.authoritySessionId!);
+    expect(instance.entityResolve(initial.id)?.cleanupComplete).toBe(false);
+    instance.entityCleanupComplete(reattached.id, reattached.authoritySessionId!);
+    expect(instance.entityResolve(initial.id)?.cleanupComplete).toBe(true);
+  });
+
+  it("rolls back failed lifetime renewal without making the retired owner executable", async () => {
+    const { instance: owner, sql } = await createWorkspaceStateTestDO();
+    const initial = owner.entityActivate(doInput());
+    owner.entityRetire(initial.id);
+    owner.entityCleanupComplete(initial.id, initial.authoritySessionId!);
+    sql.exec(`CREATE TRIGGER reject_lifetime_renewal
+      BEFORE UPDATE OF authority_session_id ON entities
+      BEGIN SELECT RAISE(ABORT, 'lifetime commit rejected'); END`);
+    expect(() => owner.entityActivate(doInput())).toThrow(/lifetime commit rejected/);
+    expect(owner.entityResolve(initial.id)).toMatchObject({
+      status: "retired",
+      authoritySessionId: initial.authoritySessionId,
+      cleanupComplete: true,
+    });
+    expect(owner.entityResolveActive(initial.id)).toBeNull();
+    sql.exec("DROP TRIGGER reject_lifetime_renewal");
+    expect(owner.entityActivate(doInput()).authoritySessionId).not.toBe(initial.authoritySessionId);
+  });
+
+  it("throws IDENTITY_COLLISION when source differs for a panel (canonical id collides on key)", () => {
+    // panel canonical id is `panel:<key>` and is source-independent, so two
+    // activates with the same key but different sources hit the same row.
+    instance.entityActivate(panelInput({ key: "p1" }));
+    expect(() =>
+      instance.entityActivate({
+        nativeOwner: null,
+        durableWorkQueues: [],
+        kind: "panel",
+        source: { repoPath: "panels/other", effectiveVersion: VERSION },
+        contextId: "ctx-1",
+        key: "p1",
+      })
+    ).toThrow(/Identity collision/);
+  });
+
+  it("throws IDENTITY_COLLISION when effectiveVersion differs for a do (canonical id matches)", () => {
+    instance.entityActivate(doInput());
+    expect(() =>
+      instance.entityActivate(doInput({ source: { repoPath: SOURCE, effectiveVersion: "v2" } }))
+    ).toThrow(/Identity collision/);
+  });
+
+  it("throws IDENTITY_COLLISION when contextId differs", () => {
+    instance.entityActivate(doInput());
+    expect(() => instance.entityActivate(doInput({ contextId: "ctx-other" }))).toThrow(
+      /Identity collision/
+    );
+  });
+
+  it("allows stateArgs to change on an idempotent activate", () => {
+    instance.entityActivate(doInput({ stateArgs: { a: 1 } }));
+    const rec = instance.entityActivate(doInput({ stateArgs: { a: 2 } }));
+    expect(rec.stateArgs).toEqual({ a: 1 });
+  });
+});
+
+describe("WorkspaceStateDO.entityRetire", () => {
+  let instance: WorkspaceStateDO;
+  beforeEach(async () => {
+    ({ instance } = await createWorkspaceStateTestDO());
+  });
+
+  it("is idempotent on already-retired rows", () => {
+    const rec = instance.entityActivate(panelInput());
+    const first = instance.entityRetire(rec.id);
+    const second = instance.entityRetire(rec.id);
+    expect(first?.status).toBe("retired");
+    expect(second?.status).toBe("retired");
+    expect(second?.retiredAt).toBe(first?.retiredAt);
+  });
+
+  it("returns null when retiring a missing row", () => {
+    expect(instance.entityRetire("panel:missing")).toBeNull();
+  });
+});
+
+describe("WorkspaceStateDO runtime resource bindings", () => {
+  let instance: WorkspaceStateDO;
+  beforeEach(async () => {
+    ({ instance } = await createWorkspaceStateTestDO());
+  });
+
+  const binding = (slotId: string) => ({
+    resource: { kind: "panel-slot", id: slotId },
+    capabilities: ["panel.inspect"],
+    scope: { kind: "agent-channel" as const, channelId: "channel-1" },
+  });
+
+  it("persists validated relationships independently of revocable grants", () => {
+    const entity = instance.entityActivate(doInput());
+    instance.runtimeResourceBindingsReplace(entity.id, [binding("slot-a"), binding("slot-b")]);
+
+    expect(instance.runtimeResourceBindingEntities("panel-slot", ["slot-b", "slot-c"])).toEqual([
+      entity.id,
+    ]);
+    expect(instance.runtimeResourceBindingsForEntity(entity.id)).toEqual([
+      binding("slot-a"),
+      binding("slot-b"),
+    ]);
+    instance.runtimeResourceBindingsRelease(entity.id);
+    expect(instance.runtimeResourceBindingEntities("panel-slot", ["slot-a"])).toEqual([]);
+    expect(instance.runtimeResourceBindingsForEntity(entity.id)).toEqual([]);
+  });
+
+  it("removes relationships atomically with entity retirement", () => {
+    const entity = instance.entityActivate(doInput());
+    instance.runtimeResourceBindingsReplace(entity.id, [binding("slot-a")]);
+
+    instance.entityRetire(entity.id);
+
+    expect(instance.runtimeResourceBindingEntities("panel-slot", ["slot-a"])).toEqual([]);
+  });
+
+  it("rejects relationships for inactive entities", () => {
+    expect(() =>
+      instance.runtimeResourceBindingsReplace("do:panels/example:MyDO:missing", [binding("slot-a")])
+    ).toThrow(/not active/u);
+  });
+});
+
+describe("WorkspaceStateDO.entityGc", () => {
+  let instance: WorkspaceStateDO;
+  beforeEach(async () => {
+    ({ instance } = await createWorkspaceStateTestDO());
+  });
+
+  it("with {all:true, graceMs:0} deletes retired rows", () => {
+    const rec = instance.entityActivate(panelInput());
+    instance.entityRetire(rec.id);
+    const deleted = instance.entityGc({ all: true, graceMs: 0 });
+    expect(deleted).toEqual([rec.id]);
+    expect(instance.entityResolve(rec.id)).toBeNull();
+  });
+
+  it("does not delete active rows", () => {
+    const rec = instance.entityActivate(panelInput());
+    const deleted = instance.entityGc({ all: true, graceMs: 0 });
+    expect(deleted).toEqual([]);
+    expect(instance.entityResolve(rec.id)).not.toBeNull();
+  });
+
+  it("does not delete retired rows referenced by slot_history", () => {
+    const rec = instance.entityActivate(panelInput({ key: "slot-entry" }));
+    instance.slotCreate({
+      slotId: "slot-A",
+      parentSlotId: null,
+      initialEntry: {
+        entryKey: rec.key,
+        entityId: rec.id,
+        source: SOURCE,
+        contextId: "ctx-1",
+      },
+    });
+    instance.entityRetire(rec.id);
+    const deleted = instance.entityGc({ all: true, graceMs: 0 });
+    expect(deleted).toEqual([]);
+    expect(instance.entityResolve(rec.id)).not.toBeNull();
+  });
+
+  it("respects the grace window", () => {
+    const rec = instance.entityActivate(panelInput());
+    instance.entityRetire(rec.id);
+    // graceMs of 10 minutes is far longer than the just-now retirement.
+    expect(instance.entityGc({ all: true, graceMs: 10 * 60 * 1000 })).toEqual([]);
+    expect(instance.entityResolve(rec.id)).not.toBeNull();
+  });
+});
+
+describe("WorkspaceStateDO slot operations", () => {
+  let instance: WorkspaceDOTestable;
+  beforeEach(async () => {
+    ({ instance } = await createWorkspaceStateTestDO());
+  });
+
+  it("resumes an identical slot creation without duplicating history", () => {
+    const entity = instance.entityActivate(preparedPanelInput({ key: "retry-entry" }));
+    const input = {
+      slotId: "retry-slot",
+      parentSlotId: null,
+      initialEntry: {
+        entryKey: entity.key,
+        entityId: entity.id,
+        source: SOURCE,
+        contextId: "ctx-1",
+      },
+    };
+
+    instance.slotCreate(input);
+    expect(() => instance.slotCreate(input)).not.toThrow();
+    expect(instance.panelTreeDetail("retry-slot")).toMatchObject({
+      slot: { current_entry_key: "retry-entry", current_entity_id: entity.id },
+      currentHistory: { cursor: 0, entry_key: "retry-entry" },
+    });
+    expect(instance.slotHistoryRelative("retry-slot", -1)).toBeNull();
+    expect(instance.slotHistoryRelative("retry-slot", 1)).toBeNull();
+  });
+
+  it("binds root ownership into the resumable slot identity", () => {
+    const input = {
+      slotId: "owned-retry-slot",
+      parentSlotId: null,
+      ownerUserId: "user-a",
+    };
+
+    instance.slotCreate(input);
+    expect(() => instance.slotCreate(input)).not.toThrow();
+    expect(() => instance.slotCreate({ ...input, ownerUserId: "user-b" })).toThrow(/ownerUserId/);
+    expect(
+      instance
+        .panelTreePage({
+          group: { kind: "roots", ownerUserId: "user-a" },
+          limit: 10,
+        })
+        .nodes.map((node) => node.slotId)
+    ).toEqual(["owned-retry-slot"]);
+  });
+
+  it("treats equivalent JSON with different property order as the same retry", () => {
+    const entity = instance.entityActivate(preparedPanelInput({ key: "canonical-entry" }));
+    const base = {
+      slotId: "canonical-slot",
+      parentSlotId: null,
+      initialEntry: {
+        entryKey: entity.key,
+        entityId: entity.id,
+        source: SOURCE,
+        contextId: "ctx-1",
+        stateArgs: { theme: "dark", nested: { enabled: true, count: 2 } },
+        options: { ref: "main", flags: { inspect: true, focus: false } },
+      },
+    };
+    instance.slotCreate(base);
+
+    expect(() =>
+      instance.slotCreate({
+        ...base,
+        initialEntry: {
+          ...base.initialEntry,
+          stateArgs: { nested: { count: 2, enabled: true }, theme: "dark" },
+          options: { flags: { focus: false, inspect: true }, ref: "main" },
+        },
+      })
+    ).not.toThrow();
+    expect(instance.slotHistoryRelative("canonical-slot", -1)).toBeNull();
+  });
+
+  it("rejects a reused slot id with a different durable identity", () => {
+    const first = instance.entityActivate(preparedPanelInput({ key: "collision-a" }));
+    const second = instance.entityActivate(preparedPanelInput({ key: "collision-b" }));
+    instance.slotCreate({
+      slotId: "collision-slot",
+      parentSlotId: null,
+      initialEntry: {
+        entryKey: first.key,
+        entityId: first.id,
+        source: SOURCE,
+        contextId: "ctx-1",
+      },
+    });
+
+    expect(() =>
+      instance.slotCreate({
+        slotId: "collision-slot",
+        parentSlotId: null,
+        initialEntry: {
+          entryKey: second.key,
+          entityId: second.id,
+          source: SOURCE,
+          contextId: "ctx-1",
+        },
+      })
+    ).toThrow(/Slot identity collision/);
+    expect(instance.panelTreeDetail("collision-slot")).toMatchObject({
+      slot: { current_entry_key: "collision-a", current_entity_id: first.id },
+    });
+  });
+
+  it("rejects a retry that changes history options under the same slot identity", () => {
+    const entity = instance.entityActivate(preparedPanelInput({ key: "option-entry" }));
+    const base = {
+      slotId: "option-slot",
+      parentSlotId: null,
+      initialEntry: {
+        entryKey: entity.key,
+        entityId: entity.id,
+        source: SOURCE,
+        contextId: "ctx-1",
+        options: { ref: "main" },
+      },
+    };
+    instance.slotCreate(base);
+
+    expect(() =>
+      instance.slotCreate({
+        ...base,
+        initialEntry: { ...base.initialEntry, options: { ref: "feature" } },
+      })
+    ).toThrow(/options/);
+  });
+
+  it("keyset-pages sibling groups without reading the complete forest", () => {
+    for (const index of ["oldest", "middle", "newest"] as const) {
+      const entity = instance.entityActivate(preparedPanelInput({ key: `page-${index}` }));
+      instance.slotCreateAs("user-a", {
+        slotId: `slot-${index}`,
+        parentSlotId: null,
+        initialEntry: {
+          entryKey: entity.key,
+          entityId: entity.id,
+          source: SOURCE,
+          contextId: "ctx-1",
+        },
+      });
+    }
+
+    const first = instance.panelTreePage({
+      group: { kind: "roots", ownerUserId: "user-a" },
+      limit: 2,
+    });
+    expect(first.nodes.map((node) => node.slotId)).toEqual(["slot-newest", "slot-middle"]);
+    expect(first.nodes.every((node) => !("kind" in node) && !("title" in node))).toBe(true);
+    expect(first.nextCursor).not.toBeNull();
+
+    const second = instance.panelTreePage({
+      group: { kind: "roots", ownerUserId: "user-a" },
+      cursor: first.nextCursor!,
+      limit: 2,
+    });
+    expect(second.nodes.map((node) => node.slotId)).toEqual(["slot-oldest"]);
+    expect(second.nextCursor).toBeNull();
+  });
+
+  it("streams ten thousand newest-first siblings through bounded keyset pages", () => {
+    const sql = (
+      instance as unknown as {
+        sql: { exec(statement: string, ...bindings: unknown[]): { toArray(): unknown[] } };
+      }
+    ).sql;
+    sql.exec(
+      `WITH RECURSIVE sequence(i) AS (
+         VALUES(1)
+         UNION ALL
+         SELECT i + 1 FROM sequence WHERE i < 10000
+       )
+       INSERT INTO slots (
+         slot_id, parent_slot_id, current_entity_id, current_entry_key,
+         sort_key, owner_user_id, created_at, closed_at
+       )
+       SELECT printf('bulk-%05d', i), NULL, NULL, NULL, -i, 'bulk-owner', i, NULL
+         FROM sequence`
+    );
+
+    const seen = new Set<string>();
+    let cursor: string | undefined;
+    let pageCount = 0;
+    do {
+      const page = instance.panelTreePage({
+        group: { kind: "roots", ownerUserId: "bulk-owner" },
+        ...(cursor ? { cursor } : {}),
+        limit: 200,
+      });
+      expect(page.nodes.length).toBeLessThanOrEqual(200);
+      for (const node of page.nodes) {
+        expect(seen.has(node.slotId)).toBe(false);
+        seen.add(node.slotId);
+      }
+      pageCount += 1;
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor);
+
+    expect(pageCount).toBe(50);
+    expect(seen.size).toBe(10_000);
+    expect([...seen].slice(0, 3)).toEqual(["bulk-10000", "bulk-09999", "bulk-09998"]);
+  });
+
+  it("projects panel surface kind from durable navigation history", () => {
+    const workspaceEntity = instance.entityActivate(preparedPanelInput({ key: "workspace" }));
+    instance.slotCreate({
+      slotId: "workspace-slot",
+      parentSlotId: null,
+      initialEntry: {
+        entryKey: workspaceEntity.key,
+        entityId: workspaceEntity.id,
+        source: "panels/example",
+        contextId: "ctx-1",
+      },
+    });
+    const browserEntity = instance.entityActivate(
+      preparedPanelInput({
+        key: "browser",
+        source: { repoPath: "browser:https://example.com", effectiveVersion: VERSION },
+      })
+    );
+    instance.slotCreate({
+      slotId: "browser-slot",
+      parentSlotId: null,
+      initialEntry: {
+        entryKey: browserEntity.key,
+        entityId: browserEntity.id,
+        source: "browser:https://example.com",
+        contextId: "ctx-1",
+      },
+    });
+
+    const page = instance.panelTreePage({
+      group: { kind: "roots", ownerUserId: null },
+      limit: 10,
+    });
+    expect(page.nodes.map(({ slotId }) => slotId)).toEqual(["browser-slot", "workspace-slot"]);
+    expect(page.nodes.every((node) => !("kind" in node) && !("title" in node))).toBe(true);
+    expect(instance.panelTreePath("browser-slot")?.nodes.at(-1)).toMatchObject({
+      slotId: "browser-slot",
+      source: "browser:https://example.com",
+      contextId: "ctx-1",
+      runtimeEntityId: browserEntity.id,
+    });
+  });
+
+  it("moves panels between stable adjacent anchors without client-side ranks", () => {
+    for (const id of ["oldest", "middle", "newest"]) {
+      instance.slotCreateAs("user-a", {
+        slotId: id,
+        parentSlotId: null,
+      });
+    }
+    expect(
+      instance
+        .panelTreePage({
+          group: { kind: "roots", ownerUserId: "user-a" },
+          limit: 10,
+        })
+        .nodes.map((node) => node.slotId)
+    ).toEqual(["newest", "middle", "oldest"]);
+
+    instance.slotMove("oldest", null, { beforeSlotId: "newest", afterSlotId: "middle" }, "user-a");
+
+    expect(
+      instance
+        .panelTreePage({
+          group: { kind: "roots", ownerUserId: "user-a" },
+          limit: 10,
+        })
+        .nodes.map((node) => node.slotId)
+    ).toEqual(["newest", "oldest", "middle"]);
+  });
+
+  it("keyset-pages owner root groups independently of root siblings", () => {
+    for (const ownerUserId of [null, "alice", "bob"]) {
+      instance.slotCreateAs(ownerUserId ?? undefined, {
+        slotId: `root-${ownerUserId ?? "system"}`,
+        parentSlotId: null,
+      });
+    }
+    const first = instance.panelTreeRootGroups({ limit: 2 });
+    expect(first.groups.map((group) => group.ownerUserId)).toEqual([null, "alice"]);
+    expect(first.nextCursor).not.toBeNull();
+    const second = instance.panelTreeRootGroups({
+      cursor: first.nextCursor!,
+      limit: 2,
+    });
+    expect(second.groups.map((group) => group.ownerUserId)).toEqual(["bob"]);
+    expect(second.nextCursor).toBeNull();
+  });
+
+  it("returns revision-consistent addressed detail without materializing history", () => {
+    expect(instance.panelTreeRootGroups({ limit: 1 }).revision).toBe(0);
+    const entryA = instance.entityActivate(preparedPanelInput({ key: "snapshot-a" }));
+    const entryB = instance.entityActivate(preparedPanelInput({ key: "snapshot-b" }));
+    instance.slotCreate({
+      slotId: "snapshot-slot",
+      parentSlotId: null,
+      initialEntry: {
+        entryKey: entryA.key,
+        entityId: entryA.id,
+        source: SOURCE,
+        contextId: "ctx-1",
+        stateArgs: { step: "a" },
+      },
+    });
+
+    const created = instance.panelTreeDetail("snapshot-slot");
+    expect(created).not.toBeNull();
+    if (!created) throw new Error("expected panel detail");
+    expect(created.revision).toBeGreaterThan(0);
+    expect(created.slot.slot_id).toBe("snapshot-slot");
+    expect(created.currentHistory).toMatchObject({
+      entry_key: entryA.key,
+      entity_id: entryA.id,
+      state_args: JSON.stringify({ step: "a" }),
+    });
+    expect(created.entity.id).toBe(entryA.id);
+
+    instance.slotCommitPreparedNavigation({
+      slotId: "snapshot-slot",
+      expectedCurrentEntityId: entryA.id,
+      mutation: {
+        kind: "append",
+        entry: {
+          entryKey: entryB.key,
+          entityId: entryB.id,
+          source: SOURCE,
+          contextId: "ctx-1",
+          stateArgs: { step: "b" },
+        },
+      },
+    });
+    const navigated = instance.panelTreeDetail("snapshot-slot");
+    expect(navigated).not.toBeNull();
+    if (!navigated) throw new Error("expected navigated detail");
+    expect(navigated.revision).toBeGreaterThan(created.revision);
+    expect(navigated.slot.current_entity_id).toBe(entryB.id);
+    expect(navigated.currentHistory.entity_id).toBe(entryB.id);
+    const earlier = instance.slotHistoryRelative("snapshot-slot", -1);
+    expect(earlier).toMatchObject({
+      slot_id: "snapshot-slot",
+      entry_key: entryA.key,
+      entity_id: entryA.id,
+      recorded_at: expect.any(Number),
+    });
+    expect(instance.slotHistoryEntry("snapshot-slot", entryA.key)).toEqual(earlier);
+    expect(instance.slotHistoryEntry("another-slot", entryA.key)).toBeNull();
+
+    instance.slotPatchCurrentStateArgs(
+      "snapshot-slot",
+      { step: "updated" },
+      {
+        entryKey: navigated.slot.current_entry_key!,
+        activeBuildKey: navigated.entity.activeBuildKey ?? null,
+      }
+    );
+    const updated = instance.panelTreeDetail("snapshot-slot");
+    expect(updated).not.toBeNull();
+    if (!updated) throw new Error("expected updated detail");
+    expect(updated.revision).toBeGreaterThan(navigated.revision);
+    expect(updated.currentHistory.state_args).toBe(JSON.stringify({ step: "updated" }));
+    expect(updated.entity.stateArgs).toEqual({ step: "updated" });
+  });
+
+  it("atomically appends, selects, and replaces prepared panel incarnations", () => {
+    const entryA = instance.entityActivate(preparedPanelInput({ key: "a" }));
+    const entryB = instance.entityActivate(preparedPanelInput({ key: "b" }));
+    const entryC = instance.entityActivate(preparedPanelInput({ key: "c" }));
+
+    instance.slotCreate({
+      slotId: "slot-1",
+      parentSlotId: null,
+      initialEntry: {
+        entryKey: entryA.key,
+        entityId: entryA.id,
+        source: SOURCE,
+        contextId: "ctx-1",
+      },
+    });
+    const appended = instance.slotCommitPreparedNavigation({
+      slotId: "slot-1",
+      expectedCurrentEntityId: entryA.id,
+      mutation: {
+        kind: "append",
+        entry: {
+          entryKey: entryB.key,
+          entityId: entryB.id,
+          source: SOURCE,
+          contextId: "ctx-1",
+        },
+      },
+    });
+    expect(appended).toEqual({
+      previousEntityId: entryA.id,
+      currentEntityId: entryB.id,
+      currentEntryKey: entryB.key,
+      cursor: 1,
+    });
+
+    const selected = instance.slotCommitPreparedNavigation({
+      slotId: "slot-1",
+      expectedCurrentEntityId: entryB.id,
+      mutation: { kind: "select", entryKey: entryA.key },
+    });
+    expect(selected.cursor).toBe(0);
+
+    const replaced = instance.slotCommitPreparedNavigation({
+      slotId: "slot-1",
+      expectedCurrentEntityId: entryA.id,
+      mutation: {
+        kind: "replace",
+        entry: {
+          entryKey: entryC.key,
+          entityId: entryC.id,
+          source: SOURCE,
+          contextId: "ctx-1",
+        },
+      },
+    });
+    expect(replaced.cursor).toBe(0);
+    const slot = instance.slotGet("slot-1");
+    expect(slot?.current_entry_key).toBe(entryC.key);
+    expect(slot?.current_entity_id).toBe(entryC.id);
+
+    expect(instance.slotHistoryRelative("slot-1", -1)).toBeNull();
+    expect(instance.slotHistoryRelative("slot-1", 1)?.entry_key).toBe(entryB.key);
+  });
+
+  it("commits active external-document panels without a code execution image", () => {
+    const current = instance.entityActivate(preparedPanelInput({ key: "external-current" }));
+    const external = instance.entityActivate(
+      panelInput({
+        key: "external-next",
+        source: {
+          repoPath: "browser:https://example.org/",
+          effectiveVersion: "",
+        },
+      })
+    );
+    instance.slotCreate({
+      slotId: "external-slot",
+      parentSlotId: null,
+      initialEntry: {
+        entryKey: current.key,
+        entityId: current.id,
+        source: SOURCE,
+        contextId: "ctx-1",
+      },
+    });
+
+    expect(
+      instance.slotCommitPreparedNavigation({
+        slotId: "external-slot",
+        expectedCurrentEntityId: current.id,
+        mutation: {
+          kind: "append",
+          entry: {
+            entryKey: external.key,
+            entityId: external.id,
+            source: "browser:https://example.org/",
+            contextId: "ctx-1",
+          },
+        },
+      })
+    ).toMatchObject({
+      previousEntityId: current.id,
+      currentEntityId: external.id,
+      currentEntryKey: external.key,
+    });
+  });
+
+  it("rejects stale or incomplete prepared swaps without changing history or current", () => {
+    const e1 = instance.entityActivate(preparedPanelInput({ key: "e1" }));
+    const incomplete = instance.entityActivate(panelInput({ key: "incomplete" }));
+    const staleCandidate = instance.entityActivate(preparedPanelInput({ key: "stale" }));
+    instance.slotCreate({
+      slotId: "slot-r",
+      parentSlotId: null,
+      initialEntry: {
+        entryKey: e1.key,
+        entityId: e1.id,
+        source: SOURCE,
+        contextId: "ctx-1",
+      },
+    });
+    const beforeSlot = instance.slotGet("slot-r");
+    const beforeDetail = instance.panelTreeDetail("slot-r");
+    const beforeRevision = instance.panelTreeRootGroups({ limit: 1 }).revision;
+
+    expect(() =>
+      instance.slotCommitPreparedNavigation({
+        slotId: "slot-r",
+        expectedCurrentEntityId: e1.id,
+        mutation: {
+          kind: "append",
+          entry: {
+            entryKey: incomplete.key,
+            entityId: incomplete.id,
+            source: SOURCE,
+            contextId: "ctx-1",
+          },
+        },
+      })
+    ).toThrow(/not active and complete/);
+    expect(() =>
+      instance.slotCommitPreparedNavigation({
+        slotId: "slot-r",
+        expectedCurrentEntityId: staleCandidate.id,
+        mutation: {
+          kind: "append",
+          entry: {
+            entryKey: staleCandidate.key,
+            entityId: staleCandidate.id,
+            source: SOURCE,
+            contextId: "ctx-1",
+          },
+        },
+      })
+    ).toThrow(/changed during preparation/);
+
+    expect(instance.slotGet("slot-r")).toEqual(beforeSlot);
+    expect(instance.panelTreeDetail("slot-r")).toEqual(beforeDetail);
+    expect(instance.panelTreeRootGroups({ limit: 1 }).revision).toBe(beforeRevision);
+  });
+
+  describe("slotPatchCurrentStateArgs", () => {
+    const createStateSlot = (stateArgs: Record<string, unknown>) => {
+      const rec = instance.entityActivate(panelInput({ key: "state-1", stateArgs }));
+      instance.slotCreate({
+        slotId: "slot-state",
+        parentSlotId: null,
+        initialEntry: {
+          entryKey: rec.key,
+          entityId: rec.id,
+          source: SOURCE,
+          contextId: "ctx-1",
+          stateArgs,
+        },
+      });
+      return rec;
+    };
+    const expectedFor = (slotId: string) => {
+      const detail = instance.panelTreeDetail(slotId);
+      if (!detail?.slot.current_entry_key) throw new Error("expected detail");
+      return {
+        entryKey: detail.slot.current_entry_key,
+        activeBuildKey: detail.entity.activeBuildKey ?? null,
+      };
+    };
+    const storedStateArgs = () =>
+      JSON.parse(instance.panelTreeDetail("slot-state")?.currentHistory.state_args ?? "null");
+
+    it("mutates the current history entry without changing entity id", () => {
+      const rec = createStateSlot({ a: 1 });
+
+      expect(
+        instance.slotPatchCurrentStateArgs("slot-state", { a: 2 }, expectedFor("slot-state"))
+      ).toEqual({ a: 2 });
+
+      expect(instance.slotGet("slot-state")?.current_entity_id).toBe(rec.id);
+      expect(storedStateArgs()).toEqual({ a: 2 });
+      expect(instance.entityResolve(rec.id)?.stateArgs).toEqual({ a: 2 });
+    });
+
+    it("applies RFC 7386 merge semantics: nested merge, null deletes, arrays replace", () => {
+      createStateSlot({
+        keep: "yes",
+        drop: "old",
+        notes: { a: "one", b: "two" },
+        list: [1, 2, 3],
+      });
+
+      const next = instance.slotPatchCurrentStateArgs(
+        "slot-state",
+        { drop: null, notes: { a: null, c: "three" }, list: [9] },
+        expectedFor("slot-state")
+      );
+
+      const expected = { keep: "yes", notes: { b: "two", c: "three" }, list: [9] };
+      expect(next).toEqual(expected);
+      expect(storedStateArgs()).toEqual(expected);
+    });
+
+    it("serializes patches so concurrent writers addressed to one entry both land", () => {
+      createStateSlot({ notes: {} });
+      // Both writers observed the same entry before either committed.
+      const expected = expectedFor("slot-state");
+
+      instance.slotPatchCurrentStateArgs("slot-state", { notes: { a: "first" } }, expected);
+      instance.slotPatchCurrentStateArgs("slot-state", { notes: { b: "second" } }, expected);
+
+      expect(storedStateArgs()).toEqual({ notes: { a: "first", b: "second" } });
+    });
+
+    it("validates the merged result against the schema and leaves state untouched on failure", () => {
+      createStateSlot({ mode: "a" });
+      const schema: import("@vibestudio/shared/stateArgs").StateArgsSchema = {
+        type: "object",
+        properties: { mode: { type: "string", enum: ["a", "b"] }, count: { type: "integer" } },
+        additionalProperties: false,
+      };
+      const expected = { ...expectedFor("slot-state"), schema };
+
+      expect(() =>
+        instance.slotPatchCurrentStateArgs("slot-state", { mode: "z" }, expected)
+      ).toThrow(/Invalid stateArgs/);
+      expect(() =>
+        instance.slotPatchCurrentStateArgs("slot-state", { extra: true }, expected)
+      ).toThrow(/Invalid stateArgs/);
+      expect(storedStateArgs()).toEqual({ mode: "a" });
+
+      expect(
+        instance.slotPatchCurrentStateArgs("slot-state", { mode: "b", count: "3" }, expected)
+      ).toEqual({ mode: "b", count: 3 });
+    });
+
+    it("refuses a patch addressed to a stale entry or build with a typed conflict", () => {
+      createStateSlot({ mode: "a" });
+      const expected = expectedFor("slot-state");
+
+      for (const stale of [
+        { ...expected, entryKey: "stale-entry" },
+        { ...expected, activeBuildKey: expected.activeBuildKey ? null : "b".repeat(64) },
+      ]) {
+        let error: unknown;
+        try {
+          instance.slotPatchCurrentStateArgs("slot-state", { mode: "b" }, stale);
+        } catch (caught) {
+          error = caught;
+        }
+        expect(error).toMatchObject({ code: "PANEL_STATE_ARGS_CONFLICT" });
+      }
+      expect(storedStateArgs()).toEqual({ mode: "a" });
+    });
+  });
+
+  it("re-owns an entire subtree to the destination root owner", () => {
+    instance.slotCreateAs("alice", {
+      slotId: "alice-root",
+      parentSlotId: null,
+    });
+    instance.slotCreateAs("bob", {
+      slotId: "bob-root",
+      parentSlotId: null,
+    });
+    instance.slotCreateAs("bob", {
+      slotId: "bob-child",
+      parentSlotId: "bob-root",
+    });
+    instance.slotCreateAs("bob", {
+      slotId: "bob-grandchild",
+      parentSlotId: "bob-child",
+    });
+
+    instance.slotMove("bob-child", "alice-root", {}, "bob");
+
+    expect(instance.slotGet("bob-child")).toMatchObject({
+      parent_slot_id: "alice-root",
+      owner_user_id: "alice",
+    });
+    expect(instance.slotGet("bob-grandchild")?.owner_user_id).toBe("alice");
+  });
+
+  it("attributes a promoted root to the acting mover", () => {
+    instance.slotCreateAs("bob", {
+      slotId: "bob-root",
+      parentSlotId: null,
+    });
+    instance.slotCreateAs("bob", {
+      slotId: "bob-child",
+      parentSlotId: "bob-root",
+    });
+
+    instance.slotMove("bob-child", null, {}, "alice");
+
+    expect(instance.slotGet("bob-child")).toMatchObject({
+      parent_slot_id: null,
+      owner_user_id: "alice",
+    });
+  });
+
+  it("rejects a move below the slot's own descendant without corrupting the tree", () => {
+    instance.slotCreateAs("alice", {
+      slotId: "root",
+      parentSlotId: null,
+    });
+    instance.slotCreateAs("alice", {
+      slotId: "child",
+      parentSlotId: "root",
+    });
+
+    expect(() => instance.slotMove("root", "child", {}, "alice")).toThrow("under its own subtree");
+    expect(instance.slotGet("root")?.parent_slot_id).toBeNull();
+    expect(instance.slotGet("child")?.parent_slot_id).toBe("root");
+  });
+
+  it("slotClose marks the slot closed, clears its entity, and retains its entry for reopen", () => {
+    const rec = instance.entityActivate(panelInput({ key: "close-1" }));
+    instance.slotCreate({
+      slotId: "slot-c",
+      parentSlotId: null,
+      initialEntry: {
+        entryKey: rec.key,
+        entityId: rec.id,
+        source: SOURCE,
+        contextId: "ctx-1",
+      },
+    });
+    instance.slotClose("slot-c");
+    const slot = instance.slotGet("slot-c");
+    expect(slot?.closed_at).toBeTypeOf("number");
+    expect(slot?.current_entity_id).toBeNull();
+    expect(slot?.current_entry_key).toBe("close-1");
+    expect(() =>
+      instance.slotPatchCurrentStateArgs(
+        "slot-c",
+        {},
+        {
+          entryKey: "close-1",
+          activeBuildKey: null,
+        }
+      )
+    ).toThrow(/closed slot/);
+  });
+
+  describe("reopen", () => {
+    const openSlot = (slotId: string, parentSlotId: string | null) => {
+      const entity = instance.entityActivate(preparedPanelInput({ key: `${slotId}-entry` }));
+      instance.slotCreate({
+        slotId,
+        parentSlotId,
+        initialEntry: {
+          entryKey: entity.key,
+          entityId: entity.id,
+          source: SOURCE,
+          contextId: "ctx-1",
+        },
+      });
+      return entity;
+    };
+    /** What runtime.retireEntity + its cleanup do to the closed slots' entities. */
+    const retireClosed = (closeId: string) => {
+      const page = instance.slotCloseCleanupPage({ closeId, limit: 200 });
+      for (const { entityId } of page.items) {
+        const retired = entityId ? instance.entityRetire(entityId) : null;
+        if (retired) instance.entityCleanupComplete(retired.id, retired.authoritySessionId ?? "");
+      }
+      instance.slotCloseCleanupAck(page.items.map(({ slotId }) => slotId));
+    };
+    /** What runtime.createEntity does for each planned entry before slot.reopen. */
+    const reactivate = (slotId: string) => {
+      for (const { entry } of instance.slotReopenPlan(slotId).slots) {
+        instance.entityActivate(preparedPanelInput({ key: entry.entry_key }));
+      }
+    };
+    const openIds = () =>
+      instance
+        .panelTreePage({ group: { kind: "roots", ownerUserId: null }, limit: 50 })
+        .nodes.map((node) => node.slotId);
+
+    it("reverses exactly one close and leaves an earlier, separate close closed", () => {
+      openSlot("root", null);
+      openSlot("kept-child", "root");
+      openSlot("grandchild", "kept-child");
+      openSlot("closed-first", "root");
+      instance.slotClose("closed-first");
+      retireClosed("closed-first");
+      instance.slotClose("root");
+      retireClosed("root");
+
+      const plan = instance.slotReopenPlan("root");
+      expect(plan.slots.map((slot) => slot.slotId)).toEqual(["root", "kept-child", "grandchild"]);
+      expect(() => instance.slotReopen({ slotId: "root", closedAt: plan.closedAt })).toThrow(
+        /not active and complete/
+      );
+
+      reactivate("root");
+      expect(instance.slotReopen({ slotId: "root", closedAt: plan.closedAt })).toMatchObject({
+        slotId: "root",
+        reopenedCount: 3,
+      });
+      expect(openIds()).toEqual(["root"]);
+      expect(instance.panelTreeDetail("grandchild")?.slot.parent_slot_id).toBe("kept-child");
+      expect(instance.slotGet("closed-first")?.closed_at).toBeTypeOf("number");
+      expect(instance.slotClosedRoots({}).items.map((entry) => entry.slotId)).toEqual([
+        "closed-first",
+      ]);
+    });
+
+    it("lists reopenable closes most recent first, hiding those under a closed parent", () => {
+      openSlot("a", null);
+      openSlot("a-child", "a");
+      openSlot("b", null);
+      instance.slotClose("a-child");
+      retireClosed("a-child");
+      instance.slotClose("b");
+      retireClosed("b");
+      expect(
+        instance.slotClosedRoots({}).items.map((entry) => [entry.slotId, entry.closedCount])
+      ).toEqual([
+        ["b", 1],
+        ["a-child", 1],
+      ]);
+      const closes = instance.slotClosedRoots({}).items;
+      expect(closes[0]!.closedAt).toBeGreaterThan(closes[1]!.closedAt);
+
+      instance.slotClose("a");
+      retireClosed("a");
+      expect(instance.slotClosedRoots({}).items.map((entry) => entry.slotId)).toEqual(["a", "b"]);
+      expect(() => instance.slotReopenPlan("a-child")).toThrow(/parent a is closed/);
+    });
+
+    it("pages closes most recent first with a resumable cursor", () => {
+      for (const id of ["p1", "p2", "p3"]) {
+        openSlot(id, null);
+        instance.slotClose(id);
+        retireClosed(id);
+      }
+      const first = instance.slotClosedRoots({ limit: 2 });
+      expect(first.items.map((entry) => entry.slotId)).toEqual(["p3", "p2"]);
+      expect(first.nextCursor).not.toBeNull();
+      const second = instance.slotClosedRoots({ limit: 2, cursor: first.nextCursor! });
+      expect(second.items.map((entry) => entry.slotId)).toEqual(["p1"]);
+      expect(second.nextCursor).toBeNull();
+      expect(() => instance.slotClosedRoots({ cursor: "nope" })).toThrow(/cursor/);
+    });
+
+    it("permanently deletes a close's whole subtree and only its unshared contexts", () => {
+      const ctxEntity = (slotId: string, parentSlotId: string | null, contextId: string) => {
+        const entity = instance.entityActivate(
+          preparedPanelInput({ key: `${slotId}-entry`, contextId })
+        );
+        instance.slotCreate({
+          slotId,
+          parentSlotId,
+          initialEntry: { entryKey: entity.key, entityId: entity.id, source: SOURCE, contextId },
+        });
+      };
+      ctxEntity("doomed", null, "ctx-doomed");
+      ctxEntity("doomed-child", "doomed", "ctx-shared");
+      ctxEntity("doomed-earlier", "doomed", "ctx-earlier");
+      ctxEntity("survivor", null, "ctx-shared");
+      instance.slotClose("doomed-earlier");
+      retireClosed("doomed-earlier");
+      instance.slotClose("doomed");
+      retireClosed("doomed");
+
+      const plan = instance.slotPurgePlan("doomed");
+      expect([...plan.slotIds].sort()).toEqual(["doomed", "doomed-child", "doomed-earlier"]);
+      expect(plan.slotIds.at(-1)).toBe("doomed");
+      expect(plan.orphanContextIds).toEqual(["ctx-doomed", "ctx-earlier"]);
+
+      expect(() => instance.slotPurge({ slotId: "doomed", closedAt: plan.closedAt - 1 })).toThrow(
+        /closed again/
+      );
+      expect(instance.slotPurge({ slotId: "doomed", closedAt: plan.closedAt })).toMatchObject({
+        deletedCount: 3,
+      });
+      expect(instance.slotGet("doomed")).toBeNull();
+      expect(instance.slotGet("doomed-earlier")).toBeNull();
+      expect(instance.slotClosedRoots({}).items).toEqual([]);
+      expect(instance.panelTreeDetail("survivor")?.currentHistory.context_id).toBe("ctx-shared");
+    });
+
+    it("refuses while the close is still retiring its runtimes, or after a newer close", () => {
+      openSlot("p", null);
+      instance.slotClose("p");
+      expect(instance.slotClosedRoots({}).items).toEqual([]);
+      expect(() => instance.slotReopenPlan("p")).toThrow(/still retiring/);
+      retireClosed("p");
+      const { closedAt } = instance.slotReopenPlan("p");
+      expect(() => instance.slotReopen({ slotId: "p", closedAt: closedAt - 1 })).toThrow(
+        /closed again/
+      );
+      expect(() => instance.slotReopenPlan("never-closed-or-missing")).toThrow(/not found/);
+    });
+  });
+
+  it("closes a subtree deeper than one thousand levels and pages cleanup in bounded batches", () => {
+    const sql = (
+      instance as unknown as {
+        sql: { exec(statement: string, ...bindings: unknown[]): { toArray(): unknown[] } };
+      }
+    ).sql;
+    sql.exec(
+      `WITH RECURSIVE sequence(i) AS (
+         VALUES(0)
+         UNION ALL
+         SELECT i + 1 FROM sequence WHERE i < 1200
+       )
+       INSERT INTO slots (
+         slot_id, parent_slot_id, current_entity_id, current_entry_key,
+         sort_key, owner_user_id, created_at, closed_at
+       )
+       SELECT printf('deep-%04d', i),
+              CASE WHEN i = 0 THEN NULL ELSE printf('deep-%04d', i - 1) END,
+              NULL, NULL, 0, 'deep-owner', i, NULL
+         FROM sequence`
+    );
+
+    expect(instance.panelTreePath("deep-1200")?.nodes).toHaveLength(1201);
+    expect(instance.slotClose("deep-0000")).toEqual({
+      closeId: "deep-0000",
+      closedCount: 1201,
+    });
+    expect(instance.slotCloseCleanupPage({ ownerUserId: "other", limit: 200 }).items).toEqual([]);
+    expect(
+      instance.slotCloseCleanupPage({ ownerUserId: "deep-owner", limit: 200 }).items
+    ).toHaveLength(200);
+
+    let cursor: string | undefined;
+    let cleanupCount = 0;
+    do {
+      const page = instance.slotCloseCleanupPage({
+        closeId: "deep-0000",
+        ...(cursor ? { cursor } : {}),
+        limit: 200,
+      });
+      expect(page.items.length).toBeLessThanOrEqual(200);
+      cleanupCount += page.items.length;
+      instance.slotCloseCleanupAck(page.items.map(({ slotId }) => slotId));
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor);
+
+    expect(cleanupCount).toBe(1201);
+    expect(instance.slotCloseCleanupPage({ closeId: "deep-0000", limit: 200 }).items).toEqual([]);
+    expect(instance.slotGet("deep-1200")?.closed_at).toBeTypeOf("number");
+  });
+});
+
+describe("WorkspaceStateDO entity reads", () => {
+  let instance: WorkspaceStateDO;
+  beforeEach(async () => {
+    ({ instance } = await createWorkspaceStateTestDO());
+  });
+
+  it("entityResolveActive returns null after retire and a record while active", () => {
+    const rec = instance.entityActivate(panelInput());
+    expect(instance.entityResolveActive(rec.id)?.id).toBe(rec.id);
+    instance.entityRetire(rec.id);
+    expect(instance.entityResolveActive(rec.id)).toBeNull();
+  });
+
+  it("entityFindIncompleteCleanups returns retired rows with cleanup_complete=0", () => {
+    const r1 = instance.entityActivate(panelInput({ key: "a" }));
+    const r2 = instance.entityActivate(panelInput({ key: "b" }));
+    instance.entityRetire(r1.id);
+    instance.entityRetire(r2.id);
+    instance.entityCleanupComplete(r1.id, r1.authoritySessionId!);
+    const incomplete = instance.entityFindIncompleteCleanups();
+    expect(incomplete.map((r: EntityRecord) => r.id)).toEqual([r2.id]);
+  });
+});
+
+describe("WorkspaceStateDO lifecycle registry", () => {
+  let instance: WorkspaceStateDO;
+  beforeEach(async () => {
+    ({ instance } = await createWorkspaceStateTestDO());
+    instance.alarmAdoptWorker("driver-1");
+  });
+
+  it("publishes native ownership atomically with activation and rolls back an invalid incarnation", () => {
+    const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
+    const identity = { incarnation: crypto.randomUUID(), generation: 1 };
+    const input = doInput({
+      activeBuildKey: "b".repeat(64),
+      activeExecutionDigest: "a".repeat(64),
+      activeAuthority: ACTIVE_AUTHORITY,
+      nativeOwner: identity,
+    });
+    expect(() =>
+      instance.entityActivate({ ...input, nativeOwner: { ...identity, generation: 0 } })
+    ).toThrow("Invalid storage incarnation");
+    expect(instance.alarmSourceList()).toEqual([]);
+    expect(instance.lifecycleListLeases()).toEqual([]);
+    const entity = instance.entityActivate(input);
+    expect(entity.nativeOwner).toEqual(identity);
+    expect(instance.lifecycleListLeases()).toEqual([
+      {
+        ...key,
+        detail: { owner: "pi" },
+        createdAt: expect.any(Number),
+        refreshedAt: expect.any(Number),
+      },
+    ]);
+    expect(() =>
+      instance.entityActivate({
+        ...input,
+        nativeOwner: { incarnation: crypto.randomUUID(), generation: 1 },
+      })
+    ).toThrow("Storage generation identity conflicts");
+    expect(instance.entityResolveActive(entity.id)?.nativeOwner).toEqual(identity);
+    expect(
+      instance.alarmSourcePublish({
+        ...key,
+        incarnation: identity.incarnation,
+        revision: 0,
+        wakeAt: null,
+      })
+    ).toBe("accepted");
+    instance.entityActivate({ ...input, nativeOwner: null });
+    expect(instance.alarmSourceList()).toEqual([]);
+    expect(instance.lifecycleListLeases()).toEqual([]);
+    expect(instance.entityResolveActive(entity.id)).not.toHaveProperty("nativeOwner");
+  });
+
+  it("acknowledges only captured host wakes while later events survive source null publication", () => {
+    const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
+    instance.entityActivate(
+      doInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+      })
+    );
+    const incarnation = crypto.randomUUID();
+    instance.entityActivate(
+      doInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+        nativeOwner: { incarnation, generation: 1 },
+      })
+    );
+    instance.alarmSourceRequest({ ...key, incarnation });
+    const [first] = instance.alarmClaimDue({ now: 1, workerId: "driver-1", limit: 1 });
+    expect(first!.wakeRequest).toEqual({ incarnation, generation: 1 });
+    instance.alarmSourceRequest({ ...key, incarnation });
+    instance.alarmSourcePublish({ ...key, incarnation, revision: 1, wakeAt: null });
+    expect(
+      instance.alarmComplete({
+        ...key,
+        dispatchOwner: "driver-1",
+        dispatchGeneration: first!.dispatchGeneration,
+        wakeRequest: first!.wakeRequest,
+        nextAlarm: null,
+      })
+    ).toEqual({ status: "accepted", wakeAt: 0 });
+    const [second] = instance.alarmClaimDue({ now: 1, workerId: "driver-1", limit: 1 });
+    expect(second!.wakeRequest).toEqual({ incarnation, generation: 2 });
+    expect(
+      instance.alarmComplete({
+        ...key,
+        dispatchOwner: "driver-1",
+        dispatchGeneration: first!.dispatchGeneration,
+        wakeRequest: first!.wakeRequest,
+        nextAlarm: null,
+      })
+    ).toEqual({ status: "stale" });
+    instance.alarmComplete({
+      ...key,
+      dispatchOwner: "driver-1",
+      dispatchGeneration: second!.dispatchGeneration,
+      wakeRequest: second!.wakeRequest,
+      nextAlarm: null,
+    });
+    expect(instance.alarmListScheduled()).toEqual([]);
+  });
+
+  it("failed dispatch rearming retains host debt and invalid acknowledgement rolls back the claim", () => {
+    const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
+    instance.entityActivate(
+      doInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+      })
+    );
+    const incarnation = crypto.randomUUID();
+    instance.entityActivate(
+      doInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+        nativeOwner: { incarnation, generation: 1 },
+      })
+    );
+    instance.alarmSourceRequest({ ...key, incarnation });
+    const [first] = instance.alarmClaimDue({ now: 1, workerId: "driver-1", limit: 1 });
+    instance.alarmSet({
+      ...key,
+      dispatchOwner: "driver-1",
+      dispatchGeneration: first!.dispatchGeneration,
+      wakeAt: 100,
+    });
+    expect(instance.alarmNextWakeAt(1)).toBe(100);
+    const [second] = instance.alarmClaimDue({ now: 100, workerId: "driver-1", limit: 1 });
+    expect(second!.wakeRequest).toEqual(first!.wakeRequest);
+    expect(() =>
+      instance.alarmComplete({
+        ...key,
+        dispatchOwner: "driver-1",
+        dispatchGeneration: second!.dispatchGeneration,
+        wakeRequest: { incarnation: "foreign", generation: 1 },
+        nextAlarm: null,
+      })
+    ).toThrow(/dispatch claim/);
+    expect(instance.alarmNextWakeAt(100)).toBeNull();
+    expect(
+      instance.alarmComplete({
+        ...key,
+        dispatchOwner: "driver-1",
+        dispatchGeneration: second!.dispatchGeneration,
+        wakeRequest: second!.wakeRequest,
+        nextAlarm: { wakeAt: 200 },
+      })
+    ).toEqual({ status: "accepted", wakeAt: 200 });
+    expect(instance.alarmNextWakeAt(100)).toBe(200);
+  });
+
+  it("a SQL failure after receipt-wake acknowledgement rolls back both debt and scheduling for exact retry", async () => {
+    const { instance: owner, sql } = await createWorkspaceStateTestDO();
+    const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
+    owner.entityActivate(
+      doInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+      })
+    );
+    owner.alarmAdoptWorker("driver-1");
+    const incarnation = crypto.randomUUID();
+    owner.entityActivate(
+      doInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+        nativeOwner: { incarnation, generation: 1 },
+      })
+    );
+    owner.alarmSourceRequest({ ...key, incarnation });
+    const [claim] = owner.alarmClaimDue({ now: 1, workerId: "driver-1", limit: 1 });
+    const completion = {
+      ...key,
+      dispatchOwner: "driver-1",
+      dispatchGeneration: claim!.dispatchGeneration,
+      wakeRequest: claim!.wakeRequest,
+      nextAlarm: { wakeAt: 200 },
+    };
+    sql.exec(
+      "CREATE TRIGGER refuse_completion BEFORE UPDATE ON do_alarms BEGIN SELECT RAISE(ABORT, 'original completion SQL failure'); END"
+    );
+    expect(() => owner.alarmComplete(completion)).toThrow(/original completion SQL failure/);
+    expect(owner.alarmNextWakeAt(1)).toBeNull();
+    sql.exec("DROP TRIGGER refuse_completion");
+    expect(owner.alarmComplete(completion)).toEqual({ status: "accepted", wakeAt: 200 });
+    expect(owner.alarmComplete(completion)).toEqual({ status: "stale" });
+    expect(owner.alarmNextWakeAt(1)).toBe(200);
+  });
+
+  it("ordinary clears preserve host wakes, but entity retirement releases them", () => {
+    const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
+    const entity = instance.entityActivate(
+      doInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+      })
+    );
+    const incarnation = crypto.randomUUID();
+    instance.entityActivate(
+      doInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+        nativeOwner: { incarnation, generation: 1 },
+      })
+    );
+    instance.alarmSourceRequest({ ...key, incarnation });
+    instance.alarmClear(key);
+    expect(instance.alarmNextWakeAt(1)).toBe(0);
+    instance.entityRetire(entity.id);
+    expect(instance.alarmListScheduled()).toEqual([]);
+    expect(() => instance.alarmSourceRequest({ ...key, incarnation })).toThrow(/active/);
+  });
+
+  it("an event first arriving during a pass survives its distant next schedule and host adoption", () => {
+    const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
+    instance.entityActivate(
+      doInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+      })
+    );
+    const incarnation = crypto.randomUUID();
+    instance.entityActivate(
+      doInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+        nativeOwner: { incarnation, generation: 1 },
+      })
+    );
+    instance.alarmSourcePublish({ ...key, incarnation, revision: 1, wakeAt: 0 });
+    const [first] = instance.alarmClaimDue({ now: 1, workerId: "driver-1", limit: 1 });
+    expect(first).not.toHaveProperty("wakeRequest");
+    instance.alarmSourceRequest({ ...key, incarnation });
+    instance.alarmSourcePublish({ ...key, incarnation, revision: 2, wakeAt: 1_000_000 });
+    instance.alarmComplete({
+      ...key,
+      dispatchOwner: "driver-1",
+      dispatchGeneration: first!.dispatchGeneration,
+      nextAlarm: { wakeAt: 1_000_000 },
+    });
+    expect(instance.alarmNextWakeAt(1)).toBe(0);
+    const [unacknowledged] = instance.alarmClaimDue({ now: 1, workerId: "driver-1", limit: 1 });
+    instance.alarmAdoptWorker("driver-2");
+    const [replacement] = instance.alarmClaimDue({ now: 1, workerId: "driver-2", limit: 1 });
+    expect(replacement!.wakeRequest).toEqual(unacknowledged!.wakeRequest);
+    expect(
+      instance.alarmComplete({
+        ...key,
+        dispatchOwner: "driver-1",
+        dispatchGeneration: unacknowledged!.dispatchGeneration,
+        wakeRequest: unacknowledged!.wakeRequest,
+        nextAlarm: null,
+      })
+    ).toEqual({ status: "stale" });
+    instance.alarmComplete({
+      ...key,
+      dispatchOwner: "driver-2",
+      dispatchGeneration: replacement!.dispatchGeneration,
+      wakeRequest: replacement!.wakeRequest,
+      nextAlarm: { wakeAt: 1_000_000 },
+    });
+    expect(instance.alarmNextWakeAt(1)).toBe(1_000_000);
+  });
+
+  it("recovers registered sources with no delivered schedule once per host generation and excludes retired owners", () => {
+    const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
+    const entity = instance.entityActivate(
+      doInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+      })
+    );
+    const incarnation = crypto.randomUUID();
+    instance.entityActivate(
+      doInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+        nativeOwner: { incarnation, generation: 1 },
+      })
+    );
+    expect(instance.alarmListScheduled()).toEqual([]);
+    instance.alarmAdoptWorker("driver-2");
+    expect(instance.alarmListScheduled()).toEqual([key]);
+    const [first] = instance.alarmClaimDue({ now: 1, workerId: "driver-2", limit: 1 });
+    expect(first).toMatchObject({ ...key, wakeAt: 0 });
+    instance.alarmSourcePublish({ ...key, incarnation, revision: 0, wakeAt: null });
+    instance.alarmSourcePublish({ ...key, incarnation, revision: 1, wakeAt: 0 });
+    const [second] = instance.alarmClaimDue({ now: 1, workerId: "driver-2", limit: 1 });
+    expect(second!.dispatchGeneration).toBeGreaterThan(first!.dispatchGeneration);
+    expect(
+      instance.alarmClear({
+        ...key,
+        dispatchOwner: "driver-2",
+        dispatchGeneration: first!.dispatchGeneration,
+      })
+    ).toBe("stale");
+    expect(instance.alarmListScheduled()).toEqual([key]);
+    instance.alarmSourcePublish({ ...key, incarnation, revision: 2, wakeAt: null });
+    instance.entityRetire(entity.id);
+    instance.alarmAdoptWorker("driver-3");
+    expect(instance.alarmListScheduled()).toEqual([]);
+  });
+
+  it("upserts, refreshes, lists, and clears active-work leases", () => {
+    const key = { source: "workers/agent", className: "AiChatWorker", objectKey: "ch-1" };
+    instance.lifecycleLeaseUpsert({ ...key, detail: { turnId: "turn-1" } });
+    instance.lifecycleLeaseUpsert({ ...key, detail: { turnId: "turn-2" } });
+
+    expect(instance.lifecycleListLeases()).toMatchObject([
+      { ...key, detail: { turnId: "turn-2" } },
+    ]);
+
+    instance.lifecycleLeaseClear(key);
+    expect(instance.lifecycleListLeases()).toEqual([]);
+  });
+
+  it("registers work capability only for an active owner and removes it on retirement", () => {
+    const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
+    const entity = instance.entityActivate(
+      doInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+        durableWorkQueues: ["workspace-publication", "channel-delivery", "channel-delivery"],
+      })
+    );
+    expect(instance.durableWorkOwnerList()).toEqual([
+      { owner: key, queues: ["channel-delivery", "workspace-publication"] },
+    ]);
+
+    instance.entityRetire(entity.id);
+    expect(instance.durableWorkOwnerList()).toEqual([]);
+  });
+
+  it("publishes queue ownership atomically across preparation, image changes, and reactivation", () => {
+    const input = doInput({
+      activeBuildKey: "b".repeat(64),
+      activeExecutionDigest: "a".repeat(64),
+      activeAuthority: ACTIVE_AUTHORITY,
+      durableWorkQueues: ["channel-delivery"],
+    });
+    instance.entityReserve(doInput());
+    instance.entityPrepareExecution(input);
+    expect(instance.durableWorkOwnerList()).toEqual([]);
+    const active = instance.entityAdvanceExecution(input);
+    expect(instance.durableWorkOwnerList()).toEqual([
+      {
+        owner: { source: SOURCE, className: "MyDO", objectKey: "k1" },
+        queues: ["channel-delivery"],
+      },
+    ]);
+    expect(() =>
+      instance.entityActivate({
+        ...input,
+        contextId: "foreign",
+        durableWorkQueues: ["workspace-publication"],
+      })
+    ).toThrow();
+    expect(instance.durableWorkOwnerList()[0]?.queues).toEqual(["channel-delivery"]);
+    expect(() =>
+      instance.entityAdvanceExecutions([
+        { ...input, durableWorkQueues: [] },
+        { ...input, key: "unknown-owner" },
+      ])
+    ).toThrow(/unknown entity/);
+    expect(instance.durableWorkOwnerList()[0]?.queues).toEqual(["channel-delivery"]);
+    instance.entityAdvanceExecutions([
+      { ...input, activeExecutionDigest: "f".repeat(64), durableWorkQueues: [] },
+    ]);
+    expect(instance.durableWorkOwnerList()).toEqual([]);
+    const restored = instance.entityAdvanceExecution(input);
+    instance.entityRetire(active.id);
+    expect(instance.durableWorkOwnerList()).toEqual([]);
+    instance.entityCleanupComplete(active.id, restored.authoritySessionId!);
+    const reactivated = instance.entityActivate(input);
+    expect(reactivated.authoritySessionId).not.toBe(active.authoritySessionId);
+    expect(instance.durableWorkOwnerList()[0]?.queues).toEqual(["channel-delivery"]);
+  });
+
+  it("claims due alarms durably and acknowledges the exact generation", () => {
+    const a = { source: "workers/poller", className: "PollerDO", objectKey: "p-1" };
+    const b = { source: "workers/poller", className: "PollerDO", objectKey: "p-2" };
+    activateAlarmKey(instance, a);
+    activateAlarmKey(instance, b);
+
+    instance.alarmSet({ ...a, wakeAt: 5_000 });
+    instance.alarmSet({ ...b, wakeAt: 2_000 });
+    // Replace a's wake time.
+    instance.alarmSet({ ...a, wakeAt: 1_000 });
+
+    expect(instance.alarmNextWakeAt(0)).toBe(1_000);
+
+    const claims = instance.alarmClaimDue({
+      now: 1_500,
+      workerId: "driver-1",
+      limit: 8,
+    });
+    expect(claims).toEqual([{ ...a, wakeAt: 1_000, dispatchGeneration: 1 }]);
+    expect(instance.alarmNextWakeAt(1_500)).toBe(2_000);
+    expect(
+      instance.alarmClear({
+        ...a,
+        dispatchOwner: "driver-1",
+        dispatchGeneration: claims[0]!.dispatchGeneration,
+      })
+    ).toBe("accepted");
+    expect(instance.alarmNextWakeAt(1_500)).toBe(2_000);
+
+    // Clearing removes a pending alarm.
+    instance.alarmClear(b);
+    expect(instance.alarmNextWakeAt(1_500)).toBeNull();
+    expect(
+      instance.alarmClaimDue({
+        now: 10_000,
+        workerId: "driver-1",
+        limit: 8,
+      })
+    ).toEqual([]);
+  });
+
+  it("retains host-attested test authority with a derived alarm until acknowledgement", () => {
+    const key = { source: "workers/poller", className: "PollerDO", objectKey: "test-case" };
+    const testPolicy = {
+      policyId: "system-test:permissions-list",
+      kind: "orchestrator" as const,
+    };
+    activateAlarmKey(instance, key);
+
+    instance.alarmSet({ ...key, wakeAt: 1_000, testPolicy });
+    // A derived schedule update from the alarm driver has no ambient caller,
+    // but it must not detach the authority of the durable work it is advancing.
+    instance.alarmSet({ ...key, wakeAt: 2_000 });
+
+    const [claim] = instance.alarmClaimDue({
+      now: 2_000,
+      workerId: "driver-1",
+      limit: 1,
+    });
+    expect(claim).toEqual({ ...key, wakeAt: 2_000, dispatchGeneration: 1, testPolicy });
+    instance.alarmClear({
+      ...key,
+      dispatchOwner: "driver-1",
+      dispatchGeneration: claim!.dispatchGeneration,
+    });
+    expect(
+      instance.alarmClaimDue({
+        now: 2_000,
+        workerId: "driver-1",
+        limit: 1,
+      })
+    ).toEqual([]);
+  });
+
+  it("releases a prior claim only when a new scheduler generation is adopted", () => {
+    const key = { source: "workers/poller", className: "PollerDO", objectKey: "reclaim" };
+    activateAlarmKey(instance, key);
+    instance.alarmSet({ ...key, wakeAt: 1_000 });
+
+    const [first] = instance.alarmClaimDue({
+      now: 1_000,
+      workerId: "driver-1",
+      limit: 1,
+    });
+    expect(instance.alarmNextWakeAt(1_000)).toBeNull();
+    expect(() =>
+      instance.alarmClaimDue({
+        now: 1_000_000,
+        workerId: "driver-2",
+        limit: 1,
+      })
+    ).toThrow(/worker generation is not active/u);
+
+    instance.alarmAdoptWorker("driver-2");
+    const [second] = instance.alarmClaimDue({
+      now: 1_000_000,
+      workerId: "driver-2",
+      limit: 1,
+    });
+    expect(second!.dispatchGeneration).toBe(first!.dispatchGeneration + 1);
+    expect(
+      instance.alarmClear({
+        ...key,
+        dispatchOwner: "driver-1",
+        dispatchGeneration: first!.dispatchGeneration,
+      })
+    ).toBe("stale");
+    expect(
+      instance.alarmClear({
+        ...key,
+        dispatchOwner: "driver-2",
+        dispatchGeneration: second!.dispatchGeneration,
+      })
+    ).toBe("accepted");
+  });
+
+  it("fences an active handler when a concurrent request replaces its wake", () => {
+    const key = { source: "workers/poller", className: "PollerDO", objectKey: "replace" };
+    activateAlarmKey(instance, key);
+    instance.alarmSet({ ...key, wakeAt: 1_000 });
+    const [claim] = instance.alarmClaimDue({
+      now: 1_000,
+      workerId: "driver-1",
+      limit: 1,
+    });
+
+    instance.alarmSet({ ...key, wakeAt: 1_100 });
+    expect(
+      instance.alarmClear({
+        ...key,
+        dispatchOwner: "driver-1",
+        dispatchGeneration: claim!.dispatchGeneration,
+      })
+    ).toBe("stale");
+    expect(instance.alarmNextWakeAt(1_000)).toBe(1_100);
+  });
+
+  it("opens an epoch and snapshots live leases into prepare and resume ops", () => {
+    const key = { source: "workers/agent", className: "AiChatWorker", objectKey: "ch-1" };
+    instance.lifecycleLeaseUpsert(key);
+
+    const epochId = instance.lifecycleOpenEpoch({
+      kind: "planned",
+      reason: "restart",
+      generation: 2,
+    });
+    expect(epochId).toMatch(/^epoch-/);
+
+    const ops = instance.lifecycleListOps(epochId);
+    expect(ops).toHaveLength(2);
+    expect(ops).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ ...key, opKind: "prepare", status: "pending" }),
+        expect.objectContaining({ ...key, opKind: "resume", status: "pending" }),
+      ])
+    );
+  });
+
+  it("returns lease-only crash targets even when no epoch or op exists", () => {
+    const key = { source: "workers/agent", className: "AiChatWorker", objectKey: "ch-1" };
+    instance.lifecycleLeaseUpsert(key);
+
+    expect(instance.lifecycleListResumeTargets()).toEqual([key]);
+  });
+
+  it("includes unfinished resume ops after the lease has been cleared", () => {
+    const key = { source: "workers/agent", className: "AiChatWorker", objectKey: "ch-1" };
+    instance.lifecycleLeaseUpsert(key);
+    const epochId = instance.lifecycleOpenEpoch({
+      kind: "planned",
+      reason: "restart",
+      generation: 2,
+    });
+    instance.lifecycleLeaseClear(key);
+
+    expect(instance.lifecycleListResumeTargets()).toEqual([key]);
+
+    instance.lifecycleRecordOp({
+      epochId,
+      key,
+      opKind: "resume",
+      status: "resumed",
+    });
+    expect(instance.lifecycleListResumeTargets()).toEqual([]);
+  });
+
+  it("clears a DO lease when the matching entity is retired", () => {
+    const rec = instance.entityActivate(
+      doInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+      })
+    );
+    const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
+    instance.lifecycleLeaseUpsert(key);
+
+    instance.entityRetire(rec.id);
+
+    expect(instance.lifecycleListLeases()).toEqual([]);
+  });
+
+  it("clears a DO alarm on retirement and rejects late scheduling", () => {
+    const rec = instance.entityActivate(
+      doInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+      })
+    );
+    const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
+    instance.alarmSet({ ...key, wakeAt: 1_000 });
+
+    instance.entityRetire(rec.id);
+    expect(
+      instance.alarmClaimDue({
+        now: 1_000,
+        workerId: "driver-1",
+        limit: 1,
+      })
+    ).toEqual([]);
+    expect(() => instance.alarmSet({ ...key, wakeAt: 2_000 })).toThrow(/is not active/u);
+    expect(
+      instance.alarmClaimDue({
+        now: 2_000,
+        workerId: "driver-1",
+        limit: 1,
+      })
+    ).toEqual([]);
+  });
+
+  it("rejects scheduling when no matching active DO exists", () => {
+    expect(() =>
+      instance.alarmSet({
+        source: "workers/missing",
+        className: "MissingDO",
+        objectKey: "missing",
+        wakeAt: 1_000,
+      })
+    ).toThrow(/is not active/u);
+    expect(instance.alarmNextWakeAt(0)).toBeNull();
+  });
+
+  it("repairs a persisted retired-entity alarm during startup", async () => {
+    const first = await createWorkspaceStateTestDO();
+    first.instance.alarmAdoptWorker("driver-1");
+    const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
+    const rec = first.instance.entityActivate(
+      doInput({
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+      })
+    );
+    first.instance.entityRetire(rec.id);
+
+    // Model a crash-era stale row without passing through the guarded ingress.
+    first.sql.exec(
+      `INSERT INTO do_alarms (source, class_name, object_key, wake_at) VALUES (?, ?, ?, ?)`,
+      key.source,
+      key.className,
+      key.objectKey,
+      2_000
+    );
+    expect(
+      first.instance.alarmClaimDue({
+        now: 2_000,
+        workerId: "driver-1",
+        limit: 1,
+      })
+    ).toEqual([{ ...key, wakeAt: 2_000, dispatchGeneration: 1 }]);
+
+    const restarted = await createWorkspaceStateTestDO({ fake: await first.fake.restart() });
+    restarted.instance.alarmAdoptWorker("driver-2");
+    expect(
+      restarted.instance.alarmClaimDue({
+        now: 2_000,
+        workerId: "driver-2",
+        limit: 1,
+      })
+    ).toEqual([]);
+  });
+});

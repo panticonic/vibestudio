@@ -10,7 +10,7 @@ on:
 jobs:
   macos-release-candidate:
     name: Package macOS release installers from the accepted app candidate
-    runs-on: macos-14
+    runs-on: macos-15
     permissions:
       contents: read
     steps:

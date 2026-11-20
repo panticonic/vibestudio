@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildInfrastructurePackages,
   emitInfrastructurePackages,
@@ -72,12 +72,44 @@ function fixture(): string {
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const directory of temporaryDirectories.splice(0)) {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
 
 describe("infrastructure package cache", () => {
+  it("invalidates mode-dependent bundles and their consumers when NODE_ENV changes", () => {
+    const cwd = fixture();
+    for (const name of ["base", "consumer"]) {
+      const manifest = JSON.parse(fs.readFileSync(path.join(cwd, `packages/${name}/package.json`), "utf8"));
+      manifest.vibestudio = { buildProfile: "tsc-output" };
+      write(cwd, `packages/${name}/package.json`, JSON.stringify(manifest));
+    }
+    write(cwd, "packages/bundle/package.json", JSON.stringify({
+      name: "@vibestudio/bundle", scripts: { build: "bundle" },
+      vibestudio: { buildProfile: "custom-bundle" },
+      dependencies: { "@vibestudio/base": "workspace:*" },
+    }));
+    write(cwd, "packages/bundle/src/index.ts", "export const mode = 1;");
+    write(cwd, "packages/bundle/dist/index.js", "development bundle");
+    write(cwd, "packages/bridge/package.json", JSON.stringify({
+      name: "@vibestudio/bridge", dependencies: { "@vibestudio/bundle": "workspace:*" },
+    }));
+    vi.stubEnv("NODE_ENV", "development");
+    writeInfrastructurePackageCache(inspectInfrastructurePackageBuilds({ cwd }));
+    expect(inspectInfrastructurePackageBuilds({ cwd }).dirty).toEqual([]);
+    vi.stubEnv("NODE_ENV", "production");
+    expect(inspectInfrastructurePackageBuilds({ cwd }).dirty.map((state) => state.name))
+      .toEqual(["@vibestudio/bundle", "@vibestudio/consumer"]);
+    write(cwd, "packages/bundle/dist/index.js", "production bundle");
+    writeInfrastructurePackageCache(inspectInfrastructurePackageBuilds({ cwd }));
+    expect(inspectInfrastructurePackageBuilds({ cwd }).dirty).toEqual([]);
+    vi.stubEnv("NODE_ENV", "development");
+    expect(inspectInfrastructurePackageBuilds({ cwd }).dirty.map((state) => state.name))
+      .toEqual(["@vibestudio/bundle", "@vibestudio/consumer"]);
+  });
+
   it("batches compatible compiler projects and preserves custom build barriers", () => {
     const cwd = fixture();
     write(cwd, "package.json", JSON.stringify({ name: "fixture", type: "module" }));

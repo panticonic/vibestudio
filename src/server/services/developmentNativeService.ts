@@ -143,7 +143,7 @@ export function createDevelopmentNativeService(deps: {
   resolveAdoptedRepository?: (input: {
     contextId: string;
     repositoryId: string;
-  }) => Promise<{ repoPath: string; workingHead: VcsStateNodeRef } | null>;
+  }, ctx: ServiceContext) => Promise<{ repoPath: string; workingHead: VcsStateNodeRef } | null>;
 }): { definition: ServiceDefinition; close(): Promise<void> } {
   const plans = new Map<string, { plan: PreparedDevelopmentBuild; ownerRuntimeId: string }>();
   const builds = new Map<string, NativeBuildState>();
@@ -452,13 +452,13 @@ export function createDevelopmentNativeService(deps: {
     methods: developmentNativeMethods,
     handler: defineServiceHandler("developmentNative", developmentNativeMethods, {
       describeHost: () => ({ platform: process.platform, arch: process.arch }),
-      resolveAdoptedRepository: async (_ctx, [input]) => {
+      resolveAdoptedRepository: async (ctx, [input]) => {
         if (!deps.resolveAdoptedRepository) {
           throw Object.assign(new Error("This host cannot read adopted development repositories"), {
             code: "EEXECUTOR_UNAVAILABLE",
           });
         }
-        return deps.resolveAdoptedRepository(input);
+        return deps.resolveAdoptedRepository(input, ctx);
       },
       listClientExecutors: (ctx) => {
         const ownerUserId = verifiedInitiatingUserId(ctx);
@@ -508,7 +508,7 @@ export function createDevelopmentNativeService(deps: {
           runId,
           recipe: recipe as DevelopmentRecipe,
           pair,
-        });
+        }, ctx);
         assertRecipeTarget(plan.recipe.target, target);
         if (needsClientExecutor(target)) {
           const ownerUserId = verifiedInitiatingUserId(ctx);
@@ -535,13 +535,13 @@ export function createDevelopmentNativeService(deps: {
         plans.set(runId, { plan, ownerRuntimeId: ctx.caller.runtime.id });
         return { runId, snapshot: plan.snapshot, recipe: plan.recipe };
       },
-      prepareTemplateExchange: async (_ctx, [input]) => {
+      prepareTemplateExchange: async (ctx, [input]) => {
         if (!deps.templateExchange) {
           throw Object.assign(new Error("Template repository exchange is unavailable"), {
             code: "EEXECUTOR_UNAVAILABLE",
           });
         }
-        return deps.templateExchange.prepare(input);
+        return deps.templateExchange.prepare(input, ctx);
       },
       applyTemplateExchange: async (ctx, [input]) => {
         if (!deps.templateExchange) {
@@ -549,7 +549,7 @@ export function createDevelopmentNativeService(deps: {
             code: "EEXECUTOR_UNAVAILABLE",
           });
         }
-        return deps.templateExchange.apply({ ...input, ingress: semanticIngress(ctx) });
+        return deps.templateExchange.apply({ ...input, ingress: semanticIngress(ctx) }, ctx);
       },
       beginBuild: async (ctx, [{ run }]) => {
         const plan = requirePlan(ctx, run);

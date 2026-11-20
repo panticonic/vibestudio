@@ -1,0 +1,541 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { sha256HexSyncText } from "@vibestudio/content-addressing";
+import type { VcsEditInput } from "@vibestudio/service-schemas/vcs";
+import { createVerifiedCaller, type VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { expect, it, vi } from "vitest";
+import type { WorkspaceSourceProviderRef } from "../workspaceSourceProvider.js";
+import { getBytes, putBytes } from "../services/blobstoreService.js";
+import {
+  advanceWorkspaceCommitMemoryIndex,
+  type HistoryCommitMemoryIndex,
+  editWorkspaceParticipant,
+  forkWorkspaceParticipantContext,
+  inspectWorkspaceParticipantProvenance,
+  mergeWorkspaceParticipantContext,
+  openWorkspaceParticipantContext,
+  readWorkspaceParticipantNeighbors,
+  readWorkspaceParticipantStatus,
+  reviewWorkspaceParticipantMerge,
+  workspaceParticipantReferencesReachable,
+  workspaceParticipantCatalog,
+  workspaceParticipantIdentity,
+} from "./workspaceHistoryHost.js";
+
+const canonical = {
+  source: "workers/workspace-source",
+  className: "GadHistoryDO",
+  objectKey: "canonical",
+};
+const native = (taskId: number, callId: string): VerifiedCaller => ({
+  runtime: { kind: "do", id: "do:workers/agent:AgentDO:agent" },
+  nativeInvocation: {
+    owner: { runtimeId: "agent", authoritySessionId: "sealed" },
+    task: { conversationId: 3, taskId },
+    operation: { kind: "tool", assistantEntryId: 0, callId },
+  },
+});
+
+it("resumes an interrupted commit recall backfill before indexing a newer protected tip", async () => {
+  const head = "a".repeat(40);
+  const timestamp = "2026-08-14T00:00:00.000Z";
+  const document = (eventId: string) => ({ eventId, revision: head, text: eventId, createdAt: timestamp });
+  let interrupted = true;
+  let marker: string | null = null;
+  const recorded: string[] = [];
+  const dispatch = vi.fn(async (_target: WorkspaceSourceProviderRef, method: string, input: unknown) => {
+    expect(method).toBe("readHistoryMain");
+    const { commitMemoryPage: page, commitMemoryEventId: eventId } = input as {
+      commitMemoryEventId: string;
+      commitMemoryPage: { previousEventId: string | null; after: string | null } | null;
+    };
+    if (!page) return { head, eventId, commitMemoryPage: null };
+    const response = (id: string, nextAfter: string | null) => ({
+      head, eventId, commitMemoryPage: { eventId, documents: [document(id)], nextAfter },
+    });
+    if (eventId === "first-tip") {
+      expect(page.previousEventId).toBeNull();
+      if (!page.after) return response("event:a", "event:a");
+      expect(page.after).toBe("event:a");
+      if (interrupted) throw new Error("Native reader stopped between pages");
+      return response("event:b", null);
+    }
+    expect(eventId).toBe("next-tip");
+    expect(page).toEqual({ previousEventId: "first-tip", after: null });
+    return response("event:c", null);
+  });
+  const index = {
+    readHistoryCommitMemoryIndex: async () => marker,
+    recordHistoryCommitMemory: vi.fn(),
+    recordHistoryCommitMemoryPage: vi.fn<NonNullable<HistoryCommitMemoryIndex["recordHistoryCommitMemoryPage"]>>(async (page) => {
+      expect(page.previousMarker).toBe(marker);
+      marker = page.marker;
+      recorded.push(...page.documents.map(({ eventId }) => eventId));
+    }),
+  };
+  const source = { dispatch: { dispatch }, canonical, index };
+  await expect(advanceWorkspaceCommitMemoryIndex({ ...source, eventId: "first-tip" }))
+    .rejects.toThrow("stopped between pages");
+  expect(recorded).toEqual(["event:a"]);
+  interrupted = false;
+  await advanceWorkspaceCommitMemoryIndex({ ...source, eventId: "next-tip" });
+  await advanceWorkspaceCommitMemoryIndex({ ...source, eventId: "next-tip" });
+  expect(recorded).toEqual(["event:a", "event:b", "event:c"]);
+  expect(index.recordHistoryCommitMemory).not.toHaveBeenCalled();
+  expect(JSON.parse(marker!)).toEqual({ completedEventId: "next-tip", pending: null });
+});
+
+it("uses the verified task and owner context to choose a working copy", async () => {
+  const dispatch = vi.fn(
+    async (_ref: WorkspaceSourceProviderRef, method: string, input: unknown) => {
+      if (method === "reserveHistoryParticipant") {
+        const { participantId } = input as { participantId: string };
+        return {
+          targetId: `do:${canonical.source}:${canonical.className}:work-${sha256HexSyncText(participantId)}`,
+          head: "fork",
+          origin: { ref: "History:canonical", token: "grant" },
+        };
+      }
+      if (method === "bindHistoryContext") return "latest-main";
+      throw new Error(`Unexpected history call ${method}`);
+    }
+  );
+  const launch = (caller: VerifiedCaller, ownerContextId = "owner", contextId = "context") =>
+    openWorkspaceParticipantContext({
+      dispatch: { dispatch },
+      canonical,
+      caller,
+      ownerContextId,
+      contextId,
+    });
+  const first = await launch(native(1, "call-1"));
+  const second = await launch(native(1, "call-2"));
+  const third = await launch(native(2, "call-3"));
+  expect(first.owner).toEqual(second.owner);
+  expect(first.owner).not.toEqual(third.owner);
+  expect(first.workingHead).toBe("latest-main");
+  expect(second.workingHead).toBe("latest-main");
+  expect(dispatch.mock.calls[1]?.[0]).toEqual(first.owner);
+  const device = createVerifiedCaller("shell:editor", "shell", null, null, { userId: "person", handle: "person" });
+  const editor = await launch(device);
+  const child = await launch(device, "owner", "child-context");
+  const independent = await launch(device, "other-owner");
+  expect(editor.owner).toEqual(child.owner);
+  expect(editor.owner).not.toEqual(independent.owner);
+});
+
+it("retains a user's interactive working copy across signed runs without collapsing native tasks", () => {
+  const signed = (run: string, userId = "person", contextId = "session-context"): VerifiedCaller => {
+    const caller = createVerifiedCaller("do:workers/session:SessionDO:session", "do", null, null, {
+      userId, handle: userId,
+    });
+    const executionSession = {
+      mode: "interactive",
+      ownerUser: `user:${userId}`,
+      contextId,
+      agentBinding: null,
+      parent: null,
+      executor: { kind: "dynamic-code", runtimeId: caller.runtime.id, runId: run },
+    } as NonNullable<VerifiedCaller["executionSession"]>;
+    return { ...caller, taskAuthority: `task:${run}`, executionSession };
+  };
+  const first = workspaceParticipantIdentity(signed("first"), "session-context");
+  expect(workspaceParticipantIdentity(signed("second"), "session-context")).toBe(first);
+  expect(workspaceParticipantIdentity(signed("third", "other"), "session-context")).not.toBe(first);
+  expect(workspaceParticipantIdentity(signed("fourth", "person", "other-context"), "other-context")).not.toBe(first);
+  expect(workspaceParticipantIdentity(signed("first"), "other-context")).not.toBe(first);
+  expect(workspaceParticipantIdentity({ ...signed("first"), nativeInvocation: native(1, "one").nativeInvocation! }, "session-context"))
+    .toBe(workspaceParticipantIdentity(native(1, "two"), "session-context"));
+});
+
+it("withholds a grant when history reports a different allocation", async () => {
+  const dispatch = vi.fn(async () => ({
+    targetId: "do:another:History:work",
+    head: "head",
+    origin: { ref: "History:canonical", token: "grant" },
+  }));
+  await expect(
+    openWorkspaceParticipantContext({
+      dispatch: { dispatch },
+      canonical,
+      caller: native(1, "call"),
+      ownerContextId: "owner",
+      contextId: "file-context",
+    })
+  ).rejects.toThrow("different participant owner");
+  expect(dispatch).toHaveBeenCalledTimes(1);
+});
+
+it("transfers the selected fork to the destination identity and requires the exact receipt", async () => {
+  const parent = native(1, "parent");
+  const child = native(2, "child");
+  const owner = { ...canonical, objectKey: `work-${sha256HexSyncText(workspaceParticipantIdentity(parent, "parent-context"))}` };
+  const childId = workspaceParticipantIdentity(child, "child-context");
+  const target = { ...canonical, objectKey: `work-${sha256HexSyncText(childId)}` };
+  const peer = (ref: WorkspaceSourceProviderRef) => `do:${ref.source}:${ref.className}:${ref.objectKey}`;
+  const request = { parentContextId: "parent-context", childContextId: "child-context", childPeer: peer(target) };
+  const seed = {
+    branch: `fork/${"a".repeat(64)}`,
+    head: "exact-head",
+    state: { kind: "application", applicationId: "private-application" },
+  };
+  const origin = { ref: "GadHistoryDO:canonical", token: "origin-grant" };
+  const dispatch = vi.fn(async (_receiver: WorkspaceSourceProviderRef, method: string) => {
+    switch (method) {
+      case "reserveHistoryParticipant": return { targetId: peer(target), head: "main", origin };
+      case "offerHistoryContextFork": return { seed, token: "fork-grant" };
+      case "acceptHistoryContextFork": return seed;
+      case "finishHistoryContextFork": return;
+      default: throw new Error(`Unexpected history call ${method}`);
+    }
+  });
+  const fork = () => forkWorkspaceParticipantContext({
+    dispatch: { dispatch }, canonical, owner, caller: parent,
+    blobsDir: tmpdir(),
+    contextId: "parent-context", ownerContextId: "parent-context",
+    child: { caller: child, contextId: "child-context", ownerContextId: "child-context" },
+  });
+  await expect(fork()).resolves.toEqual(seed.state);
+  expect(dispatch.mock.calls).toEqual([
+    [canonical, "reserveHistoryParticipant", { participantId: childId, contextId: "child-context", workingContextId: "child-context" }],
+    [owner, "offerHistoryContextFork", request],
+    [target, "acceptHistoryContextFork", { participantId: childId, origin, request, seed, token: "fork-grant", fromPeer: peer(owner) }],
+    [owner, "finishHistoryContextFork", { request, seed }],
+  ]);
+  dispatch.mockClear();
+  const remote = dispatch.getMockImplementation()!;
+  dispatch.mockImplementation((ref, method) => method === "acceptHistoryContextFork"
+    ? Promise.resolve({ ...seed, head: "wrong-head" })
+    : remote(ref, method));
+  await expect(fork()).rejects.toThrow("accepted a different revision");
+  expect(dispatch).toHaveBeenCalledTimes(3);
+});
+
+it("avoids opening a new participant copy during shutdown", async () => {
+  const dispatch = vi.fn();
+  const shutdown = new AbortController();
+  shutdown.abort(new Error("Workspace stopped"));
+  await expect(openWorkspaceParticipantContext({
+    dispatch: { dispatch }, canonical, caller: native(1, "late"),
+    ownerContextId: "owner", contextId: "context", signal: shutdown.signal,
+  })).rejects.toThrow("Workspace stopped");
+  expect(dispatch).not.toHaveBeenCalled();
+});
+
+it("reads status only from the verified participant and context", async () => {
+  const caller = native(1, "status-call");
+  const participantId = JSON.stringify(["task", {
+    authoritySessionId: "sealed",
+    runtimeId: "agent",
+  }, { conversationId: 3, taskId: 1 }]);
+  const owner = { ...canonical, objectKey: `work-${sha256HexSyncText(participantId)}` };
+  const event = { kind: "event", eventId: "saved" };
+  const status = {
+    contextId: "context",
+    committed: event,
+    workingHead: event,
+    clean: true,
+    mainEventId: "main",
+    mainRelation: "behind",
+    workingCounts: { applications: 0, workUnits: 0, changes: 0 },
+    integrating: [],
+  };
+  const dispatch = vi.fn().mockResolvedValue(status);
+  const request = { dispatch: { dispatch }, canonical, owner, caller, contextId: "context" };
+  await expect(readWorkspaceParticipantStatus(request)).resolves.toEqual(status);
+  expect(dispatch).toHaveBeenLastCalledWith(owner, "readHistoryStatus", { contextId: "context" });
+  await expect(
+    readWorkspaceParticipantStatus({ ...request, caller: native(2, "other-task") })
+  ).rejects.toThrow("history belongs to a different participant");
+  expect(dispatch).toHaveBeenCalledTimes(1);
+  await expect(
+    readWorkspaceParticipantStatus({ ...request, contextId: "other-context" })
+  ).rejects.toThrow("different context");
+});
+
+it("checks typed references through the admitted participant contexts", async () => {
+  const caller = native(1, "visibility-call");
+  const participantId = JSON.stringify(["task", {
+    authoritySessionId: "sealed",
+    runtimeId: "agent",
+  }, { conversationId: 3, taskId: 1 }]);
+  const owner = { ...canonical, objectKey: `work-${sha256HexSyncText(participantId)}` };
+  const application = { kind: "application", applicationId: "saved-application" };
+  const dispatch = vi.fn().mockResolvedValue(true);
+  const scope = { dispatch: { dispatch }, canonical, owner, caller, contextIds: ["edit", "edit"] };
+  await expect(workspaceParticipantReferencesReachable({
+    ...scope,
+    references: [
+      { kind: "event", value: "shared" },
+      { kind: "state-node", value: application },
+      { kind: "external-delta", value: "imported-delta" },
+    ],
+  })).resolves.toBe(true);
+  expect(dispatch).toHaveBeenCalledWith(owner, "readHistoryReferenceVisibility", {
+    contextIds: ["edit"],
+    references: [
+      { kind: "event", eventId: "shared" }, application,
+      { kind: "external-delta", deltaId: "imported-delta" },
+    ],
+  });
+  await expect(workspaceParticipantReferencesReachable({
+    ...scope,
+    references: [{ kind: "state-node", value: { kind: "event" } }],
+  })).resolves.toBe(false);
+  expect(dispatch).toHaveBeenCalledTimes(1);
+});
+
+it("binds catalog pages to the requested participant revision", async () => {
+  const caller = native(1, "catalog-call");
+  const participant = JSON.stringify(["task", {
+    authoritySessionId: "sealed", runtimeId: "agent",
+  }, { conversationId: 3, taskId: 1 }]);
+  const owner = { ...canonical, objectKey: `work-${sha256HexSyncText(participant)}` };
+  const contextId = "context";
+  const dispatch = vi.fn();
+  const catalog = workspaceParticipantCatalog({ dispatch: { dispatch }, caller, owner, canonical, contextId });
+  const state = { kind: "event" as const, eventId: "saved" };
+  const repository = { state, repoPath: "meta" };
+  dispatch.mockResolvedValueOnce({ ...repository, repositoryId: "repository" });
+  await expect(catalog.resolveRepository(repository)).resolves.toEqual({ ...repository, repositoryId: "repository" });
+  expect(dispatch).toHaveBeenLastCalledWith(owner, "resolveHistoryRepository", { contextId, repository });
+  const list = { state, path: "meta", limit: 5 };
+  dispatch.mockResolvedValueOnce({ state, path: list.path, entries: [], nextCursor: null });
+  await expect(catalog.listDirectory(list)).resolves.toMatchObject({ state, entries: [] });
+  dispatch.mockResolvedValueOnce({ state: { ...state, eventId: "other" }, path: list.path, entries: [], nextCursor: null });
+  await expect(catalog.listDirectory(list)).rejects.toThrow("different revision");
+});
+
+it.each([
+  { method: "mergeHistoryMain", selection: { head: "mine", base: "base", main: "shared" } },
+  { method: "mergeHistoryContext", selection: {
+    head: "mine", base: "base", source: { contextId: "owned-child", head: "shared" },
+  } },
+  { method: "mergeHistoryContext", selection: {
+    head: "mine", base: "base", source: { contextId: "peer", head: "shared", participantId: "other" },
+  } },
+])("stores composed content before $method records the merge", async ({ method: expectedMethod, selection }) => {
+  const blobsDir = await mkdtemp(join(tmpdir(), "workspace-history-merge-"));
+  try {
+    const caller = native(1, "merge-call");
+    const participant = JSON.stringify(["task", {
+      authoritySessionId: "sealed", runtimeId: "agent",
+    }, { conversationId: 3, taskId: 1 }]);
+    const owner = { ...canonical, objectKey: `work-${sha256HexSyncText(participant)}` };
+    const mine = Buffer.from("my text");
+    const { digest } = await putBytes(blobsDir, mine);
+    const composed = Buffer.from("combined content");
+    const composedDigest = sha256HexSyncText(composed.toString());
+    const application = { kind: "application", applicationId: "merge-application" };
+    const result = {
+      commandId: "merge", contextId: "context", workUnitId: "work-unit",
+      applicationId: application.applicationId, workingHead: application,
+      changeCount: 1, changeIds: ["composed-change"],
+      incorporatedChangeCount: 1, incorporatedChangeIds: ["source-change"],
+      status: "working", decisionId: "decision", decisionIds: ["decision"],
+      resolution: { complete: true, concluded: true, remainingCoordinateCount: 0 },
+      counts: { adopt: 0, convergent: 0, composed: 1, conflict: 0, resolved: 0 },
+      outcomes: [], composed: [], conflicts: [], nextConflictCursor: null,
+      intents: [], intentsTruncated: false,
+    };
+    const dispatch = vi.fn(async (_owner: WorkspaceSourceProviderRef, method: string, raw: unknown) => {
+      if (method === "resolveHistoryMerge") {
+        expect(raw).toEqual({
+          contextId: "context",
+          target: { kind: "event", eventId: "mine-event" },
+          source: { kind: "event", eventId: "shared-event" },
+          readableContextIds: ["owned-child"],
+        });
+        return selection;
+      }
+      const request = raw as { content?: { observation: { files: unknown[] }; contentHashes?: string[] } };
+      expect(method).toBe(expectedMethod);
+      expect(raw).toMatchObject(selection);
+      if (!request.content) return { kind: "read-content", contentHashes: [digest] };
+      expect(request.content.observation.files).toEqual([{ contentHash: digest, text: mine.toString() }]);
+      if (!request.content.contentHashes) {
+        return {
+          kind: "prepare-content",
+          blobs: [{ contentHash: composedDigest, base64: composed.toString("base64") }],
+        };
+      }
+      expect(request.content.contentHashes).toEqual([composedDigest]);
+      expect(await getBytes(blobsDir, composedDigest)).toEqual(composed);
+      return { kind: "committed", head: "merge-head", value: application, result };
+    });
+    const explicitSource = "source" in selection && Boolean(selection.source?.participantId);
+    await expect(mergeWorkspaceParticipantContext({
+      dispatch: { dispatch }, caller, owner, canonical, blobsDir,
+      readableContextIds: ["owned-child"],
+      ...(explicitSource ? { selection } : {}),
+      cause: { parent: null },
+      merge: {
+        commandId: "merge", contextId: "context",
+        expectedWorkingHead: { kind: "event", eventId: "mine-event" },
+        source: { kind: "event", eventId: "shared-event" },
+      },
+    })).resolves.toEqual({ head: "merge-head", value: application, result });
+    expect(dispatch).toHaveBeenCalledTimes(explicitSource ? 3 : 4);
+  } finally {
+    await rm(blobsDir, { recursive: true, force: true });
+  }
+});
+
+it("validates the selected participant command and the endpoints of its provenance", async () => {
+  const caller = native(1, "inspect");
+  const identity = JSON.stringify(["task", {
+    authoritySessionId: "sealed", runtimeId: "agent",
+  }, { conversationId: 3, taskId: 1 }]);
+  const owner = { ...canonical, objectKey: `work-${sha256HexSyncText(identity)}` };
+  const root = { kind: "command" as const, commandId: "command:one" };
+  const other = { kind: "command" as const, commandId: "command:other" };
+  const workUnit = { kind: "work-unit" as const, workUnitId: "work:one" };
+  const at = "2026-04-01T00:00:00.000Z";
+  const result = {
+    root, hasMoreEdges: false,
+    node: { kind: "command", value: {
+      commandId: root.commandId, workspaceId: "workspace", contextId: "context",
+      method: "edit", status: "complete", result: workUnit, createdAt: at, completedAt: at,
+    } },
+    edges: [{ kind: "caused-by", from: workUnit, to: root }],
+  };
+  const dispatch = vi.fn()
+    .mockResolvedValueOnce(result)
+    .mockResolvedValueOnce({ ...result, edges: [{ ...result.edges[0], to: other }] });
+  const input = { dispatch: { dispatch }, owner, canonical, caller, contextId: "context", inspect: { node: root, edgeLimit: 1 } };
+  await expect(inspectWorkspaceParticipantProvenance(input)).resolves.toEqual(result);
+  expect(dispatch).toHaveBeenCalledWith(owner, "inspectHistoryNode", {
+    contextId: "context", inspect: input.inspect,
+  });
+  await expect(inspectWorkspaceParticipantProvenance(input)).rejects.toThrow("different provenance");
+  const page = { root, edges: result.edges, nextCursor: "next-page" };
+  const neighbors = { root, limit: 1 };
+  dispatch.mockResolvedValueOnce(page).mockResolvedValueOnce({
+    ...page, edges: [{ ...page.edges[0], to: other }],
+  });
+  await expect(readWorkspaceParticipantNeighbors({ ...input, neighbors })).resolves.toEqual(page);
+  expect(dispatch).toHaveBeenCalledWith(owner, "readHistoryNeighbors", { contextId: "context", neighbors });
+  await expect(readWorkspaceParticipantNeighbors({ ...input, neighbors })).rejects.toThrow("different provenance");
+});
+
+it("observes exact bytes for a participant comparison and validates the returned states", async () => {
+  const blobsDir = await mkdtemp(join(tmpdir(), "workspace-history-compare-"));
+  try {
+    const caller = native(1, "compare-call");
+    const participant = JSON.stringify(["task", {
+      authoritySessionId: "sealed", runtimeId: "agent",
+    }, { conversationId: 3, taskId: 1 }]);
+    const owner = { ...canonical, objectKey: `work-${sha256HexSyncText(participant)}` };
+    const { digest } = await putBytes(blobsDir, Buffer.from("Exact review content"));
+    const target = { kind: "event" as const, eventId: "event:target" };
+    const source = { kind: "event" as const, eventId: "event:source" };
+    const compare = { target, source, limit: 10 };
+    const result = {
+      target, source, base: { kind: "event", eventId: "event:common" },
+      counts: { adopt: 0, convergent: 1, composed: 0, conflict: 0, resolved: 0 },
+      intentCounts: { merged: 0, settled: 1, split: 0, contested: 0, pending: 0 },
+      resolution: { complete: true, concluded: false, remainingCoordinateCount: 0 },
+      coordinates: [], intents: [], intentsTruncated: false, nextCursor: null,
+    };
+    const dispatch = vi.fn()
+      .mockResolvedValueOnce({ kind: "read-content", contentHashes: [digest] })
+      .mockResolvedValueOnce({ kind: "reviewed", result })
+      .mockResolvedValueOnce({ kind: "reviewed", result: { ...result, target: source } });
+    const input = { dispatch: { dispatch }, caller, owner, canonical, blobsDir, contextId: "context", compare };
+    await expect(reviewWorkspaceParticipantMerge(input)).resolves.toEqual(result);
+    expect(dispatch).toHaveBeenNthCalledWith(2, owner, "reviewHistoryMerge", {
+      contextId: "context", compare, readableContextIds: [], observation: { files: [{ contentHash: digest, text: "Exact review content" }] },
+    });
+    await expect(reviewWorkspaceParticipantMerge(input)).rejects.toThrow("different merge comparison");
+  } finally {
+    await rm(blobsDir, { recursive: true, force: true });
+  }
+});
+
+it("stores prepared participant content before applying the edit and returns a committed retry", async () => {
+  const blobsDir = await mkdtemp(join(tmpdir(), "workspace-history-content-"));
+  try {
+    const owner = { ...canonical, objectKey: "work-alice" };
+    const before = Buffer.from("original");
+    const after = Buffer.from("edited");
+    const { digest: originalHash } = await putBytes(blobsDir, before);
+    const contentHash = sha256HexSyncText(after.toString("utf8"));
+    const cause = { parent: null };
+    const edit: VcsEditInput = {
+      commandId: "edit-command",
+      contextId: "edit-context",
+      expectedWorkingHead: { kind: "event", eventId: "initial-event" },
+      changes: [
+        {
+          kind: "text-edit",
+          repositoryId: "repo",
+          fileId: "file",
+          edits: [{ start: 0, end: before.length, text: after.toString("utf8") }],
+        },
+      ],
+    };
+    const workingHead = { kind: "application" as const, applicationId: "application" };
+    const result = {
+      commandId: edit.commandId,
+      contextId: edit.contextId,
+      applicationId: workingHead.applicationId,
+      workUnitId: "work-unit",
+      changeCount: 1,
+      changeIds: ["change"],
+      incorporatedChangeCount: 0,
+      incorporatedChangeIds: [],
+      decisionIds: [],
+    };
+    const command = { commandId: edit.commandId, method: "edit", requestDigest: "digest", cause };
+    const application = { contextId: edit.contextId };
+    let committed = false;
+    const dispatch = vi.fn(
+      async (ref: WorkspaceSourceProviderRef, method: string, input: unknown) => {
+        expect(ref).toEqual(owner);
+        if (method === "planHistoryEdit") {
+          if (committed)
+            return { kind: "committed", head: "applied", result: { ...result, workingHead } };
+          const request = input as { receipt: unknown };
+          if (request.receipt === null)
+            return { kind: "read-content", contentHashes: [originalHash] };
+          expect(request.receipt).toEqual({
+            files: [{ contentHash: originalHash, base64: before.toString("base64") }],
+          });
+          return {
+            kind: "planned",
+            command,
+            application,
+            result,
+            blobs: [{ contentHash, base64: after.toString("base64") }],
+          };
+        }
+        expect(method).toBe("applyHistoryApplication");
+        expect(input).toEqual({ head: "working", command, plan: application });
+        expect(await getBytes(blobsDir, contentHash)).toEqual(after);
+        committed = true;
+        return { head: "applied", value: workingHead };
+      }
+    );
+    const execute = () =>
+      editWorkspaceParticipant({
+        dispatch: { dispatch },
+        owner,
+        head: "working",
+        edit,
+        cause,
+        blobsDir,
+      });
+    const output = { head: "applied", result: { ...result, workingHead } };
+    await expect(execute()).resolves.toEqual(output);
+    await expect(execute()).resolves.toEqual(output);
+    expect(dispatch.mock.calls.map(([, method]) => method)).toEqual([
+      "planHistoryEdit",
+      "planHistoryEdit",
+      "applyHistoryApplication",
+      "planHistoryEdit",
+    ]);
+  } finally {
+    await rm(blobsDir, { recursive: true, force: true });
+  }
+});

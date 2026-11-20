@@ -1,3 +1,4 @@
+import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 /**
  * RouteRegistry — Worker/service HTTP route dispatch table.
  *
@@ -62,7 +63,8 @@ export interface ServiceRouteDecl {
   handler: (
     req: IncomingMessage,
     res: ServerResponse,
-    params: Record<string, string>
+    params: Record<string, string>,
+    caller?: VerifiedCaller
   ) => void | Promise<void>;
   onUpgrade?: (
     req: IncomingMessage,

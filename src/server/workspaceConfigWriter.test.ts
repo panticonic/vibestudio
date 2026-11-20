@@ -1,9 +1,11 @@
 import YAML from "yaml";
 import { describe, expect, it, vi } from "vitest";
-import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import { createHostCaller, createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import type { WorkspaceVcs } from "./vcsHost/workspaceVcs.js";
 import { workspaceConfigDigest } from "@vibestudio/workspace/preparedConfig";
+import { sha256HexSyncText } from "@vibestudio/content-addressing";
+import { workspaceParticipantIdentity } from "./vcsHost/workspaceHistoryHost.js";
 import {
   createWorkspaceConfigMainWriter,
   renderWorkspaceConfigYaml,
@@ -21,6 +23,7 @@ const repositoryRef = {
   repositoryId: "repository:meta",
 };
 const withProtectedMainMutation = <T>(operation: () => Promise<T>): Promise<T> => operation();
+const whenSemanticReady = async () => {};
 
 function configReader(initialYaml: string) {
   return vi.fn<(method: string, input: unknown) => Promise<unknown>>(
@@ -118,6 +121,62 @@ function configReader(initialYaml: string) {
 }
 
 describe("workspaceConfigWriter", () => {
+  it("authors settings in a temporary participant copy and preserves the approving caller", async () => {
+    const initialYaml = `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ndefaultRepo: panels/old\n`;
+    const author = createHostCaller("server", "server", { userId: "system" } as never);
+    const approver = createVerifiedCaller("shell:owner", "shell");
+    const canonical = { source: "workers/workspace-source", className: "GadHistoryDO", objectKey: "canonical" };
+    const openParticipantScope = vi.fn(async ({ contextId }: { contextId: string }) => ({
+      caller: author, contextId, ownerContextId: contextId, canonical, workingHead: "native-main",
+      owner: { ...canonical, objectKey: `work-${sha256HexSyncText(workspaceParticipantIdentity(author, contextId))}` },
+      dispatch: {
+        dispatch: vi.fn(async (_target, method, input) => {
+          if (method === "readHistoryStatus") return configReader(initialYaml)("vcsStatus", input);
+          if (method === "resolveHistoryRepository")
+            return { state: mainState, repositoryId: "repository:meta", repoPath: "meta" };
+          throw new Error(`Unexpected native history call ${method}`);
+        }),
+      },
+    }));
+    const publishParticipantContext = vi.fn();
+    const dropContext = vi.fn();
+    const editParticipantContext = vi.fn(async () => ({ head: "native-edited", result: { workingHead: editedState } }));
+    const saveParticipantContext = vi.fn(async () => ({ event: committedState }));
+    const legacy = vi.fn(() => { throw new Error("Legacy store is unavailable"); });
+    const vcs = {
+      participantHistoryAttached: true, whenSemanticReady, withProtectedMainMutation,
+      openParticipantScope, dropContext, editParticipantContext, saveParticipantContext, publishParticipantContext,
+      ensureSemanticContext: legacy, semanticCausalCall: legacy,
+      ensureFresh: vi.fn(async () => ({ stateHash: "state:protected" })),
+      readFile: vi.fn(async () => ({ content: { kind: "text", text: initialYaml } })),
+      readParticipantFiles: vi.fn(async () => [await configReader(initialYaml)("vcsReadFile", {})]),
+    } as unknown as WorkspaceVcs;
+    const writer = createWorkspaceConfigMainWriter({ workspaceId: WORKSPACE_ID, vcs, authoringCaller: author });
+    await expect(writer.wouldMutate((config) => ({ ...config, defaultRepo: "panels/new" }))).resolves.toBe(true);
+    expect(openParticipantScope).not.toHaveBeenCalled();
+    await expect(writer.applyMutation({
+      ctx: { caller: createVerifiedCaller("do:relay", "do"), authorizingCaller: approver },
+      mutate: (config) => ({ ...config, defaultRepo: "panels/new" }),
+      summary: "change default repo",
+    })).resolves.toMatchObject({ changed: true, nextConfig: { defaultRepo: "panels/new" } });
+    const contextId = openParticipantScope.mock.calls[0]![0].contextId;
+    expect(contextId).toMatch(/^system:workspace-config:/u);
+    expect(editParticipantContext).toHaveBeenCalledWith(expect.objectContaining({
+      head: "native-main", edit: expect.objectContaining({ contextId, expectedWorkingHead: mainState }),
+    }));
+    expect(saveParticipantContext).toHaveBeenCalledWith(expect.objectContaining({
+      head: "native-edited", commit: expect.objectContaining({ contextId, expectedWorkingHead: editedState }),
+    }));
+    expect(publishParticipantContext).toHaveBeenCalledWith(expect.objectContaining({
+      storageCaller: author, gateContext: { kind: "caller", caller: approver },
+      push: expect.objectContaining({
+        contextId, expectedMainEventId: mainState.eventId, expectedCommittedEventId: committedState.eventId,
+      }),
+    }));
+    expect(dropContext).toHaveBeenCalledExactlyOnceWith(contextId);
+    expect(legacy).not.toHaveBeenCalled();
+  });
+
   it("uses a fresh context, one whole-chain commit, and an exact protected push", async () => {
     const initialYaml = `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ndefaultRepo: panels/old\n`;
     const semanticCausalCall = configReader(initialYaml);
@@ -131,6 +190,7 @@ describe("workspaceConfigWriter", () => {
     const ensureSemanticContext = vi.fn(async (_contextId: string) => mainState);
     const vcs = {
       withProtectedMainMutation,
+      whenSemanticReady,
       ensureSemanticContext,
       dropContext: vi.fn(async () => undefined),
       semanticCausalCall,
@@ -204,6 +264,7 @@ describe("workspaceConfigWriter", () => {
     const ensureSemanticContext = vi.fn(async () => mainState);
     const vcs = {
       withProtectedMainMutation,
+      whenSemanticReady,
       ensureSemanticContext,
       dropContext: vi.fn(async () => undefined),
       semanticCausalCall,
@@ -255,6 +316,7 @@ describe("workspaceConfigWriter", () => {
     }));
     const vcs = {
       withProtectedMainMutation,
+      whenSemanticReady,
       ensureSemanticContext: vi.fn(async () => mainState),
       dropContext: vi.fn(async () => undefined),
       semanticCausalCall,
@@ -308,6 +370,7 @@ describe("workspaceConfigWriter", () => {
     const ensureSemanticContext = vi.fn(async (_contextId: string) => mainState);
     const vcs = {
       withProtectedMainMutation,
+      whenSemanticReady,
       ensureSemanticContext,
       dropContext: vi.fn(async () => undefined),
       semanticCausalCall,
@@ -354,6 +417,7 @@ describe("workspaceConfigWriter", () => {
     const semanticCausalCall = configReader(`systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n`);
     const vcs = {
       withProtectedMainMutation,
+      whenSemanticReady,
       ensureSemanticContext: vi.fn(async () => mainState),
       dropContext: vi.fn(async () => undefined),
       semanticCausalCall,
@@ -386,6 +450,7 @@ describe("workspaceConfigWriter", () => {
     const semanticCausalCall = configReader(`systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n`);
     const vcs = {
       withProtectedMainMutation,
+      whenSemanticReady,
       ensureSemanticContext: vi.fn(async () => mainState),
       dropContext: vi.fn(async () => {
         throw cleanupFailure;
@@ -465,6 +530,7 @@ describe("workspaceConfigWriter", () => {
     const semanticCausalCall = configReader(initialYaml);
     const vcs = {
       withProtectedMainMutation,
+      whenSemanticReady,
       ensureSemanticContext: vi.fn(async () => mainState),
       dropContext: vi.fn(async () => undefined),
       semanticCausalCall,

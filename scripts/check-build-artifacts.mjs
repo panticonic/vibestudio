@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { assertInternalDoProgramsPublication } from "./lib/internal-do-programs.mjs";
+import { assertRuntimeAppPublication } from "./lib/runtime-app.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -188,8 +188,8 @@ const contracts = [
     ],
   },
   {
-    path: "dist/internal-do-programs.json",
-    runtime: "workerd/browser Durable Object bundle",
+    path: "dist/runtime-app.json",
+    runtime: "celld runtime application bundle",
     format: "esm",
     forbidden: [
       {
@@ -382,9 +382,7 @@ for (const contract of contracts) {
   checkContract(contract);
 }
 
-assertInternalDoProgramsPublication(
-  JSON.parse(readArtifact("dist/internal-do-programs.json").toString("utf8"))
-);
+assertRuntimeAppPublication(JSON.parse(readArtifact("dist/runtime-app.json").toString("utf8")));
 
 for (const smoke of importSmokes) {
   await runImportSmoke(smoke);

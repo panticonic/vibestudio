@@ -408,7 +408,7 @@ function deriveWorkspaceId(workspacePath: string): string {
  * Create a fully resolved Workspace object from a managed workspace directory.
  * The wsDir contains source/ (workspace source state) and state/ (runtime data).
  */
-export function createWorkspace(wsDir: string): Workspace {
+export function createWorkspace(wsDir: string, publishedConfig?: WorkspaceConfig): Workspace {
   const resolvedDir = path.resolve(wsDir);
   const sourceRoot = path.join(resolvedDir, "source");
   const stateRoot = path.join(resolvedDir, "state");
@@ -427,7 +427,7 @@ export function createWorkspace(wsDir: string): Workspace {
   fs.mkdirSync(cachePath, { recursive: true });
   fs.mkdirSync(stateRoot, { recursive: true });
 
-  const config = loadWorkspaceConfig(sourceRoot);
+  const config = publishedConfig ?? loadWorkspaceConfig(sourceRoot);
 
   return {
     path: sourceRoot,
@@ -455,6 +455,8 @@ export interface ResolveWorkspaceOpts {
   appRoot?: string;
   /** Hub-allocated opaque identity for a newly created managed workspace. */
   workspaceId?: string;
+  /** Configuration from the existing workspace's protected launch revision. */
+  publishedConfig?: WorkspaceConfig;
   /** Explicit exact root selected by a development or management caller. */
   rootTemplate?: WorkspaceTemplatePin;
   purpose?: "use" | "author";
@@ -525,7 +527,7 @@ export function resolveOrCreateWorkspace(opts: ResolveWorkspaceOpts): ResolvedWo
     log.info(`[Workspace] Created "${name}" from exact Base template ${exactBaseTemplate.commit}`);
   }
 
-  const workspace = createWorkspace(wsDir);
+  const workspace = createWorkspace(wsDir, created ? undefined : opts.publishedConfig);
   return { wsDir, workspace, name, created };
 }
 

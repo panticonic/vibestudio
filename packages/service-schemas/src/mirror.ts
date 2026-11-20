@@ -47,6 +47,8 @@ export type MirrorFile = z.infer<typeof mirrorFileSchema>;
 export const mirrorObjectsArgsSchema = z
   .object({
     stateHash: z.string(),
+    /** Exact context whose working tree was returned by targets. */
+    contextId: z.string().min(1).optional(),
     /** Restrict to these repo-relative paths (default: the whole tree). */
     paths: z.array(z.string()).optional(),
     /** Opaque continuation cursor from a previous page's `next`. */

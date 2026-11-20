@@ -214,24 +214,18 @@ Authority principals: `code`, `host`, `user`
 |--------|-------------|
 | `durableWork.inspect` | Return bounded, payload-free diagnostics for the host durable-work dispatcher, including hint/recovery attribution and recent phase timings. |
 
-## `eval`
+## `dynamicCode`
 
-Owner-scoped sandbox eval backed by a per-owner internal EvalDO
+Admission of dynamic code: runs of a class an entity hosts, and the host-authority controls of its scope
 
 Authority principals: `code`, `host`, `user`, `website`
 
 | Method | Description |
 |--------|-------------|
-| `eval.start` | Durably accept one caller-owned eval run. A new run executes asynchronously in the owner's EvalDO; replaying the same runId and exact input observes the same run, while input drift is rejected. A trivially fast or replayed settled run may return its terminal snapshot immediately. |
-| `eval.get` | Read the canonical durable snapshot for a caller-owned eval run. This is a recovery/backstop read; agent-owned runs normally settle through the EvalDO's terminal completion push. |
-| `eval.receipt` | Read the exact canonical terminal result and its admission/result digests. Null means no terminal receipt exists; it never means success. |
-| `eval.acknowledge` | Acknowledge a terminal result after durably accepting it. Both admission and result digests must match. The closed identity and result remain retained. |
-| `eval.events` | Read one stable, bounded page of durable events for a caller-owned eval run. Subscribe to the canonical eval:run-event through events.watch for live delivery, then use this cursor page to catch up after reconnect or backpressure. |
-| `eval.reset` | Reset the eval context: wipe the live/durable scope and user `db` tables while preserving kernel infrastructure. The owner's existing eval data is cleared. |
-| `eval.dispose` | Permanently retire one explicitly finite eval scope through its host lifecycle owner. Close admission and drain owned work before releasing the runtime and content. Retained receipts remain closed; use a new scope key for new work. Persistent notebooks cannot be disposed through this method. |
-| `eval.readScopeTextPage` | Read a bounded page from a string in the caller's current durable eval scope. Use this to retrieve a large eval result losslessly after an eval caches it under a scope key; pages are UTF-16LE base64 so every JavaScript string code unit round-trips exactly. |
-| `eval.deleteScopeValue` | Delete one value from the caller's current durable eval scope and persist the deletion. Intended for cleaning up temporary keys used by lossless large-result paging. |
-| `eval.cancel` | Cancel an in-flight or pending run by runId. The durable status is cancelling while registered cleanup runs and becomes cancelled only after cleanup settles, so the eval history and its owned cleanup remain one trust unit with valid teardown authority. Owned cleanup is awaited to real settlement and preserves other runs and scope. An unowned, non-cooperative guest run may trigger bounded recovery, which cancels all non-terminal runs, resets shared scope/user db, and returns forcedReset:true. A terminal run is a no-op with forcedReset:false. |
+| `dynamicCode.admit` | Admit one run of dynamic code for the caller. The host resolves the owner and the hosting session entity (creating it when it does not exist), normalizes the run's authority intent, registers its execution session and task authority, and returns the nonce and the exact start input. The caller then calls the hosting entity's `start(input, nonce)` and pulls with `await` and `events`; it calls `release` when the run is terminal. Replaying the same runId and input returns the same admission. |
+| `dynamicCode.release` | Close the execution session of a run the caller admitted. A run that is still executing is not ended by this call: cancel it on the hosting entity first. Releasing an unknown or already released run answers `released: false`. |
+| `dynamicCode.reset` | Reset the caller's hosted code scope: wipe the live and durable scope and user `db` tables while preserving kernel infrastructure. The owner's existing data in it is cleared. |
+| `dynamicCode.dispose` | Permanently retire one explicitly finite hosted scope through its host lifecycle owner. Close admission and drain owned work before releasing the runtime and content. Retained receipts remain closed; use a new scope key for new work. A persistent scope cannot be disposed through this method. |
 
 ## `events`
 

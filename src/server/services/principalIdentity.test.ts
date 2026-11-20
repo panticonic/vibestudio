@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 
-import { resolveCodeIdentity } from "./principalIdentity.js";
+import { entityOfCodeIdentity, resolveCodeIdentity } from "./principalIdentity.js";
 
 function makeDoRecord(id: string, repoPath: string, effectiveVersion: string): EntityRecord {
   return {
@@ -107,7 +107,7 @@ describe("resolveCodeIdentity", () => {
     expect(resolveCodeIdentity(cache, record.id)).toBeNull();
   });
 
-  it("attributes a host-admitted EvalDO to its exact harness without inheriting requests", () => {
+  it("attributes a host-admitted session entity to its exact harness without inheriting requests", () => {
     const cache = new EntityCache();
     const owner = makeDoRecord(
       "do:workers/agent-worker:AiChatWorker:owner",
@@ -116,13 +116,13 @@ describe("resolveCodeIdentity", () => {
     );
     owner.activeAuthority = { requests: [], provides: [] };
     cache._onActivate(owner);
-    const evalId = "do:vibestudio/internal:EvalDO:eval-owner";
+    const evalId = "do:workers/session:SessionDO:eval-owner";
     cache._onActivate({
       id: evalId,
       kind: "do",
-      source: { repoPath: "vibestudio/internal", effectiveVersion: "internal" },
+      source: { repoPath: "workers/session", effectiveVersion: "internal" },
       contextId: owner.contextId,
-      className: "EvalDO",
+      className: "SessionDO",
       key: "eval-owner",
       parentId: owner.id,
       stateArgs: {
@@ -146,7 +146,7 @@ describe("resolveCodeIdentity", () => {
     });
   });
 
-  it("rejects an EvalDO without the exact host admission and owner link", () => {
+  it("names the owner's entity for an owner with code, and the session entity for an inert owner (a CLI session)", () => {
     const cache = new EntityCache();
     const owner = makeDoRecord(
       "do:workers/agent-worker:AiChatWorker:owner",
@@ -155,13 +155,58 @@ describe("resolveCodeIdentity", () => {
     );
     owner.activeAuthority = { requests: [], provides: [] };
     cache._onActivate(owner);
-    const evalId = "do:vibestudio/internal:EvalDO:forged";
+    const session = (id: string, key: string, ownerId: string) => {
+      const record = makeDoRecord(id, "workers/session", "session-ev");
+      record.key = key;
+      record.className = "SessionDO";
+      record.parentId = ownerId;
+      record.stateArgs = {
+        ownerPrincipalId: ownerId,
+        agentExecutionAdmission: { v: 1, ownerId },
+      };
+      record.activeAuthority = { requests: [], provides: [] };
+      record.activeExecutionDigest = "c".repeat(64);
+      cache._onActivate(record);
+      return record;
+    };
+    // The owner has code: the identity is the owner's, and so is the entity that holds its image.
+    const mediated = session("do:workers/session:SessionDO:a", "a", owner.id);
+    const ownerIdentity = resolveCodeIdentity(cache, mediated.id)!;
+    expect(entityOfCodeIdentity(cache, ownerIdentity)?.id).toBe(owner.id);
+    // The owner has none: the identity falls back to the session entity's own image but still names
+    // the owner, and the entity is the session entity (it was the inert owner before, so the
+    // CLI's eval found no sealed artifact).
+    cache._onActivate({
+      id: "session:default",
+      kind: "session",
+      source: { repoPath: "agent-cli", effectiveVersion: "" },
+      contextId: owner.contextId,
+      createdAt: Date.now(),
+      status: "active",
+      cleanupComplete: true,
+    } as EntityRecord);
+    const inert = session("do:workers/session:SessionDO:b", "b", "session:default");
+    const inertIdentity = resolveCodeIdentity(cache, inert.id)!;
+    expect(inertIdentity.evalOrigin).toEqual({ ownerId: "session:default" });
+    expect(entityOfCodeIdentity(cache, inertIdentity)?.id).toBe(inert.id);
+  });
+
+  it("rejects a session entity without the exact host admission and owner link", () => {
+    const cache = new EntityCache();
+    const owner = makeDoRecord(
+      "do:workers/agent-worker:AiChatWorker:owner",
+      "workers/agent-worker",
+      "owner-ev"
+    );
+    owner.activeAuthority = { requests: [], provides: [] };
+    cache._onActivate(owner);
+    const evalId = "do:workers/session:SessionDO:forged";
     const evalRecord: EntityRecord = {
       id: evalId,
       kind: "do",
-      source: { repoPath: "vibestudio/internal", effectiveVersion: "internal" },
+      source: { repoPath: "workers/session", effectiveVersion: "internal" },
       contextId: owner.contextId,
-      className: "EvalDO",
+      className: "SessionDO",
       key: "forged",
       parentId: "do:workers/agent-worker:AiChatWorker:other",
       stateArgs: {

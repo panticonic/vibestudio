@@ -53,6 +53,20 @@ function definition(
 }
 
 describe("current-only durable-object schema identity", () => {
+  it("leaves a library store's local `vsl_` tables out of the sealed shape, so an object made before them opens unchanged", async () => {
+    const sql = await createInMemorySql();
+    const first = definition(sql);
+    await installDurableObjectSchema(first);
+    const before = durableObjectSchemaFingerprint(sql);
+    // A library store creates its own local set when its session opens, after the schema gate sealed the shape.
+    sql.exec("CREATE TABLE vsl_payload_chunks (id INTEGER PRIMARY KEY, data BLOB)");
+    sql.exec("CREATE INDEX vsl_payload_by_id ON vsl_payload_chunks (id)");
+    expect(durableObjectSchemaFingerprint(sql)).toBe(before);
+    await expect(
+      installDurableObjectSchema({ ...definition(sql), schemaTables: undefined })
+    ).resolves.toBeUndefined();
+  });
+
   it("uses one fresh shape snapshot for trusted admission and metadata, rejecting a different build shape", async () => {
     const probe=await createInMemorySql();
     await installDurableObjectSchema(definition(probe));
@@ -204,6 +218,32 @@ describe("current-only durable-object schema identity", () => {
         .toArray()
         .map((row) => row["name"])
     ).toEqual(["singleton", "version", "shape_json"]);
+  });
+
+  it("treats a cell holding only runtime bookkeeping as empty storage", async () => {
+    // celld keeps its key-value, alarm and replication state in the object's
+    // own database (`_cf_*`, `_litestream_*`, and `_cf_WAKE_*` triggers).
+    const sql = await createInMemorySql();
+    sql.exec("CREATE TABLE _cf_KV (key TEXT PRIMARY KEY, value BLOB)");
+    sql.exec("CREATE TABLE _cf_ALARM (id INTEGER PRIMARY KEY, scheduled_time INTEGER)");
+    sql.exec("CREATE TABLE _litestream_seq (id INTEGER PRIMARY KEY, seq INTEGER)");
+    sql.exec(
+      "CREATE TRIGGER _cf_WAKE_insert AFTER INSERT ON _cf_ALARM BEGIN SELECT 1; END"
+    );
+    sql.exec("CREATE TABLE xcf_kept (id TEXT)");
+    await expect(installDurableObjectSchema(definition(sql))).rejects.toBeInstanceOf(
+      DurableObjectSchemaError
+    );
+
+    const runtimeOnly = await createInMemorySql();
+    runtimeOnly.exec("CREATE TABLE _cf_KV (key TEXT PRIMARY KEY, value BLOB)");
+    runtimeOnly.exec("CREATE TABLE _litestream_lock (id INTEGER PRIMARY KEY)");
+    await installDurableObjectSchema(definition(runtimeOnly));
+    const fresh = await createInMemorySql();
+    await installDurableObjectSchema(definition(fresh));
+    expect(durableObjectSchemaFingerprint(runtimeOnly)).toBe(
+      durableObjectSchemaFingerprint(fresh)
+    );
   });
 
   it("opens exact current storage without changing application rows", async () => {

@@ -6,7 +6,6 @@ import { serializeRpcFailure } from "@vibestudio/rpc";
 import type { LifecyclePrepareInput } from "@vibestudio/shared/doDispatcher";
 import { ledgerTest } from "../../../tests/helpers/ledgerTest.js";
 
-import { createTestDO } from "@vibestudio/durable/test-utils";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { AcquisitionCoordinator } from "./acquisitionCoordinator.js";
 import { createEntityRetirementCleanup } from "./entityRetirementCleanup.js";
@@ -35,8 +34,8 @@ import {
 } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import type { DODispatch } from "../doDispatch.js";
 import type { DORef } from "@vibestudio/shared/doDispatcher";
-import { WorkspaceDO } from "@panticonic/builtin/workspace-state";
-import { WorkspaceDOTestable } from "@panticonic/builtin/workspace-state/test-fixture";
+import type { WorkspaceStateDO } from "@panticonic/builtin/workspace-state";
+import { createWorkspaceStateTestDO } from "@panticonic/builtin/workspace-state/test-fixture";
 import { UnitSupervisor } from "./unitSupervisor.js";
 import { authoritySessionIdForCaller } from "./callerAuthoritySession.js";
 import { createPanelAccessPermissionDeps } from "./createPanelAccessPermissionDeps.js";
@@ -77,7 +76,7 @@ function approvalQueueMock(
 }
 
 /** Wrap a WorkspaceDO instance into a DODispatch-compatible mock. */
-function makeDODispatch(instance: WorkspaceDO): {
+function makeDODispatch(instance: WorkspaceStateDO): {
   dispatch: DODispatch;
   spy: ReturnType<typeof vi.fn>;
 } {
@@ -168,7 +167,7 @@ function contextFoldersFake() {
 }
 
 async function buildDeps(opts: BuildDepsOptions = {}) {
-  const { instance } = await createTestDO(WorkspaceDOTestable);
+  const { instance } = await createWorkspaceStateTestDO();
   const { dispatch, spy } = makeDODispatch(instance);
   const entityCache = new EntityCache();
   const approvalQueue = approvalQueueMock(opts.approvalDecision ?? "session");
@@ -403,7 +402,7 @@ const appCaller = (id = "client:browser:web:desktop", _contextId = "ctx-caller")
     ],
   });
 
-const evalDoCaller = (id = "do:vibestudio/internal:EvalDO:eval") =>
+const evalDoCaller = (id = "do:workers/session:SessionDO:eval") =>
   createVerifiedCaller(id, "do", {
     callerId: id,
     callerKind: "do",
@@ -612,6 +611,35 @@ describe("runtimeService system-test agent execution policy", () => {
 });
 
 describe("runtimeService.forkSemanticContext", () => {
+  it("returns the authenticated participant's selected fork without touching the legacy workspace", async () => {
+    const selected = { kind: "application" as const, applicationId: "unsaved-private-edit" };
+    const forkParticipantContext = vi.fn(async () => selected);
+    const forkContext = vi.fn(async () => {});
+    const resolveWorkingState = vi.fn();
+    const { service, entityCache, contextFolders } = await buildDeps({
+      semanticContexts: { forkParticipantContext, forkContext, resolveWorkingState },
+    });
+    const caller = panelCaller("panel:development");
+    entityCache._onActivate({
+      id: caller.runtime.id, kind: "panel", contextId: "ctx-parent",
+      source: { repoPath: "panels/caller", effectiveVersion: "v1" },
+      key: "development", createdAt: 1, status: "active", cleanupComplete: true,
+    });
+    const result = await service.handler({ caller }, "forkSemanticContext", [{
+      ownerRuntimeId: caller.runtime.id, parentContextId: "ctx-parent", targetContextId: "ctx-child",
+    }]);
+    expect(result).toEqual({
+      contextId: "ctx-child", parentContextId: "ctx-parent",
+      parentWorkingHead: selected, childBaseState: selected,
+    });
+    expect(forkParticipantContext).toHaveBeenCalledWith({
+      caller, sourceContextId: "ctx-parent", targetContextId: "ctx-child",
+    });
+    expect(forkContext).not.toHaveBeenCalled();
+    expect(resolveWorkingState).not.toHaveBeenCalled();
+    expect(contextFolders.ensureContextFolder).not.toHaveBeenCalled();
+  });
+
   it("forks semantic state only and records a deterministic lifecycle edge for an empty context", async () => {
     const forkContext = vi.fn(async () => {});
     const resolveWorkingState = vi.fn(async (contextId: string) =>
@@ -1035,7 +1063,7 @@ describe("runtimeService deferred panel activation", () => {
     const { service } = await buildDeps({ onContextCreated });
     const policy = systemTestCasePolicy();
     const mediatedCreator = createVerifiedCaller(
-      "do:vibestudio/internal:EvalDO:transient",
+      "do:workers/session:SessionDO:transient",
       "server",
       null,
       null,
@@ -2593,7 +2621,7 @@ describe("runtimeService.retireEntity", () => {
     const { service, dispatch, approvalQueue, entityCache } = await buildDeps({
       approvalDecision: "once",
     });
-    const owner = evalDoCaller("do:vibestudio/internal:EvalDO:owner");
+    const owner = evalDoCaller("do:workers/session:SessionDO:owner");
     const handle = (await service.handler({ caller: owner }, "createEntity", [
       doCreateSpec({
         source: "workers/agent-worker",
@@ -2877,19 +2905,25 @@ describe("runtimeService session entities", () => {
     expect(sessions[0]?.createdAt).toBeGreaterThan(0);
   });
 
-  it("retire with removeContext deletes the context folder when no live entity shares it", async () => {
-    const { service, contextFolders, instance } = await buildDeps();
+  it("retries interrupted context removal after the last entity was retired", async () => {
+    const dropContext = vi.fn(async () => {});
+    dropContext.mockRejectedValueOnce(new Error("Archive interrupted"));
+    const { service, contextFolders, instance } = await buildDeps({ semanticContexts: { dropContext } });
     const handle = (await service.handler({ caller: shellCaller }, "createEntity", [
       sessionSpec({ key: "s-rm" }),
     ])) as { id: string; contextId: string };
     await contextFolders.ensureContextFolder(handle.contextId);
     expect(contextFolders.existing.has(handle.contextId)).toBe(true);
 
-    await service.handler({ caller: shellCaller }, "retireEntity", [
+    const retire = () => service.handler({ caller: shellCaller }, "retireEntity", [
       { id: handle.id, removeContext: true },
     ]);
+    await expect(retire()).rejects.toThrow("Archive interrupted");
 
     expect(instance.entityResolve(handle.id)?.status).toBe("retired");
+    expect(contextFolders.existing.has(handle.contextId)).toBe(true);
+    await retire();
+    expect(dropContext).toHaveBeenCalledTimes(2);
     expect(contextFolders.removeContext).toHaveBeenCalledWith(handle.contextId);
     expect(contextFolders.existing.has(handle.contextId)).toBe(false);
   });
@@ -3286,6 +3320,24 @@ interface OwnedContexts {
 }
 
 describe("runtimeService.cloneContext", () => {
+  it("captures the admitted author's working copy before cloning entities", async () => {
+    const forkParticipantContext = vi.fn(async () => ({ kind: "application" as const, applicationId: "private-edit" }));
+    const forkContext = vi.fn(async () => {});
+    const { service, cloneDurableStorage } = await buildDeps({ semanticContexts: { forkParticipantContext, forkContext } });
+    const source = await seedDO(service, "participant-root", "author");
+    const caller = createVerifiedCaller(source.id, "do");
+    const input = [{ sourceContextId: "participant-root", targetKey: "participant-ordinary-clone" }];
+    const cloned = (await service.handler({ caller }, "cloneContext", input)) as CloneResult;
+    expect(forkParticipantContext).toHaveBeenCalledWith({
+      caller, sourceContextId: "participant-root", targetContextId: cloned.contextId, ownerContextId: "participant-root",
+      retainForRuntime: true,
+    });
+    expect(forkParticipantContext.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(cloneDurableStorage).mock.invocationCallOrder[0]!);
+    expect(forkContext).not.toHaveBeenCalled();
+    expect(await service.handler({ caller }, "cloneContext", input)).toEqual(cloned);
+    expect(forkParticipantContext).toHaveBeenCalledOnce();
+  });
+
   it("keeps a copied child preparing until initialization joins, then publishes it", async () => {
     let release!: () => void;
     let admitted!: () => void;
@@ -3427,6 +3479,35 @@ describe("runtimeService.cloneContext", () => {
       expect(onRetire).not.toHaveBeenCalled();
     }
   );
+
+  it("forks a named entity's store at the commit it was given, and replays the same commit", async () => {
+    const cloneDurableStorage = vi.fn(async () => {});
+    const { service } = await buildDeps({ cloneDurableStorage });
+    const source = await seedDO(service, "ctx-storage-at", "source");
+    const commit = "c".repeat(40);
+    const input = [
+      {
+        sourceContextId: "ctx-storage-at",
+        targetKey: "at-owner",
+        storageAt: { [source.id]: commit },
+      },
+    ];
+    const first = (await service.handler(
+      { caller: serverCaller },
+      "cloneContext",
+      input
+    )) as CloneResult;
+    expect(cloneDurableStorage).toHaveBeenCalledWith(
+      expect.objectContaining({ fromKey: "source", at: commit })
+    );
+    // A retry of the same operation answers the same child; a different commit is another operation.
+    expect(await service.handler({ caller: serverCaller }, "cloneContext", input)).toEqual(first);
+    await expect(
+      service.handler({ caller: serverCaller }, "cloneContext", [
+        { ...input[0], storageAt: { [source.id]: "d".repeat(40) } },
+      ])
+    ).rejects.toThrow(/cloneDefinition|identity/i);
+  });
 
   it("re-adopts its sealed interrupted preparation without reforking the context or rebuilding its image", async () => {
     const initializeDurableClone = vi.fn<RuntimeEntityHooks["initializeDurableClone"]>(
@@ -3871,7 +3952,7 @@ describe("runtimeService.cloneContext", () => {
     expect(cloneDurableStorage).toHaveBeenCalledTimes(1);
   });
 
-  it("starts an unbound native execution clone fresh while ordinary DOs preserve their storage snapshots", async () => {
+  it("forks the storage of a native execution owner like any other DO, at the commit named for it", async () => {
     const { service, instance, cloneDurableStorage } = await buildDeps({
       resolveNativeOwner: (input) =>
         input.className === "AgentDO"
@@ -3879,7 +3960,8 @@ describe("runtimeService.cloneContext", () => {
           : null,
     });
     const native = await seedDO(service, "ctx-native-clone", "native");
-    expect(instance.entityResolve(native.id)?.agentBinding).toBeUndefined();
+    // A native owner serves its own channel; its clone is created unbound until the fork rebinds it.
+    expect(instance.entityResolve(native.id)?.agentBinding).toBeDefined();
     const ordinary = (await service.handler({ caller: serverCaller }, "createEntity", [
       {
         kind: "do",
@@ -3890,19 +3972,21 @@ describe("runtimeService.cloneContext", () => {
       },
     ])) as { id: string };
     const result = (await service.handler({ caller: serverCaller }, "cloneContext", [
-      { sourceContextId: "ctx-native-clone" },
+      { sourceContextId: "ctx-native-clone", storageAt: { [native.id]: "commit-of-native" } },
     ])) as CloneResult;
     const nativeClone = result.entities.find((entity) => entity.sourceId === native.id)!;
     const ordinaryClone = result.entities.find((entity) => entity.sourceId === ordinary.id)!;
-    expect(instance.entityResolve(nativeClone.newId)?.cloneProvenance?.storage).toBe("fresh");
+    expect(instance.entityResolve(nativeClone.newId)?.cloneProvenance?.storage).toBe("snapshot");
+    expect(instance.entityResolve(nativeClone.newId)?.agentBinding).toBeUndefined();
     expect(instance.entityResolve(ordinaryClone.newId)?.cloneProvenance?.storage).toBe("snapshot");
     expect(cloneDurableStorage).toHaveBeenCalledTimes(2);
     expect(cloneDurableStorage).toHaveBeenCalledWith(
       expect.objectContaining({
         fromKey: "native",
         toKey: nativeClone.newKey,
+        at: "commit-of-native",
         reservation: expect.objectContaining({
-          cloneProvenance: expect.objectContaining({ storage: "fresh" }),
+          cloneProvenance: expect.objectContaining({ storage: "snapshot" }),
         }),
       })
     );
@@ -3915,6 +3999,94 @@ describe("runtimeService.cloneContext", () => {
         }),
       })
     );
+  });
+
+  it("lets an entity fork its own storage into a new entity of its class, at a commit, and refuses any other fork", async () => {
+    const { service, instance, cloneDurableStorage, recoverExactExecution } = await buildDeps();
+    const parent = await seedDO(service, "ctx-self-fork", "parent");
+    const caller = createVerifiedCaller(parent.id, "do");
+    const child = (await service.handler({ caller }, "createEntity", [
+      {
+        kind: "do",
+        execution: { surface: "code", source: "workers/agent" },
+        className: "AgentDO",
+        key: "child",
+        contextId: "ctx-self-fork",
+        forkStorage: { at: "commit-of-the-last-closed-turn" },
+      },
+    ])) as { id: string };
+    expect(cloneDurableStorage).toHaveBeenCalledTimes(1);
+    expect(cloneDurableStorage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fromKey: "parent",
+        toKey: "child",
+        at: "commit-of-the-last-closed-turn",
+        cooperativelyPaused: true,
+        reservation: expect.objectContaining({
+          cloneProvenance: expect.objectContaining({
+            storage: "snapshot",
+            sourceEntityId: parent.id,
+          }),
+        }),
+      })
+    );
+    expect(instance.entityResolve(child.id)?.cloneProvenance?.storage).toBe("snapshot");
+    expect(recoverExactExecution).toHaveBeenCalledWith(expect.objectContaining({
+      id: child.id, status: "preparing",
+      activeBuildKey: instance.entityResolve(parent.id)?.activeBuildKey,
+      activeExecutionDigest: instance.entityResolve(parent.id)?.activeExecutionDigest,
+    }));
+    // Another class is not the caller's own: no entity reads another's storage through this.
+    await expect(
+      service.handler({ caller }, "createEntity", [
+        {
+          kind: "do",
+          execution: { surface: "code", source: "workers/counter" },
+          className: "CounterDO",
+          key: "other-class",
+          contextId: "ctx-self-fork",
+          forkStorage: { at: "commit" },
+        },
+      ])
+    ).rejects.toThrow(/own class/);
+    // A caller that is not an entity cannot fork one.
+    await expect(
+      service.handler({ caller: serverCaller }, "createEntity", [
+        {
+          kind: "do",
+          execution: { surface: "code", source: "workers/agent" },
+          className: "AgentDO",
+          key: "from-host",
+          contextId: "ctx-self-fork",
+          forkStorage: { at: "commit" },
+        },
+      ])
+    ).rejects.toThrow(/caller to be an active DO/);
+    expect(cloneDurableStorage).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses an inherited-context self-fork only at its original storage commit", async () => {
+    const { service, cloneDurableStorage } = await buildDeps();
+    const parent = await seedDO(service, "ctx-self-fork-retry", "parent");
+    const caller = createVerifiedCaller(parent.id, "do");
+    const fork = (at: string) =>
+      service.handler({ caller }, "createEntity", [
+        {
+          kind: "do",
+          execution: { surface: "code", source: "workers/agent" },
+          className: "AgentDO",
+          key: "child",
+          forkStorage: { at },
+        },
+      ]);
+    vi.mocked(cloneDurableStorage).mockRejectedValueOnce(new Error("Fork interrupted"));
+    await expect(fork("original")).rejects.toThrow("Fork interrupted");
+    await expect(fork("changed")).rejects.toThrow(/storageCommit/);
+    const child = await fork("original");
+    expect(child).toMatchObject({ contextId: "ctx-self-fork-retry" });
+    await expect(fork("original")).resolves.toEqual(child);
+    await expect(fork("changed")).rejects.toThrow(/storageCommit/);
+    expect(cloneDurableStorage).toHaveBeenCalledTimes(2);
   });
 
   it("marks only the verified source caller for a cooperative storage snapshot", async () => {
@@ -4130,12 +4302,13 @@ describe("runtimeService.cloneContext", () => {
     ])) as CloneResult;
     const clonedChannel = clone.entities.find((entity) => entity.sourceId === channel.id)!;
     const clonedAgent = clone.entities.find((entity) => entity.sourceId === agent.id)!;
-    expect(cloneDurableStorage).toHaveBeenCalledTimes(1);
+    // The agent's cell is forked with the channel's: the clone holds its conversation, unbound until it is rebound.
+    expect(cloneDurableStorage).toHaveBeenCalledTimes(2);
     expect(cloneDurableStorage).toHaveBeenCalledWith(
       expect.objectContaining({ fromKey: "chat-parent", toKey: clonedChannel.newKey })
     );
-    expect(cloneDurableStorage).not.toHaveBeenCalledWith(
-      expect.objectContaining({ fromKey: "agent-parent" })
+    expect(cloneDurableStorage).toHaveBeenCalledWith(
+      expect.objectContaining({ fromKey: "agent-parent", toKey: clonedAgent.newKey })
     );
     expect(instance.entityResolve(clonedAgent.newId)?.agentBinding).toBeUndefined();
 
@@ -4649,7 +4822,7 @@ describe("runtimeService.destroyContext", () => {
       {
         kind: "do",
         execution: { surface: "code", source: "vibestudio/internal" },
-        className: "EvalDO",
+        className: "SessionDO",
         key: "agent-eval",
         contextId: "ctx-owned-tree",
       },

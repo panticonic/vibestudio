@@ -14,7 +14,8 @@ import {
   type ServiceDefinition,
 } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
-import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import type { ServiceContext, VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import type { ExecutionSourceStateRef } from "@vibestudio/shared/execution/contracts";
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import type { WorkspaceDeclarations } from "@vibestudio/workspace/singletonRegistry";
 import { workspaceServiceBindingTier } from "@vibestudio/workspace-contracts/types";
@@ -60,9 +61,9 @@ type ServiceListRow =
 
 type ScopedDeclarations = {
   decls: WorkspaceDeclarations;
-  scope: "main" | "context";
   contextId?: string;
   buildRef: string;
+  sourceState?: ExecutionSourceStateRef;
 };
 
 type ScopedDurableObject = ScopedDeclarations & {
@@ -89,8 +90,15 @@ export function createWorkerService(deps: {
   buildSystem: BuildSystemV2;
   workspaceDecls: WorkspaceDeclarations;
   workspaceId?: string;
-  getCallerContextId?: (callerId: string) => string | null;
-  loadContextDeclarations?: (contextId: string) => Promise<WorkspaceDeclarations | null>;
+  getCallerContextId?: (caller: VerifiedCaller) => string | null;
+  loadContextSource?: (
+    contextId: string,
+    ctx: ServiceContext
+  ) => Promise<{
+    buildRef: string;
+    sourceState?: ExecutionSourceStateRef;
+    readDeclarations(): Promise<WorkspaceDeclarations>;
+  } | null>;
   /** Decide whether one exact exported receiver operation may be disclosed to
    * this foreign caller. This is a hard-policy read and must never acquire
    * authority or activate the receiver. */
@@ -102,7 +110,7 @@ export function createWorkerService(deps: {
    * Begin immutable artifact preparation for a structurally resolved service.
    * This is cache work only: it must neither execute nor activate the provider.
    */
-  prepareRuntimeImage?: (source: string, buildRef?: string) => void;
+  prepareRuntimeImage?: (source: string, buildRef: string, sourceState?: ExecutionSourceStateRef) => void;
   // Resolution makes a declared target available; it does not create ownership.
   // The resolving subject remains the caller of its subsequent RPC unchanged.
   activateDurableObject?: (args: {
@@ -112,6 +120,7 @@ export function createWorkerService(deps: {
     contextId?: string;
     contextPolicy?: "exact" | "initial";
     buildRef: string;
+    participant?: { caller: VerifiedCaller; sourceState: ExecutionSourceStateRef; signal?: AbortSignal };
   }) => Promise<void>;
   resetDurableObjectStorage?: (
     target: { source: string; className: string; objectKey: string },
@@ -175,8 +184,9 @@ export function createWorkerService(deps: {
         );
         await assertForeignServiceExported(ctx, scoped.service);
         const { service } = scoped;
-        const buildRef = scoped.buildRef;
-        deps.prepareRuntimeImage?.(service.source, buildRef);
+        if (scoped.sourceState)
+          deps.prepareRuntimeImage?.(service.source, scoped.buildRef, scoped.sourceState);
+        else deps.prepareRuntimeImage?.(service.source, scoped.buildRef);
         // A declared binding is reviewed wiring, not an authority-bearing
         // operation. Direct receiver admission already applies the exact same
         // distinction in attestWorkspaceDoRpc; resolution must not invent a
@@ -254,10 +264,11 @@ export function createWorkerService(deps: {
     },
     handler: defineServiceHandler("workers", methods, {
       listSources: async (ctx) => {
-        const contextId = deps.getCallerContextId?.(ctx.caller.runtime.id);
-        const units = await buildSystem.listBuildUnits(contextId ? `ctx:${contextId}` : undefined, [
-          "worker",
-        ]);
+        const contextId = deps.getCallerContextId?.(ctx.caller);
+        const buildRef = contextId
+          ? (await deps.loadContextSource?.(contextId, ctx))?.buildRef ?? `ctx:${contextId}`
+          : undefined;
+        const units = await buildSystem.listBuildUnits(buildRef, ["worker"]);
         return units.map((n) => ({
           name: n.unitName,
           source: n.unitPath,
@@ -362,6 +373,7 @@ export function createWorkerService(deps: {
           objectKey: resolvedObjectKey,
           ...(contextId ? { contextId } : {}),
           buildRef,
+          ...participantActivation(ctx, scoped),
         });
         return {
           kind: "durable-object",
@@ -451,9 +463,21 @@ export function createWorkerService(deps: {
         ...(contextId ? { contextId } : {}),
         ...(service.context === "creator" ? { contextPolicy: "initial" as const } : {}),
         buildRef: scoped.buildRef,
+        ...participantActivation(ctx, scoped),
       });
     }
     return service;
+  }
+
+  function participantActivation(ctx: ServiceContext, scoped: ScopedDeclarations) {
+    if (!scoped.sourceState) return {};
+    return {
+      participant: {
+        caller: ctx.caller,
+        sourceState: scoped.sourceState,
+        ...(ctx.signal ? { signal: ctx.signal } : {}),
+      },
+    };
   }
 
   /**
@@ -466,7 +490,7 @@ export function createWorkerService(deps: {
     ctx: ServiceContext,
     requested: string | null | undefined
   ): string | null | undefined {
-    const own = deps.getCallerContextId?.(ctx.caller.runtime.id);
+    const own = deps.getCallerContextId?.(ctx.caller);
     if (own) return own;
     return ctx.caller.runtime.kind === "shell" && requested ? requested : undefined;
   }
@@ -474,15 +498,14 @@ export function createWorkerService(deps: {
   async function declarationsForCallerContext(
     ctx: ServiceContext
   ): Promise<ScopedDeclarations | null> {
-    const contextId = deps.getCallerContextId?.(ctx.caller.runtime.id);
+    const contextId = deps.getCallerContextId?.(ctx.caller);
     if (!contextId) return null;
-    const decls = (await deps.loadContextDeclarations?.(contextId)) ?? null;
-    if (!decls) return null;
+    const source = await deps.loadContextSource?.(contextId, ctx);
+    if (!source) return null;
+    const { buildRef, sourceState } = source;
     return {
-      decls,
-      scope: "context",
-      contextId,
-      buildRef: `ctx:${contextId}`,
+      contextId, buildRef, decls: await source.readDeclarations(),
+      ...(sourceState ? { sourceState } : {}),
     };
   }
 
@@ -495,7 +518,6 @@ export function createWorkerService(deps: {
       return {
         service: resolveWorkspaceService(workspaceDecls, query, objectKey),
         decls: workspaceDecls,
-        scope: "main",
         buildRef: "main",
       };
     } catch (err) {
@@ -513,7 +535,6 @@ export function createWorkerService(deps: {
       );
       return {
         decls: workspaceDecls,
-        scope: "main",
         buildRef: "main",
         service: {
           kind: "durable-object",
@@ -546,11 +567,10 @@ export function createWorkerService(deps: {
           `Private context-local services use Durable Objects; a context-local HTTP alias may reference an existing published route.`
       );
     }
-    return {
-      ...scoped,
-      ...(service.kind === "worker" ? { buildRef: "main" } : {}),
-      service,
-    };
+    if (service.kind === "worker") {
+      return { decls: scoped.decls, buildRef: "main", service };
+    }
+    return { ...scoped, service };
   }
 
   async function assertForeignServiceExported(
@@ -593,7 +613,6 @@ export function createWorkerService(deps: {
       assertDurableObjectExists(buildSystem, source, className);
       return {
         decls: workspaceDecls,
-        scope: "main",
         buildRef: "main",
         authority: durableObjectAuthority(workspaceDecls, source, className),
       };

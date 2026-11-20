@@ -7,7 +7,7 @@ import {
   templateManifestDocument,
 } from "@vibestudio/workspace/templateManifest";
 import { rpcErrorDataOf } from "@vibestudio/rpc";
-import { verifiedInitiator, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import { verifiedInitiator, type ServiceContext, type VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { RpcCausalParent } from "@vibestudio/rpc";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import {
@@ -30,6 +30,7 @@ import type {
   WorkspaceSemanticMethod,
   WorkspaceVcs,
 } from "./vcsHost/workspaceVcs.js";
+import { readWorkspaceParticipantStatus, workspaceParticipantCatalog } from "./vcsHost/workspaceHistoryHost.js";
 
 const META_REPO_PATH = "meta";
 const WORKSPACE_CONFIG_FILE = "vibestudio.yml";
@@ -59,14 +60,16 @@ export interface WorkspaceConfigMutationResult {
   nextConfig: WorkspaceConfig;
 }
 
-interface WorkspaceConfigAtState {
-  status: VcsStatusResult;
-  repositoryId: string;
-  fileId: string;
+interface WorkspaceConfigContents {
   text: string;
   config: WorkspaceConfig;
   sourceFiles: Map<string, string | null>;
   readSourceFile(path: string): Promise<string | null>;
+}
+interface WorkspaceConfigAtState extends WorkspaceConfigContents {
+  status: VcsStatusResult;
+  repositoryId: string;
+  fileId: string;
 }
 
 function sameState(left: VcsStateNodeRef, right: VcsStateNodeRef): boolean {
@@ -141,7 +144,20 @@ export function createWorkspaceConfigMainWriter(deps: {
   /** Hub-owned workspace identity. Never derive authority from a mutable checkout path. */
   workspaceId: string;
   vcs: WorkspaceVcs;
+  authoringCaller?: VerifiedCaller;
 }): WorkspaceConfigMainWriter {
+  const loadConfig = async (text: string, readText: (path: string) => Promise<string | null>) => {
+    const filePath = `${META_REPO_PATH}/${WORKSPACE_CONFIG_FILE}`;
+    const sourceFiles = new Map<string, string | null>([[filePath, text]]);
+    const readSourceFile = async (path: string): Promise<string | null> => {
+      if (sourceFiles.has(path)) return sourceFiles.get(path)!;
+      const content = await readText(path);
+      sourceFiles.set(path, content);
+      return content;
+    };
+    const config = await readWorkspaceConfig({ readText: readSourceFile }, deps.workspaceId);
+    return { text, config, sourceFiles, readSourceFile };
+  };
   const readConfig = async (
     contextId: string,
     causalParent: RpcCausalParent | null,
@@ -221,11 +237,7 @@ export function createWorkspaceConfigMainWriter(deps: {
         `Cannot persist workspace config: ${META_REPO_PATH}/${WORKSPACE_CONFIG_FILE} is not text`
       );
     }
-    const sourceFiles = new Map<string, string | null>([
-      ["meta/vibestudio.yml", content.content.text],
-    ]);
-    const readSourceFile = async (filePath: string): Promise<string | null> => {
-      if (sourceFiles.has(filePath)) return sourceFiles.get(filePath)!;
+    const parsed = await loadConfig(content.content.text, async (filePath) => {
       const repoPath = filePath.slice(0, -"/package.json".length);
       const repo = await call("vcsResolveRepository", {
         state,
@@ -238,23 +250,17 @@ export function createWorkspaceConfigMainWriter(deps: {
             file: { kind: "path", path: "package.json" },
           })
         : null;
-      const text = file?.content.kind === "text" ? file.content.text : null;
-      sourceFiles.set(filePath, text);
-      return text;
-    };
-    const config = await readWorkspaceConfig({ readText: readSourceFile }, deps.workspaceId);
+      return file?.content.kind === "text" ? file.content.text : null;
+    });
     return {
+      ...parsed,
       status,
       repositoryId,
       fileId,
-      text: content.content.text,
-      config,
-      sourceFiles,
-      readSourceFile,
     };
   };
 
-  const withFreshContext = async <T>(operation: (contextId: string) => Promise<T>): Promise<T> => {
+  const withTemporaryContext = async <T>(operation: (contextId: string) => Promise<T>): Promise<T> => {
     const contextId = `system:workspace-config:${randomUUID()}`;
     // Config mutation is entirely semantic: every read/edit/commit below is
     // addressed through the content graph, and no operation consumes a
@@ -262,8 +268,6 @@ export function createWorkspaceConfigMainWriter(deps: {
     // approval click compete with (and delay) unrelated unit builds and Iroh
     // control traffic. Preserve the exact same isolated VCS authority without
     // manufacturing a disposable checkout that nobody reads.
-    await deps.vcs.ensureSemanticContext(contextId);
-
     // The context drop is mandatory, but it can't live in a `finally`: a throw
     // there hijacks the control flow leaving the try block (that's what
     // no-unsafe-finally warns about). Settle both outcomes first, then decide
@@ -292,6 +296,12 @@ export function createWorkspaceConfigMainWriter(deps: {
     return outcome.value;
   };
 
+  const withFreshContext = <T>(operation: (contextId: string) => Promise<T>) =>
+    withTemporaryContext(async (contextId) => {
+      await deps.vcs.ensureSemanticContext(contextId);
+      return operation(contextId);
+    });
+
   const withMutationContext = async <T>(
     ctx: ServiceContext,
     operation: (contextId: string, borrowed: boolean) => Promise<T>
@@ -304,7 +314,7 @@ export function createWorkspaceConfigMainWriter(deps: {
     return withFreshContext((contextId) => operation(contextId, false));
   };
 
-  const render = async (currentState: WorkspaceConfigAtState, mutate: WorkspaceConfigMutation) => {
+  const render = async (currentState: WorkspaceConfigContents, mutate: WorkspaceConfigMutation) => {
     const nextConfig = mutate(currentState.config);
     await Promise.all(
       (nextConfig.services ?? []).map((service) =>
@@ -411,21 +421,114 @@ export function createWorkspaceConfigMainWriter(deps: {
     return { changed: true, nextConfig: rendered.nextConfig };
   };
 
-  const applyMutation = async (
+  const applyParticipantMutation = (
     input: Parameters<WorkspaceConfigMainWriter["applyMutation"]>[0]
-  ): Promise<WorkspaceConfigMutationResult> =>
-    deps.vcs.withProtectedMainMutation(() =>
-      withMutationContext(input.ctx, (contextId, borrowed) =>
-        applyMutationInContext(input, contextId, borrowed)
-      )
-    );
+  ): Promise<WorkspaceConfigMutationResult> => withTemporaryContext(async (contextId) => {
+    const author = deps.authoringCaller;
+    if (!author?.hostOriginated) throw new Error("Workspace configuration requires a host author");
+    const scope = await deps.vcs.openParticipantScope({
+      contextId, caller: author, ownerContextId: contextId,
+      ...(input.ctx.signal ? { signal: input.ctx.signal } : {}),
+    });
+    if (!scope) throw new Error("Participant workspace history is unavailable");
+    const status = await readWorkspaceParticipantStatus(scope);
+    if (!status.clean || status.mainRelation !== "at") {
+      throw new Error("Workspace configuration could not start from the current main revision");
+    }
+    const state = status.workingHead;
+    const catalog = workspaceParticipantCatalog(scope);
+    const read = async (repoPath: string, filePath: string) => {
+      const repository = await catalog.resolveRepository({ state, repoPath });
+      if (!repository) return null;
+      const [file] = await deps.vcs.readParticipantFiles({
+        ...scope,
+        read: { state, files: [{ repositoryId: repository.repositoryId, file: { kind: "path", path: filePath } }] },
+      });
+      return file?.content.kind === "text"
+        ? { repositoryId: repository.repositoryId, fileId: file.fileId, text: file.content.text }
+        : null;
+    };
+    const found = await read(META_REPO_PATH, WORKSPACE_CONFIG_FILE);
+    if (!found) {
+      throw new Error("Cannot persist workspace config: meta/vibestudio.yml is missing or is not text");
+    }
+    const current = await loadConfig(found.text, async (filePath) => {
+      const value = await read(filePath.slice(0, -"/package.json".length), "package.json");
+      return value?.text ?? null;
+    });
+    const rendered = await render(current, input.mutate);
+    if (rendered.nextContent === current.text) {
+      return { changed: false, nextConfig: rendered.nextConfig };
+    }
+    const commandStem = `workspace-config:${input.ctx.requestId ?? randomUUID()}`;
+    const cause = { parent: input.ctx.causalParent ?? null };
+    const edited = await deps.vcs.editParticipantContext({
+      ...scope, head: scope.workingHead, cause,
+      edit: {
+        contextId, commandId: `${commandStem}:edit`, expectedWorkingHead: state,
+        intentSummary: input.summary,
+        changes: [{
+          kind: "text-edit", repositoryId: found.repositoryId, fileId: found.fileId,
+          edits: [{ start: 0, end: current.text.length, text: rendered.nextContent }],
+        }],
+      },
+    });
+    const committed = await deps.vcs.saveParticipantContext({
+      ...scope, head: edited.head, cause,
+      commit: {
+        contextId, commandId: `${commandStem}:commit`,
+        expectedWorkingHead: edited.result.workingHead, message: input.summary,
+      },
+    });
+    if (committed.event.kind !== "event") throw new Error("Workspace config commit did not produce an event");
+    await deps.vcs.publishParticipantContext({
+      ...scope,
+      storageCaller: author,
+      push: {
+        contextId, commandId: `${commandStem}:push`,
+        expectedCommittedEventId: committed.event.eventId, expectedMainEventId: status.mainEventId,
+      },
+      gateContext: {
+        kind: "caller", caller: verifiedInitiator(input.ctx),
+        ...(input.ctx.signal ? { signal: input.ctx.signal } : {}),
+      },
+    });
+    return { changed: true, nextConfig: rendered.nextConfig };
+  });
 
-  return {
-    wouldMutate: (mutate) =>
-      withFreshContext(async (contextId) => {
+  const wouldMutate = async (mutate: WorkspaceConfigMutation): Promise<boolean> => {
+    await deps.vcs.whenSemanticReady();
+    if (!deps.vcs.participantHistoryAttached) {
+      return withFreshContext(async (contextId) => {
         const current = await readConfig(contextId, SYSTEM_CAUSE);
         return (await render(current, mutate)).nextContent !== current.text;
-      }),
+      });
+    }
+    const { stateHash } = await deps.vcs.ensureFresh();
+    const readText = async (filePath: string) => {
+      const file = await deps.vcs.readFile(stateHash, filePath);
+      return file?.content.kind === "text" ? file.content.text : null;
+    };
+    const text = await readText(`${META_REPO_PATH}/${WORKSPACE_CONFIG_FILE}`);
+    if (text === null) throw new Error("Cannot read workspace config from protected main");
+    const current = await loadConfig(text, readText);
+    return (await render(current, mutate)).nextContent !== current.text;
+  };
+
+  const applyMutation = async (
+    input: Parameters<WorkspaceConfigMainWriter["applyMutation"]>[0]
+  ): Promise<WorkspaceConfigMutationResult> => {
+    await deps.vcs.whenSemanticReady(input.ctx.signal);
+    return deps.vcs.withProtectedMainMutation(() => deps.vcs.participantHistoryAttached
+      ? applyParticipantMutation(input)
+      : withMutationContext(input.ctx, (contextId, borrowed) =>
+          applyMutationInContext(input, contextId, borrowed)
+        )
+    );
+  };
+
+  return {
+    wouldMutate,
     applyMutation,
     applyPrepared: async (input) => {
       const result = await applyMutation({

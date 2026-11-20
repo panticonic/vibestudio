@@ -14,7 +14,8 @@ import { canonicalJson } from "@vibestudio/content-addressing";
 import type { OwnedProcess, Ownership } from "@vibestudio/shared/ownership";
 import { domainHash } from "@vibestudio/shared/execution/identity";
 import type { ExecutionArtifactRefV1 } from "@vibestudio/shared/execution/retention";
-import type { ExactRepositorySnapshotPlan } from "../vcsHost/workspaceVcs.js";
+import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import type { ExactRepositorySnapshotPlan, ExactRepositorySnapshotSelection } from "../vcsHost/workspaceVcs.js";
 import { contentTypeForPath, type BuildArtifactInput } from "../buildV2/buildStore.js";
 import type { BuildSystemV2 } from "../buildV2/index.js";
 import { executionArtifactRefFromBuild } from "../executionRootProviders.js";
@@ -114,11 +115,10 @@ export class DevelopmentExecutor {
       runRoots: DevelopmentRunRoots;
       /** The server's ownership: each build command is a registered, immediately-killed group. */
       ownership(): Promise<Ownership>;
-      planSource(input: {
+      planSources(input: {
         contextId: string;
-        repositoryId: string;
-        requiredFiles: readonly string[];
-      }): Promise<ExactRepositorySnapshotPlan>;
+        repositories: readonly ExactRepositorySnapshotSelection[];
+      }, ctx?: ServiceContext): Promise<ExactRepositorySnapshotPlan[]>;
       materializeSource(plan: ExactRepositorySnapshotPlan, destination: string): Promise<void>;
       onLog?: (runId: string, stream: "stdout" | "stderr", line: string) => void;
     }
@@ -131,7 +131,7 @@ export class DevelopmentExecutor {
     runId: string;
     recipe: DevelopmentRecipe;
     pair: DevelopmentPairSelection;
-  }): Promise<PreparedDevelopmentBuild> {
+  }, ctx?: ServiceContext): Promise<PreparedDevelopmentBuild> {
     if (process.platform === "win32") {
       throw Object.assign(
         new Error(
@@ -151,39 +151,23 @@ export class DevelopmentExecutor {
         { code: "EEXECUTOR_UNAVAILABLE" }
       );
     }
-    const [hostSourcePlan, baseSourcePlan, personalSourcePlan, systemSourcePlan, toolchain] =
-      await Promise.all([
-        this.deps.planSource({
-          contextId: input.session.contextId,
-          repositoryId: input.pair.hostRepositoryId,
-          requiredFiles: recipe.install.lockfiles,
-        }),
-        this.deps.planSource({
-          contextId: input.session.contextId,
-          repositoryId: input.pair.baseRepositoryId,
-          // The workspace template declares its units in the manifest
-          // and carries no root lockfile: its dependencies are resolved by the
-          // host's semantic projection, not by a pnpm install at its root.
-          // Requiring one here refused every build of an adopted Base.
-          requiredFiles: ["meta/vibestudio.yml"],
-        }),
-        this.deps.planSource({
-          contextId: input.session.contextId,
-          repositoryId: input.pair.personalRepositoryId,
-          requiredFiles: ["meta/vibestudio.yml"],
-        }),
-        this.deps.planSource({
-          contextId: input.session.contextId,
-          repositoryId: input.pair.systemRepositoryId,
-          requiredFiles: ["meta/vibestudio.yml"],
-        }),
-        this.toolchain(),
-      ]);
+    const contextId = input.session.contextId;
+    const selections = [
+      { repositoryId: input.pair.hostRepositoryId, requiredFiles: recipe.install.lockfiles },
+      // Template dependencies are resolved by the host's semantic projection.
+      ...[input.pair.baseRepositoryId, input.pair.personalRepositoryId, input.pair.systemRepositoryId]
+        .map((repositoryId) => ({ repositoryId, requiredFiles: ["meta/vibestudio.yml"] })),
+    ];
+    const [sourcePlans, toolchain] = await Promise.all([
+      this.deps.planSources({ contextId, repositories: selections }, ctx),
+      this.toolchain(),
+    ]);
+    const [hostSourcePlan, baseSourcePlan, personalSourcePlan, systemSourcePlan] = sourcePlans;
     if (
-      hostSourcePlan.repositoryId !== input.pair.hostRepositoryId ||
-      baseSourcePlan.repositoryId !== input.pair.baseRepositoryId ||
-      personalSourcePlan.repositoryId !== input.pair.personalRepositoryId ||
-      systemSourcePlan.repositoryId !== input.pair.systemRepositoryId
+      !hostSourcePlan || !baseSourcePlan || !personalSourcePlan || !systemSourcePlan ||
+      sourcePlans.length !== selections.length ||
+      sourcePlans.some((plan, index) => plan.contextId !== contextId ||
+        plan.repositoryId !== selections[index]?.repositoryId)
     ) {
       throw Object.assign(
         new Error("Development pair repository identity changed while preparing"),
@@ -191,6 +175,12 @@ export class DevelopmentExecutor {
           code: "EIDENTITYDRIFT",
         }
       );
+    }
+    const expectedState = canonicalJson(hostSourcePlan.sourceState);
+    if (sourcePlans.some(({ sourceState }) => canonicalJson(sourceState) !== expectedState)) {
+      throw Object.assign(new Error("Development sources belong to different working revisions"), {
+        code: "EREVISIONCHANGED",
+      });
     }
     const selectedRepository = input.session.repository.repositoryId;
     const selectedSide =

@@ -71,9 +71,9 @@ const executionSession = {
     executionDigest: "digest",
   },
   executor: {
-    kind: "eval",
+    kind: "dynamic-code",
     runtimeId: registered.runtime.id,
-    evalRunId: "system-test-runner:run-1",
+    runId: "system-test-runner:run-1",
     authorityManifest: {
       mode: "adaptive",
       effects: "read-write",

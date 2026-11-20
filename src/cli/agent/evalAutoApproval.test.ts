@@ -19,7 +19,7 @@ function capabilityApproval(input: {
   const capability = input.capability ?? "runtime.inspect";
   return {
     approvalId: input.approvalId ?? "approval-1",
-    callerId: input.callerId ?? "do:vibestudio/internal:EvalDO:eval-1",
+    callerId: input.callerId ?? "do:workers/session:SessionDO:eval-1",
     callerKind: "do",
     repoPath: "vibestudio/internal",
     effectiveVersion: "ev-1",
@@ -81,7 +81,7 @@ describe("direct eval auto approval", () => {
     const approver = createEvalAutoApprover({
       level: 1,
       runId: "run-1",
-      callerId: "do:vibestudio/internal:EvalDO:eval-1",
+      callerId: "do:workers/session:SessionDO:eval-1",
       resolve,
       onError: vi.fn(),
     });
@@ -99,14 +99,14 @@ describe("direct eval auto approval", () => {
     const levelOne = createEvalAutoApprover({
       level: 1,
       runId: "run-1",
-      callerId: "do:vibestudio/internal:EvalDO:eval-1",
+      callerId: "do:workers/session:SessionDO:eval-1",
       resolve: levelOneResolve,
       onError: vi.fn(),
     });
     const levelTwo = createEvalAutoApprover({
       level: 2,
       runId: "run-1",
-      callerId: "do:vibestudio/internal:EvalDO:eval-1",
+      callerId: "do:workers/session:SessionDO:eval-1",
       resolve: levelTwoResolve,
       onError: vi.fn(),
     });
@@ -126,13 +126,13 @@ describe("direct eval auto approval", () => {
     const approver = createEvalAutoApprover({
       level: 2,
       runId: "run-1",
-      callerId: "do:vibestudio/internal:EvalDO:eval-1",
+      callerId: "do:workers/session:SessionDO:eval-1",
       resolve,
       onError: vi.fn(),
     });
     approver.observeAuthorityRequested(requestFor(approval, "gated"));
     approver.observePending([
-      { ...approval, callerId: "do:vibestudio/internal:EvalDO:other" },
+      { ...approval, callerId: "do:workers/session:SessionDO:other" },
       {
         approvalId: "secret-1",
         callerId: approval.callerId,
@@ -159,7 +159,7 @@ describe("direct eval auto approval", () => {
     const approver = createEvalAutoApprover({
       level: 1,
       runId: "run-1",
-      callerId: "do:vibestudio/internal:EvalDO:eval-1",
+      callerId: "do:workers/session:SessionDO:eval-1",
       resolve,
       onError: vi.fn(),
     });
@@ -184,7 +184,7 @@ describe("direct eval auto approval", () => {
     const approver = createEvalAutoApprover({
       level: 1,
       runId: "run-1",
-      callerId: "do:vibestudio/internal:EvalDO:eval-1",
+      callerId: "do:workers/session:SessionDO:eval-1",
       resolve,
       onError: vi.fn(),
     });
@@ -198,7 +198,7 @@ describe("direct eval auto approval", () => {
   });
 
   it("resolves critical cards carrying the current eval task authority", async () => {
-    const evalCallerId = "do:vibestudio/internal:EvalDO:eval-1";
+    const evalCallerId = "do:workers/session:SessionDO:eval-1";
     const evalApproval = capabilityApproval({
       taskAuthority: "task:eval-1",
       cardType: "permission.gated",

@@ -148,7 +148,8 @@
     "./rpcMethods": "./src/rpcMethods.ts",
     "./typedRpcServiceClient": "./src/typedRpcServiceClient.ts",
     "./lifecyclePreparation": "./src/lifecyclePreparation.ts",
-    "./logIds": "./src/logIds.ts"
+    "./logIds": "./src/logIds.ts",
+    "./kernelRealm": "./src/kernelRealm.ts"
   },
   "scripts": {
     "test": "cd ../.. && vitest run packages/shared/src"
@@ -166,6 +167,7 @@
     "@vibestudio/types": "workspace:*",
     "@vibestudio/vcs-path-policy": "workspace:*",
     "@vibestudio/workspace-contracts": "workspace:*",
+    "ses": "^2.2.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {

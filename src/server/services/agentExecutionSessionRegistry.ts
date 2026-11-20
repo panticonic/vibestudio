@@ -11,12 +11,12 @@ type AdmissionInput = Omit<
   | "nonce"
   | "executor"
 > & {
-  executor: Extract<ExecutionAdmissionFact["executor"], { kind: "eval" }>;
+  executor: Extract<ExecutionAdmissionFact["executor"], { kind: "dynamic-code" }>;
   taskAuthority: import("@vibestudio/rpc").TaskGrantPrincipal;
   expiresAt?: number;
 };
 type EvalAdmissionFact = ExecutionAdmissionFact & {
-  executor: Extract<ExecutionAdmissionFact["executor"], { kind: "eval" }>;
+  executor: Extract<ExecutionAdmissionFact["executor"], { kind: "dynamic-code" }>;
 };
 
 interface AdmissionWaiter {
@@ -172,17 +172,17 @@ export class AgentExecutionSessionRegistry {
   admit(input: AdmissionInput): EvalAdmissionFact {
     const issuedAt = Date.now();
     const retained = this.resolve(input.executor.runtimeId, issuedAt);
-    if (retained && retained.executor.kind !== "eval") {
+    if (retained && retained.executor.kind !== "dynamic-code") {
       throw new Error(
         `Execution runtime ${input.executor.runtimeId} is already admitted by a non-eval executor`
       );
     }
     const activeRunId = this.activeRunByRuntime.get(input.executor.runtimeId);
     if (retained && activeRunId) {
-      if (activeRunId === input.executor.evalRunId) {
+      if (activeRunId === input.executor.runId) {
         if (!sameAdmission(retained, input)) {
           throw new Error(
-            `Evaluated run ${input.executor.evalRunId} was replayed with different admission facts`
+            `Evaluated run ${input.executor.runId} was replayed with different admission facts`
           );
         }
         return retained as EvalAdmissionFact;
@@ -204,7 +204,7 @@ export class AgentExecutionSessionRegistry {
       authoritySessionVersion: (retained?.authoritySessionVersion ?? 0) + 1,
       ...input,
       issuedAt,
-      // A warm EvalDO is a notebook history, not a sequence of unrelated
+      // A warm eval kernel is a notebook history, not a sequence of unrelated
       // programs. Keep its trust identity for the same retention window as its
       // live heap; individual cell completion only releases the execution slot.
       expiresAt: input.expiresAt ?? issuedAt + 7 * 24 * 60 * 60 * 1_000,
@@ -214,7 +214,7 @@ export class AgentExecutionSessionRegistry {
     this.byAdmissionKey.set(fact.admissionKey, fact);
     this.byNonce.set(fact.nonce, fact);
     this.priorFactByActiveRuntime.set(fact.executor.runtimeId, retained);
-    this.activeRunByRuntime.set(fact.executor.runtimeId, fact.executor.evalRunId);
+    this.activeRunByRuntime.set(fact.executor.runtimeId, fact.executor.runId);
     if (fact.mode === "test" && fact.testPolicy) {
       const rootPolicyId = orchestratorPolicyId(fact.testPolicy);
       const root = this.orchestratorRuns.get(rootPolicyId);
@@ -230,13 +230,13 @@ export class AgentExecutionSessionRegistry {
         }
         this.orchestratorRuns.set(rootPolicyId, {
           runtimeId: fact.executor.runtimeId,
-          runId: fact.executor.evalRunId,
+          runId: fact.executor.runId,
         });
       } else if (
         fact.testPolicy.kind === "orchestrator" &&
         root.runtimeId === fact.executor.runtimeId
       ) {
-        root.runId = fact.executor.evalRunId;
+        root.runId = fact.executor.runId;
       }
       this.markTestContext(fact.contextId, fact.testPolicy);
     }
@@ -249,7 +249,7 @@ export class AgentExecutionSessionRegistry {
       "v" | "authoritySessionId" | "authoritySessionVersion" | "issuedAt" | "expiresAt" | "nonce"
     > & { expiresAt?: number }
   ): ExecutionAdmissionFact {
-    if (input.executor.kind === "eval") return this.admit(input as AdmissionInput);
+    if (input.executor.kind === "dynamic-code") return this.admit(input as AdmissionInput);
     const existing = this.byAdmissionKey.get(input.admissionKey);
     if (existing) {
       if (existing.expiresAt <= Date.now()) this.removeGeneric(existing);
@@ -287,8 +287,8 @@ export class AgentExecutionSessionRegistry {
     if (fact.controllerRuntimeId !== controllerRuntimeId) {
       throw new Error("Only the admission controller can finish this execution");
     }
-    if (fact.executor.kind === "eval")
-      return this.close(fact.executor.runtimeId, fact.executor.evalRunId);
+    if (fact.executor.kind === "dynamic-code")
+      return this.close(fact.executor.runtimeId, fact.executor.runId);
     await closeSession(fact.authoritySessionId);
     this.removeGeneric(fact);
     return true;
@@ -302,9 +302,9 @@ export class AgentExecutionSessionRegistry {
   }
 
   /**
-   * Acquire the one live admission for an EvalDO in FIFO order.
+   * Acquire the one live admission for an eval kernel in FIFO order.
    *
-   * EvalDO deliberately serializes runs because they share one persistent
+   * eval kernel deliberately serializes runs because they share one persistent
    * scope. Admission mirrors that existing execution queue instead of rejecting
    * concurrent callers before they reach it. There is no invented wait
    * deadline: the inbound RPC's cancellation signal owns abandonment.
@@ -317,7 +317,7 @@ export class AgentExecutionSessionRegistry {
     if ((!queued || queued.length === 0) && !activeRunId) {
       return Promise.resolve(this.admit(input));
     }
-    if (retained && activeRunId === input.executor.evalRunId) {
+    if (retained && activeRunId === input.executor.runId) {
       return Promise.resolve(this.admit(input));
     }
     if (signal?.aborted) return Promise.reject(admissionAbortError(runtimeId));
@@ -356,8 +356,8 @@ export class AgentExecutionSessionRegistry {
       if (
         !root ||
         !rootFact ||
-        rootFact.executor.kind !== "eval" ||
-        rootFact.executor.evalRunId !== root.runId ||
+        rootFact.executor.kind !== "dynamic-code" ||
+        rootFact.executor.runId !== root.runId ||
         rootFact.expiresAt <= now
       ) {
         this.revokeOrchestrator(rootPolicyId);
@@ -369,16 +369,16 @@ export class AgentExecutionSessionRegistry {
 
   /**
    * Resolve the admission claimed by one outbound evaluated-execution effect.
-   * Runtime identity alone is insufficient: the EvalDO also performs its own
+   * Runtime identity alone is insufficient: the eval kernel also performs its own
    * lifecycle work while a run is admitted.
    */
   resolveInvocation(runtimeId: string, nonce: string): ExecutionAdmissionFact | null {
     const candidate = this.byNonce.get(nonce);
-    if (candidate?.executor.kind === "eval") {
+    if (candidate?.executor.kind === "dynamic-code") {
       const fact = this.resolve(runtimeId);
       return fact?.nonce === nonce &&
-        fact.executor.kind === "eval" &&
-        this.activeRunByRuntime.get(runtimeId) === fact.executor.evalRunId
+        fact.executor.kind === "dynamic-code" &&
+        this.activeRunByRuntime.get(runtimeId) === fact.executor.runId
         ? fact
         : null;
     }
@@ -406,7 +406,7 @@ export class AgentExecutionSessionRegistry {
   ): ExecutionAdmissionFact | null {
     const candidate = this.byNonce.get(nonce);
     if (!candidate || candidate.expiresAt <= Date.now()) {
-      if (candidate && candidate.executor.kind !== "eval") this.removeGeneric(candidate);
+      if (candidate && candidate.executor.kind !== "dynamic-code") this.removeGeneric(candidate);
       return null;
     }
     if (
@@ -422,6 +422,11 @@ export class AgentExecutionSessionRegistry {
       return method === "runAutomationTurn" || method === "runAutomationEval" ? candidate : null;
     }
     return null;
+  }
+
+  /** The run that holds the runtime's one live admission, if any. */
+  activeRunId(runtimeId: string): string | undefined {
+    return this.activeRunByRuntime.get(runtimeId);
   }
 
   close(runtimeId: string, runId?: string): boolean {
@@ -472,7 +477,7 @@ export class AgentExecutionSessionRegistry {
   private remove(fact: ExecutionAdmissionFact): void {
     this.byAdmissionKey.delete(fact.admissionKey);
     this.byNonce.delete(fact.nonce);
-    if (fact.executor.kind !== "eval") {
+    if (fact.executor.kind !== "dynamic-code") {
       this.removeGeneric(fact);
       return;
     }
@@ -485,7 +490,7 @@ export class AgentExecutionSessionRegistry {
     }
     const rootPolicyId = orchestratorPolicyId(policy);
     const root = this.orchestratorRuns.get(rootPolicyId);
-    if (root?.runtimeId === fact.executor.runtimeId && root.runId === fact.executor.evalRunId) {
+    if (root?.runtimeId === fact.executor.runtimeId && root.runId === fact.executor.runId) {
       this.revokeOrchestrator(rootPolicyId);
       return;
     }
@@ -559,9 +564,7 @@ export class AgentExecutionSessionRegistry {
 }
 
 function sameAdmission(fact: ExecutionAdmissionFact, input: AdmissionInput): boolean {
-  if (fact.executor.kind !== "eval") return false;
-  const { eventSinkNonce: _factSink, ...factEval } = fact.executor;
-  const { eventSinkNonce: _inputSink, ...inputEval } = input.executor;
+  if (fact.executor.kind !== "dynamic-code") return false;
   return (
     JSON.stringify(fact.authorityOrigin ?? null) ===
       JSON.stringify(input.authorityOrigin ?? null) &&
@@ -574,7 +577,7 @@ function sameAdmission(fact: ExecutionAdmissionFact, input: AdmissionInput): boo
     fact.taskAuthority === input.taskAuthority &&
     JSON.stringify(fact.agentBinding) === JSON.stringify(input.agentBinding) &&
     JSON.stringify(fact.executionImage) === JSON.stringify(input.executionImage) &&
-    JSON.stringify(factEval) === JSON.stringify(inputEval) &&
+    JSON.stringify(fact.executor) === JSON.stringify(input.executor) &&
     JSON.stringify(fact.attachedHost ?? null) === JSON.stringify(input.attachedHost ?? null) &&
     JSON.stringify(fact.causalParent) === JSON.stringify(input.causalParent) &&
     JSON.stringify(fact.parent) === JSON.stringify(input.parent) &&
@@ -609,7 +612,7 @@ function sameGenericAdmission(
 }
 
 /**
- * Identity that owns one warm EvalDO notebook heap. Cell-local provenance
+ * Identity that owns one warm eval kernel notebook heap. Cell-local provenance
  * (run id, task ref, causal parent, manifest and event sink) deliberately does
  * not participate: those facts advance on every cell without changing who
  * owns the surviving modules and objects.

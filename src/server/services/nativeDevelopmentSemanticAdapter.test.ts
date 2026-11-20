@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { createNativeDevelopmentSemanticAdapter } from "./nativeDevelopmentSemanticAdapter.js";
 import type { NativeSnapshotDescriptor } from "./nativeDevelopmentExecutor.js";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { vcsImportSnapshotResultSchema } from "@vibestudio/service-schemas/vcs";
 
 const descriptor: NativeSnapshotDescriptor = {
   version: 1,
@@ -75,8 +77,8 @@ describe("createNativeDevelopmentSemanticAdapter", () => {
     expect(semanticCausalCall).not.toHaveBeenCalled();
   });
 
-  it("imports the exact existing repository and marks the filesystem descriptor external", async () => {
-    const semanticCausalCall = vi.fn(async () => ({
+  it.each(["legacy", "participant"] as const)("imports the exact repository through %s history", async (history) => {
+    const receipt = vcsImportSnapshotResultSchema.parse({
       contextId: "context:child",
       eventId: "event:checkpoint",
       workUnitId: "work-unit:checkpoint",
@@ -89,8 +91,14 @@ describe("createNativeDevelopmentSemanticAdapter", () => {
         targetRepositoryIds: ["repository:vibestudio"],
       },
       importedRepositoryIds: ["repository:vibestudio"],
-    }));
-    const adapter = createNativeDevelopmentSemanticAdapter({ semanticCausalCall });
+    });
+    const semanticCausalCall = vi.fn(async () => receipt);
+    const importParticipantSnapshotFromContext = vi.fn(async () => receipt);
+    const adapter = createNativeDevelopmentSemanticAdapter({ semanticCausalCall, importParticipantSnapshotFromContext });
+    const participant = {
+      access: { caller: createVerifiedCaller("shell:owner", "shell"), ownerContextId: "context:owner" },
+      uploadPrincipal: "verified-upload",
+    };
 
     const result = await adapter.importSnapshot({
       developmentContextId: "context:child",
@@ -98,13 +106,11 @@ describe("createNativeDevelopmentSemanticAdapter", () => {
       expectedWorkingHead: { kind: "event", eventId: "event:base" },
       commandId: "command:checkpoint",
       descriptor,
-      ingress,
+      ingress: history === "participant" ? { ...ingress, participant } : ingress,
     });
 
     expect(result.eventId).toBe("event:checkpoint");
-    expect(semanticCausalCall).toHaveBeenCalledWith(
-      "vcsImportSnapshot",
-      {
+    const expected = {
         contextId: "context:child",
         commandId: "command:checkpoint",
         expectedWorkingHead: { kind: "event", eventId: "event:base" },
@@ -118,9 +124,16 @@ describe("createNativeDevelopmentSemanticAdapter", () => {
           },
         ],
         message: "Native development checkpoint snapshot-revision-1",
-      },
-      ingress.causalParent
-    );
+    };
+    if (history === "participant") {
+      expect(semanticCausalCall).not.toHaveBeenCalled();
+      expect(importParticipantSnapshotFromContext).toHaveBeenCalledWith({
+        ...participant, snapshot: expected, cause: { parent: ingress.causalParent },
+      });
+    } else {
+      expect(importParticipantSnapshotFromContext).not.toHaveBeenCalled();
+      expect(semanticCausalCall).toHaveBeenCalledWith("vcsImportSnapshot", expected, ingress.causalParent);
+    }
   });
 
   it("rejects repository substitution before semantic mutation", async () => {

@@ -2,6 +2,8 @@ import { promises as fsp } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { canonicalJson, sha256HexSyncText } from "@vibestudio/content-addressing";
+import { createHostCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
 import { hostRefBasisDigest } from "@vibestudio/shared/vcs/publication";
 import {
@@ -19,6 +21,7 @@ import { parseWorkspaceSystemEpochEnvelope } from "@vibestudio/workspace/configP
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import { createProtectedRefStore } from "../services/protectedRefStore.js";
 import { createWorkspaceSemanticPort } from "../workspaceSourceProvider.js";
+import type { PreparedRootTemplateInitialization } from "../workspaceRootTemplateBootstrap.js";
 import { WorkspaceVcs } from "./workspaceVcs.js";
 
 describe("WorkspaceVcs protected publication notification", () => {
@@ -28,6 +31,428 @@ describe("WorkspaceVcs protected publication notification", () => {
     vi.restoreAllMocks();
     if (root) await fsp.rm(root, { recursive: true, force: true });
     root = undefined;
+  });
+
+  it("publishes an exact fresh native root through the workspace creation gate", async () => {
+    root = await fsp.mkdtemp(path.join(os.tmpdir(), "fresh-native-root-"));
+    const blobsDir = path.join(root, "blobs");
+    ensureLayout(blobsDir);
+    const bytes = Buffer.from("systemEpoch: 0\n");
+    const { digest: contentHash } = await putBytes(blobsDir, bytes);
+    const files = [{ path: "workspace.yaml", contentHash, mode: 0o644 as const }];
+    const contentRoot = (await mirrorWorktreeTree(blobsDir, [
+      { ...files[0]!, mode: 0o100644 },
+    ])).stateHash as `state:${string}`;
+    const pin = { url: "https://github.com/example/template", ref: "refs/tags/v1", commit: "a".repeat(40) };
+    const prepareInitialization = vi.fn(async (): Promise<PreparedRootTemplateInitialization> => ({
+      pin, installation: { sources: [{ pin, manifest: bytes.toString() }] },
+      repositories: [{
+        repoPath: "meta", subdir: "meta", snapshot: `v1-sha256:${"b".repeat(64)}`,
+        contentRoot,
+        files: [{ ...files[0]!, size: bytes.length, contentKind: "text", byteLength: bytes.length, coordinateExtent: bytes.length }],
+      }],
+    }));
+    const prepare = vi.fn();
+    const gate = vi.fn(async () => ({ prepare, committed: vi.fn(), failed: vi.fn() }));
+    const refs = createProtectedRefStore({ statePath: path.join(root, "refs"), gate });
+    const vcs = new WorkspaceVcs({
+      workspaceId: "workspace:test", blobsDir, workspaceRoot: path.join(root, "source"),
+      contextProjectionsRoot: path.join(root, "contexts"), buildSourcesRoot: path.join(root, "builds"),
+      refs, rootTemplateBootstrap: {
+        prepareInitialization, preparedBuildForContent: () => null,
+      },
+    });
+    const canonical = { source: "workers/workspace-source", className: "GadHistoryDO", objectKey: "canonical" };
+    const head = "c".repeat(40);
+    const eventId = "fresh-event";
+    let requestDigest: string | undefined;
+    let installed = false;
+    const receipt = () => ({ head, eventId, installed, requestDigest, originalHead: "d".repeat(40), pin });
+    const dispatch = vi.fn(async (_target, method: string, input?: unknown) => {
+      if (method === "listHistoryAppliedPublications") return [];
+      if (method === "readHistoryMain") return { head, eventId };
+      if (method === "readFreshHistoryRoot") return requestDigest ? receipt() : null;
+      if (method === "stageFreshHistoryRoot") {
+        requestDigest = sha256HexSyncText(canonicalJson(input));
+        return { ...receipt(), repositories: [{
+          repositoryId: "root-repository", repoPath: "meta", presence: "present", fileManifestId: "manifest",
+          source: { kind: "snapshot", files },
+        }] };
+      }
+      if (method === "installFreshHistoryRoot") {
+        expect(prepare).toHaveBeenCalledOnce();
+        expect(refs.readMainSemanticState()).toBeNull();
+        expect(input).toEqual({ head, eventId, requestDigest });
+        installed = true;
+        return { head, eventId };
+      }
+      throw new Error(`Unexpected fresh history request ${method}`);
+    });
+    const source = { dispatch: { dispatch }, canonical };
+    await expect(vcs.initializeFreshHistory(source)).resolves.toBe(true);
+    expect(refs.readMainSemanticState()?.eventId).toBe(eventId);
+    expect(refs.readMain("meta")?.contentRoot).toBe(contentRoot);
+    await expect(vcs.initializeFreshHistory(source)).resolves.toBe(true);
+    expect(prepareInitialization).toHaveBeenCalledOnce();
+    expect(gate).toHaveBeenCalledOnce();
+
+    await expect(vcs.activateNativeWorkspace()).rejects.toThrow("no attached protected main");
+    await vcs.attachParticipantHistory(source);
+    await expect(vcs.activateNativeWorkspace()).resolves.toEqual(await vcs.ensureFresh());
+  });
+
+  it.each([false, true])("projects shared main only after the gated participant push is confirmed (template: %s)", async (template) => {
+    root = await fsp.mkdtemp(path.join(os.tmpdir(), "participant-publication-"));
+    const blobsDir = path.join(root, "blobs");
+    ensureLayout(blobsDir);
+    const contentHash = (await putBytes(blobsDir, Buffer.from("participant content"))).digest;
+    const prepare = vi.fn();
+    const completed = vi.fn();
+    const gate = vi.fn(async () => ({ prepare, committed: completed, failed: vi.fn() }));
+    const refs = createProtectedRefStore({ statePath: path.join(root, "refs"), gate });
+    await refs.updateMains({
+      entries: [],
+      evidence: {
+        publicationId: "initial",
+        previousEventId: "initial-parent",
+        publishedEventId: "initial-event",
+        hostRefsBasisDigest: hostRefBasisDigest([]),
+      },
+    });
+    gate.mockClear();
+    prepare.mockClear();
+    completed.mockClear();
+    const vcs = new WorkspaceVcs({
+      workspaceId: "workspace:test",
+      blobsDir,
+      workspaceRoot: path.join(root, "source"),
+      contextProjectionsRoot: path.join(root, "contexts"),
+      buildSourcesRoot: path.join(root, "build-sources"),
+      refs,
+    });
+    const caller = createHostCaller("test-device", "server", { userId: "user:test", handle: "test" });
+    const participantId = canonicalJson(["user", "user:test", "test-device", "context"]);
+    const canonical = {
+      source: "workers/workspace-source", className: "GadHistoryDO", objectKey: "canonical",
+    };
+    const owner = { ...canonical, objectKey: `work-${sha256HexSyncText(participantId)}` };
+    const installation = {
+      sources: [{
+        pin: { url: "https://github.com/example/template", ref: "v1", commit: "a".repeat(40) },
+        manifest: "systemEpoch: 0\n",
+      }],
+    };
+    let approval: Record<string, unknown> | null = null;
+    let applied = false;
+    const dispatch = vi.fn(async (target: typeof canonical, method: string, args?: unknown) => {
+      expect(target).toEqual(
+        ["readHistoryProjection", "verifyHistoryTemplatePublication", "publishApprovedHistory"].includes(method)
+          ? owner : canonical
+      );
+      switch (method) {
+        case "readHistoryPublicationApproval":
+          return approval ? { approval, applied, expiresAt: Date.now() + 60_000 } : null;
+        case "readHistoryProjection":
+          return {
+            head: "saved-head",
+            state: { kind: "event", eventId: "saved-event" },
+            repositories: [{
+              repositoryId: "repo",
+              repoPath: "packages/a",
+              presence: "present",
+              fileManifestId: "manifest",
+              source: { kind: "snapshot", files: [{ path: "note.txt", contentHash, mode: 0o644 }] },
+            }],
+          };
+        case "readHistoryMain":
+          return { head: "initial-head", eventId: "initial-event" };
+        case "verifyHistoryTemplatePublication":
+          expect(gate).not.toHaveBeenCalled();
+          expect(args).toEqual({
+            contextId: "context", previousHead: "initial-head", proposedHead: "saved-head",
+            eventId: "saved-event", installation,
+          });
+          return null;
+        case "authorizeHistoryPublication":
+          expect(prepare).toHaveBeenCalledOnce();
+          approval = args as Record<string, unknown>;
+          return { expiresAt: Date.now() + 60_000 };
+        case "grantHistoryPublication":
+          expect(approval).toMatchObject({
+            participantId,
+            previousEventId: "initial-event",
+            proposedEventId: "saved-event",
+            publication: { previousHead: "initial-head", proposedHead: "saved-head" },
+          });
+          return { kind: "grant", id: "grant", origin: { ref: "GadHistoryDO:canonical", token: "token" } };
+        case "publishApprovedHistory":
+          expect(refs.readMainSemanticState()?.eventId).toBe("initial-event");
+          expect(args).toMatchObject({
+            contextId: "context", proposedEventId: "saved-event", ...(template ? { installation } : {}),
+          });
+          if (!template) expect(args).not.toHaveProperty("installation");
+          applied = true;
+          throw new Error("The native push reply was lost");
+        case "releaseHistoryGrant":
+          expect(args).toEqual({ id: "grant" });
+          return null;
+        case "acknowledgeHistoryPublication":
+          expect(refs.readMainSemanticState()?.eventId).toBe("saved-event");
+          expect(refs.readHeadPublication()?.observersAppliedAt).not.toBeNull();
+          approval = null;
+          return null;
+        default:
+          throw new Error(`Unexpected history method ${method}`);
+      }
+    });
+    const publish = () => vcs.publishParticipantContext({
+      dispatch: { dispatch }, canonical, owner, ownerContextId: "context", gateContext: { kind: "caller", caller },
+      push: {
+        commandId: "publish-command", contextId: "context",
+        expectedMainEventId: "initial-event", expectedCommittedEventId: "saved-event",
+        ...(template ? { templateInstallation: installation } : {}),
+      },
+    });
+    const result = await publish();
+    expect(result.mainEventId).toBe("saved-event");
+    await expect(publish()).resolves.toEqual(result);
+    expect(gate).toHaveBeenCalledOnce();
+    expect(completed).toHaveBeenCalledOnce();
+    expect(dispatch.mock.calls.filter(([, method]) => method === "publishApprovedHistory")).toHaveLength(1);
+    expect(dispatch.mock.calls.filter(([, method]) => method === "verifyHistoryTemplatePublication"))
+      .toHaveLength(template ? 1 : 0);
+    expect(refs.readMain("packages/a")?.contentRoot).toMatch(/^state:[0-9a-f]{64}$/);
+  });
+
+  it("recovers canonical publications before accepting the matching shared head", async () => {
+    root = await fsp.mkdtemp(path.join(os.tmpdir(), "participant-publication-recovery-"));
+    const blobsDir = path.join(root, "blobs");
+    ensureLayout(blobsDir);
+    const gate = vi.fn(async () => undefined);
+    const refs = createProtectedRefStore({ statePath: path.join(root, "refs"), gate });
+    await refs.updateMains({
+      entries: [],
+      evidence: {
+        publicationId: "initial",
+        previousEventId: "initial-parent",
+        publishedEventId: "initial-event",
+        hostRefsBasisDigest: hostRefBasisDigest([]),
+      },
+    });
+    gate.mockClear();
+    const vcs = new WorkspaceVcs({
+      workspaceId: "workspace:test",
+      blobsDir,
+      workspaceRoot: path.join(root, "source"),
+      contextProjectionsRoot: path.join(root, "contexts"),
+      buildSourcesRoot: path.join(root, "build-sources"),
+      refs,
+    });
+    const canonical = {
+      source: "workers/workspace-source", className: "GadHistoryDO", objectKey: "canonical",
+    };
+    const receipt = (previousEventId: string, proposedEventId: string) => ({
+      approval: {
+        publicationId: `publication:${proposedEventId}`,
+        participantId: `participant:${proposedEventId}`,
+        previousEventId,
+        proposedEventId,
+        publication: { previousHead: `head:${previousEventId}`, proposedHead: `head:${proposedEventId}` },
+      },
+      applied: true,
+      expiresAt: 1,
+    });
+    const first = receipt("initial-event", "first");
+    const second = receipt("first", "second");
+    const pending = new Map([second, first].map((value) => [value.approval.publicationId, value]));
+    const observed: string[] = [];
+    refs.onRefsChanged((value) => { observed.push(value.publishedEventId); });
+    let canonicalEventId = "unreconciled";
+    const dispatch = vi.fn(async (target: typeof canonical, method: string, input?: unknown) => {
+      expect(target).toEqual(canonical);
+      if (method === "readHistoryMain")
+        return { head: `head:${canonicalEventId}`, eventId: canonicalEventId };
+      if (method === "listHistoryAppliedPublications") return [...pending.values()];
+      if (method === "readHistoryPublishedRevision") {
+        const { eventId } = input as { eventId: string };
+        return { head: `head:${eventId}`, state: { kind: "event", eventId }, repositories: [] };
+      }
+      const { publicationId } = input as { publicationId: string };
+      if (method === "readHistoryPublicationApproval") return pending.get(publicationId) ?? null;
+      if (method === "acknowledgeHistoryPublication") {
+        expect(refs.readMainSemanticState()?.eventId).toBe(pending.get(publicationId)?.approval.proposedEventId);
+        pending.delete(publicationId);
+        return null;
+      }
+      throw new Error(`Publication recovery attempted ${method}`);
+    });
+    const attach = () => vcs.attachParticipantHistory({ dispatch: { dispatch }, canonical });
+    await expect(attach()).rejects.toMatchObject({
+      code: "REF_EVENT_CONFLICT",
+      expectedEventId: "unreconciled",
+      actualEventId: "second",
+    });
+    expect(vcs.participantHistoryAttached).toBe(false);
+    expect(pending.size).toBe(0);
+    canonicalEventId = "second";
+    await expect(attach()).resolves.toBeUndefined();
+    expect(vcs.participantHistoryAttached).toBe(true);
+    expect(observed).toEqual(["first", "second"]);
+    expect(refs.readMainSemanticState()).toEqual({ kind: "event", eventId: "second" });
+    expect(gate).not.toHaveBeenCalled();
+  });
+
+  it("finishes a peer publication's interrupted host projection before returning the retry receipt", async () => {
+    root = await fsp.mkdtemp(path.join(os.tmpdir(), "peer-publication-recovery-"));
+    const blobsDir = path.join(root, "blobs");
+    ensureLayout(blobsDir);
+    const refs = createProtectedRefStore({
+      statePath: path.join(root, "refs"), gate: async () => undefined,
+    });
+    await refs.updateMains({
+      entries: [],
+      evidence: {
+        publicationId: "initial",
+        previousEventId: "genesis",
+        publishedEventId: "initial-event",
+        hostRefsBasisDigest: hostRefBasisDigest([]),
+      },
+    });
+    const vcs = new WorkspaceVcs({
+      workspaceId: "workspace:test",
+      blobsDir,
+      workspaceRoot: path.join(root, "source"),
+      contextProjectionsRoot: path.join(root, "contexts"),
+      buildSourcesRoot: path.join(root, "build-sources"),
+      refs,
+    });
+    const canonical = {
+      source: "workers/workspace-source", className: "GadHistoryDO", objectKey: "canonical",
+    };
+    const transition = {
+      publicationId: "a".repeat(64), sourceNodeId: "b".repeat(64),
+      previousHead: "1".repeat(40), proposedHead: "2".repeat(40),
+    };
+    const receipt = {
+      approval: {
+        publicationId: `chronolog-publication:${transition.publicationId}`,
+        participantId: "chronolog:group:publisher",
+        previousEventId: "initial-event",
+        proposedEventId: "peer-event",
+        publication: { previousHead: transition.previousHead, proposedHead: transition.proposedHead },
+      },
+      applied: true,
+      expiresAt: 1,
+    };
+    let applied = false;
+    let acknowledged = false;
+    const dispatch = vi.fn(async (target: typeof canonical, method: string, input?: unknown) => {
+      expect(target).toEqual(canonical);
+      switch (method) {
+        case "readHistoryMain":
+          return { head: transition.previousHead, eventId: "initial-event" };
+        case "listHistoryAppliedPublications":
+          return applied && !acknowledged ? [receipt] : [];
+        case "readHistoryPublicationApproval":
+          expect(input).toEqual({ publicationId: receipt.approval.publicationId });
+          return applied && !acknowledged ? receipt : null;
+        case "readHistoryPublishedRevision":
+          expect(input).toEqual({ eventId: "peer-event" });
+          return { head: transition.proposedHead, state: { kind: "event", eventId: "peer-event" }, repositories: [] };
+        case "acknowledgeHistoryPublication":
+          expect(refs.readMainSemanticState()?.eventId).toBe("peer-event");
+          acknowledged = true;
+          return null;
+        case "stageIncomingHistory":
+          expect(acknowledged).toBe(true);
+          return { kind: "applied", head: transition.proposedHead };
+        default:
+          throw new Error(`Unexpected history method ${method}`);
+      }
+    });
+    await vcs.attachParticipantHistory({ dispatch: { dispatch }, canonical });
+    applied = true;
+    await expect(vcs.dispatchIncomingHistory("stageIncomingHistory", transition, vi.fn()))
+      .resolves.toEqual({ kind: "applied", head: transition.proposedHead });
+    expect(refs.readMainSemanticState()?.eventId).toBe("peer-event");
+  });
+
+  it("checks seed bytes before initializing empty history and recovers an interrupted install", async () => {
+    root = await fsp.mkdtemp(path.join(os.tmpdir(), "workspace-history-seed-"));
+    const blobsDir = path.join(root, "blobs");
+    ensureLayout(blobsDir);
+    const gate = vi.fn(async () => undefined);
+    const refs = createProtectedRefStore({ statePath: path.join(root, "refs"), gate });
+    const dependencies = {
+      workspaceId: "workspace:test",
+      blobsDir,
+      workspaceRoot: path.join(root, "source"),
+      contextProjectionsRoot: path.join(root, "contexts"),
+      buildSourcesRoot: path.join(root, "build-sources"),
+      refs,
+    };
+    const vcs = new WorkspaceVcs(dependencies);
+    const canonical = {
+      source: "workers/workspace-source", className: "GadHistoryDO", objectKey: "canonical",
+    };
+    const seed = { sourceNodeId: "a".repeat(64), head: "1".repeat(40), eventId: "seed-event" };
+    const body = JSON.stringify({ name: "@workspace/a", version: "1.2.3" });
+    const contentHash = sha256HexSyncText(body);
+    const confirmSource = vi.fn(async () => undefined);
+    let installed = false;
+    const dispatch = vi.fn(async (target: typeof canonical, method: string, input?: unknown) => {
+      expect(target).toEqual(canonical);
+      switch (method) {
+        case "stageSharedHistorySeed":
+          return {
+            state: { kind: "event", eventId: seed.eventId },
+            repositories: [{
+              repositoryId: "repo", repoPath: "packages/a", presence: "present", fileManifestId: "manifest",
+              source: { kind: "snapshot", files: [{ path: "package.json", contentHash, mode: 0o644 }] },
+            }],
+            contentHashes: [contentHash],
+          };
+        case "readSharedHistorySeedReceipt":
+          return { seed, originalHead: "0".repeat(40), installed };
+        case "installSharedHistorySeed":
+          expect(input).toEqual(seed);
+          expect(confirmSource).toHaveBeenCalledOnce();
+          if (!installed) {
+            installed = true;
+            throw new Error("The native seed install reply was lost");
+          }
+          return seed;
+        default:
+          throw new Error(`Unexpected history method ${method}`);
+      }
+    });
+    const fetchFile = vi.fn(async (digest: string) => {
+      expect(digest).toBe(contentHash);
+      return Buffer.from(body);
+    });
+    const initialize = () => vcs.initializeSharedHistory({
+      canonical, dispatch: { dispatch }, seed,
+      offer: { destinationNodeId: "b".repeat(64), branch: "seed/fixture", token: "token" },
+      fetchPack: vi.fn(), fetchFile, confirmSource,
+    });
+    fetchFile.mockResolvedValueOnce(Buffer.from("different source file"));
+    await expect(initialize()).rejects.toThrow("bytes do not match their digest");
+    expect(gate).not.toHaveBeenCalled();
+    expect(installed).toBe(false);
+    await expect(initialize()).rejects.toThrow("native seed install reply was lost");
+    expect(refs.readMainSemanticState()).toBeNull();
+    vcs.startSemanticInitialization(initialize);
+    await expect(vcs.whenSemanticReady()).resolves.toBeUndefined();
+    expect(refs.readMainSemanticState()?.eventId).toBe(seed.eventId);
+    const { stateHash } = await vcs.ensureFresh();
+    const reopened = new WorkspaceVcs({ ...dependencies, seededWorkspace: true });
+    const graph = await reopened.discoverGraph(stateHash);
+    const node = graph.allNodes().find((unit) => unit.relativePath === "packages/a");
+    expect(node).toBeDefined();
+    await expect(fsp.readFile(path.join(node!.path, "package.json"), "utf8")).resolves.toBe(body);
+    await expect(initialize()).resolves.toBeUndefined();
+    expect(gate).toHaveBeenCalledOnce();
+    expect(fetchFile).toHaveBeenCalledTimes(2);
   });
 
   async function interruptedPublication(semanticAcknowledged: boolean) {

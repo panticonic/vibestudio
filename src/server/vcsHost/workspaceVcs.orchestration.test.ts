@@ -1,12 +1,17 @@
-import { serializeRpcFailure, RemoteRpcAggregateError } from "@vibestudio/rpc";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { CONTEXT_BINDING_FILE, parseContextBinding } from "@vibestudio/shared/contextBinding";
 import { contextMaterializationCommand } from "@vibestudio/shared/vcs/workspaceProjection";
 import type { ContextMaterializationCommand } from "@vibestudio/shared/vcs/workspaceProjection";
-import { buildWorktreeManifest, EMPTY_STATE_HASH, sha256Hex } from "@vibestudio/content-addressing";
+import {
+  canonicalJson,
+  EMPTY_STATE_HASH,
+  sha256Hex,
+  sha256HexSyncText,
+} from "@vibestudio/content-addressing";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import * as blobstoreService from "../services/blobstoreService.js";
 import {
@@ -19,6 +24,7 @@ import {
 } from "../services/blobstoreService.js";
 import { createProtectedRefStore } from "../services/protectedRefStore.js";
 import { createWorkspaceSemanticPort } from "../workspaceSourceProvider.js";
+import { workspaceParticipantIdentity } from "./workspaceHistoryHost.js";
 import { WorkspaceRepositories } from "./workspaceRepositories.js";
 import { WorkspaceVcs } from "./workspaceVcs.js";
 
@@ -186,6 +192,353 @@ afterEach(async () => {
 });
 
 describe("WorkspaceVcs semantic host orchestration", () => {
+  it("admits recall causes only from the bound participant and protected workspace revisions", async () => {
+    const { vcs, refs } = await harness();
+    const eventId = "published-event";
+    const contextId = "context:reader";
+    const owner = { ...TEST_PROVIDER, objectKey: "reader" };
+    const canonical = { ...TEST_PROVIDER, objectKey: "canonical" };
+    const caller = {
+      ...createVerifiedCaller("agent:reader", "server"),
+      agentBinding: { contextId, channelId: "channel:reader", entityId: "agent:reader" },
+    } satisfies Parameters<WorkspaceVcs["participantRecallCauses"]>[0];
+    const privateCause = ["private-log", "main", "private-invocation"];
+    const sharedCause = ["shared-log", "main", "shared-invocation"];
+    const dispatch = vi.fn(async (_target: typeof owner, method: string, input: unknown) => {
+      if (method === "readHistoryRecallBasis") return ["private-revision", "protected-revision"];
+      if (method === "readHistorySearchCauses") {
+        return (input as { revision: string }).revision === "private-revision"
+          ? [privateCause, sharedCause] : [sharedCause];
+      }
+      throw new Error(`Unexpected history call ${method}`);
+    });
+    const scope = vi.spyOn(vcs, "openParticipantScope").mockResolvedValue({
+      dispatch: { dispatch }, canonical, owner, caller, contextId, ownerContextId: contextId,
+      workingHead: "private-revision",
+    });
+    vi.spyOn(refs, "readMainSemanticState").mockReturnValue({ kind: "event", eventId });
+    await expect(vcs.participantRecallCauses(caller, [{ query: "Northstar" }]))
+      .resolves.toEqual([privateCause, sharedCause]);
+    expect(scope).toHaveBeenCalledExactlyOnceWith({ caller, contextId, ownerContextId: contextId });
+    expect(dispatch.mock.calls).toEqual([
+      [owner, "readHistoryRecallBasis", { contextId, protectedEventId: eventId }],
+      [owner, "readHistorySearchCauses", { revision: "private-revision", after: null }],
+      [owner, "readHistorySearchCauses", { revision: "protected-revision", after: null }],
+    ]);
+    await expect(vcs.participantRecallCauses(caller, [{ query: "Northstar", kinds: ["commit"] }]))
+      .resolves.toEqual([]);
+    await expect(vcs.participantRecallCauses(createVerifiedCaller("panel:reader", "panel"), [{ query: "Northstar" }]))
+      .resolves.toEqual([]);
+    expect(scope).toHaveBeenCalledTimes(1);
+  });
+
+  it("rebuilds commit recall from the exact protected event when native history attaches", async () => {
+    const { vcs, refs } = await harness();
+    const eventId = "native-main";
+    const head = "a".repeat(40);
+    const canonical = { ...TEST_PROVIDER, objectKey: "canonical" };
+    const document = { eventId, revision: head, text: "Keep the published configuration", createdAt: "2026-08-14T00:00:00Z" };
+    vi.spyOn(refs, "readMainSemanticState").mockReturnValue({ kind: "event", eventId });
+    const recordHistoryCommitMemory = vi.fn();
+    await vcs.attachGad({ recordHistoryCommitMemory } as never);
+    const dispatch = vi.fn(async (_target: typeof TEST_PROVIDER, method: string, input?: unknown) => {
+      switch (method) {
+        case "readHistoryMain":
+          return input === undefined ? { head, eventId } : { head, eventId, commitMemory: document };
+        case "listHistoryAppliedPublications":
+          return [];
+        default:
+          throw new Error(`Unexpected native history call ${method}`);
+      }
+    });
+    await vcs.attachParticipantHistory({ canonical, dispatch: { dispatch } });
+    expect(dispatch).toHaveBeenCalledWith(canonical, "readHistoryMain", { commitMemoryEventId: eventId });
+    expect(recordHistoryCommitMemory).toHaveBeenCalledExactlyOnceWith(document);
+  });
+
+  it("reopens separate participant copies and reclaims directories after archival", async () => {
+    const { vcs, blobsDir, refs } = await harness();
+    vi.spyOn(refs, "readMainSemanticState").mockReturnValue({ kind: "event", eventId: "main-event" });
+    const canonical = { ...TEST_PROVIDER, objectKey: "canonical" };
+    const contextId = "ctx-shared";
+    const content = (await putBytes(blobsDir, Buffer.from("participant-only bytes"))).digest;
+    const state = { kind: "event", eventId: "private-event" };
+    const allocated = new Set<string>();
+    let refuseRetirement = true;
+    const dispatch = vi.fn(async (owner: typeof TEST_PROVIDER, method: string, raw?: unknown) => {
+      if (method === "readHistoryMain") return { head: "main", eventId: "main-event" };
+      if (method === "listHistoryAppliedPublications") return [];
+      if (method === "reserveHistoryParticipant") {
+        const { participantId } = raw as { participantId: string };
+        const objectKey = `work-${sha256HexSyncText(participantId)}`;
+        allocated.add(objectKey);
+        return {
+          targetId: `do:${owner.source}:${owner.className}:${objectKey}`,
+          head: "initial",
+          origin: { ref: "canonical", token: "grant" },
+        };
+      }
+      if (method === "retireHistoryContext") {
+        expect(owner).toEqual(canonical);
+        expect(raw).toEqual({ contextId });
+        if (refuseRetirement) throw new Error("Archive incomplete");
+        return { contextId, targets: [...allocated] };
+      }
+      if (method === "bindHistoryContext") {
+        const binding = raw as { contextId: string };
+        expect(binding.contextId).toBe(contextId);
+        const belongsToOwner = owner.objectKey === `work-${sha256HexSyncText(
+          workspaceParticipantIdentity(taskCaller(1), contextId)
+        )}`;
+        return belongsToOwner ? "private-working" : "main";
+      }
+      if (method === "readHistoryProjection") {
+        return {
+          head: "private-working",
+          state,
+          repositories: [{
+            repositoryId: "repository", repoPath: "meta", presence: "present", fileManifestId: "files",
+            source: { kind: "snapshot", files: [{ path: "note.txt", contentHash: content, mode: 420 }] },
+          }],
+        };
+      }
+      throw new Error(`Unexpected participant dispatch ${method}`);
+    });
+    const taskCaller = (taskId: number) => ({
+      runtime: { kind: "do", id: "agent" },
+      nativeInvocation: {
+        owner: { runtimeId: "agent", authoritySessionId: "sealed" },
+        task: { conversationId: 0, taskId },
+        operation: { kind: "tool", assistantEntryId: 0, callId: "bind" },
+      },
+    } as const);
+    const bind = (taskId: number) => vcs.bindParticipantFilesystem({
+      contextId,
+      caller: taskCaller(taskId),
+      isTracked: async () => true,
+    });
+    await expect(bind(1)).resolves.toBeNull();
+    await vcs.attachGad(providerFromWireCall(vi.fn(async (method) => {
+      expect(method).toBe("vcsDropContext");
+      return { dropped: true };
+    })));
+    const destroyRetiredStorage = vi.fn(async (_owner: typeof TEST_PROVIDER) => {});
+    await vcs.attachParticipantHistory({
+      dispatch: { dispatch }, canonical, destroyRetiredStorage,
+    });
+    const [first, second] = await Promise.all([bind(1), bind(2)]);
+    expect(first?.sourceRoot).toBeDefined();
+    expect(first?.sourceRoot).not.toBe(second?.sourceRoot);
+    const { vcs: restarted, refs: restartedRefs } = await harness();
+    vi.spyOn(restartedRefs, "readMainSemanticState").mockReturnValue({ kind: "event", eventId: "main-event" });
+    await restarted.attachParticipantHistory({ dispatch: { dispatch }, canonical });
+    await expect(restarted.openParticipantScope({
+      contextId, ownerContextId: contextId, caller: taskCaller(1),
+    })).resolves.toMatchObject({ workingHead: "private-working" });
+    await expect(restarted.openParticipantScope({
+      contextId, ownerContextId: contextId, caller: taskCaller(2),
+    })).resolves.toMatchObject({ workingHead: "main" });
+    await first!.bridge.ensureMaterialized(contextId, "all");
+    await expect(first!.bridge.isMaterialized(contextId, "meta")).resolves.toBe(true);
+    await expect(second!.bridge.isMaterialized(contextId, "meta")).resolves.toBe(false);
+    await expect(fsp.readFile(path.join(first!.sourceRoot, "meta/note.txt"), "utf8")).resolves.toBe("participant-only bytes");
+    await expect(vcs.dropContext(contextId)).rejects.toThrow("Archive incomplete");
+    expect(destroyRetiredStorage).not.toHaveBeenCalled();
+    await expect(fsp.stat(first!.sourceRoot)).resolves.toBeDefined();
+    await expect(bind(1)).rejects.toThrow("context has retired");
+    refuseRetirement = false;
+    await vcs.dropContext(contextId);
+    expect(destroyRetiredStorage.mock.calls.map(([owner]) => owner)).toEqual(
+      [...allocated].map((objectKey) => ({ ...canonical, objectKey }))
+    );
+    await expect(fsp.stat(first!.sourceRoot)).rejects.toHaveProperty("code", "ENOENT");
+  });
+
+  it("uses native context registration and retirement while legacy history stays frozen", async () => {
+    const { vcs, refs } = await harness();
+    const canonical = { ...TEST_PROVIDER, objectKey: "canonical" };
+    const contextId = "native-runtime-context";
+    const infrastructureContextId = "native-history-provider";
+    const contexts = new Set<string>();
+    vi.spyOn(refs, "readMainSemanticState").mockReturnValue({ kind: "event", eventId: "main-event" });
+    const legacy = vi.fn(async () => { throw new Error("Legacy workspace history is frozen"); });
+    await vcs.attachGad(providerFromWireCall(legacy));
+    const dispatch = vi.fn(async (owner: typeof canonical, method: string, value?: unknown) => {
+      expect(owner).toEqual(canonical);
+      switch (method) {
+        case "readHistoryMain": return { head: "main", eventId: "main-event" };
+        case "listHistoryAppliedPublications": return [];
+        case "ensureHistoryRuntimeContext":
+          expect(value).toEqual({ contextId });
+          contexts.add(contextId);
+          return;
+        case "listHistoryRuntimeContexts":
+          expect(value).toEqual({ prefix: "native-runtime" });
+          return [...contexts];
+        case "retireHistoryContext":
+          expect(value).toEqual({ contextId });
+          contexts.delete(contextId);
+          return { contextId, targets: [] };
+        default: throw new Error(`Unexpected participant dispatch ${method}`);
+      }
+    });
+    await vcs.attachParticipantHistory({ canonical, dispatch: { dispatch }, infrastructureContextId });
+    await vcs.ensureRuntimeContext(infrastructureContextId);
+    await vcs.ensureRuntimeContext(contextId);
+    await vcs.ensureRuntimeContext(contextId);
+    await expect(vcs.listSemanticContexts("native-runtime")).resolves.toEqual([contextId]);
+    await vcs.dropContext(contextId);
+    await expect(vcs.listSemanticContexts("native-runtime")).resolves.toEqual([]);
+    await expect(vcs.ensureRuntimeContext(contextId)).rejects.toThrow("context has retired");
+    expect(legacy).not.toHaveBeenCalled();
+  });
+
+  it("keeps participant projections separate, advances one, and repairs its binding on retry", async () => {
+    const { vcs, blobsDir, deps } = await harness();
+    const contextId = "context:shared";
+    const actorA = {
+      ...createVerifiedCaller("shell:alice", "shell"), taskAuthority: `task:${"a".repeat(64)}` as const,
+    };
+    const actorB = {
+      ...createVerifiedCaller("shell:bob", "shell"), taskAuthority: `task:${"b".repeat(64)}` as const,
+    };
+    const owners = [actorA, actorB].map((actor) => ({
+      ...TEST_PROVIDER,
+      objectKey: `work-${sha256HexSyncText(workspaceParticipantIdentity(actor, contextId))}`,
+    }));
+    const original = (await putBytes(blobsDir, Buffer.from("shared content"))).digest;
+    const privateEdit = (await putBytes(blobsDir, Buffer.from("private edit"))).digest;
+    let aliceEdited = false;
+    const projection = (edited: boolean) => ({
+        head: edited ? "edited" : "initial",
+        state: edited
+          ? { kind: "application", applicationId: "alice-edit" }
+          : { kind: "event", eventId: "genesis" },
+        repositories: [{
+          repositoryId: "repo",
+          repoPath: "packages/example",
+          presence: "present",
+          fileManifestId: edited ? "edited-manifest" : "initial-manifest",
+          source: { kind: "snapshot", files: [
+            { path: "note.txt", contentHash: edited ? privateEdit : original, mode: 0o644 },
+          ] },
+        }],
+    });
+    const receipts = new Set<string>();
+    const dispatch = vi.fn(async (owner: typeof TEST_PROVIDER, method: string, input: unknown) => {
+      const edited = aliceEdited && owner.objectKey === owners[0]!.objectKey;
+      if (method === "readHistoryReferenceVisibility") return edited;
+      if (method === "rememberHistoryContentSource" || method === "readHistoryContentSource") {
+        const { stateHash } = input as { stateHash: string };
+        const receipt = JSON.stringify([owner.objectKey, stateHash, edited]);
+        if (method === "rememberHistoryContentSource") {
+          receipts.add(receipt);
+          return;
+        }
+        if (!receipts.has(receipt)) return null;
+        const { state, repositories } = projection(edited);
+        return { state, repositories };
+      }
+      expect(method).toBe("readHistoryProjection");
+      expect(input).toEqual({ contextId });
+      return projection(edited);
+    });
+    const project = (owner: typeof TEST_PROVIDER) =>
+      vcs.materializeParticipantContext({ dispatch: { dispatch }, owner, contextId });
+    const [alice, bob] = await Promise.all(owners.map(project));
+    expect(alice!.folder).not.toBe(bob!.folder);
+    const read = (folder: string) => fsp.readFile(path.join(folder, "packages/example/note.txt"), "utf8");
+    await expect(read(alice!.folder)).resolves.toBe("shared content");
+    await expect(read(bob!.folder)).resolves.toBe("shared content");
+    aliceEdited = true;
+    expect((await project(owners[0]!)).head).toBe("edited");
+    await expect(read(alice!.folder)).resolves.toBe("private edit");
+    await expect(read(bob!.folder)).resolves.toBe("shared content");
+    const binding = path.join(alice!.folder, CONTEXT_BINDING_FILE);
+    await fsp.unlink(binding);
+    await project(owners[0]!);
+    expect(parseContextBinding(JSON.parse(await fsp.readFile(binding, "utf8")))).toMatchObject({
+      workspaceId: deps.workspaceId,
+      contextId,
+    });
+
+    const canonical = { ...TEST_PROVIDER, objectKey: "canonical" };
+    const attachment = {
+      canonical,
+      dispatch: { dispatch: vi.fn(async (_owner: typeof TEST_PROVIDER, method: string) => {
+        if (method === "readHistoryMain") return { head: "initial", eventId: "genesis" };
+        if (method === "readHistoryMainStateVisibility") return false;
+        if (method === "listHistoryAppliedPublications") return [];
+        throw new Error(`Unexpected canonical dispatch ${method}`);
+      }) },
+    };
+    vi.spyOn(deps.refs, "readMainSemanticState").mockReturnValue({ kind: "event", eventId: "genesis" });
+    await vcs.attachParticipantHistory(attachment);
+    const resolveScope: WorkspaceVcs["openParticipantScope"] = async (input) => ({
+      dispatch: { dispatch }, canonical, contextId, ownerContextId: input.ownerContextId,
+      caller: input.caller,
+      owner: input.caller === actorA ? owners[0]! : owners[1]!,
+      workingHead: input.caller === actorA && aliceEdited ? "edited" : "initial",
+    });
+    const scope = vi.spyOn(vcs, "openParticipantScope").mockImplementation(resolveScope);
+    const developmentSource = { contextId, repositoryId: "repo", requiredFiles: ["note.txt"] };
+    const [alicePlan, bobPlan] = await Promise.all([
+      vcs.planExactContextRepository(developmentSource, { caller: actorA, ownerContextId: contextId }),
+      vcs.planExactContextRepository(developmentSource, { caller: actorB, ownerContextId: contextId }),
+    ]);
+    expect(alicePlan.sourceState).toEqual({ kind: "application", applicationId: "alice-edit" });
+    expect(alicePlan.requiredFiles[0]?.contentHash).toBe(privateEdit);
+    expect(bobPlan.sourceState).toEqual({ kind: "event", eventId: "genesis" });
+    expect(bobPlan.requiredFiles[0]?.contentHash).toBe(original);
+    const priorProjectionReads = dispatch.mock.calls.length;
+    const plans = await vcs.planExactContextRepositories({
+      contextId,
+      repositories: [
+        { repositoryId: "repo", requiredFiles: ["note.txt"] },
+        { repositoryId: "repo", requiredFiles: [] },
+      ],
+    }, { caller: actorA, ownerContextId: contextId });
+    expect(dispatch.mock.calls.slice(priorProjectionReads)).toEqual([
+      [owners[0], "readHistoryProjection", { contextId }],
+    ]);
+    expect(plans.map(({ sourceState }) => sourceState)).toEqual([alicePlan.sourceState, alicePlan.sourceState]);
+    await expect(vcs.resolveAdoptedParticipantRepository(developmentSource, {
+      caller: actorA, ownerContextId: contextId,
+    })).resolves.toEqual({ repoPath: "packages/example", workingHead: alicePlan.sourceState });
+    const [a] = await vcs.contextRepoTargets(contextId, actorA);
+    const [b] = await vcs.contextRepoTargets(contextId, actorB);
+    expect(a!.stateHash).not.toBe(b!.stateHash);
+    expect(await blobstoreService.readFileAtTree(blobsDir, a!.stateHash, "note.txt")).toMatchObject({ contentHash: privateEdit });
+    expect(await blobstoreService.readFileAtTree(blobsDir, b!.stateHash, "note.txt")).toMatchObject({ contentHash: original });
+    const before = dispatch.mock.calls.length;
+    expect(await vcs.contextRepoTargets(contextId, actorA)).toEqual([a]);
+    expect(dispatch.mock.calls).toHaveLength(before);
+    const [privateSource, sharedSource] = await Promise.all([
+      vcs.resolveCallerContextState(contextId, actorA),
+      vcs.resolveCallerContextState(contextId, actorB),
+    ]);
+    expect(privateSource.semanticState).toEqual({ kind: "application", applicationId: "alice-edit" });
+    expect(sharedSource.semanticState).toEqual({ kind: "event", eventId: "genesis" });
+    await expect(vcs.readFile(privateSource.stateHash, "packages/example/note.txt")).resolves
+      .toMatchObject({ content: { kind: "text", text: "private edit" } });
+    await expect(vcs.readFile(sharedSource.stateHash, "packages/example/note.txt")).resolves
+      .toMatchObject({ content: { kind: "text", text: "shared content" } });
+    expect(scope).toHaveBeenCalledWith({ caller: actorA, contextId, ownerContextId: contextId });
+    await expect(vcs.contextRepoTargets(contextId)).rejects.toThrow("verified caller");
+    await expect(vcs.resolveParticipantBuildSource(privateSource.stateHash, actorA, contextId))
+      .resolves.toEqual(privateSource);
+    await expect(vcs.resolveParticipantBuildSource(privateSource.stateHash, actorB, contextId))
+      .rejects.toMatchObject({ code: "EACCES" });
+    const reopened = new WorkspaceVcs(deps);
+    await reopened.attachParticipantHistory(attachment);
+    vi.spyOn(reopened, "openParticipantScope").mockImplementation(resolveScope);
+    await expect(reopened.resolveParticipantBuildSource(privateSource.stateHash, actorA, contextId))
+      .resolves.toEqual(privateSource);
+    aliceEdited = false;
+    await expect(reopened.resolveParticipantBuildSource(privateSource.stateHash, actorA, contextId))
+      .rejects.toMatchObject({ code: "EACCES" });
+  });
+
   it("resolves current semantic content without a checkout and reuses only exact immutable heads", async () => {
     const { vcs, blobsDir, deps } = await harness();
     const firstBytes = Buffer.from("first configuration");
@@ -627,6 +980,91 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     await expect(read()).rejects.toThrow("missing");
   });
 
+  it("verifies participant file coordinates and content against the exact read request", async () => {
+    const { blobsDir, vcs } = await harness();
+    const nativeInvocation = {
+      owner: { runtimeId: "agent", authoritySessionId: "sealed" },
+      task: { conversationId: 3, taskId: 1 },
+      operation: { kind: "tool" as const, assistantEntryId: 0, callId: "call" },
+    };
+    const caller = { runtime: { kind: "do" as const, id: "agent" }, nativeInvocation };
+    const participant = canonicalJson(["task", nativeInvocation.owner, nativeInvocation.task]);
+    const owner = { ...TEST_PROVIDER, objectKey: `work-${sha256HexSyncText(participant)}` };
+    const contextId = "context:test";
+    const state = { kind: "application" as const, applicationId: "app:test" };
+    const repositoryId = "repo";
+    const read = { state, files: [
+      { repositoryId, file: { kind: "path" as const, path: "value" } },
+      { repositoryId, file: { kind: "id" as const, fileId: "absent" } },
+    ] };
+    const text = "one";
+    const stored = await putBytes(blobsDir, Buffer.from(text));
+    const file = {
+      kind: "read-semantic-blob",
+      state,
+      repositoryId,
+      fileId: "file:test",
+      repoPath: "meta",
+      path: "value",
+      contentHash: stored.digest,
+      contentKind: "text",
+      byteLength: 3,
+      coordinateExtent: 3,
+      externalKeys: [],
+      authoredChangeId: "change:test",
+      authoredByWorkUnitId: "work:test",
+      contentClass: "internal",
+      mode: 0o644,
+    };
+    const dispatch = vi.fn().mockResolvedValue([file, null]);
+    const perform = () => vcs.readParticipantFiles({
+      dispatch: { dispatch }, canonical: TEST_PROVIDER, owner, caller, contextId, read,
+    });
+    await expect(perform()).resolves.toMatchObject([
+      { fileId: file.fileId, content: { kind: "text", text } }, null,
+    ]);
+    expect(dispatch).toHaveBeenLastCalledWith(owner, "readHistoryFiles", { contextId, read });
+    dispatch.mockResolvedValueOnce([{ ...file, path: "different" }, null]);
+    await expect(perform()).rejects.toThrow("different file selection");
+    await fsp.chmod(blobPath(blobsDir, stored.digest), 0o644);
+    await fsp.writeFile(blobPath(blobsDir, stored.digest), "two");
+    await expect(perform()).rejects.toThrow("does not match its digest");
+  });
+
+  it("repairs a participant's current projection when retrying a completed discard", async () => {
+    const { vcs } = await harness();
+    const nativeInvocation = {
+      owner: { runtimeId: "agent", authoritySessionId: "sealed" },
+      task: { conversationId: 3, taskId: 1 },
+      operation: { kind: "tool" as const, assistantEntryId: 0, callId: "discard" },
+    };
+    const caller = { runtime: { kind: "do" as const, id: "agent" }, nativeInvocation };
+    const participant = canonicalJson(["task", nativeInvocation.owner, nativeInvocation.task]);
+    const owner = { ...TEST_PROVIDER, objectKey: `work-${sha256HexSyncText(participant)}` };
+    const contextId = "context:test";
+    const discard = {
+      contextId, commandId: "discard",
+      expectedWorkingHead: { kind: "application" as const, applicationId: "original-work" },
+    };
+    const saved = {
+      contextId, workingHead: { kind: "event", eventId: "saved" },
+      discardedApplicationIds: ["original-work"],
+    };
+    const dispatch = vi.fn().mockResolvedValue({ head: "saved-head", discard: saved });
+    const projection = vi.spyOn(vcs, "materializeParticipantContext").mockResolvedValue({
+      head: "later-head", state: { kind: "application", applicationId: "later-edit" }, folder: "projection",
+    });
+    const cause = { parent: null };
+    await expect(vcs.discardParticipantContext({
+      dispatch: { dispatch }, canonical: TEST_PROVIDER, owner, caller,
+      discard, head: "original-head", cause,
+    })).resolves.toEqual(saved);
+    expect(dispatch).toHaveBeenCalledWith(owner, "discardHistoryContext", {
+      discard, head: "original-head", cause,
+    });
+    expect(projection).toHaveBeenCalledWith({ dispatch: { dispatch }, owner, contextId });
+  });
+
   it.each([
     {
       authoredChangeId: "change:test",
@@ -922,6 +1360,47 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     );
   });
 
+  it("keeps private participant content across the destructive GC boundary", async () => {
+    const { blobsDir, vcs, refs } = await harness();
+    vi.spyOn(refs, "readMainSemanticState").mockReturnValue({ kind: "event", eventId: "main-event" });
+    const before = await putBytes(blobsDir, Buffer.from("private before preparation"));
+    const archived = await putBytes(blobsDir, Buffer.from("saved during retirement"));
+    const recent = await putBytes(blobsDir, Buffer.from("private after preparation"));
+    const discarded = await putBytes(blobsDir, Buffer.from("unreferenced"));
+    await vcs.attachGad({
+      contentGcRoots: vi.fn(async () => ({ contentRoots: [], contentHashes: [] })),
+    } as never);
+    const canonical = { ...TEST_PROVIDER, objectKey: "canonical" };
+    const retiring = `work-${"a".repeat(64)}`;
+    const active = `work-${"b".repeat(64)}`;
+    let publicationPhase = false;
+    let retired = false;
+    const dispatch = vi.fn(async (owner: typeof TEST_PROVIDER, method: string) => {
+      if (method === "readHistoryMain") return { head: "main-head", eventId: "main-event" };
+      if (method === "listHistoryAppliedPublications") return [];
+      if (method === "listHistoryRetainedParticipants") return retired ? [active] : [retiring, active];
+      if (method !== "readHistoryContentRoots") throw new Error(`Unexpected history call ${method}`);
+      if (owner.objectKey === canonical.objectKey) return retired ? [archived.digest] : [];
+      if (owner.objectKey === retiring) {
+        if (publicationPhase) {
+          retired = true;
+          throw new Error("Participant retired while collecting its roots");
+        }
+        return [before.digest];
+      }
+      if (owner.objectKey === active) return publicationPhase ? [recent.digest] : [];
+      throw new Error("Unexpected participant");
+    });
+    await vcs.attachParticipantHistory({ dispatch: { dispatch }, canonical });
+    const epoch = await vcs.prepareGc({ minAgeMs: 0, epoch: 1, executionSourceRoots: [] });
+    publicationPhase = true;
+    await expect(epoch.commit()).resolves.toMatchObject({ swept: 1 });
+    for (const item of [before, archived, recent]) {
+      await expect(getBytes(blobsDir, item.digest)).resolves.toBeInstanceOf(Buffer);
+    }
+    await expect(getBytes(blobsDir, discarded.digest)).resolves.toBeNull();
+  });
+
   it("proves shared semantic, execution, and cached roots in one graph before GC", async () => {
     const { blobsDir, vcs } = await harness();
     const sharedContent = await putBytes(blobsDir, Buffer.from("shared subtree content"));
@@ -1212,366 +1691,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     );
   });
 
-  it("imports source facts without duplicating host-observed content descriptors", async () => {
-    const { root, vcs } = await harness();
-    const workspaceRoot = path.join(root, "source");
-    const unicodeText = "é🙂\n";
-    const invalidUtf8 = Buffer.from([0x66, 0x80, 0x6f]);
-    await Promise.all([
-      fsp.mkdir(path.join(workspaceRoot, "meta"), { recursive: true }),
-      fsp.mkdir(path.join(workspaceRoot, "projects", "coordinates"), { recursive: true }),
-    ]);
-    await Promise.all([
-      fsp.writeFile(path.join(workspaceRoot, "meta", "vibestudio.yml"), "systemEpoch: 59\n"),
-      fsp.writeFile(
-        path.join(workspaceRoot, "projects", "coordinates", "unicode.txt"),
-        unicodeText
-      ),
-      fsp.writeFile(
-        path.join(workspaceRoot, "projects", "coordinates", "invalid.bin"),
-        invalidUtf8
-      ),
-    ]);
-
-    type ImportedSnapshot = {
-      repositories: Array<{
-        repoPath: string;
-        files: Array<{
-          path: string;
-          contentHash: string;
-          mode: number;
-        }>;
-      }>;
-    };
-    const importedSnapshots: ImportedSnapshot[] = [];
-    const call = vi.fn(async (method: string, input: unknown) => {
-      if (method === "vcsContextMaterializationCommand") {
-        return emptyRepairCommand(input as never, {
-          kind: "event",
-          eventId: "event:genesis",
-        });
-      }
-      if (method === "vcsEnsureContext") {
-        return {
-          kind: "complete",
-          result: semanticContextResult({ kind: "event", eventId: "event:genesis" }),
-        };
-      }
-      const dispatch = { method, request: input as { input: unknown } };
-      if (dispatch.method === "vcsInspect") {
-        const requestedEventId = (
-          dispatch.request.input as { node?: { eventId?: string } } | undefined
-        )?.node?.eventId;
-        const imported = requestedEventId === "event:import" && importedSnapshots.length > 0;
-        const eventId = imported ? "event:import" : "event:genesis";
-        return {
-          kind: "complete",
-          result: {
-            root: { kind: "event", eventId: "event:genesis" },
-            node: {
-              kind: "event",
-              value: imported
-                ? {
-                    eventId,
-                    workspaceId: "workspace:test",
-                    commandId: "command:initial-import",
-                    kind: "commit",
-                    workspaceFactRootId: "workspace-fact-root:initial",
-                    snapshotSource: null,
-                    parentEventIds: ["event:genesis"],
-                    applicationIds: ["application:initial-import"],
-                    decisionIds: [],
-                    message: "Import initial workspace snapshot",
-                    semanticProtocol: "semantic-vcs:test",
-                    createdAt: "2026-07-16T12:00:00.000Z",
-                  }
-                : {
-                    eventId,
-                    workspaceId: "workspace:test",
-                    commandId: "command:genesis",
-                    kind: "genesis",
-                    workspaceFactRootId: "workspace-fact-root:genesis",
-                    snapshotSource: null,
-                    parentEventIds: [],
-                    applicationIds: [],
-                    decisionIds: [],
-                    message: null,
-                    semanticProtocol: "semantic-vcs:test",
-                    createdAt: "2026-07-16T12:00:00.000Z",
-                  },
-            },
-            edges: [],
-            hasMoreEdges: false,
-          },
-        };
-      }
-      if (dispatch.method === "vcsImportSnapshot") {
-        const input = dispatch.request.input as ImportedSnapshot;
-        importedSnapshots.push(input);
-        return {
-          kind: "complete",
-          result: {
-            contextId: "context:workspace-initialization",
-            eventId: "event:import",
-            workUnitId: "work-unit:initial-import",
-            applicationId: "application:initial-import",
-            externalSnapshot: {
-              sourceKind: "filesystem",
-              sourceUri: "vibestudio://workspace/source",
-              snapshotRevision: "source-revision",
-              snapshotDigest: `snapshot:${"a".repeat(64)}`,
-              targetRepositoryIds: ["repository:coordinates"],
-            },
-            importedRepositoryIds: ["repository:coordinates"],
-          },
-        };
-      }
-      if (dispatch.method === "vcsPush") {
-        return {
-          kind: "complete",
-          result: pushResult(
-            "context:workspace-initialization",
-            "event:import",
-            "effect:initial-push"
-          ),
-        };
-      }
-      throw new Error(`unexpected ${dispatch.method}`);
-    });
-    await vcs.attachGad(providerFromWireCall(call));
-
-    await vcs.startSemanticInitialization(async () => {
-      await expect(vcs.activateWorkspaceFromSource()).resolves.toMatchObject({ initialized: true });
-    });
-
-    expect(importedSnapshots).toHaveLength(1);
-    const coordinateRepository = importedSnapshots[0]?.repositories.find(
-      (repository) => repository.repoPath === "projects/coordinates"
-    );
-    expect(coordinateRepository?.files.map(({ path }) => path)).toEqual([
-      "invalid.bin",
-      "unicode.txt",
-    ]);
-    for (const file of coordinateRepository?.files ?? []) {
-      expect(file).toEqual({
-        path: file.path,
-        contentHash: expect.any(String),
-        mode: 0o644,
-      });
-    }
-  });
-
-  it("imports one exact external root as per-repo Git snapshots and publishes once", async () => {
-    const { root, deps } = await harness();
-    const workspaceRoot = path.join(root, "source");
-    await fsp.mkdir(path.join(workspaceRoot, "meta"), { recursive: true });
-    await fsp.writeFile(path.join(workspaceRoot, "meta", "vibestudio.yml"), "systemEpoch: 59\n");
-    const encoder = new TextEncoder();
-    const subtreeDigest = `v1-sha256:${"b".repeat(64)}` as const;
-    const pin = {
-      url: "https://example.test/news.git",
-      ref: "refs/tags/v1",
-      commit: "1".repeat(40),
-    };
-    const templateBytes = encoder.encode("export const news = true;\n");
-    const templateHash = sha256Hex(templateBytes);
-    const prepared = {
-      installation: { sources: [] },
-      pin,
-      config: {
-        id: "workspace:test",
-        systemEpoch: 59,
-      },
-      repositories: [
-        {
-          repoPath: "panels/news",
-          subdir: "panels/news",
-          snapshot: subtreeDigest,
-          contentRoot: buildWorktreeManifest([
-            { path: "index.ts", contentHash: templateHash, mode: 0o100644 },
-          ]).stateHash as `state:${string}`,
-          files: [
-            {
-              path: "index.ts",
-              contentHash: templateHash,
-              size: templateBytes.byteLength,
-              contentKind: "text" as const,
-              byteLength: templateBytes.byteLength,
-              coordinateExtent: new TextDecoder().decode(templateBytes).length,
-              mode: 0o644 as const,
-            },
-          ],
-        },
-      ],
-    };
-    const rootTemplateBootstrap = {
-      preparedBuildForContent: () => null,
-      prepareSource: vi.fn(async () => pin),
-      prepareInitialization: vi.fn(async () => prepared),
-    };
-    const templateVcs = new WorkspaceVcs({ ...deps, rootTemplateBootstrap });
-    vi.spyOn(deps.refs, "readMainSemanticState").mockReturnValue({
-      kind: "event",
-      eventId: "event:template",
-    });
-    vi.spyOn(templateVcs, "ensureContext").mockImplementation(async () => ({
-      kind: "event",
-      eventId: "event:genesis",
-    }));
-    vi.spyOn(templateVcs, "ensureFresh").mockResolvedValue({ stateHash: EMPTY_STATE_HASH });
-    await templateVcs.attachGad(
-      providerFromWireCall(async (method) => {
-        if (method !== "vcsInspect") throw new Error(`unexpected ${method}`);
-        return {
-          kind: "complete",
-          result: {
-            node: {
-              kind: "event",
-              value: { kind: "genesis", eventId: "event:genesis" },
-            },
-          },
-        };
-      })
-    );
-    const initializeExactSnapshot = vi.fn(async () => ({
-      state: "ready" as const,
-      commandId: `workspace-source:${pin.commit}`,
-      receipt: {
-        commandId: `workspace-source:${pin.commit}`,
-        pin,
-        initializedEventId: "event:template",
-        initializedStateHash: EMPTY_STATE_HASH,
-      },
-    }));
-    templateVcs.attachWorkspaceSourceProvider({
-      readTemplateInstallation: async () => null,
-      initializeExactSnapshot,
-      resolveSource: vi.fn(),
-      currentSource: vi.fn(),
-      inspectInitialization: vi.fn(async () => ({ state: "empty" as const })),
-      health: vi.fn(),
-    } as never);
-
-    await expect(templateVcs.activateWorkspaceFromSource()).resolves.toMatchObject({
-      initialized: true,
-    });
-
-    expect(initializeExactSnapshot).toHaveBeenCalledWith({
-      installation: prepared.installation,
-      commandId: `workspace-source:${pin.commit}`,
-      pin,
-      repositories: [
-        expect.objectContaining({
-          repoPath: "panels/news",
-          subdir: "panels/news",
-          snapshot: subtreeDigest,
-        }),
-      ],
-    });
-  });
-
-  it.each(["inspection", "initialization"] as const)(
-    "retains the persisted initialization failure graph from %s",
-    async (boundary) => {
-      const { deps } = await harness();
-      const pin = {
-        url: "https://example.test/root.git",
-        ref: "refs/tags/v1",
-        commit: "1".repeat(40),
-      };
-      const child = Object.assign(new Error("Publication denied"), {
-        code: "EACCES",
-        errorData: { repository: "meta" },
-      });
-      const failure = serializeRpcFailure(
-        new AggregateError(
-          [child, new Error("Rollback failed", { cause: child })],
-          "Initialization failed",
-          { cause: child }
-        )
-      );
-      const failed = { state: "failed" as const, commandId: "workspace-source:root", failure };
-      const vcs = new WorkspaceVcs({
-        ...deps,
-        rootTemplateBootstrap: {
-          preparedBuildForContent: () => null,
-          prepareSource: vi.fn(async () => pin),
-          prepareInitialization: vi.fn(async () => ({
-            installation: { sources: [] },
-            pin,
-            repositories: [],
-          })),
-        },
-      });
-      vcs.attachWorkspaceSourceProvider({
-        readTemplateInstallation: async () => null,
-        initializeExactSnapshot: vi.fn(async () => failed),
-        resolveSource: vi.fn(),
-        currentSource: vi.fn(),
-        health: vi.fn(),
-        inspectInitialization: vi.fn(async () =>
-          boundary === "inspection" ? failed : { state: "empty" as const }
-        ),
-      });
-      const error = await vcs.activateWorkspaceFromSource().catch((error: unknown) => error);
-      expect(error).toBeInstanceOf(RemoteRpcAggregateError);
-      const graph = error as RemoteRpcAggregateError;
-      expect(graph.errors[0]).toMatchObject({ code: "EACCES", errorData: { repository: "meta" } });
-      expect(graph.cause).toBe(graph.errors[0]);
-      expect((graph.errors[1] as Error).cause).toBe(graph.errors[0]);
-    }
-  );
-
-  it("does not replay root initialization after semantic main has advanced", async () => {
-    const { deps } = await harness();
-    const pin = {
-      url: "https://example.test/root.git",
-      ref: "refs/tags/v1",
-      commit: "1".repeat(40),
-    };
-    const prepared = {
-      installation: { sources: [] },
-      pin,
-      repositories: [],
-    };
-    const prepareInitialization = vi.fn(async () => prepared);
-    const vcs = new WorkspaceVcs({
-      ...deps,
-      rootTemplateBootstrap: {
-        preparedBuildForContent: () => null,
-        prepareSource: vi.fn(async () => pin),
-        prepareInitialization,
-      },
-    });
-    const initializeExactSnapshot = vi.fn();
-    vcs.attachWorkspaceSourceProvider({
-      readTemplateInstallation: async () => null,
-      initializeExactSnapshot,
-      resolveSource: vi.fn(),
-      currentSource: vi.fn(),
-      inspectInitialization: vi.fn(async () => ({
-        state: "ready" as const,
-        commandId: "workspace-source:root",
-        receipt: {
-          commandId: "workspace-source:root",
-          pin,
-          initializedEventId: "event:root",
-          initializedStateHash: `state:${"3".repeat(64)}`,
-        },
-      })),
-      health: vi.fn(),
-    });
-    vi.spyOn(vcs, "ensureFresh").mockResolvedValue({ stateHash: `state:${"4".repeat(64)}` });
-
-    await expect(vcs.activateWorkspaceFromSource()).resolves.toMatchObject({
-      stateHash: `state:${"4".repeat(64)}`,
-      initialized: false,
-    });
-    expect(initializeExactSnapshot).not.toHaveBeenCalled();
-    expect(prepareInitialization).not.toHaveBeenCalled();
-  });
-
-  it("recovers an interrupted initial publication and recognizes the initialized workspace", async () => {
+  it("recovers an interrupted initial publication", async () => {
     const { vcs, refs } = await harness();
     const contextId = "workspace-initialization:workspace:test";
     const genesisEventId = "event:genesis";
@@ -1675,7 +1795,6 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     await vcs.attachGad(providerFromWireCall(call));
 
     await expect(vcs.recoverPendingSemanticEffects()).resolves.toBe(1);
-    await expect(vcs.activateWorkspaceFromSource()).resolves.toMatchObject({ initialized: false });
     expect(refs.updateMains).not.toHaveBeenCalled();
     expect(pending).toBe(false);
   });
@@ -1924,111 +2043,6 @@ describe("WorkspaceVcs semantic host orchestration", () => {
         },
       })
     ).resolves.toMatchObject({ contextId: "context:aborted-publication" });
-  });
-
-  it("refuses to reconstruct an initial publication without its source plan", async () => {
-    const { refs, vcs } = await harness();
-    const imported = { kind: "event", eventId: "event:initial-import" } as const;
-    vi.spyOn(refs, "listMains").mockReturnValue([]);
-    const updateMains = vi.spyOn(refs, "updateMains");
-    const inspect = vi.fn(async (method: string, input: unknown) => {
-      if (method === "vcsInspect") {
-        const node = (input as { node: { eventId?: string } }).node;
-        if (node.eventId === "event:genesis") {
-          return {
-            root: { kind: "event", eventId: "event:genesis" },
-            node: {
-              kind: "event",
-              value: {
-                eventId: "event:genesis",
-                workspaceId: "workspace:test",
-                commandId: "command:genesis",
-                workspaceFactRootId: "workspace-fact-root:genesis",
-                snapshotSource: null,
-                decisionIds: [],
-                message: null,
-                semanticProtocol: "semantic-vcs:test",
-                createdAt: "2026-07-16T12:00:00.000Z",
-                kind: "genesis",
-                parentEventIds: [],
-                applicationIds: [],
-              },
-            },
-            edges: [],
-            hasMoreEdges: false,
-          };
-        }
-        return {
-          root: imported,
-          node: {
-            kind: "event",
-            value: {
-              eventId: imported.eventId,
-              workspaceId: "workspace:test",
-              commandId: "command:initial-import",
-              kind: "commit",
-              workspaceFactRootId: "workspace-fact-root:initial",
-              snapshotSource: null,
-              parentEventIds: ["event:genesis"],
-              applicationIds: ["application:initial-import"],
-              decisionIds: [],
-              message: "Import initial workspace snapshot",
-              semanticProtocol: "semantic-vcs:test",
-              createdAt: "2026-07-16T12:00:00.000Z",
-            },
-          },
-          edges: [],
-          hasMoreEdges: false,
-        };
-      }
-      throw new Error(`unexpected ${method}`);
-    });
-    const call = vi.fn(async (method: string, input: unknown) => {
-      if (method === "vcsEnsureContext")
-        return { kind: "complete", result: semanticContextResult(imported) };
-      if (method === "vcsContextMaterializationCommand")
-        return emptyRepairCommand(input as never, imported);
-      if (method === "vcsInspect")
-        return {
-          kind: "complete",
-          result: await inspect(method, (input as { input: unknown }).input),
-        };
-      if (method === "vcsPush") {
-        return {
-          kind: "effects-pending",
-          result: { eventId: imported.eventId },
-          effects: [
-            {
-              effectId: "effect:initial-publication-retry",
-              scopeKind: "workspace",
-              scopeId: "workspace:test",
-              commandId: `initial-push:${imported.eventId}`,
-              kind: "publish-main",
-              payload: {
-                previousEventId: "event:genesis",
-                publishedEventId: imported.eventId,
-                repositories: [],
-              },
-              payloadDigest: "effect-digest:initial-publication-retry",
-              status: "pending",
-              receipt: null,
-              createdAt: "2026-07-16T12:00:00.000Z",
-            },
-          ],
-        };
-      }
-      if (method === "vcsSemanticEffectAck") {
-        return { kind: "complete", result: { eventId: imported.eventId } };
-      }
-      throw new Error(`unexpected ${method}`);
-    });
-    await vcs.attachGad(providerFromWireCall(call));
-
-    await expect(vcs.activateWorkspaceFromSource()).rejects.toThrow(
-      "workspace source is missing meta/vibestudio.yml"
-    );
-    expect(inspect).toHaveBeenCalledTimes(4);
-    expect(updateMains).not.toHaveBeenCalled();
   });
 
   it("coalesces concurrent initialization of the same large context", async () => {
