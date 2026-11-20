@@ -637,6 +637,15 @@ const grimoireHandoffWorkflow = {
   validator: { template: "system-testing", path: "skills/system-testing/grimoire-handoff-managed.ts" },
   evidence: grimoireHandoffEvidence,
 };
+const adventureReviewWorkflow = {
+  family: "examples-live-adventure-opening",
+  workspace: "examples",
+  namespace: "vibestudio:examples",
+  group: "adventure-opening-readback",
+  validator: { template: "examples", path: "skills/examples-review-fixtures/live-adventure.ts" },
+  root: "reviewExample",
+  evidence: adventureReviewEvidence,
+};
 const tendrilWorkflow = {
   family: "workspace-tendril-presentation",
   namespace: "vibestudio:tendrils",
@@ -827,6 +836,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedUnitDesignWorlds },
     { managedTerminalEvidenceWorlds },
     { managedGitHubDiagnosisWorlds },
+    { managedAdventureWorlds },
   ] = await Promise.all(
     [
       "content-project-worlds.ts",
@@ -908,6 +918,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "unit-design-worlds.ts",
       "terminal-evidence-worlds.ts",
       "github-diagnosis-worlds.ts",
+      "adventure-review-worlds.ts",
     ].map(async (file) => {
       const imported = await import(pathToFileURL(path.join(directory, file)).href);
       return imported.default ?? imported;
@@ -1418,6 +1429,9 @@ export async function loadLiveTeacherCases(checkouts) {
       expectedDecisions: expected,
       expectedActions: actions.map((action) => action.toLowerCase()),
     });
+  }
+  for (const assignment of managedAdventureWorlds) {
+    cases.set(`adventure-review-live-${assignment.id}`, { ...adventureReviewWorkflow, assignment });
   }
   for (const { id, request, expected } of managedBrowserLibraryWorlds) {
     cases.set(`browser-library-live-${id}`, {
@@ -8234,6 +8248,77 @@ function spectroliteHandoffEvidence(execution, exercise, scenario, workflow) {
   return {
     world: review.world,
     checks: { ...review.checks, ...verification.checks },
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function adventureReviewEvidence(execution, exercise, _scenario, { assignment }) {
+  const fixture = execution.diagnostics.managedAdventureReview;
+  const { journey, campaign, observed, panel, expected, checks, passed } = fixture?.verification ?? {};
+  const { before, current, artwork } = observed ?? {};
+  const report = exercise.report;
+  requireEvidence(
+    fixture?.contextId === execution.provenance?.contextId &&
+      typeof fixture?.contextId === "string" &&
+      passed === true &&
+      ["ownedOpening", "artwork", "persisted", "assignedClaims", "exactReport"].every((key) => checks?.[key] === true) &&
+      /^natlang-adventure-[0-9a-f-]{36}$/u.test(journey) &&
+      campaign === assignment.campaign &&
+      before?.id === `${journey}:before` &&
+      before.place === assignment.place &&
+      before.tick === 0 &&
+      isDeepStrictEqual(current, { ...before, id: `${journey}:current` }) &&
+      /^[0-9a-f]{64}$/u.test(current.signature) &&
+      (assignment.painted
+        ? typeof artwork?.id === "string" && artwork.id.length > 0 &&
+          artwork.place === current.place && artwork.signature === current.signature &&
+          isDeepStrictEqual(panel, { location: current.place, asset: artwork.id, tick: current.tick, importDenied: false })
+        : artwork === null &&
+          isDeepStrictEqual(panel, { location: current.place, asset: "", tick: current.tick, importDenied: true })) &&
+      isDeepStrictEqual(report, expected) &&
+      isDeepStrictEqual(report?.components?.map(({ decision }) => decision), assignment.expected),
+    "Adventure review must match the owned saved opening and its independently checked artwork"
+  );
+  const root = exercise.calls.find(({ callId }) => callId === exercise.rootCallIds[0]);
+  const children = (parent, name) => exercise.calls.filter(({ record }) =>
+    parent && record.parent_call_id === parent.callId &&
+    record.definition?.name === name && record.outcome === "done"
+  );
+  const [review] = children(root, "reviewExample");
+  const [inspect] = children(review, "inspectLiveAdventure");
+  const [read] = children(inspect, "readJourney");
+  const [combined] = children(inspect, "combineFindings");
+  const claims = children(inspect, "qualifyClaim");
+  const effects = exercise.calls.flatMap(({ record }) => record.effects ?? []);
+  const [observation] = effects;
+  const leafFor = {
+    access: "inspectAccess",
+    continuity: "compareJourney",
+    artwork: "compareIllustration",
+  };
+  requireEvidence(
+    matchesValue(review?.record.inputs?.request, assignment.request) &&
+      matchesValue(review?.record.output, report) &&
+      matchesValue(combined?.record.output, report) &&
+      effects.length === 1 &&
+      read?.record.effects?.includes(observation) &&
+      observation?.service === "adventureRead" && observation.method === "observe" &&
+      !observation.error && matchesValue(observation.result, observed) &&
+      claims.length === assignment.request.claims.length &&
+      assignment.request.claims.every((claim, index) => claims.some((branch) => {
+        const [subtree] = children(branch, "reviewAdventure");
+        const [leaf] = children(subtree, leafFor[claim.kind]);
+        const verdict = report.components[index];
+        return matchesValue(branch.record.inputs?.claim, claim) &&
+          matchesValue(branch.record.inputs?.observed, observed) &&
+          matchesValue(branch.record.output, verdict) &&
+          matchesValue(leaf?.record.output, verdict);
+      })),
+    "Adventure review must retain the actual service read and the nested reviewer for each assigned claim"
+  );
+  return {
+    world: { context_id: fixture.contextId, case_id: assignment.id, journey },
+    checks,
     evidence: { workspace: { fixture } },
   };
 }

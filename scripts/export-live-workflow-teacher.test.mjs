@@ -113,6 +113,7 @@ test("authored template worlds flow into the collector without losing original s
       ["retained-triage-worlds", "retainedTriageWorlds", []],
       ["github-setup-worlds", "githubSetupWorlds", []],
       ["github-diagnosis-worlds", "managedGitHubDiagnosisWorlds", []],
+      ["adventure-review-worlds", "managedAdventureWorlds", []],
       ["personal-resume-worlds", "personalResumeWorlds", []],
       ["template-release-worlds", "templateReleaseWorlds", []],
       ["template-candidate-worlds", "templateCandidateManagedWorlds", []],
@@ -3202,6 +3203,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["retained-triage-worlds", "export const retainedTriageWorlds = [];"],
       ["github-setup-worlds", "export const githubSetupWorlds = [];"],
       ["github-diagnosis-worlds", "export const managedGitHubDiagnosisWorlds = [];"],
+      ["adventure-review-worlds", "export const managedAdventureWorlds = [];"],
       ["template-release-worlds", "export const templateReleaseWorlds = [];"],
       ["template-candidate-worlds", "export const templateCandidateManagedWorlds = [];"],
       ["delivery-history-worlds", "export const deliveryHistoryWorlds = []; export const chatDeliveryWorlds = [];"],
@@ -4686,6 +4688,75 @@ test("client admission export preserves unavailable required capabilities", (t) 
 test("client admission export preserves denied optional capabilities", (t) =>
   checkClientCapabilityCase(t, "android-candidate-requests-optional-menu", "review-candidate")
 );
+
+test("Adventure export joins the loaded cover to the saved journey and requires each nested reviewer", async () => {
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const name = "adventure-review-live-postal-painted-opening";
+  const workflow = (await loadLiveTeacherCases(checkouts)).get(name);
+  const { assignment } = workflow;
+  const ref = (value) => {
+    const json = JSON.stringify(value);
+    return { complete: true, hash: createHash("sha256").update(json).digest("hex"), bytes: Buffer.byteLength(json) };
+  };
+  const contextId = "owned-adventure";
+  const journey = "natlang-adventure-11d71f32-0bb0-4c84-a05d-53d895943c34";
+  const before = { id: journey + ":before", place: assignment.place, tick: 0, signature: "a".repeat(64) };
+  const current = { ...before, id: journey + ":current" };
+  const artwork = { id: "cover-image", place: current.place, signature: current.signature };
+  const panel = { location: current.place, asset: artwork.id, tick: current.tick, importDenied: false };
+  const observed = { before, current, artwork };
+  const components = assignment.expected.map((decision, index) => ({
+    decision,
+    finding: "finding-" + index,
+    evidenceIds: [current.id],
+  }));
+  const report = { decision: "contradicted", finding: "criteria-contradicted", evidenceIds: [current.id], components };
+  const verification = {
+    passed: true,
+    campaign: assignment.campaign,
+    journey,
+    observed,
+    panel,
+    expected: report,
+    checks: Object.fromEntries(["ownedOpening", "artwork", "persisted", "assignedClaims", "exactReport"].map((key) => [key, true])),
+  };
+  const execution = {
+    provenance: { contextId },
+    diagnostics: { managedAdventureReview: { contextId, verification } },
+  };
+  const call = (callId, parent, name, fields = {}) => ({
+    callId,
+    record: { parent_call_id: parent, outcome: "done", definition: { name }, ...fields },
+  });
+  const leaves = { access: "inspectAccess", continuity: "compareJourney", artwork: "compareIllustration" };
+  const exercise = {
+    report,
+    rootCallIds: ["root"],
+    calls: [
+      call("root", null, "runWorkflow"),
+      call("review", "root", "reviewExample", { inputs: { request: ref(assignment.request) }, output: ref(report) }),
+      call("live", "review", "inspectLiveAdventure"),
+      call("read", "live", "readJourney", { effects: [{ service: "adventureRead", method: "observe", result: ref(observed) }] }),
+      call("combine", "live", "combineFindings", { output: ref(report) }),
+      ...assignment.request.claims.flatMap((claim, index) => [
+        call("claim-" + index, "live", "qualifyClaim", {
+          inputs: { claim: ref(claim), observed: ref(observed) },
+          output: ref(components[index]),
+        }),
+        call("review-" + index, "claim-" + index, "reviewAdventure"),
+        call("leaf-" + index, "review-" + index, leaves[claim.kind], { output: ref(components[index]) }),
+      ]),
+    ],
+  };
+  assert.ok(workflow.evidence(execution, exercise, name, workflow));
+  panel.asset = "other-cover";
+  assert.throws(() => workflow.evidence(execution, exercise, name, workflow), /independently checked artwork/);
+  panel.asset = artwork.id;
+  exercise.calls.pop();
+  assert.throws(() => workflow.evidence(execution, exercise, name, workflow), /nested reviewer/);
+});
 
 test("Grimoire handoff binds each claim and the staged evidence to the owned readback", async () => {
   const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(

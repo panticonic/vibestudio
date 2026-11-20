@@ -427,6 +427,12 @@ Examples workspace. The staged artifact cites the verified answer to each
 question, keeping contradicted claims distinct from missing observations.
 Run `grimoire-managed-handoff-qualification` to check the live garden, the
 read and write gates, and the saved artifact without a model.
+Adventure opening reviews call the access, continuity and illustration
+reviewers on the installed worker's saved journey. The postal case joins the
+panel's loaded image to the stored asset and canonical scene signature. The
+Embassy case checks an opening where image import is denied and no artwork is
+saved. Run
+`adventure-review-oracle-qualification` in Examples for the model-free check.
 Spectrolite navigation reviews retain the browser-observed source and destination of each
 wiki-link hop. The navigation finding binds the whole route to the final canonical document,
 and any preview finding refers to that same editor and revision. Draft reviews compare the
