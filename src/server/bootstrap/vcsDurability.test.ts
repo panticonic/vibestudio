@@ -135,7 +135,7 @@ describe("wireVcsDurability", () => {
     await services.find((service) => service.name === "vcsAttach")?.start?.(resolve);
     await initialize!();
     expect(sequence).toEqual(["native", "participant", "active"]);
-    expect(workspaceVcs.attachParticipantHistory).toHaveBeenCalledWith(expect.objectContaining({ nativeOnly: true }));
+    expect(workspaceVcs.attachParticipantHistory).toHaveBeenCalledWith(expect.objectContaining({ infrastructureContextId: expect.any(String) }));
     expect(activateSemanticWorkspace).toHaveBeenCalledExactlyOnceWith(workspaceVcs);
     expect(dispatch).not.toHaveBeenCalled();
   });

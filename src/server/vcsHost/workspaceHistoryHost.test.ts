@@ -86,7 +86,7 @@ it("resumes an interrupted commit recall backfill before indexing a newer protec
   expect(JSON.parse(marker!)).toEqual({ completedEventId: "next-tip", pending: null });
 });
 
-it("uses the verified task to choose a copy and preserves the migrated context head", async () => {
+it("uses the verified task and owner context to choose a working copy", async () => {
   const dispatch = vi.fn(
     async (_ref: WorkspaceSourceProviderRef, method: string, input: unknown) => {
       if (method === "reserveHistoryParticipant") {
@@ -97,31 +97,30 @@ it("uses the verified task to choose a copy and preserves the migrated context h
           origin: { ref: "History:canonical", token: "grant" },
         };
       }
-      if (method === "bindHistoryContext") return (input as { replayedHead?: string }).replayedHead ?? "latest-main";
+      if (method === "bindHistoryContext") return "latest-main";
       throw new Error(`Unexpected history call ${method}`);
     }
   );
-  const launch = (caller: VerifiedCaller, replayedWorkingHead?: string, ownerContextId = "owner", contextId = "context") =>
+  const launch = (caller: VerifiedCaller, ownerContextId = "owner", contextId = "context") =>
     openWorkspaceParticipantContext({
       dispatch: { dispatch },
       canonical,
       caller,
       ownerContextId,
       contextId,
-      replayedWorkingHead,
     });
-  const first = await launch(native(1, "call-1"), "replayed-working");
+  const first = await launch(native(1, "call-1"));
   const second = await launch(native(1, "call-2"));
   const third = await launch(native(2, "call-3"));
   expect(first.owner).toEqual(second.owner);
   expect(first.owner).not.toEqual(third.owner);
-  expect(first.workingHead).toBe("replayed-working");
+  expect(first.workingHead).toBe("latest-main");
   expect(second.workingHead).toBe("latest-main");
   expect(dispatch.mock.calls[1]?.[0]).toEqual(first.owner);
   const device = createVerifiedCaller("shell:editor", "shell", null, null, { userId: "person", handle: "person" });
   const editor = await launch(device);
-  const child = await launch(device, undefined, "owner", "child-context");
-  const independent = await launch(device, undefined, "other-owner");
+  const child = await launch(device, "owner", "child-context");
+  const independent = await launch(device, "other-owner");
   expect(editor.owner).toEqual(child.owner);
   expect(editor.owner).not.toEqual(independent.owner);
 });
@@ -150,7 +149,7 @@ it("retains a user's interactive working copy across signed runs without collaps
     .toBe(workspaceParticipantIdentity(native(1, "two"), "session-context"));
 });
 
-it("withholds a grant when replay reports a different allocation", async () => {
+it("withholds a grant when history reports a different allocation", async () => {
   const dispatch = vi.fn(async () => ({
     targetId: "do:another:History:work",
     head: "head",

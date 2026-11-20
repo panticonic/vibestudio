@@ -69,7 +69,6 @@ import {
   type WorkspaceMaterializationRepository,
 } from "@vibestudio/shared/vcs/workspaceProjection";
 import { hostRefBasisDigest } from "@vibestudio/shared/vcs/publication";
-import { writeFileAtomicSync } from "../../atomicFile.js";
 import {
   collectTreeReachableDigests,
   collectTreeReachableDigestsBatch,
@@ -169,17 +168,12 @@ import {
   transferWorkspaceParticipant,
   revertWorkspaceParticipant,
   workspaceMainStateReachable,
-  workspaceInteractiveSessionParticipant,
   workspaceParticipantCatalog,
   workspaceParticipantReferencesReachable,
   type WorkspaceHistoryParticipant,
   type WorkspaceHistorySource,
 } from "./workspaceHistoryHost.js";
 import type { WorkspaceRootTemplateBootstrap } from "../workspaceRootTemplateBootstrap.js";
-import {
-  installWorkspaceReplayBlobScopes,
-  readWorkspaceHistoryReplayReceipt, registerWorkspaceHistoryReplayOwners,
-} from "./workspaceHistoryMigration.js";
 import { retainedBlobDigests, withBlobContentLock } from "../storage/blobRetentions.js";
 
 /**
@@ -260,27 +254,8 @@ const SLOW_SEMANTIC_EFFECT_MS = 500;
 type ParticipantHistoryAttachment = WorkspaceHistorySource & {
   /** Physical allocations inherit this provider lifetime and cannot reenter their creating DO. */
   infrastructureContextId?: string;
-  nativeOnly?: true;
-  replayedContextOwners?: ReadonlyMap<string, { caller: VerifiedCaller; ownerContextId: string }>;
-  /** The runtime entity store supplies these durable user stamps at startup. */
-  listReplayedSessionOwners?: (contextIds: readonly string[]) =>
-    Promise<readonly { contextId: string; userId: string }[]>;
   destroyRetiredStorage?: (owner: WorkspaceSourceProviderRef) => Promise<void>;
 };
-
-const sealedLegacyHistoryRetention = z.object({
-  version: z.literal(1),
-  receiptDigest: z.string().regex(/^[0-9a-f]{64}$/u),
-  contentRoots: z.array(z.string().min(1)),
-  contentHashes: z.array(z.string().min(1)),
-}).strict();
-
-async function readSealedLegacyHistoryRetention(file: string, receiptDigest: string) {
-  const record = sealedLegacyHistoryRetention.parse(JSON.parse(await fsp.readFile(file, "utf8")));
-  if (record.receiptDigest !== receiptDigest)
-    throw new Error("Legacy history retention belongs to a different replay receipt");
-  return record;
-}
 
 export interface ExactRepositorySnapshotPlan {
   version: 1;
@@ -533,13 +508,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     send(bytes: Uint8Array): Promise<Uint8Array>;
   }>();
 
-  private participantHistorySource: (WorkspaceHistorySource & {
-    replayedWorkingHeads: ReadonlyMap<string, { participantId: string; head: string }>;
-    infrastructureContextId?: string;
-    nativeOnly?: true;
-    destroyRetiredStorage?: ParticipantHistoryAttachment["destroyRetiredStorage"];
-  }) | null = null;
-  private retiredLegacyRetention: { file: string; receiptDigest: string } | undefined;
+  private participantHistorySource: ParticipantHistoryAttachment | null = null;
   private readonly protectedPublicationListeners = new Set<
     (event: ProtectedPublicationEvent) => void | Promise<void>
   >();
@@ -621,31 +590,11 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     };
   }
 
-  /** Preserve the retired source's complete GC contract under the exact migration receipt. */
-  async retainSealedLegacyHistory(receiptDigest: string): Promise<void> {
-    if (!this.participantHistorySource)
-      throw new Error("Retired legacy history requires an attached participant history");
-    const file = path.join(this.deps.blobsDir, "legacy-replay-retention.json");
-    try {
-      await readSealedLegacyHistoryRetention(file, receiptDigest);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      const record = sealedLegacyHistoryRetention.parse({
-        version: 1, receiptDigest, ...await this.gad().contentGcRoots(),
-      });
-      writeFileAtomicSync(file, JSON.stringify(record), { mode: 0o600 });
-    }
-    this.retiredLegacyRetention = { file, receiptDigest };
-  }
-
   private async collectGcReachableDigests(
     executionSourceRoots: readonly ExecutionSourceContentRoot[]
   ): Promise<Set<string>> {
-    const retained = this.retiredLegacyRetention;
-    const semantic = this.participantHistorySource?.nativeOnly
+    const semantic = this.participantHistorySource
       ? { contentRoots: [], contentHashes: [] }
-      : retained
-      ? await readSealedLegacyHistoryRetention(retained.file, retained.receiptDigest)
       : await this.gad().contentGcRoots();
     const roots = new Set(semantic.contentRoots);
     const mainRoots = new Set<string>();
@@ -853,78 +802,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           this.deps.refs.readHeadPublication()?.publicationId ?? null
         );
       }
-      const receipt = source.nativeOnly
-        ? null
-        : await readWorkspaceHistoryReplayReceipt(source.dispatch, source.canonical);
-      const replayedWorkingHeads = new Map<string, { participantId: string; head: string }>();
-      const suppliedOwners = [...source.replayedContextOwners ?? []].map(
-        ([contextId, { caller, ownerContextId }]) => ({
-          contextId, participantId: workspaceParticipantIdentity(caller, ownerContextId),
-        })
-      );
-      if (!receipt && suppliedOwners.length > 0)
-        throw new Error("Workspace replay owners require an installed receipt");
-      if (receipt) {
-        let recordedOwners = await registerWorkspaceHistoryReplayOwners(
-          source.dispatch, source.canonical, suppliedOwners,
-        );
-        const tips = new Map(receipt.contexts.map(({ id, working }) => [id, working]));
-        const givenOwners = new Map(suppliedOwners.map(({ contextId, participantId }) => [contextId, participantId]));
-        if (receipt.frozenPlanDigest && source.listReplayedSessionOwners) {
-          const registered = new Set(recordedOwners.map(({ contextId }) => contextId));
-          const unowned = [...tips.keys()].filter((contextId) => !registered.has(contextId));
-          const candidates = new Map<string, Set<string>>();
-          const sessions = unowned.length ? await source.listReplayedSessionOwners(unowned) : [];
-          for (const { contextId, userId } of sessions) {
-            if (!tips.has(contextId) || registered.has(contextId)) continue;
-            const users = candidates.get(contextId) ?? new Set<string>();
-            users.add(userId);
-            candidates.set(contextId, users);
-          }
-          const additions = [...candidates].flatMap(([contextId, users]) => {
-            const [userId] = users;
-            return users.size === 1 && userId
-              ? [{ contextId, participantId: workspaceInteractiveSessionParticipant(userId, contextId) }]
-              : [];
-          });
-          if (additions.length) {
-            for (const { contextId, participantId } of recordedOwners) {
-              const given = givenOwners.get(contextId);
-              if (given !== undefined && given !== participantId)
-                throw new Error("Workspace history returned an inconsistent replay owner");
-              givenOwners.set(contextId, participantId);
-            }
-            recordedOwners = await registerWorkspaceHistoryReplayOwners(
-              source.dispatch, source.canonical, additions,
-            );
-            for (const { contextId, participantId } of additions) givenOwners.set(contextId, participantId);
-          }
-        }
-        for (const { contextId, participantId } of recordedOwners) {
-          const head = tips.get(contextId);
-          if (!head || replayedWorkingHeads.has(contextId) ||
-            (givenOwners.has(contextId) && givenOwners.get(contextId) !== participantId)) {
-            throw new Error("Workspace history returned an inconsistent replay owner");
-          }
-          replayedWorkingHeads.set(contextId, { participantId, head });
-          givenOwners.delete(contextId);
-        }
-        if (givenOwners.size > 0) throw new Error("Workspace history did not record all replay owners");
-      }
-      if (receipt?.frozenPlanDigest) {
-        await installWorkspaceReplayBlobScopes({
-          dispatch: source.dispatch, destination: source.canonical,
-          blobsDir: this.deps.blobsDir, planDigest: receipt.frozenPlanDigest,
-        });
-      }
-      this.participantHistorySource = {
-        dispatch: source.dispatch,
-        canonical: source.canonical,
-        replayedWorkingHeads,
-        ...(source.nativeOnly ? { nativeOnly: true } : {}),
-        ...(source.infrastructureContextId ? { infrastructureContextId: source.infrastructureContextId } : {}),
-        ...(source.destroyRetiredStorage ? { destroyRetiredStorage: source.destroyRetiredStorage } : {}),
-      };
+      this.participantHistorySource = source;
       await this.indexPublishedCommitMemory(main.eventId);
     });
   }
@@ -1582,13 +1460,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     if (this.contextHeads.get(input.ownerContextId) === null || this.contextHeads.get(input.contextId) === null) {
       throw new Error("Workspace participant context has retired");
     }
-    const replayed = source.replayedWorkingHeads.get(input.contextId);
-    const participantId = workspaceParticipantIdentity(input.caller, input.ownerContextId);
     const forkSources = input.contextId === input.ownerContextId
       ? await this.deps.runtimeForkSources?.(input.caller, input.contextId) : undefined;
     const reservation = await openWorkspaceParticipantContext({
       ...source, ...input,
-      ...(replayed?.participantId === participantId ? { replayedWorkingHead: replayed.head } : {}),
       ...(forkSources?.length ? { runtimeFork: { sourceContextIds: forkSources, blobsDir: this.deps.blobsDir } } : {}),
     });
     return {
@@ -2282,9 +2157,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       const head = this.deps.refs.readHeadPublication();
       if (head) await this.replayPublicationObservers(head);
     });
-    // Freezing the legacy source required an empty outbox. Once that source
-    // is retired, native publication recovery owns subsequent commands.
-    if (this.retiredLegacyRetention) return 0;
     const owner = this.gad();
     let recovered = 0;
     for (let step = 0; step < 1_000; step += 1) {

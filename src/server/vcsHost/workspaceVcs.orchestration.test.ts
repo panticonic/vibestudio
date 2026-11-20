@@ -245,8 +245,6 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       switch (method) {
         case "readHistoryMain":
           return input === undefined ? { head, eventId } : { head, eventId, commitMemory: document };
-        case "readHistoryReplayReceipt":
-          return null;
         case "listHistoryAppliedPublications":
           return [];
         default:
@@ -258,68 +256,18 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     expect(recordHistoryCommitMemory).toHaveBeenCalledExactlyOnceWith(document);
   });
 
-  it("recovers only unambiguous durable session owners for unassigned replay contexts", async () => {
-    const { vcs, refs } = await harness();
-    vi.spyOn(refs, "readMainSemanticState").mockReturnValue({ kind: "event", eventId: "main-event" });
-    const canonical = { ...TEST_PROVIDER, objectKey: "canonical" };
-    const existing = { contextId: "recorded", participantId: "exact-task-owner" };
-    const selected = { contextId: "unknown", participantId: '["interactive-session","user1","unknown"]' };
-    const register = vi.fn(async (owners: Array<{ contextId: string; participantId: string }>) =>
-      [existing, ...owners]
-    );
-    const dispatch = vi.fn(async (_owner: typeof TEST_PROVIDER, method: string, raw?: unknown) => {
-      switch (method) {
-        case "listHistoryAppliedPublications": return [];
-        case "readHistoryMain": return { head: "main", eventId: "main-event" };
-        case "readHistoryReplayReceipt": return {
-          head: "initial", eventId: "main-event", frozenPlanDigest: "a".repeat(64),
-          contexts: ["unknown", "ambiguous", "recorded"].map((id) => ({
-            id, committed: "initial", working: `${id}-working`,
-          })),
-        };
-        case "registerHistoryReplayOwners":
-          return register((raw as { owners: (typeof existing)[] }).owners);
-        case "readHistoryReplayPrivateContent": return [];
-        default: throw new Error(`Unexpected participant dispatch ${method}`);
-      }
-    });
-    const listReplayedSessionOwners = vi.fn(async () => [
-      { contextId: "ambiguous", userId: "user2" },
-      { contextId: "ambiguous", userId: "user3" },
-      { contextId: "unknown", userId: "user1" },
-      { contextId: "unknown", userId: "user1" },
-      { contextId: "recorded", userId: "user1" },
-      { contextId: "unreplayed", userId: "user1" },
-    ]);
-    await vcs.attachParticipantHistory({ dispatch: { dispatch }, canonical, listReplayedSessionOwners });
-    expect(listReplayedSessionOwners).toHaveBeenCalledExactlyOnceWith(["unknown", "ambiguous"]);
-    expect(register.mock.calls).toEqual([[[]], [[selected]]]);
-    expect(vcs.participantHistoryAttached).toBe(true);
-  });
-
-  it("restores migrated work only for its recorded participant and reclaims directories after archival", async () => {
+  it("reopens separate participant copies and reclaims directories after archival", async () => {
     const { vcs, blobsDir, refs } = await harness();
     vi.spyOn(refs, "readMainSemanticState").mockReturnValue({ kind: "event", eventId: "main-event" });
     const canonical = { ...TEST_PROVIDER, objectKey: "canonical" };
     const contextId = "ctx-shared";
     const content = (await putBytes(blobsDir, Buffer.from("participant-only bytes"))).digest;
-    const state = { kind: "event", eventId: "replayed-event" };
+    const state = { kind: "event", eventId: "private-event" };
     const allocated = new Set<string>();
-    let recordedOwners: { contextId: string; participantId: string }[] = [];
     let refuseRetirement = true;
     const dispatch = vi.fn(async (owner: typeof TEST_PROVIDER, method: string, raw?: unknown) => {
       if (method === "readHistoryMain") return { head: "main", eventId: "main-event" };
-      if (method === "readHistoryReplayReceipt") return {
-        head: "initial", eventId: "main-event",
-        contexts: [{ id: contextId, committed: "initial", working: "replayed-working" }],
-      };
       if (method === "listHistoryAppliedPublications") return [];
-      if (method === "registerHistoryReplayOwners") {
-        expect(owner).toEqual(canonical);
-        const { owners } = raw as { owners: typeof recordedOwners };
-        if (owners.length) recordedOwners = owners;
-        return recordedOwners;
-      }
       if (method === "reserveHistoryParticipant") {
         const { participantId } = raw as { participantId: string };
         const objectKey = `work-${sha256HexSyncText(participantId)}`;
@@ -337,17 +285,16 @@ describe("WorkspaceVcs semantic host orchestration", () => {
         return { contextId, targets: [...allocated] };
       }
       if (method === "bindHistoryContext") {
-        const binding = raw as { contextId: string; participantId: string; replayedHead?: string };
+        const binding = raw as { contextId: string };
         expect(binding.contextId).toBe(contextId);
         const belongsToOwner = owner.objectKey === `work-${sha256HexSyncText(
           workspaceParticipantIdentity(taskCaller(1), contextId)
         )}`;
-        expect(binding.replayedHead).toBe(belongsToOwner ? "replayed-working" : undefined);
-        return belongsToOwner ? "replayed-working" : "main";
+        return belongsToOwner ? "private-working" : "main";
       }
       if (method === "readHistoryProjection") {
         return {
-          head: "replayed-working",
+          head: "private-working",
           state,
           repositories: [{
             repositoryId: "repository", repoPath: "meta", presence: "present", fileManifestId: "files",
@@ -378,7 +325,6 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const destroyRetiredStorage = vi.fn(async (_owner: typeof TEST_PROVIDER) => {});
     await vcs.attachParticipantHistory({
       dispatch: { dispatch }, canonical, destroyRetiredStorage,
-      replayedContextOwners: new Map([[contextId, { caller: taskCaller(1), ownerContextId: contextId }]]),
     });
     const [first, second] = await Promise.all([bind(1), bind(2)]);
     expect(first?.sourceRoot).toBeDefined();
@@ -388,7 +334,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     await restarted.attachParticipantHistory({ dispatch: { dispatch }, canonical });
     await expect(restarted.openParticipantScope({
       contextId, ownerContextId: contextId, caller: taskCaller(1),
-    })).resolves.toMatchObject({ workingHead: "replayed-working" });
+    })).resolves.toMatchObject({ workingHead: "private-working" });
     await expect(restarted.openParticipantScope({
       contextId, ownerContextId: contextId, caller: taskCaller(2),
     })).resolves.toMatchObject({ workingHead: "main" });
@@ -421,7 +367,6 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       expect(owner).toEqual(canonical);
       switch (method) {
         case "readHistoryMain": return { head: "main", eventId: "main-event" };
-        case "readHistoryReplayReceipt": return null;
         case "listHistoryAppliedPublications": return [];
         case "ensureHistoryRuntimeContext":
           expect(value).toEqual({ contextId });
@@ -523,7 +468,6 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       dispatch: { dispatch: vi.fn(async (_owner: typeof TEST_PROVIDER, method: string) => {
         if (method === "readHistoryMain") return { head: "initial", eventId: "genesis" };
         if (method === "readHistoryMainStateVisibility") return false;
-        if (method === "readHistoryReplayReceipt") return null;
         if (method === "listHistoryAppliedPublications") return [];
         throw new Error(`Unexpected canonical dispatch ${method}`);
       }) },
@@ -1433,7 +1377,6 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     let retired = false;
     const dispatch = vi.fn(async (owner: typeof TEST_PROVIDER, method: string) => {
       if (method === "readHistoryMain") return { head: "main-head", eventId: "main-event" };
-      if (method === "readHistoryReplayReceipt") return null;
       if (method === "listHistoryAppliedPublications") return [];
       if (method === "listHistoryRetainedParticipants") return retired ? [active] : [retiring, active];
       if (method !== "readHistoryContentRoots") throw new Error(`Unexpected history call ${method}`);
@@ -1456,55 +1399,6 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       await expect(getBytes(blobsDir, item.digest)).resolves.toBeInstanceOf(Buffer);
     }
     await expect(getBytes(blobsDir, discarded.digest)).resolves.toBeNull();
-  });
-
-  it("reopens sealed history without scanning the legacy outbox or content roots", async () => {
-    const { blobsDir, vcs, refs, deps } = await harness();
-    vi.spyOn(refs, "readMainSemanticState").mockReturnValue({ kind: "event", eventId: "main-event" });
-    const legacyFile = await putBytes(blobsDir, Buffer.from("legacy materialized bytes"));
-    const legacyRaw = await putBytes(blobsDir, Buffer.from("legacy retained provenance bytes"));
-    const native = await putBytes(blobsDir, Buffer.from("native participant bytes"));
-    const discarded = await putBytes(blobsDir, Buffer.from("unreferenced bytes"));
-    const legacyTree = await putTree(blobsDir, [
-      { name: "history.txt", kind: "file", contentHash: legacyFile.digest, mode: 0o100644 },
-    ], { root: true });
-    const contentGcRoots = vi.fn(async () => ({
-      contentRoots: [legacyTree.stateHash!],
-      contentHashes: [legacyRaw.digest],
-    }));
-    await vcs.attachGad({ contentGcRoots } as never);
-    const canonical = { ...TEST_PROVIDER, objectKey: "canonical" };
-    const dispatch = vi.fn(async (_owner: typeof TEST_PROVIDER, method: string) => {
-      switch (method) {
-        case "readHistoryMain": return { head: "main-head", eventId: "main-event" };
-        case "readHistoryReplayReceipt": return null;
-        case "listHistoryAppliedPublications":
-        case "listHistoryRetainedParticipants": return [];
-        case "readHistoryContentRoots": return [native.digest];
-        default: throw new Error(`Unexpected history call ${method}`);
-      }
-    });
-    const digest = "a".repeat(64);
-    await vcs.attachParticipantHistory({ dispatch: { dispatch }, canonical });
-    await vcs.retainSealedLegacyHistory(digest);
-    const reopened = new WorkspaceVcs(deps);
-    await reopened.attachParticipantHistory({ dispatch: { dispatch }, canonical });
-    await expect(reopened.retainSealedLegacyHistory("b".repeat(64)))
-      .rejects.toThrow("different replay receipt");
-    await reopened.retainSealedLegacyHistory(digest);
-    await expect(reopened.recoverPendingSemanticEffects()).resolves.toBe(0);
-    await reopened.runGc({ minAgeMs: 0, epoch: 1, executionSourceRoots: [] });
-    expect(contentGcRoots).toHaveBeenCalledOnce();
-    for (const item of [legacyFile, legacyRaw, native])
-      await expect(getBytes(blobsDir, item.digest)).resolves.toBeInstanceOf(Buffer);
-    await expect(getBytes(blobsDir, discarded.digest)).resolves.toBeNull();
-    const retentionFile = path.join(blobsDir, "legacy-replay-retention.json");
-    await expect(fsp.stat(retentionFile)).resolves.toBeDefined();
-    await fsp.unlink(retentionFile);
-    const untouched = await putBytes(blobsDir, Buffer.from("unreferenced during failed GC"));
-    await expect(reopened.runGc({ minAgeMs: 0, epoch: 2, executionSourceRoots: [] }))
-      .rejects.toMatchObject({ code: "ENOENT" });
-    await expect(getBytes(blobsDir, untouched.digest)).resolves.toBeInstanceOf(Buffer);
   });
 
   it("proves shared semantic, execution, and cached roots in one graph before GC", async () => {

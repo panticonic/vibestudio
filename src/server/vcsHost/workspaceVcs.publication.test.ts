@@ -97,7 +97,7 @@ describe("WorkspaceVcs protected publication notification", () => {
     expect(gate).toHaveBeenCalledOnce();
 
     await expect(vcs.activateNativeWorkspace()).rejects.toThrow("no attached protected main");
-    await vcs.attachParticipantHistory({ ...source, nativeOnly: true });
+    await vcs.attachParticipantHistory(source);
     await expect(vcs.activateNativeWorkspace()).resolves.toEqual(await vcs.ensureFresh());
   });
 
@@ -272,7 +272,6 @@ describe("WorkspaceVcs protected publication notification", () => {
       expect(target).toEqual(canonical);
       if (method === "readHistoryMain")
         return { head: `head:${canonicalEventId}`, eventId: canonicalEventId };
-      if (method === "readHistoryReplayReceipt") return null;
       if (method === "listHistoryAppliedPublications") return [...pending.values()];
       if (method === "readHistoryPublishedRevision") {
         const { eventId } = input as { eventId: string };
@@ -352,8 +351,6 @@ describe("WorkspaceVcs protected publication notification", () => {
       switch (method) {
         case "readHistoryMain":
           return { head: transition.previousHead, eventId: "initial-event" };
-        case "readHistoryReplayReceipt":
-          return null;
         case "listHistoryAppliedPublications":
           return applied && !acknowledged ? [receipt] : [];
         case "readHistoryPublicationApproval":

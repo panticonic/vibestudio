@@ -1173,7 +1173,6 @@ export async function openWorkspaceParticipantContext(input: {
   caller: VerifiedCaller;
   ownerContextId: string;
   contextId: string;
-  replayedWorkingHead?: string;
   signal?: AbortSignal;
   runtimeFork?: { sourceContextIds: readonly string[]; blobsDir: string };
 }): Promise<{ owner: WorkspaceSourceProviderRef; workingHead: string }> {
@@ -1207,7 +1206,6 @@ export async function openWorkspaceParticipantContext(input: {
       participantId,
       origin: reservation.origin,
       contextId,
-      ...(input.replayedWorkingHead === undefined ? {} : { replayedHead: input.replayedWorkingHead }),
     })
   );
   return { owner, workingHead };

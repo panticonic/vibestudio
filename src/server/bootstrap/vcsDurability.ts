@@ -76,7 +76,6 @@ async function attachNativeWorkspaceHistory(
   const attachment = {
     ...history,
     infrastructureContextId: contextId,
-    nativeOnly: true as const,
     destroyRetiredStorage: (owner: WorkspaceSourceProviderRef) => runtime.destroyRetiredDOStorage(owner),
   };
   if (deps.sharedHistorySeed) {
