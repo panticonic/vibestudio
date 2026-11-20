@@ -90,12 +90,12 @@ Live workflow collection executes the authored Natlang root against real caller-
 
 ## Use
 
-List the available cases, then select workflows from the Vibestudio host checkout with the development templates configured. Use a new output directory and a model enabled on the collection machine.
+List the available open goals, then select cases from the Vibestudio host checkout with the development templates configured. Use a new output directory and a model enabled on the collection machine. Use `--assignments` for the historical workflow catalog and its cases.
 
 ```sh
-pnpm natlang:teacher --list
+pnpm --silent natlang:teacher --list
 pnpm natlang:teacher --preflight
-pnpm natlang:teacher --case panel-draft-unmount --out /path/to/new-run
+pnpm natlang:teacher --case open-goal-reconcile-workshop-update --out /path/to/new-run
 ```
 
 Preflight provisions each assigned workspace and historical baseline, checks

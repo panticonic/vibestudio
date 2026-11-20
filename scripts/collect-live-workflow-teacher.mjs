@@ -27,6 +27,7 @@ const { values } = parseArgs({
     out: { type: "string" },
     model: { type: "string", default: "openai-codex:gpt-6-luna" },
     "open-goals": { type: "boolean" },
+    assignments: { type: "boolean" },
   },
 });
 const list = values.list && !values.preflight && values.case === undefined && values.out === undefined;
@@ -34,21 +35,27 @@ const preflight = values.preflight && !values.list && values.out === undefined &
   values["review-model"] === undefined;
 const requested = values.case ?? [];
 if (
+  (values.assignments && values["open-goals"]) ||
   new Set(requested).size !== requested.length ||
   (!list && !preflight && (values.list || values.preflight || !values.out || !requested.length))
 ) {
   throw new Error(
-    "Usage: pnpm natlang:teacher --list | --preflight [--case WORKFLOW_CASE ...] | --case WORKFLOW_CASE [--case WORKFLOW_CASE ...] --out NEW_DIR [--model PROVIDER:MODEL] [--open-goals]"
+    "Usage: pnpm natlang:teacher --list | --preflight [--case CASE ...] | --case CASE [--case CASE ...] --out NEW_DIR [--model PROVIDER:MODEL] [--assignments]"
   );
 }
 
 const host = fileURLToPath(new URL("../", import.meta.url));
 const { checkouts } = requireDevelopmentTemplateCheckouts(host);
 const liveTeacherCases = await loadLiveTeacherCases(checkouts);
-if (values["open-goals"]) {
-  for (const [scenario, workflow] of liveTeacherCases)
-    if (workflow.interaction !== "open-user-goal") liveTeacherCases.delete(scenario);
-  if (!liveTeacherCases.size) throw new Error("No open user goals are installed in these checkouts");
+for (const [scenario, workflow] of liveTeacherCases) {
+  if ((workflow.interaction === "open-user-goal") === Boolean(values.assignments)) {
+    liveTeacherCases.delete(scenario);
+  }
+}
+if (!liveTeacherCases.size) {
+  throw new Error(values.assignments
+    ? "No assigned workflows are installed in these checkouts"
+    : "No open user goals are installed in these checkouts");
 }
 if (list) {
   for (const [scenario, workflow] of liveTeacherCases)
@@ -63,6 +70,7 @@ if (list) {
           interaction: workflow.interaction,
           split: workflow.split,
           taskId: `${workflow.namespace}:${scenario}`,
+          goalSha256: createHash("sha256").update(JSON.stringify(workflow.assignment.goal)).digest("hex"),
         } : {}),
         requiresReview: Boolean(workflow.requiresReview),
         ...(workflow.workspaceBaseline ? { workspaceBaseline: workflow.workspaceBaseline } : {}),
@@ -76,7 +84,7 @@ const scenarios = preflight && !requested.length ? [...liveTeacherCases.keys()] 
 const unknown = scenarios.filter((scenario) => !liveTeacherCases.has(scenario));
 if (unknown.length) {
   throw new Error(
-    `Unknown teacher case(s): ${unknown.join(", ")}. Run pnpm natlang:teacher --list.`
+    `Unknown teacher case(s): ${unknown.join(", ")}. Run pnpm natlang:teacher --list${values.assignments ? " --assignments" : ""}.`
   );
 }
 

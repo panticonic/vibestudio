@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -46,6 +47,10 @@ test("a batch reuses each workspace instance and retains successes across failur
     export const liveTeacherCases = new Map(['passing', 'failing', 'personal'].map(caseId =>
       [caseId, { family: 'fixture', group: 'group', workspace: caseId === 'personal' ? 'personal' : undefined, validator: {template:'system-testing',path:'skills/system-testing/oracle.ts'} }]
     ));
+    liveTeacherCases.set('open-café', {
+      family: 'open', group: 'open', interaction: 'open-user-goal', split: 'train',
+      namespace: 'vibestudio:fixture', assignment: { goal: 'Send a café update.\\n"Use the new time."' },
+    });
     export async function loadLiveTeacherCases() { return liveTeacherCases; }
     export function workflowSourceGroups(workflow) { return [workflow.group]; }
     export async function exportLiveTeacherWorkflow({ out, pins, trajectory }) {
@@ -92,11 +97,26 @@ exit 0
       );`,
     0o700
   );
+  const list = (args) => spawnSync(process.execPath, ["scripts/collect-live-workflow-teacher.mjs", "--list", ...args], {
+    cwd: root,
+    encoding: "utf8",
+  });
+  const defaultCatalog = list([]);
+  assert.equal(defaultCatalog.status, 0, defaultCatalog.stderr);
+  const open = JSON.parse(defaultCatalog.stdout);
+  assert.equal(open.scenario, "open-café");
+  assert.equal(open.goalSha256, createHash("sha256").update(JSON.stringify('Send a café update.\n"Use the new time."')).digest("hex"));
+  const assignments = list(["--assignments"]);
+  assert.equal(assignments.status, 0, assignments.stderr);
+  assert.deepEqual(assignments.stdout.trim().split("\n").map((row) => JSON.parse(row).scenario),
+    ["passing", "failing", "personal"]);
+
   const out = path.join(root, "capture");
   const result = spawnSync(
     process.execPath,
     [
       "scripts/collect-live-workflow-teacher.mjs",
+      "--assignments",
       "--case",
       "passing",
       "--case",
@@ -144,7 +164,7 @@ exit 0
   assert.equal(JSON.parse(await readFile(pathFor("failing", "source.json"), "utf8")).run_id, runId);
   await assert.rejects(readFile(pathFor("failing", "verified/manifest.json")), { code: "ENOENT" });
 
-  const preflight = spawnSync(process.execPath, ["scripts/collect-live-workflow-teacher.mjs", "--preflight"], {
+  const preflight = spawnSync(process.execPath, ["scripts/collect-live-workflow-teacher.mjs", "--preflight", "--assignments"], {
     cwd: root,
     env: {
       ...process.env, PATH: path.join(root, "bin") + path.delimiter + process.env.PATH,
