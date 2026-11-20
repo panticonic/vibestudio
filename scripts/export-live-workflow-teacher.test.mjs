@@ -972,11 +972,13 @@ test("open goal export attests the goal-only invocation and rejects a hidden ass
     },
   };
   await save();
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases, split: "test" }), /predeclared split/u);
   await exportLiveTeacherWorkflow({ ...options, cases });
   const manifest = JSON.parse(await readFile(path.join(options.out, "manifest.json"), "utf8"));
   const verification = JSON.parse(await readFile(path.join(options.out, "verification.json"), "utf8"));
   assert.deepEqual(manifest.interaction, { kind: "open-user-goal", goal, program: workflow.program });
   assert.deepEqual(verification.interaction, manifest.interaction);
+  assert.equal(verification.split, "train");
   root.record.inputs.work = {};
   await save();
   await assert.rejects(

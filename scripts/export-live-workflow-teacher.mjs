@@ -999,13 +999,26 @@ export async function loadLiveTeacherCases(checkouts) {
   });
   if (openGoalSource) {
     const imported = await import(pathToFileURL(openGoalFile).href);
+    const splitByGroup = new Map();
     for (const assignment of (imported.default ?? imported).openGoalWorlds) {
-      cases.set(`open-goal-${assignment.id}`, {
+      const split = assignment.split ?? "train";
+      const sourceGroups = [assignment.sourceGroup, assignment.relatedSourceGroup].filter(Boolean);
+      const scenario = `open-goal-${assignment.id}`;
+      requireEvidence(!cases.has(scenario) && sourceGroups.length &&
+        ["train", "validation", "test"].includes(split), `Invalid open-goal declaration for ${scenario}`);
+      for (const group of sourceGroups) {
+        const prior = splitByGroup.get(group);
+        requireEvidence(prior === undefined || prior === split,
+          `Open-goal source group ${group} crosses ${prior} and ${split}`);
+        splitByGroup.set(group, split);
+      }
+      cases.set(scenario, {
         family: `workspace-open-user-goal-${assignment.kind}`,
         workspace: "examples",
         namespace: assignment.kind === "research" ? "vibestudio:web-research" : "vibestudio:workspace-edit",
         group: assignment.sourceGroup,
-        sourceGroups: [assignment.sourceGroup, assignment.relatedSourceGroup].filter(Boolean),
+        sourceGroups,
+        split,
         interaction: "open-user-goal",
         program: "skills/open-user-goal/runUserGoal.nl",
         root: "runUserGoal",
@@ -10737,6 +10750,8 @@ export async function exportLiveTeacherWorkflow({
     ["train", "validation", "test"].includes(split),
     "Choose the predeclared split for this source world"
   );
+  if (workflow.interaction === "open-user-goal")
+    requireEvidence(split === workflow.split, "Open-goal export must use the case's predeclared split");
 
   const taskId = `${workflow.namespace}:${test.name}`;
   const validatorBytes = await readFile(validator);
@@ -10804,6 +10819,7 @@ export async function exportLiveTeacherWorkflow({
     world,
     status: "passed",
     checks: observed.checks,
+    ...(workflow.interaction === "open-user-goal" ? { split } : {}),
     ...interaction,
     validator: validatorFile,
     root_call_ids: [rootId],

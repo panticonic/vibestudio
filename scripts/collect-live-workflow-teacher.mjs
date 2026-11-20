@@ -59,7 +59,11 @@ if (list) {
         sourceGroup: workflow.group,
         workspace: workflow.workspace ?? "system",
         sourceGroups: workflowSourceGroups(workflow),
-        ...(workflow.interaction ? { interaction: workflow.interaction } : {}),
+        ...(workflow.interaction ? {
+          interaction: workflow.interaction,
+          split: workflow.split,
+          taskId: `${workflow.namespace}:${scenario}`,
+        } : {}),
         requiresReview: Boolean(workflow.requiresReview),
         ...(workflow.workspaceBaseline ? { workspaceBaseline: workflow.workspaceBaseline } : {}),
         ...(workflow.devices ? { devices: workflow.devices } : {}),
@@ -285,14 +289,17 @@ for (const group of groups.values()) {
         if (runs.length !== 1) throw new Error("Expected one managed system-test run");
         const [runId] = runs;
         writePins(pins, { ...caseSource, run_id: runId });
-        if (status !== 0)
-          throw new Error(`System test ${runId} failed. Its evidence is in ${directory}`);
-        if (
-          systemTest(
-            ["trajectory", runId, scenario, "--full", "--json", "--out-dir", directory],
-            "ignore"
-          ) !== 0
-        )
+        const traceStatus = systemTest(
+          ["trajectory", runId, scenario, "--full", "--json", "--out-dir", directory],
+          "ignore"
+        );
+        if (status !== 0) {
+          const detail = traceStatus === 0
+            ? `Its full trajectory was retained in ${directory}`
+            : `Its full trajectory could not be retrieved. See ${directory}`;
+          throw new Error(`System test ${runId} failed. ${detail}`);
+        }
+        if (traceStatus !== 0)
           throw new Error(`Unable to retrieve the durable trajectory for ${runId}`);
         if (JSON.stringify(pinSources()) !== JSON.stringify(pinned))
           throw new Error("Source pins changed during the live run");
@@ -302,7 +309,7 @@ for (const group of groups.values()) {
           pins,
           validator: validators.get(scenario),
           out: destination,
-          split: "train",
+          split: liveTeacherCases.get(scenario).split ?? "train",
           review,
           cases: liveTeacherCases,
         });

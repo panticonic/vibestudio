@@ -114,29 +114,33 @@ exit 0
   );
   assert.equal(result.status, 1, result.stderr);
   assert.match(result.stderr, /Teacher case failing failed/);
+  assert.match(result.stderr, /Its full trajectory was retained/u);
   const commands = (await readFile(path.join(root, "commands.jsonl"), "utf8"))
     .trim()
     .split("\n")
     .map(JSON.parse);
   assert.deepEqual(
     commands.map(({ command }) => command),
-    ["doctor", "list", "run", "trajectory", "run", "stop", "doctor", "list", "run", "trajectory", "stop"]
+    ["doctor", "list", "run", "trajectory", "run", "trajectory", "stop", "doctor", "list", "run", "trajectory", "stop"]
   );
   assert.deepEqual(commands.map(({ workspace }) => workspace), [
-    ...Array(6).fill("system"), ...Array(5).fill("personal"),
+    ...Array(7).fill("system"), ...Array(5).fill("personal"),
   ]);
-  assert.equal(new Set(commands.slice(0, 6).map(({ instance }) => instance)).size, 1);
-  assert.equal(new Set(commands.slice(6).map(({ instance }) => instance)).size, 1);
-  assert.notEqual(commands[0].instance, commands[6].instance);
+  assert.equal(new Set(commands.slice(0, 7).map(({ instance }) => instance)).size, 1);
+  assert.equal(new Set(commands.slice(7).map(({ instance }) => instance)).size, 1);
+  assert.notEqual(commands[0].instance, commands[7].instance);
   const pathFor = (kind, name) => path.join(out, "cases", kind, name);
   const admitted = JSON.parse(await readFile(pathFor("passing", "verified/manifest.json"), "utf8"));
+  assert.deepEqual(JSON.parse(await readFile(
+    pathFor("failing", `${runId}/trajectory-failing-full.json.gz`), "utf8"
+  )), { scenario: "failing" });
   assert.equal(admitted.source.run_id, runId);
   assert.equal(admitted.run.scenario, "passing");
   const personal = JSON.parse(
     await readFile(pathFor("personal", "verified/manifest.json"), "utf8")
   );
   assert.equal(personal.source.workspace, "personal");
-  assert.equal(personal.source.instance, commands[6].instance);
+  assert.equal(personal.source.instance, commands.find(({ workspace }) => workspace === "personal").instance);
   assert.equal(JSON.parse(await readFile(pathFor("failing", "source.json"), "utf8")).run_id, runId);
   await assert.rejects(readFile(pathFor("failing", "verified/manifest.json")), { code: "ENOENT" });
 
