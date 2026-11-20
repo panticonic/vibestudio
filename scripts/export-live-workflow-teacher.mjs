@@ -6927,7 +6927,7 @@ function openPdfEffectsValid(effects, proof, report, expected) {
     });
 }
 
-function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
+export function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
   const proof = execution.diagnostics.openGoalVerification;
   const world = workflow.assignment;
   const { callable, checks, skill: skillName = world.kind } = templateGoalDomains[world.kind];
@@ -6966,8 +6966,9 @@ function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
     const nativeEdits = outcome.events.filter(event => event.operation === "change");
     const nativeTransitions = outcome.events.filter(event => event.operation !== "change");
     requireEvidence(
-      opened.length === 1 && matchesValue(opened[0].result?.screen, outcome.initial) && matchesValue(outcome.initial, proof.initial) &&
-        matchesValue(outcome.events, proof.events) &&
+      opened.length === 1 && matchesValue(opened[0].args, []) && matchesValue(opened[0].result, proof.opened) &&
+      isDeepStrictEqual(outcome.initial, proof.opened?.screen) && isDeepStrictEqual(outcome.initial, proof.initial) &&
+        isDeepStrictEqual(outcome.events, proof.events) &&
         edits.length === nativeEdits.length &&
         nativeEdits.every((event, index) => matchesValue(edits[index].args, [event.change]) && matchesValue(edits[index].result, event)) &&
         transitions.length === nativeTransitions.length &&
@@ -6987,17 +6988,19 @@ function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
           : outcome.checkReport === null) &&
         (world.discovery ? Array.isArray(outcome.discovery?.routes) &&
           outcome.discovery.routes.length === world.discovery.methods.length &&
-          outcome.discovery.routes.every(route => proof.discovery?.routes?.some(row => matchesValue(row, route)) &&
+          outcome.discovery.routes.every(route => proof.discovery?.routes?.some(row => isDeepStrictEqual(row, route)) &&
             lookups.some(effect => matchesValue(effect.args, [route.id]) && matchesValue(effect.result, route)) &&
-            searches.some(effect => Array.isArray(effect.result) && effect.result.some(hit => hit.id === route.id))) &&
+            proof.discovery.searchReceipts?.some(({ query, result }) => result.some(hit => hit.id === route.id) &&
+              searches.some(effect => matchesValue(effect.args, [query]) && matchesValue(effect.result, result)))) &&
           outcome.discovery.guidance.length === world.discovery.guidance.length &&
-          outcome.discovery.guidance.every(citation => reads.some(effect =>
-            effect.result?.skillPath === citation.skillPath && effect.result.sha256 === citation.sha256 &&
-            effect.result.passages.some(passage => passage.includes(citation.quote)))) &&
+          outcome.discovery.guidance.every(citation => proof.discovery.loadReceipts?.some(({ dirPath, focus, result }) =>
+            result.skillPath === citation.skillPath && result.sha256 === citation.sha256 &&
+            result.passages.some(passage => passage.includes(citation.quote)) &&
+            reads.some(effect => matchesValue(effect.args, [dirPath, focus]) && matchesValue(effect.result, result)))) &&
           performedBy("discoverTerminalOptions", "openTerminalDiscovery", "installed").length === 1
           : (outcome.discovery ?? null) === null) &&
         stages.length === Number(world.expected.sequence.includes("stage")) &&
-        (stages.length ? matchesValue(stages[0].result, outcome.handoff) && matchesValue(outcome.handoff, proof.handoff) &&
+        (stages.length ? matchesValue(stages[0].result, outcome.handoff) && isDeepStrictEqual(outcome.handoff, proof.handoff) &&
           typeof proof.stagedText === "string" && hash(proof.stagedText) === outcome.handoff?.sha256 : outcome.handoff === null),
       "Expected actual open terminal and interaction calls, observed PTY continuity, bounded native checks, and a verified authorized handoff"
     );
@@ -7032,13 +7035,13 @@ function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
           typeof proof.retry.sourceDigest === "string" && originals.get(proof.retry.originalRunId)?.sourceDigest === proof.retry.sourceDigest &&
           originals.get(proof.retry.newRunId)?.sourceDigest === proof.retry.sourceDigest && matchesValue(retries[0].args, [attempts.at(-1).jobId, proof.retry.originalRunId]) && matchesValue(retries[0].result, attempts.at(-1)) : proof.retry === null) &&
         (world.expected.active ? outcome?.status === "reviewed" && outcome.trials?.length === attempts.length &&
-          outcome.trials.every((trial, index) => matchesValue(trial.observation, attempts[index]) && exercise.calls.some(({ record }) =>
+          outcome.trials.every((trial, index) => isDeepStrictEqual(trial.observation, attempts[index]) && exercise.calls.some(({ record }) =>
             record.definition?.name === "reviewEvalRecovery" && record.outcome === "done" &&
             matchesValue(record.inputs?.request, trial.observation.request) && matchesValue(record.output, trial.review)))
           : outcome?.status === "unresolved" && outcome.reason === "job-unavailable") &&
         handoffs.length === Number(world.expected.stage) &&
         (handoffs.length ? matchesValue(handoffs[0].args, [outcome.jobId, outcome.decision.runId]) &&
-          matchesValue(handoffs[0].result, proof.artifact) && matchesValue(outcome.artifact, proof.artifact) &&
+          matchesValue(handoffs[0].result, proof.artifact) && isDeepStrictEqual(outcome.artifact, proof.artifact) &&
           typeof proof.artifactText === "string" && hash(proof.artifactText) === proof.artifact?.sha256
           : proof.artifact === null && proof.artifactText === null),
       "Expected original native EvalDO admissions and receipts, an authorized retry if any, and actual retained scratch bytes"
@@ -7068,11 +7071,11 @@ function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
           matchesValue(runs[index].result, { id: attempt.id, status: attempt.status }) &&
           matchesValue(reads[index].args, [attempt.id]) && matchesValue(reads[index].result, observations[index])) &&
         (world.expected.project ? outcome.status === "reviewed" && reviewedActualEvidence &&
-          outcome.review?.next === world.expected.next && matchesValue(outcome.receipts, observations)
+          outcome.review?.next === world.expected.next && isDeepStrictEqual(outcome.receipts, observations)
           : outcome.status === "unresolved" && outcome.reason === "program-unavailable") &&
         signs.length === Number(world.expected.signed) &&
         (world.expected.signed ? matchesValue(signs[0].args, [attempts.at(-1)?.id]) &&
-          matchesValue(signs[0].result, proof.signed) && matchesValue(outcome.signed, proof.signed) &&
+          matchesValue(signs[0].result, proof.signed) && isDeepStrictEqual(outcome.signed, proof.signed) &&
           typeof proof.signedText === "string" && hash(proof.signedText) === proof.signed?.sha256
           : proof.signed === null && proof.signedText === null),
       "Expected actual native invocations, exact independently checked output, and any authorized signed receipt"
@@ -7089,20 +7092,20 @@ function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
     const expectedConfirmations = !runs ? [] : world.edit ? ["changed", "current"] : ["current"];
     requireEvidence(
       effectsOf("authoringDiscovery", "list").length === Math.max(1, runs) &&
-        effectsOf("authoringDiscovery", "open").filter(effect => effect.result !== null).length === runs &&
+        effectsOf("authoringDiscovery", "open").filter(effect => effect.result?.complete && !matchesValue(effect.result, null)).length === runs &&
         readbacks.length === runs * readsPerRun &&
         confirmations.length === expectedConfirmations.length &&
         expectedConfirmations.every((result, index) => matchesValue(confirmations[index]?.result, result)) &&
         isDeepStrictEqual(proof.confirmations, expectedConfirmations) &&
         (runs ? outcome?.status === "reviewed" && outcome.receipt?.review?.status === world.expected.status &&
           matchesValue(confirmations.at(-1)?.args, [outcome.receipt]) &&
-          matchesValue(proof.receipt, outcome.receipt) && proof.readbacks?.length === readsPerRun &&
+          isDeepStrictEqual(proof.receipt, outcome.receipt) && proof.readbacks?.length === readsPerRun &&
           readbacks.slice(-readsPerRun).every((effect, index) => matchesValue(effect.result, proof.readbacks[index]))
           : outcome?.status === "unresolved" && outcome.reason === world.expected.unresolvedReason &&
             proof.receipt === null && proof.readbacks?.length === 0) &&
         stages.length === Number(world.expected.stage) &&
         (world.expected.stage ? matchesValue(stages[0]?.args, [outcome.receipt]) &&
-          matchesValue(stages[0]?.result, outcome.artifact) && matchesValue(outcome.artifact, proof.handoff) &&
+          matchesValue(stages[0]?.result, outcome.artifact) && isDeepStrictEqual(outcome.artifact, proof.handoff) &&
           typeof proof.handoffText === "string" && hash(proof.handoffText) === proof.handoff?.revision
           : proof.handoff === null && proof.handoffText === null),
       "Expected exact workspace compiler evidence, a current revision receipt and any authorized scratch handoff"
@@ -7270,7 +7273,7 @@ function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
     requireEvidence(
       catalog.length > 0 && catalog.every(({ args, result }) => matchesValue(args, []) && matchesValue(result, proof.catalog)) &&
         Array.isArray(proof.windows) && proof.windows.length === checkpointCount && reads.length === checkpointCount &&
-        new Set(reads.map(({ args }) => args?.[0])).size === checkpointCount &&
+        new Set(reads.map(({ args }) => args?.hash)).size === checkpointCount &&
         reads.every(({ args, result }) => proof.windows.some(window =>
           matchesValue(args, [window.source.id]) && matchesValue(result, window))) &&
         outcome?.finding?.status === world.expected.status && stages.length === Number(world.expected.stage) &&
@@ -7292,14 +7295,15 @@ function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
     requireEvidence(
       discover.length > 0 && discover.every(({ args, result }) => matchesValue(args, []) && matchesValue(result, proof.catalog)) &&
         proof.observations?.length === roomCount && inspect.length === roomCount &&
-        new Set(inspect.map(({ args }) => args?.[0])).size === roomCount &&
+        new Set(inspect.map(({ args }) => args?.hash)).size === roomCount &&
         inspect.every(({ args, result }) => proof.observations.some(observation =>
           matchesValue(args, [observation.room.id, observation.phrase]) && matchesValue(result, observation))) &&
         proof.nativeProofs?.length === proof.catalog.length && proof.nativeProofs.every(({ passed }) => passed === true) &&
         proof.boundaries?.length === proof.catalog.length && proof.boundaries.every(boundary => boundary.joined === true) &&
         outcome?.status === world.expected.status && submit.length === Number(Boolean(world.expected.send)) &&
         readback.length === submit.length && (world.expected.send ?
-          proof.readback?.acknowledged === true && matchesValue(outcome.delivery, { attempt: proof.attempt, readback: proof.readback }) &&
+          proof.readback?.acknowledged === true && isDeepStrictEqual(outcome.delivery?.attempt, proof.attempt) &&
+          isDeepStrictEqual(outcome.delivery?.readback, proof.readback) &&
           proof.observations.some(({ room, basis }) => room.id === proof.readback.roomId &&
             matchesValue(submit[0].args, [basis, proof.readback.content])) && matchesValue(submit[0].result, proof.attempt) &&
           matchesValue(readback[0].args, [proof.attempt.attemptId]) && matchesValue(readback[0].result, proof.readback) :
@@ -7367,7 +7371,7 @@ function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
     }) && ["reconciliationWindow", "reconciliationNative"].every(service => proof.effects.some(effect => effect.service === service)) &&
       (!world.archive || proof.checks?.recoveredRetainedReconciliation === true &&
         outcome?.archive?.prior?.id === proof.archiveRecheck?.sourceId && outcome.archive.relation === proof.archiveRecheck.relation) &&
-      matchesValue(outcome?.window, proof.window) && outcome.integration.status === world.expected.status &&
+      isDeepStrictEqual(outcome?.window, proof.window) && outcome.integration.status === world.expected.status &&
       outcome.integration.head === (world.expected.status === "integrated" ? proof.mergeHead : proof.nativeHead) &&
       outcome.handoff?.status === world.expected.handoff &&
       (world.expected.handoff === "staged" ? outcome.handoff.artifact?.path === proof.artifact?.path &&
@@ -7402,7 +7406,7 @@ function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
           return matchesValue(args, [receipt.id, receipt.from]) && matchesValue(result, receipt.result);
         }) && outcome?.status === world.expected.status && outcome.revision === proof.independent.build.revision &&
         Boolean(proof.race) === Boolean(world.race) && (world.expected.release
-          ? matchesValue(outcome.release, proof.commits.at(-1)?.result) && outcome.release?.status === "committed"
+          ? isDeepStrictEqual(outcome.release, proof.commits.at(-1)?.result) && outcome.release?.status === "committed"
           : outcome.release === null),
       "Expected exact live build, source, native test and local commit effects"
     );
