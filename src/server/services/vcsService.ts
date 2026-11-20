@@ -58,6 +58,7 @@ export interface VcsServiceDeps {
     | "whenSemanticReady"
     | "participantHistoryAttached"
     | "readParticipantMain"
+    | "readPublishedCatalog"
     | "readTrajectoryProvenance"
     | "openParticipantScope"
     | "editParticipantContext"
@@ -375,6 +376,31 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
     epochTransition = false
   ): Promise<unknown> => {
     if (method === "mainState") return workspace.readParticipantMain();
+    if (!effectCaller.agentBinding && !callerContextId(ctx, deps) && privileged(ctx, deps)) {
+      // Shell and its delegated template reads can name a published event
+      // before an interactive work context has been established.
+      switch (method) {
+        case "resolveRepository":
+          return workspace.readPublishedCatalog().resolveRepository(
+            vcsMethods.resolveRepository.args.parse([input])[0],
+          );
+        case "listDirectory":
+          return workspace.readPublishedCatalog().listDirectory(
+            vcsMethods.listDirectory.args.parse([input])[0],
+          );
+        case "listFiles":
+          return workspace.readPublishedCatalog().listFiles(
+            vcsMethods.listFiles.args.parse([input])[0],
+          );
+        case "readFiles":
+          return workspace.readPublishedCatalog().readFiles(vcsMethods.readFiles.args.parse([input])[0]);
+        case "readFile": {
+          const { state, ...file } = vcsMethods.readFile.args.parse([input])[0];
+          const files = await workspace.readPublishedCatalog().readFiles({ state, files: [file] });
+          return files[0] ?? null;
+        }
+      }
+    }
     if (method === "inspect") {
       const inspect = vcsMethods.inspect.args.parse([input])[0];
       if ("logId" in inspect.node) {

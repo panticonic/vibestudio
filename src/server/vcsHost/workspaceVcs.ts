@@ -143,6 +143,7 @@ import {
   readWorkspaceHistoryTemplateInstallation,
   readWorkspaceParticipantContentSource,
   readWorkspaceParticipantFileDescriptors,
+  workspacePublishedCatalog,
   readWorkspaceParticipantProjection,
   readWorkspaceParticipantRevision,
   readWorkspaceParticipantStatus,
@@ -1003,6 +1004,20 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     if (!source) throw new Error("Participant workspace history is unavailable");
     const main = await readWorkspaceCanonicalMain(source);
     return { kind: "event" as const, eventId: main.eventId };
+  }
+
+  readPublishedCatalog() {
+    if (!this.participantHistorySource) throw new Error("Participant workspace history is unavailable");
+    const catalog = workspacePublishedCatalog(this.participantHistorySource);
+    return {
+      ...catalog,
+      readFiles: async (read: VcsReadFilesInput) => {
+        const files = await catalog.readFileDescriptors(read);
+        return vcsMethods.readFiles.returns.parse(await Promise.all(
+          files.map((file) => file === null ? null : this.executeSingleSemanticBlobRead(file)),
+        ));
+      },
+    };
   }
 
   async participantRecallCauses(

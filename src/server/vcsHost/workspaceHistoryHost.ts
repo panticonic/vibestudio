@@ -669,7 +669,18 @@ export async function readWorkspaceParticipantFileDescriptors(input: WorkspaceHi
   read: VcsReadFilesInput;
 }) {
   requireWorkspaceParticipantOwner(input);
-  const { dispatch, owner, contextId, read } = input;
+  return readWorkspaceFileDescriptors(input);
+}
+
+type WorkspaceCatalogTarget = {
+  dispatch: WorkspaceHistorySource["dispatch"];
+  owner: WorkspaceSourceProviderRef;
+  contextId: string | null;
+};
+
+async function readWorkspaceFileDescriptors({ dispatch, owner, contextId, read }: WorkspaceCatalogTarget & {
+  read: VcsReadFilesInput;
+}) {
   const files = semanticFileHostReadSchema.nullable().array().max(500).parse(
     await dispatch.dispatch(owner, "readHistoryFiles", { contextId, read })
   );
@@ -699,12 +710,6 @@ export function workspaceParticipantCatalog(input: WorkspaceHistoryParticipant &
     ...input, readableContextIds: input.readableContextIds ?? [],
     reference: { kind: "state-node", value: state },
   });
-  const verify = <T extends { state: VcsStateNodeRef } | null>(result: T, state: VcsStateNodeRef) => {
-    if (result && canonicalJson(result.state) !== canonicalJson(state)) {
-      throw new Error("Workspace catalog returned a different revision");
-    }
-    return result;
-  };
   const locations = async (
     method: "readHistoryChangedLocations" | "readHistoryMergeLocations",
     target: VcsStateNodeRef,
@@ -720,12 +725,13 @@ export function workspaceParticipantCatalog(input: WorkspaceHistoryParticipant &
     return result.locations;
   };
   return {
+    ...workspaceHistoryCatalog(input),
     changedLocations: (target: VcsStateNodeRef, source: VcsStateNodeRef) =>
       locations("readHistoryChangedLocations", target, source),
     mergeLocations: (target: VcsStateNodeRef, source: VcsStateNodeRef) =>
       locations("readHistoryMergeLocations", target, source),
     async repositoryPath(state: VcsStateNodeRef, repositoryId: string) {
-      const result = verify(vcsResolveRepositoryResultSchema.parse(
+      const result = verifyCatalogState(vcsResolveRepositoryResultSchema.parse(
         await dispatch.dispatch(owner, "readHistoryRepositoryLocation", {
           contextId: await contextForState(state), state, repositoryId,
         })
@@ -741,8 +747,26 @@ export function workspaceParticipantCatalog(input: WorkspaceHistoryParticipant &
       });
       return files[0]?.path ?? null;
     },
+  };
+}
+
+export function workspacePublishedCatalog({ dispatch, canonical }: WorkspaceHistorySource) {
+  return workspaceHistoryCatalog({ dispatch, owner: canonical, contextId: null });
+}
+
+function verifyCatalogState<T extends { state: VcsStateNodeRef } | null>(result: T, state: VcsStateNodeRef): T {
+  if (result && canonicalJson(result.state) !== canonicalJson(state)) {
+    throw new Error("Workspace catalog returned a different revision");
+  }
+  return result;
+}
+
+function workspaceHistoryCatalog({ dispatch, owner, contextId }: WorkspaceCatalogTarget) {
+  return {
+    readFileDescriptors: (read: VcsReadFilesInput) =>
+      readWorkspaceFileDescriptors({ dispatch, owner, contextId, read }),
     async resolveRepository(repository: VcsResolveRepositoryInput) {
-      const result = verify(vcsResolveRepositoryResultSchema.parse(
+      const result = verifyCatalogState(vcsResolveRepositoryResultSchema.parse(
         await dispatch.dispatch(owner, "resolveHistoryRepository", { contextId, repository })
       ), repository.state);
       if (result && result.repoPath !== repository.repoPath)
@@ -751,7 +775,7 @@ export function workspaceParticipantCatalog(input: WorkspaceHistoryParticipant &
     },
     async listFiles(list: VcsListFilesInput) {
       const { prefix } = list;
-      const result = verify(vcsListFilesResultSchema.parse(
+      const result = verifyCatalogState(vcsListFilesResultSchema.parse(
         await dispatch.dispatch(owner, "listHistoryFiles", { contextId, list })
       ), list.state);
       if (result.repositoryId !== list.repositoryId || result.files.length > list.limit ||
@@ -761,7 +785,7 @@ export function workspaceParticipantCatalog(input: WorkspaceHistoryParticipant &
       return result;
     },
     async listDirectory(list: VcsListDirectoryInput) {
-      const result = verify(vcsListDirectoryResultSchema.parse(
+      const result = verifyCatalogState(vcsListDirectoryResultSchema.parse(
         await dispatch.dispatch(owner, "listHistoryDirectory", { contextId, list })
       ), list.state);
       const prefix = list.path ? `${list.path}/` : "";

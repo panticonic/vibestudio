@@ -163,6 +163,7 @@ function participantFixture(
       await read("readHistoryMain");
       return EVENT;
     }),
+    readPublishedCatalog: vi.fn<WorkspaceVcs["readPublishedCatalog"]>(),
     editParticipantContext: vi.fn(),
     transferParticipantContext: vi.fn(),
     revertParticipantContext: vi.fn(),
@@ -225,6 +226,33 @@ function mutationService(options?: Omit<ServiceOptions, "participantWorkspace">)
 }
 
 describe("canonical vcsService", () => {
+  it("lets a trusted shell's template extension resolve a published repository without opening a copy", async () => {
+    const workspace = participantFixture(undefined, vi.fn());
+    const repository = { state: EVENT, repoPath: "meta", repositoryId: "repository:meta" };
+    const resolveRepository = vi.fn().mockResolvedValue(repository);
+    workspace.readPublishedCatalog.mockReturnValue({
+      resolveRepository,
+      listDirectory: vi.fn(),
+      listFiles: vi.fn(),
+      readFileDescriptors: vi.fn(),
+      readFiles: vi.fn(),
+    });
+    const { definition } = service({ participantWorkspace: workspace });
+    const ctx = {
+      ...workerContext(),
+      caller: createVerifiedCaller("@workspace-extensions/templates", "extension"),
+      authorizingCaller: shellContext().caller,
+    };
+    const selector = { state: EVENT, repoPath: "meta" };
+    await expect(definition.handler(ctx, "resolveRepository", [selector])).resolves.toEqual(repository);
+    expect(resolveRepository).toHaveBeenCalledWith(selector);
+    expect(workspace.openParticipantScope).not.toHaveBeenCalled();
+    await expect(definition.handler(workerContext(), "resolveRepository", [selector])).rejects.toThrow(
+      "no admitted workspace participant context",
+    );
+    expect(resolveRepository).toHaveBeenCalledTimes(1);
+  });
+
   it("uses the admitted participant copy for exact reads and protected writes", async () => {
     const caller = createVerifiedCaller("worker:reader", "worker", null, null, {
       userId: "user:owner",
@@ -266,6 +294,7 @@ describe("canonical vcsService", () => {
       whenSemanticReady: vi.fn(async () => {}),
       openParticipantScope: vi.fn().mockResolvedValue(scope),
       readParticipantMain: vi.fn().mockResolvedValue(EVENT),
+      readPublishedCatalog: vi.fn<WorkspaceVcs["readPublishedCatalog"]>(),
       readTrajectoryProvenance: vi.fn(),
       editParticipantContext: vi.fn(),
       transferParticipantContext: vi.fn(),
