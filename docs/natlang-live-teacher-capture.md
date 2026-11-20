@@ -430,8 +430,8 @@ read and write gates, and the saved artifact without a model.
 Adventure opening reviews call the access, continuity and illustration
 reviewers on the installed worker's saved journey. The postal case joins the
 panel's loaded image to the stored asset and canonical scene signature. The
-Embassy case checks an opening where image import is denied and no artwork is
-saved. Run
+Embassy case checks an opening with the optional artwork configuration removed
+in the disposable context. Run
 `adventure-review-oracle-qualification` in Examples for the model-free check.
 Spectrolite navigation reviews retain the browser-observed source and destination of each
 wiki-link hop. The navigation finding binds the whole route to the final canonical document,

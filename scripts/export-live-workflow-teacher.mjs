@@ -8272,9 +8272,9 @@ function adventureReviewEvidence(execution, exercise, _scenario, { assignment })
       (assignment.painted
         ? typeof artwork?.id === "string" && artwork.id.length > 0 &&
           artwork.place === current.place && artwork.signature === current.signature &&
-          isDeepStrictEqual(panel, { location: current.place, asset: artwork.id, tick: current.tick, importDenied: false })
+          isDeepStrictEqual(panel, { location: current.place, asset: artwork.id, tick: current.tick })
         : artwork === null &&
-          isDeepStrictEqual(panel, { location: current.place, asset: "", tick: current.tick, importDenied: true })) &&
+          isDeepStrictEqual(panel, { location: current.place, asset: "", tick: current.tick })) &&
       isDeepStrictEqual(report, expected) &&
       isDeepStrictEqual(report?.components?.map(({ decision }) => decision), assignment.expected),
     "Adventure review must match the owned saved opening and its independently checked artwork"

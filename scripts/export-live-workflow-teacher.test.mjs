@@ -4705,7 +4705,7 @@ test("Adventure export joins the loaded cover to the saved journey and requires 
   const before = { id: journey + ":before", place: assignment.place, tick: 0, signature: "a".repeat(64) };
   const current = { ...before, id: journey + ":current" };
   const artwork = { id: "cover-image", place: current.place, signature: current.signature };
-  const panel = { location: current.place, asset: artwork.id, tick: current.tick, importDenied: false };
+  const panel = { location: current.place, asset: artwork.id, tick: current.tick };
   const observed = { before, current, artwork };
   const components = assignment.expected.map((decision, index) => ({
     decision,
