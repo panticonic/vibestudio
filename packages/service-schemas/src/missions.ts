@@ -367,6 +367,7 @@ export const missionsMethods = defineReceiverServiceMethods({
         .object({
           name: z.string().min(1).optional(),
           charter: missionCharterSchema.optional(),
+          expectedRevision: z.number().int().positive().optional(),
           authorityPlan: authorityPlanReferenceSchema.optional(),
         })
         .strict(),

@@ -28,6 +28,39 @@ describe("missions v3 contract", () => {
     expect(missionsMethods.resume.args.parse(["mission"])).toEqual(["mission"]);
   });
 
+  it("accepts only positive integral observed edit revisions and keeps unguarded edits valid", () => {
+    const { args } = missionsMethods.edit;
+    expect(args.parse(["mission", { name: "New", expectedRevision: 2 }])).toEqual([
+      "mission",
+      { name: "New", expectedRevision: 2 },
+    ]);
+    expect(args.parse(["mission", { name: "Legacy" }])).toEqual(["mission", { name: "Legacy" }]);
+    for (const expectedRevision of [0, -1, 1.5, "2", null]) {
+      expect(args.safeParse(["mission", { expectedRevision }]).success).toBe(false);
+    }
+  });
+
+  it("leaves a moved revision to the edit receiver so the same key can recover", async () => {
+    const result = { missionId: "mission", revision: 2 };
+    const call = vi
+      .fn()
+      .mockResolvedValueOnce({ kind: "durable-object", targetId: "controller" })
+      .mockResolvedValueOnce({ revision: 3 })
+      .mockResolvedValueOnce(result);
+    const client = createMissionsClient({ call } as unknown as MissionRpc);
+    const patch = { name: "New", expectedRevision: 1 };
+    await expect(client.edit("mission", patch, { idempotencyKey: "same-edit" })).resolves.toEqual(
+      result
+    );
+    expect(call.mock.calls.at(-1)).toEqual([
+      "controller",
+      missionsRpcMethods.edit,
+      ["mission", patch],
+      { idempotencyKey: "same-edit" },
+    ]);
+    expect(call).toHaveBeenCalledTimes(3);
+  });
+
   it("sends the guarded transition through the revision-aware receiver", async () => {
     const result = { state: "paused", missionId: "mission", revisionDigest: hex };
     const call = vi

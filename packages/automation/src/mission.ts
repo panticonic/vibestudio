@@ -436,6 +436,7 @@ export function missionUsesAuthority(execution: MissionExecution): boolean {
 }
 
 export const MISSIONS_SERVICE_PROTOCOL = "vibestudio.missions.v1" as const;
+export const MISSION_REVISION_CHANGED = "MISSION_REVISION_CHANGED" as const;
 
 /** Schedule/name changes do not change the compiled invocation meaning. */
 export function sameMissionExecution(left: MissionExecution, right: MissionExecution): boolean {
@@ -458,6 +459,8 @@ export interface MissionDefaultDefinitionInput extends MissionDefinitionInput {
 export interface MissionEditPatch {
   name?: string;
   charter?: MissionCharter;
+  /** Refuse a fresh edit if this observed definition revision has moved. */
+  expectedRevision?: number;
 }
 
 export interface MissionCallOptions {

@@ -94,6 +94,11 @@ export function createMissionsClient(rpc: MissionRpc): MissionsClient {
     async edit(missionId, patch, options) {
       const current = await call("get", [missionId]);
       if (!current) throw new Error(`Automation ${missionId} is unavailable`);
+      // The native command owns stale checks and same-key recovery. A moved
+      // revision needs no fresh authority plan to either reject or replay it.
+      if (patch.expectedRevision !== undefined && current.revision !== patch.expectedRevision) {
+        return call("edit", [missionId, patch], options?.idempotencyKey);
+      }
       const execution = patch.charter?.execution ?? current.charter.execution;
       const authorityPlan = editNeedsAuthorityPlan(current, execution)
         ? await compileMissionAuthorityPlan(rpc, execution, planKey(options))
