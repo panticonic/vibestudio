@@ -268,10 +268,15 @@ export async function startNativeWorkspaceRuntime(input: {
       home,
       admitDependencies(input: NativeDependencyAdmission): Promise<NativeDependencyResources> {
         const { key, nodeModulesDir, workspacePackages, workspacePackageNodeModules } = input;
+        const workspaceSourcePackages = new Set(input.workspaceSourcePackages ?? []);
         if (retiring) return Promise.reject(new Error("Native workspace is retiring"));
         if (!/^[a-z0-9-]+$/u.test(key))
           return Promise.reject(new Error("Invalid acquired dependency identity"));
-        if (Object.keys(workspacePackageNodeModules).some((name) => !workspacePackages[name])) {
+        if (
+          [...Object.keys(workspacePackageNodeModules), ...workspaceSourcePackages].some(
+            (name) => !Object.hasOwn(workspacePackages, name)
+          )
+        ) {
           return Promise.reject(
             new Error("Workspace package dependency roots must belong to admitted packages")
           );
@@ -294,7 +299,11 @@ export async function startNativeWorkspaceRuntime(input: {
                 "workspace-modules",
                 Buffer.from(name).toString("base64url")
               );
-              await dependencyWorker.materializePackage(source, target);
+              await dependencyWorker.materializePackage(
+                source,
+                target,
+                workspaceSourcePackages.has(name)
+              );
               const packageNodeModules = workspacePackageNodeModules[name];
               if (packageNodeModules) {
                 await dependencyWorker.materialize(

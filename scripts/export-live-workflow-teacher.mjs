@@ -9,6 +9,29 @@ import { requireDevelopmentTemplateCheckouts } from "../src/dev/developmentTempl
 import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
 
 const sharedProgram = "skills/vibestudio-workflows/runWorkflow.nl";
+const templateGoalDomains = {
+  news: {
+    namespace: "vibestudio:news",
+    validator: { template: "news", path: "packages/news-live-evidence/open-goal.ts" },
+    callable: "reviewUserNewsGoal",
+    checks: ["readCurrentNews", "verifiedCadence", "verifiedReaderViews", "groundedScheduleFindings",
+      "verifiedAuthorizedChanges", "reportedDisposition"],
+  },
+  spectrolite: {
+    namespace: "vibestudio:spectrolite",
+    validator: { template: "spectrolite", path: "skills/spectrolite-review-fixtures/open-goal.ts" },
+    callable: "workTowardVaultGoal",
+    checks: ["originalSpectroliteEditor", "exactObservedNavigation", "currentSpectroliteOutcome",
+      "canonicalReviewFindings", "exactVaultWrite", "protectedVaultHeads"],
+  },
+  google: {
+    namespace: "vibestudio:google-drive",
+    validator: { template: "google-workspace", path: "skills/google-drive/open-goal-drive.ts" },
+    callable: "workOnDriveGoal",
+    checks: ["discoveredDriveScope", "exactProviderReads", "boundDriveOutcome",
+      "groundedDriveFindings", "preservedReadOnlyScope"],
+  },
+};
 const panelWorkflow = {
   family: "workspace-panel-repair",
   namespace: "vibestudio:panel-repair",
@@ -1000,8 +1023,10 @@ export async function loadLiveTeacherCases(checkouts) {
   if (openGoalSource) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
-    const { openGoalWorlds, browserGoalWorlds = [], suiteGoalWorlds = [] } = imported.default ?? imported;
-    for (const assignment of [...openGoalWorlds, ...browserGoalWorlds, ...suiteGoalWorlds]) {
+    const { openGoalWorlds, browserGoalWorlds = [], suiteGoalWorlds = [], newsGoalWorlds = [],
+      spectroliteGoalWorlds = [], openGoalGoogleWorlds = [] } = imported.default ?? imported;
+    for (const assignment of [...openGoalWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
+      ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds]) {
       const split = assignment.split ?? "train";
       const sourceGroups = [assignment.sourceGroup, assignment.relatedSourceGroup].filter(Boolean);
       const scenario = `open-goal-${assignment.id}`;
@@ -1013,23 +1038,24 @@ export async function loadLiveTeacherCases(checkouts) {
           `Open-goal source group ${group} crosses ${prior} and ${split}`);
         splitByGroup.set(group, split);
       }
+      const domain = templateGoalDomains[assignment.kind];
       cases.set(scenario, {
         family: `workspace-open-user-goal-${assignment.kind}`,
-        workspace: "examples",
-        namespace: assignment.kind === "browser" ? "vibestudio:browser" :
+        workspace: assignment.workspace ?? "examples",
+        namespace: domain?.namespace ?? (assignment.kind === "browser" ? "vibestudio:browser" :
           assignment.kind === "suite" ? "vibestudio:workspace-verification" :
-          assignment.kind === "research" ? "vibestudio:web-research" : "vibestudio:workspace-edit",
+          assignment.kind === "research" ? "vibestudio:web-research" : "vibestudio:workspace-edit"),
         group: assignment.sourceGroup,
         sourceGroups,
         split,
         interaction: "open-user-goal",
         program: "skills/open-user-goal/runUserGoal.nl",
         root: "runUserGoal",
-        validator: { template: "system-testing", path: `skills/system-testing/open-goal${[
+        validator: domain?.validator ?? { template: "system-testing", path: `skills/system-testing/open-goal${[
           "browser", "suite",
         ].includes(assignment.kind) ? `-${assignment.kind}` : ""}-managed.ts` },
         assignment,
-        evidence: openGoalEvidence,
+        evidence: domain ? openTemplateGoalEvidence : openGoalEvidence,
       });
     }
   }
@@ -6655,6 +6681,66 @@ function researchHandoffEvidence(execution, exercise, scenario, workflow) {
     "The scratch handoff must use the exact verified excerpts and only write when supported"
   );
   return { world: { context_id: contextId, case_id: caseId }, checks, evidence: { workspace: { fixture } } };
+}
+
+function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
+  const proof = execution.diagnostics.openGoalVerification;
+  const world = workflow.assignment;
+  const { callable, checks } = templateGoalDomains[world.kind];
+  const rootId = exercise.rootCallIds[0];
+  const root = exercise.calls.find(({ callId }) => callId === rootId)?.record;
+  const skill = exercise.calls.map(({ record }) => record).find(record =>
+    record.parent_call_id === rootId && record.definition?.name === callable && record.outcome === "done");
+  const effects = exercise.calls.flatMap(({ record }) => record.effects ?? []);
+  const performed = (service, method) => effects.some(effect =>
+    effect.service === service && effect.method === method && !effect.error);
+  requireEvidence(
+    proof?.passed === true && proof.caseId === world.id && proof.goal === world.goal &&
+      typeof proof.contextId === "string" && proof.contextId === execution.provenance?.contextId &&
+      checks.every(key => proof.checks?.[key] === true) &&
+      Object.keys(root?.inputs ?? {}).length === 1 && matchesValue(root.inputs.goal, world.goal) &&
+      Object.keys(skill?.inputs ?? {}).length === 1 && matchesValue(skill.inputs.goal, world.goal) &&
+      exercise.report?.status === "workspace-skill-reviewed" && exercise.report.skill === world.kind &&
+      matchesValue(skill.output, exercise.report.outcome),
+    "Expected a verified live goal and its actual installed Natlang skill call"
+  );
+  const evidence = { workspace: { proof } };
+  if (world.kind === "news") {
+    requireEvidence(
+      performed("newsGoal", "observeCadence") &&
+        (!world.readers.length || performed("newsGoal", "readReader")) &&
+        (!world.applied.length || performed("newsGoal", "apply")) &&
+        proof.initial && proof.latest && proof.observations?.length > 0 && Array.isArray(proof.attempts),
+      "Expected the run's actual News observations and schedule action records"
+    );
+  } else if (world.kind === "spectrolite") {
+    const generation = proof.final?.binding?.generation;
+    requireEvidence(
+      performed("spectroliteGoal", "inspect") && performed("spectroliteGoal", "evidence") &&
+        (!world.expected.route.length || performed("spectroliteGoal", "follow")) &&
+        (!world.writablePath || performed("spectroliteGoal", "revise")) &&
+        typeof proof.panelId === "string" && generation?.protocol === "panel-cdp-generation.v1" &&
+        generation.panelId === proof.panelId && proof.observations?.length > 0 &&
+        proof.observations.every(({ binding }) => isDeepStrictEqual(binding?.generation, generation)),
+      "Expected navigation and readback bound to the original Spectrolite renderer"
+    );
+    evidence.cdp = { panelId: proof.panelId, observations: proof.observations, final: proof.final };
+  } else {
+    const { mode, gate } = world.expected;
+    requireEvidence(
+      proof.mode === mode && proof.gate === (gate ?? null) &&
+        performed("googleWorkspaceRead", "readiness") && performed("googleGoalDiscovery", "discover") &&
+        performed("googleWorkspaceRead", mode === "changes" ? "readChanges" : "listFolder") &&
+        (gate === "audited") === performed("googleWorkspaceRead", "readPermissions") &&
+        proof.requests?.length > 0 && proof.discovery && proof.observed,
+      "Expected the authorized Drive scope and verified results from the observed provider pages"
+    );
+  }
+  return {
+    world: { context_id: proof.contextId, ...(proof.panelId ? { panel_id: proof.panelId } : {}) },
+    checks: Object.fromEntries(checks.map(check => [check, true])),
+    evidence,
+  };
 }
 
 function openGoalEvidence(execution, exercise, _scenario, workflow) {

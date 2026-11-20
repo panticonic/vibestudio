@@ -2,7 +2,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { materializeImmutableTree, materializePrivateTree } from "./immutableTreeMaterializer.js";
+import {
+  materializeImmutableTree,
+  materializePackageResources,
+  materializePrivateTree,
+} from "./immutableTreeMaterializer.js";
 
 const roots: string[] = [];
 
@@ -142,4 +146,45 @@ it("publishes independent native files while resolving only contained dependency
   await expect(materializePrivateTree(source, path.join(root, "rejected"))).rejects.toThrow(
     /escapes installed resource closure/
   );
+});
+
+it("admits internal source for workspace packages while projecting only installed SDK exports", async () => {
+  const fixture = await fs.promises.mkdtemp(path.join(os.tmpdir(), "native-package-resources-"));
+  try {
+    const source = path.join(fixture, "source");
+    await fs.promises.mkdir(path.join(source, "node_modules"), { recursive: true });
+    await fs.promises.writeFile(
+      path.join(source, "package.json"),
+      JSON.stringify({ exports: "./index.ts" })
+    );
+    await fs.promises.writeFile(
+      path.join(source, "index.ts"),
+      'export { value } from "./internal.js";'
+    );
+    await fs.promises.writeFile(path.join(source, "internal.ts"), "export const value = 42;");
+    await fs.promises.writeFile(
+      path.join(source, "node_modules", "ambient.js"),
+      "export const ambient = true;"
+    );
+    const workspace = path.join(fixture, "workspace");
+    const sdk = path.join(fixture, "sdk");
+
+    await materializePackageResources(source, workspace, true);
+    await materializePackageResources(source, sdk);
+
+    await expect(
+      fs.promises.readFile(path.join(workspace, "internal.ts"), "utf8")
+    ).resolves.toContain("42");
+    await expect(
+      fs.promises.readFile(path.join(workspace, "node_modules", "ambient.js"))
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.promises.readFile(path.join(sdk, "index.ts"), "utf8")).resolves.toContain(
+      "internal.js"
+    );
+    await expect(fs.promises.readFile(path.join(sdk, "internal.ts"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  } finally {
+    await fs.promises.rm(fixture, { recursive: true, force: true });
+  }
 });

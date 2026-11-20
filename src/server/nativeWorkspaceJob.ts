@@ -12,6 +12,8 @@ export interface NativeDependencyAdmission {
   key: string;
   nodeModulesDir: string;
   workspacePackages: Record<string, string>;
+  /** Names from the pinned workspace tree whose internal source is needed. Installed SDKs stay export-only. */
+  workspaceSourcePackages?: readonly string[];
   /** External dependencies owned by each workspace package, mounted beneath its node_modules. */
   workspacePackageNodeModules: Record<string, string>;
 }

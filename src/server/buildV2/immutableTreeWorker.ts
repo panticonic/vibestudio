@@ -9,7 +9,7 @@ interface Request {
   id: number;
   source: string;
   target: string;
-  kind: "tree" | "package";
+  kind: "tree" | "package" | "workspace-package";
 }
 
 const port = parentPort;
@@ -19,8 +19,12 @@ let queue = Promise.resolve();
 port.on("message", (request: Request) => {
   queue = queue.then(async () => {
     try {
-      if (request.kind === "package")
-        await materializePackageResources(request.source, request.target);
+      if (request.kind !== "tree")
+        await materializePackageResources(
+          request.source,
+          request.target,
+          request.kind === "workspace-package"
+        );
       else await materializeImmutableTree(request.source, request.target);
       port.postMessage({ id: request.id, result: true });
     } catch (error) {
