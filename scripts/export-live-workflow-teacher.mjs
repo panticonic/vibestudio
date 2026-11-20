@@ -629,6 +629,14 @@ const grimoireWorkflow = {
   root: "reviewExample",
   evidence: grimoireEvidence,
 };
+const grimoireHandoffWorkflow = {
+  ...grimoireWorkflow,
+  family: "examples-live-grimoire-handoff",
+  namespace: "vibestudio:examples-handoff",
+  group: "grimoire-caretaker-handoff",
+  validator: { template: "system-testing", path: "skills/system-testing/grimoire-handoff-managed.ts" },
+  evidence: grimoireHandoffEvidence,
+};
 const tendrilWorkflow = {
   family: "workspace-tendril-presentation",
   namespace: "vibestudio:tendrils",
@@ -805,7 +813,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedBrowserHandoffWorlds },
     { managedMissionPlanningWorlds },
     { managedChannelRosterWorlds },
-    { managedGrimoireWorlds },
+    { managedGrimoireWorlds, grimoireHandoffWork, projectGardenHandoff },
     { managedSpectroliteWorlds, spectroliteHandoffWork },
     { managedNewsWorlds, newsHandoffWork, newsHandoffSchedule, projectNewsCadenceSource },
     { managedGoogleSetupWorlds, gmailContinuationWork },
@@ -1393,9 +1401,19 @@ export async function loadLiveTeacherCases(checkouts) {
       })),
     });
   }
-  for (const { id, expected, actions } of managedGrimoireWorlds) {
+  for (const { id, expected, actions, request, handoff } of managedGrimoireWorlds) {
     cases.set(`grimoire-live-${id}`, {
       ...grimoireWorkflow,
+      ...(handoff && {
+        ...grimoireHandoffWorkflow,
+        skills: grimoireHandoffWork.map(({ operation }) => operation),
+        work: grimoireHandoffWork,
+        gardenRequest: request,
+        handoff,
+        projectGardenHandoff,
+        sourceGroups: [grimoireHandoffWorkflow, grimoireWorkflow, scratchHandoffWorkflow]
+          .flatMap(workflowSourceGroups),
+      }),
       caseId: id,
       expectedDecisions: expected,
       expectedActions: actions.map((action) => action.toLowerCase()),
@@ -8257,6 +8275,86 @@ function grimoireEvidence(execution, exercise, _scenario, workflow) {
   return {
     world: { context_id: fixture.contextId, garden: verification.garden, case_id: workflow.caseId },
     checks: verification.checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function grimoireHandoffEvidence(execution, exercise, scenario, workflow) {
+  const fixture = execution.diagnostics.managedGrimoire;
+  const { request, garden, handoff, sourceSha256, checks, passed } = fixture?.verification ?? {};
+  const results = exercise.report?.results;
+  const [gardenResult, handoffResult] = Array.isArray(results) ? results : [];
+  requireEvidence(
+    passed === true &&
+      ["exactGarden", "exactHandoff", "verifiedTransfer"].every((key) => checks?.[key] === true) &&
+      request?.goal?.startsWith(workflow.gardenRequest.goal) &&
+      request.work?.length === workflow.work.length &&
+      results?.length === workflow.work.length &&
+      exercise.report.remaining?.length === 0 &&
+      workflow.work.every((assigned, index) =>
+        ["kind", "domain", "operation"].every((key) =>
+          assigned[key] === request.work[index]?.[key] && assigned[key] === results[index]?.[key]
+        )
+      ) &&
+      isDeepStrictEqual(request.work[0]?.input, workflow.gardenRequest) &&
+      isDeepStrictEqual(request.work[1]?.input?.questions, workflow.handoff.questions) &&
+      isDeepStrictEqual(handoff?.sourceIds, ["garden"]) &&
+      request.work[1].input.sources?.length === 1 &&
+      request.work[1].input.sources[0]?.id === "garden",
+    "The outcome must join the assigned garden and caretaker questions in the same workflow"
+  );
+  const observed = grimoireEvidence({
+    ...execution,
+    diagnostics: { managedGrimoire: { contextId: fixture.contextId, verification: garden } },
+  }, { ...exercise, report: gardenResult.report }, scenario, workflow);
+  const staged = scratchHandoffEvidence({
+    ...execution,
+    diagnostics: {
+      scratchHandoffWorld: { contextId: fixture.contextId, caseId: workflow.caseId },
+      scratchHandoffVerification: handoff,
+    },
+  }, { ...exercise, report: handoffResult.report }, scenario, { ...workflow, expectedStatus: "staged" });
+  const source = workflow.projectGardenHandoff(workflow.gardenRequest.claims, gardenResult.report.components);
+  const root = exercise.calls.find(({ callId }) => callId === exercise.rootCallIds[0]);
+  const children = (parent, name) => exercise.calls.filter(({ record }) =>
+    parent && record.parent_call_id === parent.callId &&
+    record.definition?.name === name && record.outcome === "done"
+  );
+  const [review] = children(root, "reviewExample");
+  const [assemble] = children(root, "assembleHandoff");
+  const [inspect] = children(review, "inspectLiveGarden");
+  const [readGarden] = children(inspect, "readGarden");
+  const claimCalls = children(inspect, "qualifyClaim");
+  const effects = exercise.calls.flatMap(({ record }) => record.effects ?? []);
+  const effect = (service) => effects.find((effect) => effect.service === service);
+  const gardenRead = effect("gardenRead");
+  const read = effect("scratchHandoffRead");
+  const write = effect("scratchHandoffWrite");
+  requireEvidence(
+    sourceSha256 === hash(source) &&
+      matchesValue(root?.record.inputs?.request, request) &&
+      matchesValue(review?.record.inputs?.request, request.work[0].input) &&
+      matchesValue(review?.record.output, gardenResult.report) &&
+      matchesValue(assemble?.record.inputs?.request, request.work[1].input) &&
+      matchesValue(assemble?.record.output, handoffResult.report) &&
+      claimCalls.length === workflow.gardenRequest.claims.length &&
+      workflow.gardenRequest.claims.every((claim) => claimCalls.some(({ record }) =>
+        matchesValue(record.inputs?.claim, claim) &&
+        matchesValue(record.inputs?.observed, garden.observed)
+      )) &&
+      effects.length === 3 &&
+      gardenRead && readGarden?.record.effects?.includes(gardenRead) &&
+      gardenRead.method === "observe" && !gardenRead.error &&
+      matchesValue(gardenRead.result, garden.observed) &&
+      read?.method === "read" && !read.error && matchesValue(read.args, ["garden"]) &&
+      matchesValue(read.result, { id: "garden", lines: source.trimEnd().split("\n") }) &&
+      write?.method === "stage" && !write.error && matchesValue(write.result, handoffResult.report.artifact) &&
+      Date.parse(review.record.ended_at) <= Date.parse(assemble.record.started_at),
+    "The staged caretaker handoff must use the exact committed garden findings and recorded service effects"
+  );
+  return {
+    world: { ...observed.world, seed_revision: staged.world.seed_revision },
+    checks: { ...observed.checks, ...staged.checks, ...checks },
     evidence: { workspace: { fixture } },
   };
 }

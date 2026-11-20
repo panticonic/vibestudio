@@ -422,6 +422,11 @@ or reattachment.
 Examples garden tasks compare visits and elapsed time against the persisted world. Clock cases
 use the panel's quiet observation action in an estate without storyteller seats. The oracle verifies the exact action
 sequence, elapsed phases, and attachment gains on distinct days.
+The caretaker handoffs call the garden review and scratch handoff in the same
+Examples workspace. The staged artifact cites the verified answer to each
+question, keeping contradicted claims distinct from missing observations.
+Run `grimoire-managed-handoff-qualification` to check the live garden, the
+read and write gates, and the saved artifact without a model.
 Spectrolite navigation reviews retain the browser-observed source and destination of each
 wiki-link hop. The navigation finding binds the whole route to the final canonical document,
 and any preview finding refers to that same editor and revision. Draft reviews compare the

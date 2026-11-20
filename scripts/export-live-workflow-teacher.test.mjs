@@ -4687,6 +4687,112 @@ test("client admission export preserves denied optional capabilities", (t) =>
   checkClientCapabilityCase(t, "android-candidate-requests-optional-menu", "review-candidate")
 );
 
+test("Grimoire handoff binds each claim and the staged evidence to the owned readback", async () => {
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  const name = "grimoire-live-discovery-with-missing-habitat-handoff";
+  const workflow = cases.get(name);
+  assert.deepEqual(workflow.skills, ["reviewExample", "assembleHandoff"]);
+  assert.ok(workflowSourceGroups(workflow).includes("vibestudio:examples:grimoire-resident-care"));
+  const sha = (text) => createHash("sha256").update(text).digest("hex");
+  const ref = (value) => {
+    const text = JSON.stringify(value);
+    return { complete: true, bytes: Buffer.byteLength(text), hash: sha(text) };
+  };
+  const { claims } = workflow.gardenRequest;
+  const contextId = "garden-context";
+  const observed = { before: { id: "owned:before" }, current: { id: "owned:current" } };
+  const components = workflow.expectedDecisions.map((decision, index) => ({
+    decision,
+    finding: `evidence-${index}`,
+    evidenceIds: [observed.current.id],
+  }));
+  const gardenReport = { ...components[0], components };
+  const source = workflow.projectGardenHandoff(claims, components);
+  const artifact = { path: "/.tmp/handoff/handoff.json", bytes: 27 };
+  const stagedReport = { status: "staged", artifact, missingSources: [], unanswered: [] };
+  const sandbox = { goal: "Stage", questions: workflow.handoff.questions, sources: [{ id: "garden", path: "/.tmp/input" }] };
+  const request = {
+    goal: workflow.gardenRequest.goal,
+    work: workflow.work.map((item, index) => ({ ...item, input: [workflow.gardenRequest, sandbox][index] })),
+  };
+  const check = (...keys) => Object.fromEntries(keys.map((key) => [key, true]));
+  const verification = {
+    passed: true,
+    request,
+    checks: check("exactGarden", "exactHandoff", "verifiedTransfer"),
+    sourceSha256: sha(source),
+    garden: {
+      passed: true,
+      garden: "owned",
+      actions: workflow.expectedActions,
+      observed,
+      expected: gardenReport,
+      checks: check("persistedVisits", "persistedClock", "assignedClaims", "readOwnedGarden", "matchedJudgment", "matchedClaims"),
+    },
+    handoff: {
+      passed: true,
+      expectedStatus: "staged",
+      checks: check("protectedUnchanged", "originalsUnchanged", "disposition", "exactReadback"),
+      sourceIds: ["garden"],
+      seedRevision: "seed",
+      artifact: { ...artifact, sha256: sha("artifact") },
+    },
+  };
+  const execution = {
+    provenance: { contextId },
+    diagnostics: { managedGrimoire: { contextId, verification } },
+  };
+  const call = (callId, parent, name, fields = {}) => ({
+    callId,
+    record: { parent_call_id: parent, outcome: "done", definition: { name }, ...fields },
+  });
+  const read = { service: "scratchHandoffRead", method: "read", args: ref(["garden"]), result: ref({
+    id: "garden", lines: source.trimEnd().split("\n"),
+  }) };
+  const claimsTrace = claims.map((claim, index) =>
+    call(`claim-${index}`, "inspect", "qualifyClaim", {
+      inputs: { claim: ref(claim), observed: ref(observed) },
+    })
+  );
+  const exercise = {
+    report: {
+      results: workflow.work.map((item, index) => ({ ...item, report: [gardenReport, stagedReport][index] })),
+      remaining: [],
+    },
+    rootCallIds: ["root"],
+    calls: [
+      call("root", null, "runWorkflow", { inputs: { request: ref(request) } }),
+      call("garden", "root", "reviewExample", {
+        ended_at: "2026-11-20T10:00:01Z", inputs: { request: ref(workflow.gardenRequest) }, output: ref(gardenReport),
+      }),
+      call("inspect", "garden", "inspectLiveGarden"),
+      call("read-garden", "inspect", "readGarden", {
+        effects: [{ service: "gardenRead", method: "observe", result: ref(observed) }],
+      }),
+      ...claimsTrace,
+      call("scratch", "root", "assembleHandoff", {
+        started_at: "2026-11-20T10:00:02Z", inputs: { request: ref(sandbox) }, output: ref(stagedReport),
+      }),
+      call("read-source", "scratch", "readSource", { effects: [read] }),
+      call("write", "scratch", "commitHandoff", {
+        effects: [{ service: "scratchHandoffWrite", method: "stage", result: ref(artifact) }],
+      }),
+    ],
+  };
+  assert.ok(workflow.evidence(execution, exercise, name, workflow));
+  const withheld = claimsTrace.at(-1);
+  withheld.record.inputs.observed = ref({ ...observed, current: { id: "unowned:current" } });
+  assert.throws(() => workflow.evidence(execution, exercise, name, workflow), /exact committed garden findings/);
+  withheld.record.inputs.observed = ref(observed);
+  const replaced = source.replace("not-observed", "contradicted");
+  verification.sourceSha256 = sha(replaced);
+  read.result = ref({ id: "garden", lines: replaced.trimEnd().split("\n") });
+  assert.throws(() => workflow.evidence(execution, exercise, name, workflow), /exact committed garden findings/);
+});
+
 test("release review handoff binds each transferred source to its live prerequisite", async (t) => {
   const { options, diagnostics, entry, save } = await fixture(t);
   const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
