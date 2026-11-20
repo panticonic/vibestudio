@@ -77,6 +77,11 @@ async function restoreParticipantHistory(
     throw new Error("The runtime prepared a different canonical participant history");
   await deps.publishWorkspaceSourceEntity({ ...canonical, contextId, ...prepared });
   const history = { dispatch, canonical };
+  const attachment = {
+    ...history,
+    infrastructureContextId: contextId,
+    destroyRetiredStorage: (owner: WorkspaceSourceProviderRef) => runtime.destroyRetiredDOStorage(owner),
+  };
   if (deps.sharedHistorySeed) {
     const destination = await runtime.workspaceNodeEndpoint();
     if (destination.nodeId === deps.sharedHistorySeed.seed.sourceNodeId) {
@@ -84,13 +89,13 @@ async function restoreParticipantHistory(
     }
     await deps.workspaceVcs.initializeSharedHistory({ ...deps.sharedHistorySeed, ...history });
     await deps.sharedHistorySeed.remember();
-    await deps.workspaceVcs.attachParticipantHistory({ ...history, infrastructureContextId: contextId });
+    await deps.workspaceVcs.attachParticipantHistory(attachment);
     await deps.exportSharedHistorySeed?.(history);
     return true;
   }
   const replay = await readWorkspaceHistoryReplayState(dispatch, canonical);
   const attachHistory = () => deps.workspaceVcs.attachParticipantHistory({
-    ...history, infrastructureContextId: contextId,
+    ...attachment,
     listReplayedSessionOwners: deps.listWorkspaceHistorySessionOwners,
   });
   if (replay?.legacySeal) {

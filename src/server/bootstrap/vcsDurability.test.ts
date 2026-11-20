@@ -83,6 +83,7 @@ describe("wireVcsDurability", () => {
     const runtimeManager = {
       declaresRemoteDoltClass: vi.fn(() => true),
       workspaceNodeEndpoint: vi.fn(async () => ({ nodeId: "d".repeat(64) })),
+      destroyRetiredDOStorage: vi.fn(async () => undefined),
       ensureDurableObjectEntity: vi.fn(async ({ source, className, key }) => ({
         targetId: `do:${source}:${className}:${key}`, effectiveVersion: "a".repeat(64),
         buildKey: "b".repeat(64), executionDigest: "c".repeat(64),
@@ -97,6 +98,10 @@ describe("wireVcsDurability", () => {
     expect(sequence).toEqual(["seed", "participant", "active"]);
     expect(activateSemanticWorkspace).toHaveBeenCalledWith(workspaceVcs, true);
     expect(dispatch).not.toHaveBeenCalled();
+    const [history] = vi.mocked(workspaceVcs.attachParticipantHistory).mock.calls[0]!;
+    const retired = { ...history.canonical, objectKey: `work-${"a".repeat(64)}` };
+    await history.destroyRetiredStorage!(retired);
+    expect(runtimeManager.destroyRetiredDOStorage).toHaveBeenCalledExactlyOnceWith(retired);
   });
 
   it("loads approved seed files only for the designated workspace and verified pack", async () => {
@@ -423,6 +428,7 @@ describe("wireVcsDurability", () => {
     expect(workspaceVcs.attachParticipantHistory).toHaveBeenCalledWith({
       dispatch: { dispatch }, canonical, infrastructureContextId: contextId,
       listReplayedSessionOwners: listWorkspaceHistorySessionOwners,
+      destroyRetiredStorage: expect.any(Function),
     });
     expect(sequence).toEqual(["participant", "initialization"]);
   });
