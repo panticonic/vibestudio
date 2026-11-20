@@ -767,6 +767,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { unitIdentityWorlds },
     { transcriptCursorWorlds },
     { remoteRouteWorlds, cliContinuationWork },
+    { liveRemoteCommissionWorld },
     { notificationWorlds },
     { retainedTriageWorlds },
     { githubSetupWorlds },
@@ -846,6 +847,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "unit-identity-worlds.ts",
       "transcript-cursor-worlds.ts",
       "remote-route-worlds.ts",
+      "remote-commission-worlds.ts",
       "notification-worlds.ts",
       "retained-triage-worlds.ts",
       "github-setup-worlds.ts",
@@ -1022,6 +1024,19 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of androidAuditWorlds) {
     cases.set(`android-audit-live-${assignment.id}`, { ...androidAuditWorkflow, assignment });
+  }
+  if (liveRemoteCommissionWorld) {
+    cases.set(`remote-commission-live-${liveRemoteCommissionWorld.id}`, {
+      family: "system-live-remote-commission",
+      namespace: "vibestudio:remote-access",
+      group: "deployment-and-device-route",
+      workspace: "system",
+      devices: ["terminal"],
+      root: liveRemoteCommissionWorld.operation,
+      validator: { template: "system-testing", path: "skills/system-testing/remote-commission-managed.ts" },
+      assignment: liveRemoteCommissionWorld,
+      evidence: remoteCommissionEvidence,
+    });
   }
   for (const assignment of remoteRouteWorlds) {
     const routeGroup = "vibestudio:remote-access:authenticated-workspace-gateway";
@@ -3250,6 +3265,101 @@ function clientAdmissionEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: contextId, source, host, abi: workingAbi },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function remoteCommissionEvidence(execution, exercise, _name, { assignment }) {
+  const fixture = execution.diagnostics.remoteCommissionManaged;
+  const { request, identity, proof, steps, order, checks, contextId } = fixture ?? {};
+  const { operationId } = request ?? {};
+  const { baseline, handoff, profile, pair, route, child } = steps ?? {};
+  const validId = (id) => typeof id === "string" &&
+    /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(id);
+  requireEvidence(
+    fixture?.passed && fixture.caseId === assignment.id &&
+      typeof contextId === "string" && contextId === execution.provenance?.contextId &&
+      typeof identity?.serverId === "string" && /^srv_[A-Za-z0-9_-]{24}$/u.test(identity.serverId) &&
+      typeof identity.bootId === "string" && /^boot_[A-Za-z0-9_-]{24}$/u.test(identity.bootId) &&
+      typeof identity.buildId === "string" && /^[a-f0-9]{64}$/u.test(identity.buildId) &&
+      typeof identity.workspaceId === "string" && /^ws_[A-Za-z0-9_-]+$/u.test(identity.workspaceId) &&
+      isDeepStrictEqual(proof, { stableDeployment: true, persistedNewProfile: true }) &&
+      ["stableDeployment", "newPairedProfile", "receiptOrder", "assignedChild", "exactReport"]
+        .every((check) => checks?.[check] === true) &&
+      validId(operationId) && validId(handoff?.operationId) && handoff.operationId !== operationId &&
+      isDeepStrictEqual(order, ["baseline", "handoff", "profile", "pair", "route", "child"]) &&
+      isDeepStrictEqual(baseline, { receipt: operationId + ":baseline", intent: "deploy", state: "ready", hasPriorIdentity: true }) &&
+      isDeepStrictEqual(handoff, { state: "assigned", operationId: handoff.operationId }) &&
+      isDeepStrictEqual(profile, { receipt: handoff.operationId + ":profile", state: "unpaired", inviteAssigned: true }) &&
+      isDeepStrictEqual(pair, { receipt: handoff.operationId + ":pair", state: "paired" }) &&
+      isDeepStrictEqual(route, { receipt: handoff.operationId + ":route", state: "routed" }) &&
+      isDeepStrictEqual(child, { receipt: handoff.operationId + ":child", state: "verified", workspaceId: identity.workspaceId }),
+    "Commissioning requires one stable live hub and the new paired device's verified child",
+  );
+  const report = exercise.report;
+  const evidenceIds = [profile.receipt, pair.receipt, route.receipt, child.receipt];
+  requireEvidence(isDeepStrictEqual(report, {
+    deployment: { status: "already-running", identity: null, evidenceIds: [baseline.receipt] },
+    handoff,
+    access: { status: "workspace-ready", workspaceId: identity.workspaceId, evidenceIds },
+  }), "Commissioning must report the verified reuse, handoff and paired workspace");
+
+  const records = exercise.calls.map(({ record }) => record);
+  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const single = (parent, name) => {
+    const matches = parent && records.filter((record) =>
+      record.parent_call_id === parent.call_id && record.definition.name === name);
+    return matches?.length === 1 ? matches[0] : undefined;
+  };
+  const commission = single(root, "commissionRemoteWorkspace");
+  const deploy = single(commission, "deployRemoteServer");
+  const bind = single(commission, "bindVerifiedWorkspace");
+  const access = single(commission, "openRemoteWorkspace");
+  const read = single(deploy, "observeBaseline");
+  const decide = single(deploy, "decideDeployment");
+  const profileRead = single(access, "readAssignedProfile");
+  const admit = single(access, "decideAdmission");
+  const pairProfile = single(access, "pairAssignedProfile");
+  const open = single(access, "openAssignedRoute");
+  const select = single(open, "routeThroughHub");
+  const verify = single(open, "observeChild");
+  const interpret = single(open, "interpretChild");
+
+  function links(node, parameter, input, output) {
+    return node?.outcome === "done" && matchesValue(node.inputs?.[parameter], input) &&
+      matchesValue(node.output, output);
+  }
+  const native = [
+    [read, "remoteDeploymentRead", "observe", "operationId", operationId, baseline],
+    [bind, "remoteDeploymentHandoff", "open", "deploymentReceipt", baseline.receipt, handoff],
+    [profileRead, "remoteAccessRead", "observe", "operationId", handoff.operationId, profile],
+    [pairProfile, "remoteAccessPair", "pair", "profileReceipt", profile.receipt, pair],
+    [select, "remoteAccessRoute", "select", "priorReceipt", pair.receipt, route],
+    [verify, "remoteAccessVerify", "verify", "routeReceipt", route.receipt, child],
+  ];
+  const sequence = [read, decide, bind, profileRead, admit, pairProfile, select, verify, interpret];
+  requireEvidence(
+    links(commission, "request", request, report) &&
+      links(deploy, "request", request, report.deployment) &&
+      links(access, "request", { operationId: handoff.operationId }, report.access) &&
+      links(decide, "baseline", baseline, "already-running") &&
+      links(admit, "observed", profile, "pair") &&
+      links(interpret, "child", child, "workspace-ready") &&
+      matchesValue(open?.inputs?.priorReceipt, pair.receipt) &&
+      native.every(([node, service, method, parameter, input, output]) => {
+        const effect = node?.effects?.[0];
+        return links(node, parameter, input, output) && node.effects.length === 1 &&
+          effect.service === service && effect.method === method && !effect.error &&
+          matchesValue(effect.args, [input]) && matchesValue(effect.result, output);
+      }) &&
+      records.flatMap(({ effects }) => effects ?? []).length === native.length &&
+      sequence.every((node, index) => !index ||
+        Date.parse(sequence[index - 1].ended_at) <= Date.parse(node.started_at)),
+    "Commissioning requires the ordered nested deployment, profile pairing and verified route calls",
+  );
+  return {
+    world: { context_id: contextId, workspace_id: identity.workspaceId, server_boot_id: identity.bootId },
     checks,
     evidence: { workspace: { fixture } },
   };

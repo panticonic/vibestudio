@@ -20,6 +20,7 @@ import { deviceCall, terminalHostDescriptor } from "../../../hosts/terminal/clie
 import { TerminalHostState, terminalHostStatePath } from "../../../hosts/terminal/hostState.js";
 import { openServerEvents } from "../../../hosts/terminal/serverEvents.js";
 import { binDirectoryOf, createTerminalDevice } from "./terminalDevice.js";
+import { remoteCommissionDeviceOperations } from "./remoteCommission.js";
 import { terminalDeviceLayout, vibestudioWrapper } from "./layout.js";
 
 /**
@@ -37,6 +38,7 @@ export async function runTerminalDevice(options: {
   /** Invites for the device under test and for the driver's own connection. */
   links: { device: string; driver: string };
   signal: AbortSignal;
+  assignedHub?: string;
   log(line: string): void;
 }): Promise<void> {
   const { root, repoRoot, signal, log } = options;
@@ -61,6 +63,13 @@ export async function runTerminalDevice(options: {
   let driver: Awaited<ReturnType<typeof serveDeviceDriver>> | undefined;
   let terminal: ReturnType<typeof createTerminalDevice> | undefined;
   let events: Awaited<ReturnType<typeof openServerEvents>> | undefined;
+  const commission = options.assignedHub
+    ? remoteCommissionDeviceOperations({
+        instanceRoot: options.assignedHub,
+        scratchRoot: root,
+        signal,
+      })
+    : undefined;
   try {
     const call = deviceCall(device);
     const version = hostVersion(repoRoot);
@@ -132,7 +141,7 @@ export async function runTerminalDevice(options: {
     driver = await serveDeviceDriver({
       transport,
       deviceKind: "terminal",
-      ops: terminal.ops,
+      ops: { ...terminal.ops, ...commission?.ops },
       onUndelivered: (error) => log(`an answer was not delivered: ${String(error)}`),
     });
     log(`terminal device ready (home ${layout.home})`);
@@ -143,6 +152,7 @@ export async function runTerminalDevice(options: {
   } finally {
     for (const step of [
       () => driver?.close(),
+      () => commission?.close(),
       () => terminal?.close(),
       () => events?.close(),
       () => release(),

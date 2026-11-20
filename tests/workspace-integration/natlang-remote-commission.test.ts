@@ -51,7 +51,7 @@ it.runIf(Boolean(instance))(
     });
     await withRemoteCommissionSmoke(
       instance!,
-      async ({ request, services, workspaceId, assertPairedProfile }) => {
+      async ({ request, services, identity, verify }) => {
         const root = (await loader.load("skills/vibestudio-workflows/runWorkflow.nl", {
           services,
         })) as (input: unknown) => Promise<{
@@ -85,7 +85,7 @@ it.runIf(Boolean(instance))(
                 handoff: { state: "assigned", operationId: expect.any(String) },
                 access: {
                   status: "workspace-ready",
-                  workspaceId,
+                  workspaceId: identity.workspaceId,
                   evidenceIds: ["profile", "pair", "route", "child"].map(
                     (stage) => `${operationId}:${stage}`
                   ),
@@ -94,7 +94,7 @@ it.runIf(Boolean(instance))(
             },
           ],
         });
-        assertPairedProfile();
+        await expect(verify()).resolves.toEqual({ stableDeployment: true, persistedNewProfile: true });
       }
     );
     expect(calls).toEqual([

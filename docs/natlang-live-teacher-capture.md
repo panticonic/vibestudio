@@ -224,6 +224,18 @@ refresh step without changing the profile. Use the
 separate host smoke `scripts/smoke-remote-workspace-access.ts` tests pairing
 and resume through the disposable managed instance's local transport.
 
+The managed `remote-commission-live-running-hub-new-cli` case creates a
+fresh profile on an attached terminal driver. The shared program reads the
+running deployment, obtains a handoff tied to that deployment, pairs the
+profile, routes to the exact workspace, and verifies the child gateway.
+The terminal driver uses the original production deployment and pairing
+bindings. It keeps all credentials and invitation material on the device.
+The verifier rereads the protected hub identity and confirms that the new
+profile saved the same workspace. Qualify it with
+`--device terminal run remote-commission-oracle-qualification-running-hub-new-cli`.
+This case exercises deployment reuse. The scoped corpus also covers installer
+and update transitions.
+
 CLI continuation cases compose the authenticated gateway review with
 `planCliContinuation`. The gateway receipt comes from the running System
 workspace. The fixtures supply redacted CLI invocation coordinates for explicit,

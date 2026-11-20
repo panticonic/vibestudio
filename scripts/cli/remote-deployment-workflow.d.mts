@@ -18,6 +18,7 @@ export function inspectDeploymentIdentity(options: {
   readyFile: string;
   port: number;
   workspace?: string;
+  expectedWorkspaceId?: string;
   active?: boolean;
 }): Promise<DeploymentObservation>;
 

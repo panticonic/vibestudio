@@ -73,6 +73,13 @@ device operations to its system tests. Runs until stopped.`);
     throw error;
   }
   console.log(`[terminal-executor] minted device invites on ${parsed.instanceId}`);
+  const { readDevInstanceRecord } = await tsImport("../src/dev/instanceRegistry.ts", import.meta.url);
+  const { isManagedSystemTestInstance } = await tsImport("../src/dev/systemTestInstance.ts", import.meta.url);
+  const instance = readDevInstanceRecord(repoRoot, parsed.instanceId);
+  const assignedHub = instance.lifecycle === "ephemeral" && isManagedSystemTestInstance(instance)
+    ? instance.root
+    : undefined;
+
   // The CLI's credential and path modules bind their stores when first
   // imported, so the device's own environment has to be in place first.
   const { terminalDeviceLayout } = await tsImport(
@@ -87,6 +94,7 @@ device operations to its system tests. Runs until stopped.`);
     root: tempRoot,
     repoRoot,
     links,
+    ...(assignedHub ? { assignedHub } : {}),
     signal: ownerSignal,
     log: (line) => console.log(`[terminal-executor] ${line}`),
   });

@@ -181,12 +181,58 @@ export interface ClientDeviceWire {
    * one gets a new session, presenting the credential the host still holds for its principal. A
    * principal revoked at the hub is refused.
    */
-  openClientSession(args: { surfaceId: string; workspace: "personal" | "system" }): ClientSessionOutcome;
+  openClientSession(args: {
+    surfaceId: string;
+    workspace: "personal" | "system";
+  }): ClientSessionOutcome;
   /** terminal: run a command line in a shell with the test-owned PATH, HOME and bin directory. */
   shell(args: { commandLine: string; stdin?: string }): ShellResult;
   /** terminal: the test-owned directory `vibestudio clients link` writes into. */
   binDirectory(args: Record<string, never>): string;
+  /** The terminal fixture binds an already running, disposable hub and one fresh profile. */
+  remoteCommissionBegin(args: Record<string, never>): {
+    operationId: string;
+    identity: RemoteCommissionIdentity;
+  };
+  remoteCommissionStep(args: {
+    operationId: string;
+    step: RemoteCommissionStep;
+    evidence: string;
+  }): RemoteCommissionStages[RemoteCommissionStep];
+  remoteCommissionFinish(args: { operationId: string }): {
+    stableDeployment: boolean;
+    persistedNewProfile: boolean;
+  };
 }
+
+export type RemoteCommissionIdentity = {
+  serverId: string;
+  bootId: string;
+  buildId: string;
+  workspaceId: string;
+};
+export type RemoteCommissionStages = {
+  baseline: {
+    receipt: string;
+    intent: "deploy" | "update";
+    state: "inactive" | "ready" | "unverified";
+    hasPriorIdentity: boolean;
+  };
+  handoff: { state: "assigned" | "deployment-changed"; operationId: string | null };
+  profile: {
+    receipt: string;
+    state: "unpaired" | "account" | "workspace" | "foreign" | "unusable";
+    inviteAssigned: boolean;
+  };
+  pair: { receipt: string; state: "paired" | "failed" };
+  route: { receipt: string; state: "routed" | "failed" };
+  child: {
+    receipt: string;
+    state: "verified" | "unreachable" | "identity-mismatch";
+    workspaceId: string | null;
+  };
+};
+export type RemoteCommissionStep = keyof RemoteCommissionStages;
 
 export type WireMethod = keyof ClientDeviceWire & string;
 

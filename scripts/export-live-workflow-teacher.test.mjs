@@ -107,6 +107,7 @@ test("authored template worlds flow into the collector without losing original s
       ["unit-identity-worlds", "unitIdentityWorlds", []],
       ["transcript-cursor-worlds", "transcriptCursorWorlds", []],
       ["remote-route-worlds", "remoteRouteWorlds", []],
+      ["remote-commission-worlds", "liveRemoteCommissionWorld", null],
       ["notification-worlds", "notificationWorlds", []],
       ["retained-triage-worlds", "retainedTriageWorlds", []],
       ["github-setup-worlds", "githubSetupWorlds", []],
@@ -3152,6 +3153,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["unit-identity-worlds", "export const unitIdentityWorlds = [];"],
       ["transcript-cursor-worlds", "export const transcriptCursorWorlds = [];"],
       ["remote-route-worlds", "export const remoteRouteWorlds = [];"],
+      ["remote-commission-worlds", "export const liveRemoteCommissionWorld = null;"],
       ["notification-worlds", "export const notificationWorlds = [];"],
       ["retained-triage-worlds", "export const retainedTriageWorlds = [];"],
       ["github-setup-worlds", "export const githubSetupWorlds = [];"],
@@ -8601,4 +8603,99 @@ test("approval transition export requires ordered live snapshots and both nested
   request.later[0].ids.push(approvalId);
   await save();
   await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /exact live snapshots/u);
+});
+
+test("commission export requires the live hub, verified new device and exact nested receipts", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(path.resolve(import.meta.dirname, ".."));
+  const cases = await loadLiveTeacherCases(checkouts);
+  const name = "remote-commission-live-running-hub-new-cli";
+  const workflow = cases.get(name);
+  assert.deepEqual(workflow.devices, ["terminal"]);
+  assert.deepEqual(workflowSourceGroups(workflow), ["vibestudio:remote-access:deployment-and-device-route"]);
+  entry.test.name = name;
+  const operationId = "f8fbdfc8-0268-4074-bfbe-5579990c9781";
+  const accessId = "82ee36a3-4875-4828-a457-1c66961e8b4e";
+  const request = { operationId };
+  const identity = {
+    serverId: "srv_" + "s".repeat(24), bootId: "boot_" + "b".repeat(24),
+    buildId: "a".repeat(64), workspaceId: "ws_own",
+  };
+  const baseline = { receipt: operationId + ":baseline", intent: "deploy", state: "ready", hasPriorIdentity: true };
+  const handoff = { state: "assigned", operationId: accessId };
+  const profile = { receipt: accessId + ":profile", state: "unpaired", inviteAssigned: true };
+  const pair = { receipt: accessId + ":pair", state: "paired" };
+  const route = { receipt: accessId + ":route", state: "routed" };
+  const child = { receipt: accessId + ":child", state: "verified", workspaceId: identity.workspaceId };
+  const report = {
+    deployment: { status: "already-running", identity: null, evidenceIds: [baseline.receipt] },
+    handoff,
+    access: { status: "workspace-ready", workspaceId: identity.workspaceId, evidenceIds: [profile, pair, route, child].map(({ receipt }) => receipt) },
+  };
+  const proof = { stableDeployment: true, persistedNewProfile: true };
+  diagnostics.remoteCommissionManaged = {
+    contextId: "ctx", caseId: workflow.assignment.id, request, identity, proof,
+    steps: { baseline, handoff, profile, pair, route, child },
+    order: ["baseline", "handoff", "profile", "pair", "route", "child"],
+    checks: { stableDeployment: true, newPairedProfile: true, receiptOrder: true, assignedChild: true, exactReport: true },
+    passed: true,
+  };
+  const ref = (value) => {
+    const json = JSON.stringify(value);
+    return { complete: true, hash: createHash("sha256").update(json).digest("hex"), bytes: Buffer.byteLength(json) };
+  };
+  const prototype = diagnostics.natlangTeacher.calls[0];
+  let tick = 0;
+  const call = (name, parent, inputs, output, effect) => ({
+    callId: name,
+    summary: { ...prototype.summary, call_id: name },
+    record: {
+      ...prototype.record, call_id: name, parent_call_id: parent, definition: { name }, outcome: "done",
+      inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+      output: ref(output),
+      effects: effect ? [{
+        service: effect[0], method: effect[1], args: ref(Object.values(inputs)), result: ref(output),
+      }] : [],
+      started_at: new Date(tick++ * 1000).toISOString(),
+      ended_at: new Date(tick * 1000).toISOString(),
+    },
+  });
+  const commission = "commissionRemoteWorkspace";
+  const deploy = "deployRemoteServer";
+  const access = "openRemoteWorkspace";
+  const open = "openAssignedRoute";
+  const calls = [
+    call("runWorkflow", null, {}, null),
+    call(commission, "runWorkflow", { request }, report),
+    call(deploy, commission, { request }, report.deployment),
+    call("observeBaseline", deploy, { operationId }, baseline, ["remoteDeploymentRead", "observe"]),
+    call("decideDeployment", deploy, { baseline }, "already-running"),
+    call("bindVerifiedWorkspace", commission, { deploymentReceipt: baseline.receipt }, handoff, ["remoteDeploymentHandoff", "open"]),
+    call(access, commission, { request: { operationId: accessId } }, report.access),
+    call("readAssignedProfile", access, { operationId: accessId }, profile, ["remoteAccessRead", "observe"]),
+    call("decideAdmission", access, { observed: profile }, "pair"),
+    call("pairAssignedProfile", access, { profileReceipt: profile.receipt }, pair, ["remoteAccessPair", "pair"]),
+    call(open, access, { priorReceipt: pair.receipt }, { ...report.access, evidenceIds: [route.receipt, child.receipt] }),
+    call("routeThroughHub", open, { priorReceipt: pair.receipt }, route, ["remoteAccessRoute", "select"]),
+    call("observeChild", open, { routeReceipt: route.receipt }, child, ["remoteAccessVerify", "verify"]),
+    call("interpretChild", open, { child }, "workspace-ready"),
+  ];
+  diagnostics.natlangTeacher = {
+    ...diagnostics.natlangTeacher, programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+    rootCallIds: ["runWorkflow"], report, calls,
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+
+  const childCall = calls.find(({ callId }) => callId === "observeChild").record;
+  const childEffect = childCall.effects[0];
+  const exact = childEffect.args;
+  childEffect.args = ref([baseline.receipt]);
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /ordered nested deployment/u);
+  childEffect.args = exact;
+
+  proof.persistedNewProfile = false;
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /new paired device/u);
 });
