@@ -115,6 +115,7 @@ test("authored template worlds flow into the collector without losing original s
       ["github-diagnosis-worlds", "managedGitHubDiagnosisWorlds", []],
       ["adventure-review-worlds", "managedAdventureWorlds", []],
       ["adventure-transition-world", "programmedAdventureWorld", null],
+      ["drive-checkpoint-worlds", "managedDriveCheckpointWorlds", []],
       ["regency-review-worlds", "managedRegencyWorlds", []],
       ["examples-portfolio-worlds", "managedExamplesPortfolioWorlds", []],
       ["personal-resume-worlds", "personalResumeWorlds", []],
@@ -3208,6 +3209,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["github-diagnosis-worlds", "export const managedGitHubDiagnosisWorlds = [];"],
       ["adventure-review-worlds", "export const managedAdventureWorlds = [];"],
       ["adventure-transition-world", "export const programmedAdventureWorld = null;"],
+      ["drive-checkpoint-worlds", "export const managedDriveCheckpointWorlds = [];"],
       ["regency-review-worlds", "export const managedRegencyWorlds = [];"],
       ["examples-portfolio-worlds", "export const managedExamplesPortfolioWorlds = [];"],
       ["template-release-worlds", "export const templateReleaseWorlds = [];"],
@@ -4854,6 +4856,72 @@ test("Regency export keeps the committed claim and forecast evidence distinct", 
   leaf.record.inputs.basis = ref("forecast");
   observation.args = ref([3]);
   assert.throws(() => workflow.evidence(execution, exercise, name, workflow), /saved or projected evidence/);
+});
+
+test("Drive checkpoint export binds full, partial and stale outcomes to their actual page effects", async () => {
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(path.resolve(import.meta.dirname, ".."));
+  const cases = await loadLiveTeacherCases(checkouts);
+  const ref = (value) => {
+    const json = JSON.stringify(value);
+    return { complete: true, hash: createHash("sha256").update(json).digest("hex"), bytes: Buffer.byteLength(json) };
+  };
+  for (const world of ["terminal-shared-drive-page", "missing-terminal-shared-drive-page", "checkpoint-moved-during-paging"]) {
+    const name = "drive-checkpoint-live-" + world;
+    const workflow = cases.get(name);
+    const { assignment } = workflow;
+    const { initial, expected, driveId, pages } = assignment;
+    const request = { kind: "sync-checkpoint", goal: assignment.goal };
+    const receipt = { state: expected.state, cursor: expected.cursor };
+    const terminal = pages.at(-1).response?.newStartPageToken ?? null;
+    const report = {
+      action: "none", status: expected.state === "saved" ? "complete" : "partial", ids: expected.ids,
+      findings: [], checkpoint: expected.cursor, checkpointWrite: receipt,
+    };
+    const latest = new Map();
+    const changes = pages.map(({ cursor, response }) => {
+      const effect = { service: "googleWorkspaceRead", method: "readChanges", args: ref([cursor]) };
+      if (!response) return { ...effect, error: "Drive tail unavailable" };
+      const next = response.nextPageToken ?? null;
+      const rows = response.changes.map((row) => ({
+        fileId: row.fileId, removed: row.removed ?? false, name: row.file?.name ?? null, time: null,
+      }));
+      for (const row of rows) latest.set(row.fileId, row);
+      return { ...effect, result: ref({ next, checkpoint: next ? null : response.newStartPageToken, rows }) };
+    });
+    const contextId = "owned-drive";
+    const verification = {
+      caseId: assignment.id, passed: true, request, observed: initial, terminal, persisted: expected.cursor,
+      receipt: expected.attempts ? receipt : null,
+      requests: pages.map(({ cursor, response }) => ({ cursor, driveId, status: response ? 200 : 503 })),
+      checks: Object.fromEntries(["exactTransport", "exactRead", "exactWrite", "exactReport"].map((key) => [key, true])),
+    };
+    const execution = { provenance: { contextId }, diagnostics: { managedDriveCheckpoint: { contextId, verification } } };
+    const call = (callId, parent, label, inputs = {}, output, effects) => ({
+      callId, record: {
+        parent_call_id: parent, outcome: "done", definition: { name: label },
+        inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+        ...(output && { output: ref(output) }), ...(effects && { effects }),
+      },
+    });
+    const write = { service: "driveCheckpoint", method: "commit", args: ref([initial, terminal]), result: ref(receipt) };
+    const exercise = { report, rootCallIds: ["root"], calls: [
+      call("root", null, "runWorkflow"),
+      call("guide", "root", "guideGoogleWorkspace", { request }, report, [{ service: "googleWorkspaceRead", method: "readiness", result: ref({ state: "ready" }) }]),
+      call("sync", "guide", "syncCheckpoint", { request }, report),
+      call("read", "sync", "readCheckpoint", {}, initial, [{ service: "driveCheckpoint", method: "read", result: ref(initial) }]),
+      call("continue", "sync", "continueSync", {}, undefined, changes),
+      call("summary", "continue", "summarizeDelta", { changes: [...latest.values()] }),
+      ...(expected.attempts ? [call("commit", "sync", "commitCheckpoint", {}, receipt, [write])] : []),
+    ] };
+    assert.ok(workflow.evidence(execution, exercise, name, workflow));
+    if (expected.attempts) {
+      write.args = ref([initial, "ignore-intermediate-checkpoint"]);
+      assert.throws(() => workflow.evidence(execution, exercise, name, workflow), /guarded terminal write/);
+    } else {
+      exercise.calls.push(call("commit", "sync", "commitCheckpoint", {}, receipt, [write]));
+      assert.throws(() => workflow.evidence(execution, exercise, name, workflow), /guarded terminal write/);
+    }
+  }
 });
 
 test("Programmed Adventure export requires the committed change, a repaint and the loaded image after reload", async () => {

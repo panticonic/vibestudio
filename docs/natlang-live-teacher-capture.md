@@ -406,6 +406,14 @@ preserve a saved draft, reconcile an interrupted send, or review a conflicting
 draft identity or missing recipient before proceeding. The system test
 `google-setup-managed-compose-qualification` checks the actual panel and
 channel, including denial of launch evidence before the setup readback.
+
+Drive checkpoint tasks use the installed Drive client with an assigned test
+transport and a VibeStudio workspace file for the saved cursor. The nested
+Natlang program follows the feed and attempts a write only after a terminal
+page. Run `drive-checkpoint-oracle-qualification` in Google Workspace to
+verify the saved, partial and concurrent-writer outcomes without a model.
+The transport supplies test pages locally and requires no Google account.
+
 Local model comparison cases query the installed local-model extension twice. The workflow assesses the
 assigned candidates against tool and context requirements and offers a fresh or fork handoff only for a
 qualifying local model. The comparison has only inventory access.

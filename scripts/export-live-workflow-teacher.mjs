@@ -579,6 +579,13 @@ const googleSetupWorkflow = {
   root: "guideGoogleWorkspace",
   evidence: googleSetupEvidence,
 };
+const driveCheckpointWorkflow = {
+  ...googleSetupWorkflow,
+  family: "google-live-drive-checkpoint",
+  group: "drive-terminal-and-guarded-checkpoint",
+  validator: { template: "google-workspace", path: "skills/google-drive/live-drive-checkpoint.ts" },
+  evidence: driveCheckpointEvidence,
+};
 const gmailContinuationWorkflow = {
   ...googleSetupWorkflow,
   family: "google-live-compose-continuation",
@@ -851,6 +858,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedSpectroliteWorlds, spectroliteHandoffWork },
     { managedNewsWorlds, newsHandoffWork, newsHandoffSchedule, projectNewsCadenceSource },
     { managedGoogleSetupWorlds, gmailContinuationWork },
+    { managedDriveCheckpointWorlds },
     { localModelComparisonWorlds },
     { managedLogAuditWorlds },
     { incidentContinuationWorlds },
@@ -936,6 +944,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "spectrolite-worlds.ts",
       "news-worlds.ts",
       "google-setup-worlds.ts",
+      "drive-checkpoint-worlds.ts",
       "local-model-comparison-worlds.ts",
       "log-audit-worlds.ts",
       "incident-continuation-worlds.ts",
@@ -1392,6 +1401,9 @@ export async function loadLiveTeacherCases(checkouts) {
     } else {
       cases.set(`google-setup-live-${id}`, setup);
     }
+  }
+  for (const assignment of managedDriveCheckpointWorlds) {
+    cases.set(`drive-checkpoint-live-${assignment.id}`, { ...driveCheckpointWorkflow, assignment });
   }
   for (const { id, checks, expected, repair, handoff } of managedNewsWorlds) {
     cases.set(`news-live-${id}`, {
@@ -7787,6 +7799,86 @@ function googleSetupChoiceMatches(receipt, previous, check) {
     default:
       return false;
   }
+}
+
+function driveCheckpointEvidence(execution, exercise, _scenario, { assignment }) {
+  const fixture = execution.diagnostics.managedDriveCheckpoint;
+  const { caseId, request, requests, observed, terminal, persisted, receipt, checks, passed } = fixture?.verification ?? {};
+  const { expected, initial, goal, pages, driveId } = assignment;
+  const finalToken = pages.at(-1)?.response?.newStartPageToken ?? null;
+  const report = exercise.report;
+  const disposition = { state: expected.state, cursor: expected.cursor };
+  requireEvidence(
+    typeof fixture?.contextId === "string" &&
+      fixture.contextId === execution.provenance?.contextId &&
+      caseId === assignment.id && passed === true &&
+      ["exactTransport", "exactRead", "exactWrite", "exactReport"].every((key) => checks?.[key] === true) &&
+      isDeepStrictEqual(request, { kind: "sync-checkpoint", goal }) &&
+      isDeepStrictEqual(requests, pages.map(({ cursor, response }) => ({ cursor, driveId, status: response ? 200 : 503 }))) &&
+      observed === initial && terminal === finalToken && persisted === expected.cursor &&
+      isDeepStrictEqual(receipt, expected.attempts ? disposition : null) &&
+      report?.action === "none" &&
+      report.status === (expected.state === "saved" ? "complete" : "partial") &&
+      report.checkpoint === persisted &&
+      isDeepStrictEqual(report.checkpointWrite, disposition) &&
+      isDeepStrictEqual(report.ids, expected.ids),
+    "Drive checkpoint must match the assigned HTTP feed and independently read workspace cursor"
+  );
+  const root = exercise.calls.find(({ callId }) => callId === exercise.rootCallIds[0]);
+  const child = (parent, name) => exercise.calls.find(({ record }) =>
+    parent && record.parent_call_id === parent.callId &&
+    record.definition?.name === name && record.outcome === "done"
+  );
+  const review = child(root, "guideGoogleWorkspace");
+  const sync = child(review, "syncCheckpoint");
+  const read = child(sync, "readCheckpoint");
+  const continuation = child(sync, "continueSync");
+  const summary = child(continuation, "summarizeDelta");
+  const commit = child(sync, "commitCheckpoint");
+  const [readiness] = review?.record.effects ?? [];
+  const [saved] = read?.record.effects ?? [];
+  const changes = continuation?.record.effects ?? [];
+  const [write] = commit?.record.effects ?? [];
+  const effects = exercise.calls.flatMap(({ record }) => record.effects ?? []);
+  const latest = new Map();
+  requireEvidence(
+    matchesValue(review?.record.inputs?.request, request) &&
+      matchesValue(sync?.record.inputs?.request, request) &&
+      matchesValue(review?.record.output, report) && matchesValue(sync?.record.output, report) &&
+      readiness?.service === "googleWorkspaceRead" && readiness.method === "readiness" &&
+      !readiness.error && matchesValue(readiness.result, { state: "ready" }) &&
+      saved?.service === "driveCheckpoint" && saved.method === "read" &&
+      !saved.error && matchesValue(saved.result, initial) &&
+      changes.length === pages.length &&
+      pages.every(({ cursor, response }, index) => {
+        const change = changes[index];
+        if (change?.service !== "googleWorkspaceRead" || change.method !== "readChanges" ||
+            !matchesValue(change.args, [cursor])) return false;
+        if (!response) return Boolean(change.error);
+        const next = response.nextPageToken ?? null;
+        const rows = response.changes.map((row) => ({
+          fileId: row.fileId, removed: row.removed === true || row.file?.trashed === true,
+          name: row.file?.name ?? null, time: row.time ?? null,
+        }));
+        for (const row of rows) latest.set(row.fileId, row);
+        return !change.error && matchesValue(change.result, {
+          next, checkpoint: next ? null : (response.newStartPageToken ?? null), rows,
+        });
+      }) &&
+      matchesValue(summary?.record.inputs?.changes, [...latest.values()]) &&
+      effects.length === 2 + pages.length + expected.attempts &&
+      (expected.attempts
+        ? write?.service === "driveCheckpoint" && write.method === "commit" &&
+          !write.error && matchesValue(write.args, [initial, finalToken]) &&
+          matchesValue(write.result, disposition) && matchesValue(commit.record.output, disposition)
+        : !commit),
+    "Drive trace must retain exact page order, last file changes, and any guarded terminal write"
+  );
+  return {
+    world: { context_id: fixture.contextId, case_id: assignment.id, drive_id: driveId },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
 }
 
 function googleSetupEvidence(execution, exercise, _scenario, workflow) {
