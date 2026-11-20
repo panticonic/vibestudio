@@ -11,6 +11,7 @@ import {
   createRpcClient,
   decodeRpcJson,
   deserializeRpcFailure,
+  encodeRpcJson,
   envelopeFromMessage,
   type EnvelopeRpcTransport,
   type RpcMethod,
@@ -708,7 +709,8 @@ async function connectRpcWebSocket(options: {
   const transport: EnvelopeRpcTransport = {
     async send(envelope) {
       if (ws.readyState !== WebSocket.OPEN) throw new Error("RPC WebSocket is not connected");
-      ws.send(JSON.stringify({ type: "ws:rpc", envelope, message: envelope.message }));
+      const type = envelope.target === "main" || envelope.target === "server" ? "ws:rpc" : "ws:route";
+      ws.send(encodeRpcJson({ type, envelope } satisfies WsClientMessage));
     },
     onMessage(handler) {
       listeners.add(handler);
