@@ -65,8 +65,13 @@ export function nodeProxy(options: NodeProxyOptions) {
       res.end("unattributed");
       return;
     }
-    if (subject.kind === "host-program") {
+    if (subject.kind !== "caller") {
       const target = new URL(req.url ?? "", "http://gateway");
+      if (subject.kind === "chronolog-history" && target.pathname !== "/_chronolog-history") {
+        res.writeHead(403, { "content-type": "text/plain" });
+        res.end("outside workspace history ingress");
+        return;
+      }
       req.url = `${target.pathname}${target.search}`;
       options.gateway(req, res);
       return;
