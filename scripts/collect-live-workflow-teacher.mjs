@@ -51,6 +51,7 @@ if (list) {
         workspace: workflow.workspace ?? "system",
         sourceGroups: workflowSourceGroups(workflow),
         requiresReview: Boolean(workflow.requiresReview),
+        ...(workflow.workspaceBaseline ? { workspaceBaseline: workflow.workspaceBaseline } : {}),
         ...(workflow.devices ? { devices: workflow.devices } : {}),
       })
     );
@@ -130,10 +131,11 @@ const single = scenarios.length === 1;
 const casesDir = path.join(out, "cases");
 const groups = new Map();
 for (const scenario of scenarios) {
-  const workspace = liveTeacherCases.get(scenario).workspace ?? "system";
-  if (!groups.has(workspace))
-    groups.set(workspace, { instance: `natlang-live-${randomUUID().slice(0, 12)}`, cases: [] });
-  groups.get(workspace).cases.push(scenario);
+  const { workspace = "system", workspaceBaseline } = liveTeacherCases.get(scenario);
+  const key = workspaceBaseline ? `${workspace}@${workspaceBaseline}` : workspace;
+  if (!groups.has(key))
+    groups.set(key, { workspace, workspaceBaseline, instance: `natlang-live-${randomUUID().slice(0, 12)}`, cases: [] });
+  groups.get(key).cases.push(scenario);
 }
 if (!single) {
   const instances = Object.fromEntries(
@@ -144,10 +146,14 @@ if (!single) {
   mkdirSync(casesDir, { mode: 0o700 });
 }
 const failures = [];
-for (const [workspace, group] of groups) {
-  const { instance } = group;
+for (const group of groups.values()) {
+  const { instance, workspace, workspaceBaseline } = group;
   const systemTest = (args, stdout) =>
-    command(["system-test", "--instance", instance, "--workspace", workspace, ...args], stdout);
+    command([
+      "system-test", "--instance", instance, "--workspace", workspace,
+      ...(workspaceBaseline ? ["--workspace-baseline", workspaceBaseline] : []),
+      ...args,
+    ], stdout);
   const cases = group.cases.map((scenario) => {
     const directory = single ? out : path.join(casesDir, scenario);
     if (!single) mkdirSync(directory, { mode: 0o700 });
@@ -156,6 +162,7 @@ for (const [workspace, group] of groups) {
       ...source,
       instance,
       workspace,
+      ...(workspaceBaseline ? { workspace_baseline_commit: workspaceBaseline } : {}),
       validator_sha256: pinned.validators[scenario],
     };
     writePins(pins, caseSource);

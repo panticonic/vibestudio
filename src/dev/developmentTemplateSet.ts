@@ -6,12 +6,16 @@ export {
   developmentTemplateSetEnv,
   developmentTemplateSetSources,
 } from "../../scripts/lib/development-template-set.mjs";
-import { inspectWorkspaceSources } from "../workspaceTemplateSource.js";
+import {
+  inspectWorkspaceSources,
+  type WorkspaceSourceInspection,
+} from "../workspaceTemplateSource.js";
 import type { WorkspaceSource } from "@vibestudio/workspace/workspaceSources";
 import { selectDevelopmentTemplateCheckouts } from "./developmentTemplateConfig.js";
 
 export interface DevelopmentTemplateSet {
   pins: DefaultWorkspaceTemplates;
+  baseline?: WorkspaceSourceInspection;
   checkouts: Record<string, string> & Record<keyof DefaultWorkspaceTemplates, string>;
   sourceCheckouts: Record<string, string> & Record<keyof DefaultWorkspaceTemplates, string>;
   sourcePins: Record<string, WorkspaceTemplatePin>;
@@ -44,6 +48,7 @@ export async function resolveDevelopmentTemplateSet(input: {
   checkpointRoot: string;
   explicitRoot?: string;
   productionTemplates?: boolean;
+  baseline?: { id: string; commit: string };
 }): Promise<DevelopmentTemplateSet | null> {
   const selected = selectDevelopmentTemplateCheckouts(input.repoRoot, {
     ...(input.explicitRoot ? { explicitRoot: input.explicitRoot } : {}),
@@ -70,6 +75,29 @@ export async function resolveDevelopmentTemplateSet(input: {
     checkpointRoot: input.checkpointRoot,
     declareDependencies,
   });
+  let baseline: WorkspaceSourceInspection | undefined;
+  const requestedBaseline = input.baseline;
+  if (requestedBaseline) {
+    const source = selected.sources.find(({ id }) => id === requestedBaseline.id);
+    if (source?.role !== "catalog")
+      throw new Error("Historical baselines require a managed catalog workspace");
+    const checkout = requiredEntry(selected.checkouts, source.id, "checkout");
+    if (!declareDependencies.has(fs.realpathSync(checkout)))
+      throw new Error("The historical baseline workspace must install the development harness");
+    const [snapshot] = await inspectWorkspaceSources({
+      sources: [{ checkout, url: source.url, commit: requestedBaseline.commit }],
+      checkpointRoot: path.join(input.checkpointRoot, "baseline"),
+      declareDependencies,
+    });
+    if (
+      !snapshot ||
+      inspected.some(
+        ({ pin }) => pin.url === snapshot.pin.url && pin.commit === snapshot.pin.commit
+      )
+    )
+      throw new Error("The historical baseline must differ from the current template");
+    baseline = snapshot;
+  }
   const byCheckout = new Map(inspected.map((source) => [source.sourceCheckout, source]));
   const pins = {} as Record<keyof DefaultWorkspaceTemplates, WorkspaceTemplatePin>;
   const sourcePins: Record<string, WorkspaceTemplatePin> = {};
@@ -95,6 +123,7 @@ export async function resolveDevelopmentTemplateSet(input: {
   }
   return {
     pins,
+    ...(baseline ? { baseline } : {}),
     checkouts,
     sourceCheckouts: selected.checkouts,
     sourcePins,

@@ -80,28 +80,43 @@ export interface WorkspaceSourceCheckpoint {
 export async function checkpointWorkspaceSource(input: {
   checkout: string;
   target: string;
+  commit?: string;
 }): Promise<WorkspaceSourceCheckpoint> {
   const sourceCheckout = fs.realpathSync(path.resolve(input.checkout));
   // Native Git owns developer checkouts, including linked/detached worktrees.
   // Always seal a private clone, so downstream exact readers never observe a
   // live checkout or need to interpret its .git indirection.
-  const commit = (await git(sourceCheckout, ["rev-parse", "--verify", "HEAD"])).trim();
+  if (input.commit !== undefined && !/^[a-f0-9]{40}$/u.test(input.commit))
+    throw new Error("A historical template checkpoint requires an exact commit SHA");
+  const commit = (
+    await git(sourceCheckout, [
+      "rev-parse",
+      "--verify",
+      input.commit ? `${input.commit}^{commit}` : "HEAD",
+    ])
+  ).trim();
+  if (input.commit !== undefined && input.commit !== commit)
+    throw new Error("The local template checkout does not contain the assigned commit");
   // The checkpoint is named for the branch it was taken from: that name is the
   // template's version wherever a review shows it. A detached checkout has none.
-  const sourceBranch = (await git(sourceCheckout, ["branch", "--show-current"])).trim();
-  const changedPaths = [
-    ...new Set([
-      ...(
-        await git(sourceCheckout, ["diff", "--no-renames", "--name-only", "-z", "HEAD", "--"])
-      ).split("\0"),
-      ...(await git(sourceCheckout, ["ls-files", "--others", "--exclude-standard", "-z"])).split(
-        "\0"
-      ),
-    ]),
-  ]
-    .filter(Boolean)
-    .filter((relativePath) => !isDependencyArtifactPath(relativePath))
-    .sort();
+  const sourceBranch = input.commit
+    ? "local-checkout"
+    : (await git(sourceCheckout, ["branch", "--show-current"])).trim();
+  const changedPaths = input.commit
+    ? []
+    : [
+        ...new Set([
+          ...(
+            await git(sourceCheckout, ["diff", "--no-renames", "--name-only", "-z", "HEAD", "--"])
+          ).split("\0"),
+          ...(
+            await git(sourceCheckout, ["ls-files", "--others", "--exclude-standard", "-z"])
+          ).split("\0"),
+        ]),
+      ]
+        .filter(Boolean)
+        .filter((relativePath) => !isDependencyArtifactPath(relativePath))
+        .sort();
   const target = path.resolve(input.target);
   fs.rmSync(target, { recursive: true, force: true });
   fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });

@@ -140,6 +140,31 @@ describe("self-provisioning system-test instance", () => {
     ).toThrow(/only be specified once/u);
   });
 
+  it("passes historical catalog baselines only as exact commit IDs", () => {
+    const commit = "a".repeat(40);
+    expect(
+      parseSystemTestLauncherArgs([
+        "--workspace",
+        "examples",
+        "--workspace-baseline",
+        commit,
+        "doctor",
+      ])
+    ).toMatchObject({ workspace: "examples", workspaceBaseline: commit, command: ["doctor"] });
+    expect(() => parseSystemTestLauncherArgs(["--workspace-baseline", "HEAD~1", "doctor"])).toThrow(
+      /exact commit SHA/u
+    );
+    expect(() =>
+      parseSystemTestLauncherArgs([
+        "--workspace-baseline",
+        commit,
+        "--workspace-baseline",
+        commit,
+        "doctor",
+      ])
+    ).toThrow(/one exact commit SHA/u);
+  });
+
   it("recognizes launcher and subcommand help as side-effect-free", () => {
     expect(isLocalSystemTestHelpCommand(["--help"])).toBe(true);
     expect(isLocalSystemTestHelpCommand(["-h"])).toBe(true);

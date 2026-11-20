@@ -107,7 +107,7 @@ function declareCheckpointDependency(checkout: string, url: string): void {
 }
 
 export async function inspectWorkspaceSources(input: {
-  sources: readonly { checkout: string; url: string }[];
+  sources: readonly { checkout: string; url: string; commit?: string }[];
   checkpointRoot: string;
   /** Template URLs to declare as dependencies of the named source checkouts. */
   declareDependencies?: ReadonlyMap<string, readonly string[]>;
@@ -122,13 +122,14 @@ export async function inspectWorkspaceSources(input: {
       throw new Error(`Template checkout selected more than once for ${url}`);
     }
     selectedUrls.add(url);
-    return { sourceCheckout, url };
+    return { sourceCheckout, url, commit: requested.commit };
   });
   const inspect = async (index: number): Promise<void> => {
-    const { sourceCheckout, url } = checkouts[index]!;
+    const { sourceCheckout, url, commit: requestedCommit } = checkouts[index]!;
     const checkpoint = await checkpointWorkspaceSource({
       checkout: sourceCheckout,
       target: path.join(input.checkpointRoot, String(index)),
+      ...(requestedCommit ? { commit: requestedCommit } : {}),
     });
     for (const dependencyUrl of input.declareDependencies?.get(sourceCheckout) ?? []) {
       declareCheckpointDependency(checkpoint.checkout, dependencyUrl);

@@ -192,6 +192,15 @@ or when the caller's exact requested target differs from the observed offer.
 refuses preparation for the held offers. The exporter also requires the nested
 offer decision and absence of preparation calls in the trajectory.
 
+The two managed Examples cases use `--workspace-baseline` to boot a
+disposable workspace from an exact checkpoint in the configured local
+template history. The current local template remains the discovery source.
+The historical checkpoint installs the same development harness as the
+current template. Teacher capture records the baseline commit in the case
+pins and groups runs by workspace and baseline. One case inspects the
+available offer. The other prepares it and requires a clean isolated
+candidate, the native review receipt, and the same protected main event.
+
 The native staging smoke exercises the authorized path with two exact local
 Examples revisions. Start an owned disposable `server:live` System instance
 with the earlier detached checkout registered through `--extra-template-checkout`.

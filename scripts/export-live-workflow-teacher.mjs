@@ -1071,10 +1071,11 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of templateCandidateManagedWorlds) {
     cases.set(`template-candidate-live-${assignment.id}`, {
-      family: "system-live-template-candidate",
+      family: assignment.workspaceBaseline ? "examples-live-template-candidate" : "system-live-template-candidate",
       namespace: "vibestudio:templates",
       group: "exact-installation-update-offer",
-      workspace: "system",
+      workspace: assignment.workspace ?? "system",
+      ...(assignment.workspaceBaseline ? { workspaceBaseline: assignment.workspaceBaseline } : {}),
       root: "stageTemplateCandidate",
       validator: { template: "system-testing", path: "skills/system-testing/template-candidate-managed.ts" },
       assignment,
@@ -3778,8 +3779,16 @@ function templateReleaseEvidence(execution, exercise, _scenario, { assignment, p
 
 function templateCandidateEvidence(execution, exercise, _scenario, { assignment }) {
   const fixture = execution.diagnostics.templateCandidateManaged;
-  const { caseId, contextId, request, observed, checks } = fixture?.verification ?? {};
+  const {
+    caseId, contextId, request, observed, receipt, observedReview, protectedMainEventId, checks,
+  } = fixture?.verification ?? {};
   const report = exercise.report;
+  const historical = Boolean(assignment.workspaceBaseline);
+  const staging = assignment.status === "validate-candidate";
+  const decision = staging ? "prepare" : assignment.status;
+  const sourceUrl = historical
+    ? "git+https://github.com/panticonic/vibestudio-template-examples.git"
+    : "git+https://github.com/panticonic/vibestudio-base.git";
   const records = exercise.calls.map(({ record }) => record);
   const effects = records.flatMap(({ effects }) => effects ?? []);
   const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
@@ -3790,39 +3799,82 @@ function templateCandidateEvidence(execution, exercise, _scenario, { assignment 
   const inspect = child(stage, "inspectOffer");
   const read = child(inspect, "readOffer");
   const assess = child(inspect, "assessOffer");
-  const effect = read?.effects?.[0];
+  const prepare = child(stage, "prepareCandidate");
+  const reconcile = child(stage, "reconcileCandidate");
+  const observedEffect = (node, service, method, output) => {
+    const effect = node?.effects?.[0];
+    return node?.effects?.length === 1 && effect.service === service &&
+      effect.method === method && !effect.error &&
+      matchesValue(effect.args, []) && matchesValue(effect.result, output);
+  };
   requireEvidence(
     fixture?.verification?.passed === true &&
       fixture.contextId === execution.provenance?.contextId &&
       typeof contextId === "string" && fixture.contextId === contextId && caseId === assignment.id &&
-      ["observed", "report", "held", "unchanged"].every((key) => checks?.[key] === true) &&
+      ["observed", "report", "lifecycle", "unchanged"].every((key) => checks?.[key] === true) &&
       request?.goal === assignment.goal && request.intent === assignment.intent &&
-      request.sourceUrl === "git+https://github.com/panticonic/vibestudio-base.git" &&
+      request.sourceUrl === sourceUrl &&
       typeof request.commandId === "string" && request.commandId.length > 0 &&
-      /^[a-f0-9]{40}$/u.test(request.installedCommit) &&
-      /^[a-f0-9]{40}$/u.test(request.incomingCommit) &&
-      observed?.status === "current" && observed.hostUnavailable === false &&
+      [observed?.installedCommit, observed?.incomingCommit, request.installedCommit, request.incomingCommit]
+        .every((commit) => typeof commit === "string" && /^[a-f0-9]{40}$/u.test(commit)) &&
+      observed.status === (historical ? "available" : "current") && observed.hostUnavailable === false &&
       request.installedCommit === observed.installedCommit &&
-      observed.installedCommit === observed.incomingCommit &&
+      (observed.installedCommit !== observed.incomingCommit) === historical &&
       (request.incomingCommit !== observed.incomingCommit) === (assignment.status === "target-changed") &&
       Number.isSafeInteger(observed.checkedAt) &&
       request.checkedAfterMs === observed.checkedAt + Number(assignment.status === "refresh") &&
-      isDeepStrictEqual(report, { status: assignment.status, offer: observed, operationId: null, candidate: null }),
-    "Template candidate requires the exact local discovery receipt and its expected hold"
+      isDeepStrictEqual(report, {
+        status: assignment.status,
+        offer: observed,
+        operationId: staging ? request.commandId : null,
+        candidate: staging ? observedReview?.review : null,
+      }),
+    "Template candidate requires the exact local discovery receipt and the assigned outcome"
   );
   requireEvidence(
     matchesValue(stage?.inputs?.request, request) && matchesValue(stage.output, report) &&
       matchesValue(inspect?.inputs?.request, request) &&
-      matchesValue(inspect.output, { decision: assignment.status, offer: observed }) &&
+      (matchesValue(inspect.output, { decision, offer: observed }) ||
+        matchesValue(inspect.output, { offer: observed, decision })) &&
       matchesValue(assess?.inputs?.request, request) && matchesValue(assess.inputs.offer, observed) &&
-      matchesValue(assess.output, assignment.status) && matchesValue(read?.output, observed) &&
-      effects.length === 1 && effect?.service === "templateOffer" && effect.method === "read" && !effect.error &&
-      matchesValue(effect.args, []) && matchesValue(effect.result, observed) &&
-      !child(stage, "prepareCandidate") && !child(stage, "reconcileCandidate"),
-    "Template candidate hold requires a live read and nested offer decision before any preparation"
+      matchesValue(assess.output, decision) && matchesValue(read?.output, observed) &&
+      observedEffect(read, "templateOffer", "read", observed),
+    "Template candidate requires a live read and nested offer decision before any preparation"
   );
+  if (staging) {
+    const requestPreparation = child(prepare, "requestPreparation");
+    const readCandidate = child(reconcile, "readCandidate");
+    const choose = child(reconcile, "chooseReview");
+    const candidate = observedReview?.review;
+    requireEvidence(
+      effects.length === 3 && receipt?.outcome === "acknowledged" &&
+        isDeepStrictEqual(receipt.review, candidate) &&
+        candidate?.operationId === request.commandId && candidate.incomingCommit === request.incomingCommit &&
+        typeof candidate.contextId === "string" && candidate.contextId && candidate.contextId !== contextId &&
+        typeof protectedMainEventId === "string" && protectedMainEventId &&
+        candidate.mainEventId === protectedMainEventId && observedReview.mainEventId === protectedMainEventId &&
+        candidate.state === "review" && Array.isArray(candidate.conflicts) && candidate.conflicts.length === 0 &&
+        Array.isArray(candidate.repositories) && candidate.repositories.some(
+          ({ repoPath, kind }) => repoPath === "workers/grimoire-world" && kind === "changed"
+        ) &&
+        observedEffect(requestPreparation, "templateCandidatePrepare", "prepare", receipt) &&
+        observedEffect(readCandidate, "templateCandidateReview", "read", observedReview) &&
+        matchesValue(prepare?.output, receipt) && matchesValue(requestPreparation?.output, receipt) &&
+        matchesValue(reconcile?.inputs?.request, request) && matchesValue(reconcile.inputs.receipt, receipt) &&
+        matchesValue(readCandidate?.output, observedReview) &&
+        matchesValue(choose?.inputs?.candidate, candidate) && matchesValue(choose.output, assignment.status) &&
+        matchesValue(reconcile.output, { status: assignment.status, candidate }) &&
+        Date.parse(inspect.ended_at) <= Date.parse(prepare.started_at) &&
+        Date.parse(prepare.ended_at) <= Date.parse(reconcile.started_at),
+      "Template staging requires the acknowledged candidate and matching protected-main review"
+    );
+  } else {
+    requireEvidence(effects.length === 1 && !prepare && !reconcile,
+      "A held or inspected template offer must finish before any preparation");
+  }
   return {
-    world: { context_id: contextId, installed_commit: observed.installedCommit, checked_at: observed.checkedAt },
+    world: { context_id: contextId, installed_commit: observed.installedCommit, checked_at: observed.checkedAt,
+      ...(staging ? { candidate_context_id: observedReview.review.contextId, seed_revision: protectedMainEventId } : {}) },
     checks,
     evidence: { workspace: { fixture } },
   };
@@ -9265,8 +9317,17 @@ export async function exportLiveTeacherWorkflow({
     source.validator_sha256 === hash(validatorBytes),
     "Validator source differs from the run pin"
   );
+  requireEvidence(
+    source.workspace_baseline_commit === workflow.workspaceBaseline,
+    "Workspace baseline differs from the authored instance pin"
+  );
   const observed = workflow.evidence(execution, exercise, test.name, workflow);
-  const world = { instance: source.instance, run_id: source.run_id, ...observed.world };
+  const world = {
+    instance: source.instance,
+    run_id: source.run_id,
+    ...(workflow.workspaceBaseline ? { workspace_baseline_commit: workflow.workspaceBaseline } : {}),
+    ...observed.world,
+  };
   if (workflow.requiresReview) {
     requireEvidence(
       typeof review === "function",

@@ -156,6 +156,7 @@ function extractInstance(argv: string[]): {
   lifetime: OwnershipLifetime;
   /** `pnpm system-test` created this instance and may stop it. */
   systemTestManaged: boolean;
+  workspaceBaseline?: string;
   /** Serve the developer's own checkouts so their projects can be adopted. */
   selfDevelopment: boolean;
   forwarded: string[];
@@ -166,6 +167,7 @@ function extractInstance(argv: string[]): {
   let productionTemplates = false;
   let lifetime: OwnershipLifetime = "until-stop";
   let systemTestManaged = false;
+  let workspaceBaseline: string | undefined;
   let selfDevelopment = false;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]!;
@@ -175,6 +177,13 @@ function extractInstance(argv: string[]): {
         throw new Error(`--lifetime must name leased or until-stop, not ${value ?? "nothing"}`);
       }
       lifetime = value;
+      continue;
+    }
+    if (arg === "--workspace-baseline") {
+      const value = argv[++index];
+      if (workspaceBaseline || !value || !/^[a-f0-9]{40}$/u.test(value))
+        throw new Error("--workspace-baseline requires one exact commit SHA");
+      workspaceBaseline = value;
       continue;
     }
     if (arg === "--system-test-managed") {
@@ -226,6 +235,7 @@ function extractInstance(argv: string[]): {
     productionTemplates,
     lifetime,
     systemTestManaged,
+    ...(workspaceBaseline ? { workspaceBaseline } : {}),
     selfDevelopment,
     forwarded,
   };
@@ -731,6 +741,10 @@ async function main(): Promise<void> {
   if (catalogId && (!parsed.systemTestManaged || mode !== "server")) {
     throw new Error("Catalog workspace selection belongs to a managed system-test server");
   }
+  if (parsed.workspaceBaseline && (!catalogId || !disposable || parsed.productionTemplates))
+    throw new Error(
+      "A historical workspace baseline requires a disposable managed catalog workspace"
+    );
   // The ownership claim is what makes this instance id exclusive: its scratch
   // root, registry record and every process this supervisor starts are owned
   // by the claim's reaper, which retires them whether this process finishes
@@ -744,6 +758,7 @@ async function main(): Promise<void> {
       instanceId: id,
       repoRoot,
       managed: parsed.systemTestManaged,
+      ...(parsed.workspaceBaseline ? { workspaceBaseline: parsed.workspaceBaseline } : {}),
       selfDevelopment: parsed.selfDevelopment,
       ...(selectedWorkspace ? { systemTestWorkspace: selectedWorkspace } : {}),
     },
@@ -872,6 +887,9 @@ async function main(): Promise<void> {
                 checkpointRoot: checkpointTarget,
                 ...(parsed.templateCheckouts ? { explicitRoot: parsed.templateCheckouts } : {}),
                 productionTemplates: parsed.productionTemplates,
+                ...(parsed.workspaceBaseline && catalogId
+                  ? { baseline: { id: catalogId, commit: parsed.workspaceBaseline } }
+                  : {}),
               })) ?? undefined;
             detail(
               `[Perf] development template checkpoints: ${Math.round(performance.now() - startedAt)}ms`
@@ -901,7 +919,7 @@ async function main(): Promise<void> {
         ? `[instance:${id}] Template sources: published release set`
         : `[instance:${id}] Template sources: complete local set (${defaultTemplates!.sources.length} official templates)`
     );
-    const developmentTemplates = await inspectWorkspaceSources({
+    const additionalTemplates = await inspectWorkspaceSources({
       sources: [
         ...new Set(
           [
@@ -912,10 +930,16 @@ async function main(): Promise<void> {
       ].map(workspaceSourceFromCheckout),
       checkpointRoot: templateCheckpointRoot,
     });
+    const developmentTemplates = [
+      ...additionalTemplates,
+      ...(defaultTemplates?.baseline ? [defaultTemplates.baseline] : []),
+    ];
     if (catalogId && templateOptions.workspaceCheckout) {
       throw new Error("Select one workspace source for the instance");
     }
-    const catalogTemplate = catalogId ? defaultTemplates?.sourcePins[catalogId] : undefined;
+    const catalogTemplate = catalogId
+      ? (defaultTemplates?.baseline?.pin ?? defaultTemplates?.sourcePins[catalogId])
+      : undefined;
     if (catalogId && !catalogTemplate) {
       throw new Error(`No local template snapshot for ${catalogId}`);
     }

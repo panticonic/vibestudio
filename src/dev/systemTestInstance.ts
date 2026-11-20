@@ -50,6 +50,7 @@ type LauncherArgs = {
   keep: boolean;
   /** Which workspace this instance's CLI opens; System by default. */
   workspace?: string;
+  workspaceBaseline?: string;
   /** Device drivers to attach for the command (`--device terminal|desktop`). */
   devices?: DeviceKind[];
   command: string[];
@@ -88,6 +89,7 @@ export function parseSystemTestLauncherArgs(argv: readonly string[]): LauncherAr
   let selfDevelopment = false;
   let keep = false;
   let workspace: string | undefined;
+  let workspaceBaseline: string | undefined;
   const devices: DeviceKind[] = [];
   const command: string[] = [];
   for (let index = 0; index < argv.length; index += 1) {
@@ -119,6 +121,13 @@ export function parseSystemTestLauncherArgs(argv: readonly string[]): LauncherAr
         );
       }
       workspace = value;
+      continue;
+    }
+    if (arg === "--workspace-baseline") {
+      const value = argv[++index];
+      if (workspaceBaseline || !value || !/^[a-f0-9]{40}$/u.test(value))
+        throw new Error("--workspace-baseline requires one exact commit SHA");
+      workspaceBaseline = value;
       continue;
     }
     if (arg === "--device" || arg.startsWith("--device=")) {
@@ -154,6 +163,7 @@ export function parseSystemTestLauncherArgs(argv: readonly string[]): LauncherAr
     selfDevelopment,
     keep,
     ...(workspace ? { workspace } : {}),
+    ...(workspaceBaseline ? { workspaceBaseline } : {}),
     ...(devices.length > 0 ? { devices } : {}),
     command,
   };
@@ -315,6 +325,7 @@ type EnsureOptions = {
   selfDevelopment?: boolean;
   /** Workspace this instance's CLI pairs into; System by default. */
   workspace?: string;
+  workspaceBaseline?: string;
   /**
    * The contract of an instance this call creates (default `until-stop`).
    * `leased` ends with the launcher's ownership; `until-stop` ends only when
@@ -413,6 +424,7 @@ async function createInstance(
     "--lifetime",
     lifetime,
     "--system-test-managed",
+    ...(options.workspaceBaseline ? ["--workspace-baseline", options.workspaceBaseline] : []),
     ...(options.selfDevelopment ? ["--self-development"] : []),
   ];
   const env = systemTestInstanceEnvironment(process.env, {
@@ -516,6 +528,10 @@ function assertAttachable(
       `System-test instance ${JSON.stringify(instanceId)} uses workspace ${workspace}, requested ${options.workspace}. Choose another --instance.`
     );
   }
+  if (options.workspaceBaseline && ledger.meta["workspaceBaseline"] !== options.workspaceBaseline)
+    throw new Error(
+      `System-test instance ${instanceId} has a different workspace baseline. Choose another --instance.`
+    );
   if (options.selfDevelopment && ledger.meta["selfDevelopment"] !== true) {
     throw new Error(
       `System-test instance ${JSON.stringify(instanceId)} was not created with --self-development, ` +

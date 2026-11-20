@@ -232,6 +232,7 @@ async function runCommand({
     ...(parsed.selfDevelopment ? { selfDevelopment: true } : {}),
     ...(parsed.workspace ? { workspace: parsed.workspace } : {}),
     lifetime,
+    ...(parsed.workspaceBaseline ? { workspaceBaseline: parsed.workspaceBaseline } : {}),
     ownership,
     onLeased: (supervisor) => joins.push(supervisor),
     signal,

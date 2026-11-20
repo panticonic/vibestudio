@@ -7955,7 +7955,7 @@ test("template hold export binds its decision to the cached native offer and ref
   diagnostics.templateCandidateManaged = {
     contextId: "ctx", verification: {
       contextId: "ctx", caseId: assignment.id, request, observed, passed: true,
-      checks: { observed: true, report: true, held: true, unchanged: true },
+      checks: { observed: true, report: true, lifecycle: true, unchanged: true },
     },
   };
   const ref = (value) => {
@@ -7999,6 +7999,85 @@ test("template hold export binds its decision to the cached native offer and ref
   read.record.effects.push({ service: "templateCandidatePrepare", method: "prepare" });
   await save();
   await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /before any preparation/u);
+});
+
+test("template staging export binds native preparation and review to the historical instance", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  const name = "template-candidate-live-stage-examples-for-semantic-review";
+  const { assignment, workspaceBaseline } = cases.get(name);
+  entry.test.name = name;
+  const source = JSON.parse(await readFile(options.pins, "utf8"));
+  const pinned = { ...source, workspace: "examples", workspace_baseline_commit: workspaceBaseline };
+  await writeFile(options.pins, JSON.stringify(pinned));
+  const request = {
+    goal: assignment.goal, intent: assignment.intent,
+    sourceUrl: "git+https://github.com/panticonic/vibestudio-template-examples.git",
+    installedCommit: "a".repeat(40), incomingCommit: "b".repeat(40),
+    checkedAfterMs: 41, commandId: "assigned-staging",
+  };
+  const observed = {
+    installedCommit: request.installedCommit, incomingCommit: request.incomingCommit,
+    status: "available", checkedAt: 41, workspaceAppVersion: "0.1.106", currentAppVersion: "0.1.106",
+    targetAppVersion: "0.1.106", minimumAppVersion: "0.1.84", hostUnavailable: false,
+  };
+  const candidate = {
+    operationId: request.commandId, contextId: "isolated-worktree",
+    mainEventId: "protected-main", incomingCommit: request.incomingCommit,
+    state: "review", repositories: [{ repoPath: "workers/grimoire-world", kind: "changed" }], conflicts: [],
+  };
+  const receipt = { outcome: "acknowledged", review: candidate };
+  const observedReview = { review: candidate, mainEventId: "protected-main" };
+  const report = { status: assignment.status, offer: observed, operationId: request.commandId, candidate };
+  diagnostics.templateCandidateManaged = {
+    contextId: "ctx", verification: {
+      contextId: "ctx", caseId: assignment.id, request, observed, receipt, observedReview,
+      protectedMainEventId: "protected-main", passed: true,
+      checks: { observed: true, report: true, lifecycle: true, unchanged: true },
+    },
+  };
+  const ref = (value) => {
+    const text = JSON.stringify(value);
+    return { complete: true, hash: createHash("sha256").update(text).digest("hex"), bytes: Buffer.byteLength(text) };
+  };
+  const prototype = diagnostics.natlangTeacher.calls[0];
+  const call = (name, parent, inputs, output, effect) => ({
+    callId: name, summary: { ...prototype.summary, call_id: name },
+    record: {
+      ...prototype.record, call_id: name, parent_call_id: parent, definition: { name }, outcome: "done",
+      started_at: "2026-01-05T00:00:00.000Z", ended_at: "2026-01-05T00:00:00.000Z",
+      inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+      output: ref(output),
+      effects: effect ? [{ service: effect[0], method: effect[1], args: ref([]), result: ref(output) }] : [],
+    },
+  });
+  const read = call("readCandidate", "reconcileCandidate", {}, observedReview, ["templateCandidateReview", "read"]);
+  diagnostics.natlangTeacher = {
+    ...diagnostics.natlangTeacher,
+    programPath: "skills/vibestudio-workflows/runWorkflow.nl", rootCallIds: ["runWorkflow"], report,
+    calls: [
+      call("runWorkflow", null, {}, null),
+      call("stageTemplateCandidate", "runWorkflow", { request }, report),
+      call("inspectOffer", "stageTemplateCandidate", { request }, { decision: "prepare", offer: observed }),
+      call("readOffer", "inspectOffer", {}, observed, ["templateOffer", "read"]),
+      call("assessOffer", "inspectOffer", { request, offer: observed }, "prepare"),
+      call("prepareCandidate", "stageTemplateCandidate", {}, receipt),
+      call("requestPreparation", "prepareCandidate", {}, receipt, ["templateCandidatePrepare", "prepare"]),
+      call("reconcileCandidate", "stageTemplateCandidate", { request, receipt }, { status: assignment.status, candidate }),
+      read,
+      call("chooseReview", "reconcileCandidate", { candidate }, assignment.status),
+    ],
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  read.record.effects[0].result = ref({ ...observedReview, mainEventId: "foreign-main" });
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /matching protected-main/u);
+  await writeFile(options.pins, JSON.stringify({ ...pinned, workspace_baseline_commit: "c".repeat(40) }));
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /authored instance pin/u);
 });
 
 test("template release export requires the freshly inspected protected-main receipt", async () => {

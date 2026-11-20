@@ -54,6 +54,33 @@ describe("development template checkpoint", () => {
     expect(fs.readFileSync(path.join(target, " leading space.txt"), "utf8")).toBe("visible edit\n");
     expect(git(checkout, ["rev-parse", "HEAD"])).toBe(git(original, ["rev-parse", "HEAD"]));
   });
+  it("seals the assigned historical tree without current tracked and untracked changes", async () => {
+    const checkout = repository();
+    const target = `${checkout}-historical`;
+    temporaryRoots.add(target);
+    const baseline = git(checkout, ["rev-parse", "HEAD"]);
+    fs.writeFileSync(path.join(checkout, "tracked.txt"), "second commit\n");
+    git(checkout, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.invalid",
+      "commit",
+      "-am",
+      "next",
+    ]);
+    const current = git(checkout, ["rev-parse", "HEAD"]);
+    fs.writeFileSync(path.join(checkout, "tracked.txt"), "working change\n");
+    fs.writeFileSync(path.join(checkout, "local.txt"), "local scratch\n");
+    const result = await checkpointWorkspaceSource({ checkout, target, commit: baseline });
+    expect(result.changedPaths).toEqual([]);
+    expect(git(target, ["rev-parse", "HEAD"])).toBe(baseline);
+    expect(git(target, ["show", "HEAD:tracked.txt"])).toBe("committed");
+    expect(fs.existsSync(path.join(target, "local.txt"))).toBe(false);
+    expect(git(checkout, ["rev-parse", "HEAD"])).toBe(current);
+    expect(fs.readFileSync(path.join(checkout, "tracked.txt"), "utf8")).toBe("working change\n");
+  });
+
   it("does not admit automatic Git maintenance into an immutable checkpoint", async () => {
     const checkout = repository();
     const target = `${checkout}-checkpoint`;
