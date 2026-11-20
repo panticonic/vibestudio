@@ -1,5 +1,4 @@
 import { rpcFailureSchema } from "./rpcFailure.js";
-import { rpcCausalParentSchema } from "./rpcCausality.js";
 import type {
   EnvelopeId,
   EventId,
@@ -36,7 +35,7 @@ import {
   type MethodSchema,
   type ServiceMethodSchemas,
 } from "@vibestudio/shared/typedServiceClient";
-import { vcsInspectInputSchema, vcsNeighborsInputSchema, vcsFileLineageSchema, vcsMethods, vcsQueryInputSchema, vcsSearchHitSchema, vcsSearchInputSchema, vcsStateNodeRefSchema, vcsTrajectoryInvocationRefSchema, vcsTrajectoryTurnRefSchema, vcsWalkEntrySchema, vcsWalkInputSchema } from "./vcs.js";
+import { vcsInspectInputSchema, vcsNeighborsInputSchema, vcsFileLineageSchema, vcsQueryInputSchema, vcsSearchHitSchema, vcsSearchInputSchema, vcsStateNodeRefSchema, vcsTrajectoryInvocationRefSchema, vcsTrajectoryTurnRefSchema, vcsWalkEntrySchema, vcsWalkInputSchema } from "./vcs.js";
 
 const readAccess = { sensitivity: "read" as const };
 const writeAccess = { sensitivity: "write" as const };
@@ -471,36 +470,6 @@ const DiagnosticInvocationSchema = TrajectoryInvocationSchema.omit({
   request_ref_json: SqlNullableTextSchema,
   result_ref_json: SqlNullableTextSchema,
 });
-const DiagnosticCommandSchema = z
-  .object({
-    command_id: SqlTextSchema,
-    scope_kind: z.enum(["context", "workspace"]),
-    scope_id: SqlTextSchema,
-    method: SqlTextSchema,
-    request_digest: SqlTextSchema,
-    status: z.enum(["pending", "effect-pending", "complete"]),
-    created_at: SqlTextSchema,
-    completed_at: SqlNullableTextSchema,
-    result: GadJsonValueSchema.nullable(),
-  })
-  .strict();
-const DiagnosticEffectSchema = z
-  .object({
-    effect_id: SqlTextSchema,
-    scope_kind: z.enum(["context", "workspace"]),
-    scope_id: SqlTextSchema,
-    command_id: SqlTextSchema,
-    kind: z.enum(["observe-content", "materialize-context", "publish-main"]),
-    payload_digest: SqlTextSchema,
-    status: z.enum(["pending", "applied"]),
-    receipt_digest: SqlNullableTextSchema,
-    created_at: SqlTextSchema,
-    applied_at: SqlNullableTextSchema,
-    payload: GadJsonValueSchema,
-    receipt: GadJsonValueSchema.nullable(),
-  })
-  .strict();
-
 export const ChannelPublicationSchema = z
   .object({
     eventId: z.string(),
@@ -693,26 +662,14 @@ export const InvocationDiagnosticPacketSchema = z
     // Inspection summaries deliberately truncate arbitrary event payloads, but
     // remain recursively JSON validated at this narrow ABI.
     events: z.array(GadJsonRecordSchema),
-    commands: z.array(
-      z
-        .object({
-          command: DiagnosticCommandSchema,
-          effects: z.array(DiagnosticEffectSchema),
-        })
-        .strict()
-    ),
     summary: z
       .object({
         terminal: z.boolean(),
         eventCount: z.number().int().nonnegative(),
-        commandCount: z.number().int().nonnegative(),
-        pendingEffectCount: z.number().int().nonnegative(),
         cleanupFailureCount: z.number().int().nonnegative(),
         truncated: z
           .object({
             events: z.boolean(),
-            commands: z.boolean(),
-            effects: z.boolean(),
           })
           .strict(),
       })
@@ -877,8 +834,6 @@ export const DiagnoseInvocationInputSchema = z
     branchId: z.string().min(1),
     invocationId: z.string().min(1),
     eventLimit: z.number().int().min(1).max(50).optional(),
-    commandLimit: z.number().int().min(1).max(50).optional(),
-    effectLimit: z.number().int().min(1).max(100).optional(),
   })
   .strict();
 export type DiagnoseInvocationInput = z.infer<typeof DiagnoseInvocationInputSchema>;
@@ -1406,7 +1361,7 @@ export const gadMethods = defineServiceMethods({
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
     description:
-      "Return one bounded causal packet joining an exact invocation to its turn, terminal events, semantic commands, effect intents, and receipts.",
+      "Return one bounded packet for an exact invocation, including its turn and recorded events.",
     args: z.tuple([DiagnoseInvocationInputSchema]),
     returns: InvocationDiagnosticPacketSchema,
     access: readAccess,
@@ -1537,26 +1492,6 @@ const {
   ...directGadWireMethods
 } = gadMethods;
 
-const semanticCausalParentSchema = rpcCausalParentSchema;
-const semanticIngressSchema = z
-  .object({
-    causalParent: semanticCausalParentSchema.nullable(),
-  })
-  .strict();
-const semanticEffectSchema = z
-  .object({
-    effectId: z.string().min(1),
-    scopeKind: z.enum(["context", "workspace"]),
-    scopeId: z.string().min(1),
-    commandId: z.string().min(1),
-    kind: z.enum(["observe-content", "materialize-context", "publish-main"]),
-    payload: GadJsonRecordSchema,
-    payloadDigest: z.string().min(1),
-    status: z.enum(["pending", "applied"]),
-    receipt: GadJsonRecordSchema.nullable(),
-    createdAt: z.string(),
-  })
-  .strict();
 export const semanticFileHostReadSchema = z
   .object({
     kind: z.literal("read-semantic-blob"),
@@ -1573,154 +1508,7 @@ export const semanticFileHostReadSchema = z
     mode: z.number().int().nonnegative(),
   })
   .strict();
-const semanticMergeContentHostReadSchema = z
-  .object({
-    kind: z.literal("read-merge-content"),
-    operation: z.enum(["compare", "merge", "edit"]),
-    input: GadJsonRecordSchema,
-    ingress: semanticIngressSchema,
-    contentHashes: z.array(z.string().min(1)).min(1).max(1_500),
-  })
-  .strict();
-const semanticHostReadSchema = z.discriminatedUnion("kind", [
-  semanticFileHostReadSchema,
-  z
-    .object({
-      kind: z.literal("read-semantic-blobs"),
-      files: z.array(semanticFileHostReadSchema.nullable()).max(500),
-    })
-    .strict(),
-  semanticMergeContentHostReadSchema,
-]);
-const semanticHostReadAcknowledgementSchema = z
-  .object({
-    request: semanticMergeContentHostReadSchema,
-    files: z
-      .array(z.object({ contentHash: z.string().min(1), text: z.string() }).strict())
-      .max(1_500),
-  })
-  .strict();
-
-const semanticContentRequestSchema = z
-  .object({
-    kind: z.literal("prepare-semantic-content"),
-    operation: z.enum(["edit", "merge"]),
-    input: GadJsonRecordSchema,
-    ingress: semanticIngressSchema,
-    observed: z
-      .array(z.object({ contentHash: z.string().min(1), text: z.string() }).strict())
-      .optional(),
-    blobs: z.array(z.object({ contentHash: z.string().min(1), base64: z.string() }).strict()),
-  })
-  .strict();
-const semanticContentAcknowledgementSchema = z
-  .object({
-    request: semanticContentRequestSchema,
-    contentHashes: z.array(z.string().min(1)),
-  })
-  .strict();
-
-function semanticWireMethod<M extends (typeof vcsMethods)[keyof typeof vcsMethods]>(
-  method: M,
-  wireName: string
-) {
-  const inputSchema = (method.args as z.ZodTuple<[] | [z.ZodTypeAny]>).items[0] ?? z.undefined();
-  const resultSchema = method.returns;
-  return {
-    website: {
-      kind: "closed",
-      reason:
-        "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
-    } as const,
-    description: `Execute the exact ${wireName} semantic workspace operation.`,
-    access: method.access,
-    args: z.tuple([
-      z
-        .object({
-          input: inputSchema,
-          ingress: semanticIngressSchema,
-        })
-        .strict(),
-    ]),
-    returns: z.discriminatedUnion("kind", [
-      z.object({ kind: z.literal("complete"), result: resultSchema }).strict(),
-      z
-        .object({
-          kind: z.literal("effects-pending"),
-          // Effects may be required to construct the public method result
-          // (for example an import learns its canonical snapshot only after
-          // host observation). Only `complete` carries the final contract.
-          result: PolymorphicJsonPayloadSchema,
-          effects: z.array(semanticEffectSchema),
-        })
-        .strict(),
-      z.object({ kind: z.literal("host-read"), request: semanticHostReadSchema }).strict(),
-      z.object({ kind: z.literal("host-content"), request: semanticContentRequestSchema }).strict(),
-    ]),
-    agentFacing: false,
-  };
-}
-
-type SemanticWireMethod<M extends (typeof vcsMethods)[keyof typeof vcsMethods]> = ReturnType<
-  typeof semanticWireMethod<M>
->;
-type SemanticWireMethods = {
-  [K in keyof typeof vcsMethods as `vcs${Capitalize<string & K>}`]: SemanticWireMethod<
-    (typeof vcsMethods)[K]
-  >;
-};
-
-const semanticWireMethods: SemanticWireMethods = {
-  vcsEdit: semanticWireMethod(vcsMethods.edit, "edit"),
-  vcsMove: semanticWireMethod(vcsMethods.move, "move"),
-  vcsCopy: semanticWireMethod(vcsMethods.copy, "copy"),
-  vcsMerge: semanticWireMethod(vcsMethods.merge, "merge"),
-  vcsRevert: semanticWireMethod(vcsMethods.revert, "revert"),
-  vcsCommit: semanticWireMethod(vcsMethods.commit, "commit"),
-  vcsDiscard: semanticWireMethod(vcsMethods.discard, "discard"),
-  vcsImportSnapshot: semanticWireMethod(vcsMethods.importSnapshot, "import snapshot"),
-  vcsRegisterExternalDelta: semanticWireMethod(
-    vcsMethods.registerExternalDelta,
-    "register external delta"
-  ),
-  vcsSupersedeExternalDelta: semanticWireMethod(
-    vcsMethods.supersedeExternalDelta,
-    "supersede external delta"
-  ),
-  vcsFinalizeExternalDelta: semanticWireMethod(
-    vcsMethods.finalizeExternalDelta,
-    "finalize external delta"
-  ),
-  vcsPush: semanticWireMethod(vcsMethods.push, "push"),
-  vcsStatus: semanticWireMethod(vcsMethods.status, "status"),
-  vcsMainState: semanticWireMethod(vcsMethods.mainState, "main state"),
-  vcsCompare: semanticWireMethod(vcsMethods.compare, "compare"),
-  vcsInspect: semanticWireMethod(vcsMethods.inspect, "inspect"),
-  vcsNeighbors: semanticWireMethod(vcsMethods.neighbors, "neighbors"),
-  vcsHistory: semanticWireMethod(vcsMethods.history, "history"),
-  vcsBlame: semanticWireMethod(vcsMethods.blame, "blame"),
-  vcsWalk: semanticWireMethod(vcsMethods.walk, "walk"),
-  vcsQuery: semanticWireMethod(vcsMethods.query, "query"),
-  vcsSearch: semanticWireMethod(vcsMethods.search, "search"),
-  vcsReadMemory: semanticWireMethod(vcsMethods.readMemory, "read memory"),
-  vcsResolveRepository: semanticWireMethod(vcsMethods.resolveRepository, "resolve repository"),
-  vcsReadFile: semanticWireMethod(vcsMethods.readFile, "read file"),
-  vcsReadFiles: semanticWireMethod(vcsMethods.readFiles, "read files"),
-  vcsListDirectory: semanticWireMethod(vcsMethods.listDirectory, "list directory"),
-  vcsListFiles: semanticWireMethod(vcsMethods.listFiles, "list files"),
-};
-
-const semanticMutationWireMethodNames = Object.keys(semanticWireMethods).filter(
-  (method) =>
-    semanticWireMethods[method as keyof typeof semanticWireMethods].access?.sensitivity !== "read"
-);
-const semanticReadWireMethodNames = Object.keys(semanticWireMethods).filter(
-  (method) =>
-    semanticWireMethods[method as keyof typeof semanticWireMethods].access?.sensitivity === "read"
-);
-
 const nonemptyText = z.string().min(1);
-const stateRefSchema = vcsStateNodeRefSchema;
 const workspacePinSchema = z
   .object({
     url: nonemptyText,
@@ -1748,13 +1536,6 @@ const workspaceSnapshotRepositorySchema = z
     ),
   })
   .strict();
-const semanticAcknowledgementSchema = z
-  .object({
-    effectId: nonemptyText,
-    payloadDigest: nonemptyText,
-    receipt: GadJsonRecordSchema,
-  })
-  .strict();
 export const workspaceHistoryInitializationInputSchema = z
   .object({
     commandId: nonemptyText,
@@ -1763,18 +1544,6 @@ export const workspaceHistoryInitializationInputSchema = z
     installation: WorkspaceTemplateInstallationSchema,
   })
   .strict();
-const genericSemanticResultSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("complete"), result: GadJsonValueSchema }).strict(),
-  z
-    .object({
-      kind: z.literal("effects-pending"),
-      result: GadJsonValueSchema,
-      effects: z.array(semanticEffectSchema),
-    })
-    .strict(),
-  z.object({ kind: z.literal("host-read"), request: semanticHostReadSchema }).strict(),
-  z.object({ kind: z.literal("host-content"), request: semanticContentRequestSchema }).strict(),
-]);
 const refRecordSchema = z
   .object({
     refName: nonemptyText,
@@ -1868,50 +1637,6 @@ const forkLogResultSchema = z
 const channelInviteKeySchema = z.object({ channelId: nonemptyText, userId: nonemptyText }).strict();
 
 const gadInternalWireMethods = defineServiceMethods({
-  vcsSemanticEffectAck: {
-    website: {
-      kind: "closed",
-      reason:
-        "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
-    } as const,
-    description: "Acknowledge one exact semantic host effect.",
-    args: z.tuple([z.object({ acknowledgement: semanticAcknowledgementSchema }).strict()]),
-    returns: genericSemanticResultSchema,
-    agentFacing: false,
-  },
-  vcsSemanticHostReadAck: {
-    website: {
-      kind: "closed",
-      reason:
-        "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
-    } as const,
-    description: "Resume one exact semantic content host read.",
-    args: z.tuple([z.object({ acknowledgement: semanticHostReadAcknowledgementSchema }).strict()]),
-    returns: genericSemanticResultSchema,
-    agentFacing: false,
-  },
-  vcsSemanticContentAck: {
-    website: {
-      kind: "closed",
-      reason:
-        "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
-    } as const,
-    description: "Resume an exact semantic command after its authored content is available.",
-    args: z.tuple([z.object({ acknowledgement: semanticContentAcknowledgementSchema }).strict()]),
-    returns: genericSemanticResultSchema,
-    agentFacing: false,
-  },
-  vcsPendingSemanticEffects: {
-    website: {
-      kind: "closed",
-      reason:
-        "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
-    } as const,
-    description: "List durable pending semantic effects.",
-    args: z.tuple([]),
-    returns: z.array(semanticEffectSchema),
-    agentFacing: false,
-  },
   resolveRef: {
     website: {
       kind: "closed",
@@ -2420,16 +2145,12 @@ const gadWireMethodOverrides = {
 
 type MergeServiceMethods<A, B> = Omit<A, keyof B> & B;
 type RawGadWireMethods = MergeServiceMethods<
-  MergeServiceMethods<
-    MergeServiceMethods<typeof gadInternalWireMethods, typeof semanticWireMethods>,
-    typeof directGadWireMethods
-  >,
+  MergeServiceMethods<typeof gadInternalWireMethods, typeof directGadWireMethods>,
   typeof gadWireMethodOverrides
 >;
 
 const rawGadWireMethods: RawGadWireMethods = defineServiceMethods({
   ...gadInternalWireMethods,
-  ...semanticWireMethods,
   ...directGadWireMethods,
   ...gadWireMethodOverrides,
 });
@@ -2453,42 +2174,11 @@ const GAD_AUTHORITY_GROUPS: readonly GadAuthorityGroup[] = [
     effect: { kind: "open" },
   },
   {
-    methods: [
-      "vcsSemanticEffectAck",
-      "vcsSemanticHostReadAck",
-      "vcsSemanticContentAck",
-    ],
-    capability: "workspace.source.write",
-    principals: ["host"],
-    tier: "open",
-    sensitivity: "write",
-    effect: { kind: "open" },
-  },
-  {
-    methods: [
-      "vcsPendingSemanticEffects",
-      "listChannelMembershipsForUser",
-    ],
+    methods: ["listChannelMembershipsForUser"],
     capability: "workspace.source.read",
     principals: ["host"],
     tier: "open",
     sensitivity: "read",
-    effect: { kind: "open" },
-  },
-  {
-    methods: semanticMutationWireMethodNames,
-    capability: "workspace-service:gad.workspace",
-    principals: ["host"],
-    tier: "open",
-    sensitivity: "admin",
-    effect: { kind: "open" },
-  },
-  {
-    methods: semanticReadWireMethodNames,
-    capability: "workspace-service:gad.workspace",
-    principals: ["host", "code"],
-    tier: "open",
-    sensitivity: "admin",
     effect: { kind: "open" },
   },
   {

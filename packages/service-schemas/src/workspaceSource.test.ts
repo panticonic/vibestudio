@@ -3,7 +3,7 @@ import { GAD_RUNTIME_METHOD_NAMES } from "@vibestudio/shared/gadRuntimeMethods";
 import {
   AgentHealthInspectionSchema,
   gadMethods,
-  gadWireMethods,
+  semanticFileHostReadSchema,
   workspaceHistoryInitializationInputSchema,
   InspectAgentHealthInputSchema,
 } from "@vibestudio/service-schemas/workspaceSource";
@@ -19,77 +19,12 @@ describe("GAD runtime schema", () => {
       contentHash: "blob:test", contentKind: "text", byteLength: 7, coordinateExtent: 4,
       ...lineage, mode: 0o644,
     };
-    const result = { kind: "host-read", request };
-    expect(gadWireMethods.vcsReadFile.returns!.parse(result)).toEqual(result);
+    expect(semanticFileHostReadSchema.parse(request)).toEqual(request);
     const { contentKind: _kind, ...missing } = request;
-    expect(() => gadWireMethods.vcsReadFile.returns!.parse({ kind: "host-read", request: missing })).toThrow();
+    expect(() => semanticFileHostReadSchema.parse(missing)).toThrow();
   });
-  it("transports prepared content and edit observations through transient acknowledgements", () => {
-    const ingress = {
-      causalParent: null,
-    };
-    const request = {
-      kind: "prepare-semantic-content",
-      operation: "edit",
-      input: {},
-      ingress,
-      observed: [{ contentHash: "old", text: "previous text" }],
-      blobs: [{ contentHash: "new", base64: "bmV3" }],
-    };
-    const result = { kind: "host-content", request };
-    expect(gadWireMethods.vcsEdit.returns!.parse(result)).toEqual(result);
-    expect(gadWireMethods.vcsSemanticHostReadAck.returns.parse(result)).toEqual(result);
-    expect(
-      gadWireMethods.vcsSemanticContentAck.args.parse([
-        { acknowledgement: { request, contentHashes: ["new"] } },
-      ])
-    ).toEqual([{ acknowledgement: { request, contentHashes: ["new"] } }]);
-    const read = {
-      kind: "read-merge-content",
-      operation: "edit",
-      input: {},
-      ingress,
-      contentHashes: ["old"],
-    };
-    expect(
-      gadWireMethods.vcsSemanticHostReadAck.args.parse([
-        {
-          acknowledgement: {
-            request: read,
-            files: [{ contentHash: "old", text: "previous text" }],
-          },
-        },
-      ])
-    ).toEqual([
-      {
-        acknowledgement: { request: read, files: [{ contentHash: "old", text: "previous text" }] },
-      },
-    ]);
-  });
-
   it("exactly implements the portable runtime method manifest", () => {
     expect(Object.keys(gadMethods)).toEqual([...GAD_RUNTIME_METHOD_NAMES]);
-  });
-
-  it("keeps semantic VCS wire methods private to the host ingress", () => {
-    for (const method of [
-      "vcsEdit",
-      "vcsMove",
-      "vcsCopy",
-      "vcsMerge",
-      "vcsRevert",
-      "vcsCommit",
-      "vcsDiscard",
-      "vcsImportSnapshot",
-      "vcsRegisterExternalDelta",
-      "vcsSupersedeExternalDelta",
-      "vcsFinalizeExternalDelta",
-      "vcsPush",
-    ] as const) {
-      expect(gadWireMethods[method].authority?.principals, method).toEqual(["host"]);
-    }
-    expect(gadWireMethods.vcsStatus.authority?.principals).toEqual(["host", "code"]);
-    expect(gadWireMethods.vcsMainState.authority?.principals).toEqual(["host", "code"]);
   });
 
   it("documents typed args, returns, and sensitivity for every method", () => {
@@ -176,24 +111,6 @@ describe("GAD runtime schema", () => {
     expect(gadMethods).not.toHaveProperty("provenanceForFile");
     expect(gadMethods).not.toHaveProperty("provenanceForSession");
     expect(gadMethods).not.toHaveProperty("walkProvenance");
-  });
-
-  it("exposes semantic operations to declared workspace-service clients", () => {
-    expect(gadWireMethods.vcsStatus).toMatchObject({
-      capability: "workspace-service:gad.workspace",
-      authority: { principals: ["host", "code"] },
-    });
-    expect(gadWireMethods.vcsMainState).toMatchObject({
-      capability: "workspace-service:gad.workspace",
-      authority: { principals: ["host", "code"] },
-    });
-    const request = {
-      ingress: { causalParent: null },
-    };
-    expect(gadWireMethods.vcsMainState.args.safeParse([request]).success).toBe(true);
-    expect(gadWireMethods.vcsMainState.args.safeParse([{ ...request, input: {} }]).success).toBe(
-      false
-    );
   });
 
   it("accepts exact bootstrap content roots at the RPC authority boundary", () => {

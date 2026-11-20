@@ -5496,7 +5496,7 @@
     }
   },
   "diagnoseInvocation": {
-    "description": "Return one bounded causal packet joining an exact invocation to its turn, terminal events, semantic commands, effect intents, and receipts.",
+    "description": "Return one bounded packet for an exact invocation, including its turn and recorded events.",
     "access": {
       "sensitivity": "read"
     },
@@ -5524,16 +5524,6 @@
               "type": "integer",
               "minimum": 1,
               "maximum": 50
-            },
-            "commandLimit": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 50
-            },
-            "effectLimit": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100
             }
           },
           "required": [
@@ -5717,154 +5707,6 @@
             }
           }
         },
-        "commands": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "command": {
-                "type": "object",
-                "properties": {
-                  "command_id": {
-                    "$ref": "#/properties/invocation/properties/log_id"
-                  },
-                  "scope_kind": {
-                    "type": "string",
-                    "enum": [
-                      "context",
-                      "workspace"
-                    ]
-                  },
-                  "scope_id": {
-                    "$ref": "#/properties/invocation/properties/log_id"
-                  },
-                  "method": {
-                    "$ref": "#/properties/invocation/properties/log_id"
-                  },
-                  "request_digest": {
-                    "$ref": "#/properties/invocation/properties/log_id"
-                  },
-                  "status": {
-                    "type": "string",
-                    "enum": [
-                      "pending",
-                      "effect-pending",
-                      "complete"
-                    ]
-                  },
-                  "created_at": {
-                    "$ref": "#/properties/invocation/properties/log_id"
-                  },
-                  "completed_at": {
-                    "$ref": "#/properties/invocation/properties/turn_id"
-                  },
-                  "result": {
-                    "allOf": [
-                      {
-                        "$ref": "#/properties/events/items/additionalProperties"
-                      }
-                    ],
-                    "nullable": true
-                  }
-                },
-                "required": [
-                  "command_id",
-                  "scope_kind",
-                  "scope_id",
-                  "method",
-                  "request_digest",
-                  "status",
-                  "created_at",
-                  "completed_at",
-                  "result"
-                ],
-                "additionalProperties": false
-              },
-              "effects": {
-                "type": "array",
-                "items": {
-                  "type": "object",
-                  "properties": {
-                    "effect_id": {
-                      "$ref": "#/properties/invocation/properties/log_id"
-                    },
-                    "scope_kind": {
-                      "type": "string",
-                      "enum": [
-                        "context",
-                        "workspace"
-                      ]
-                    },
-                    "scope_id": {
-                      "$ref": "#/properties/invocation/properties/log_id"
-                    },
-                    "command_id": {
-                      "$ref": "#/properties/invocation/properties/log_id"
-                    },
-                    "kind": {
-                      "type": "string",
-                      "enum": [
-                        "observe-content",
-                        "materialize-context",
-                        "publish-main"
-                      ]
-                    },
-                    "payload_digest": {
-                      "$ref": "#/properties/invocation/properties/log_id"
-                    },
-                    "status": {
-                      "type": "string",
-                      "enum": [
-                        "pending",
-                        "applied"
-                      ]
-                    },
-                    "receipt_digest": {
-                      "$ref": "#/properties/invocation/properties/turn_id"
-                    },
-                    "created_at": {
-                      "$ref": "#/properties/invocation/properties/log_id"
-                    },
-                    "applied_at": {
-                      "$ref": "#/properties/invocation/properties/turn_id"
-                    },
-                    "payload": {
-                      "$ref": "#/properties/events/items/additionalProperties"
-                    },
-                    "receipt": {
-                      "allOf": [
-                        {
-                          "$ref": "#/properties/events/items/additionalProperties"
-                        }
-                      ],
-                      "nullable": true
-                    }
-                  },
-                  "required": [
-                    "effect_id",
-                    "scope_kind",
-                    "scope_id",
-                    "command_id",
-                    "kind",
-                    "payload_digest",
-                    "status",
-                    "receipt_digest",
-                    "created_at",
-                    "applied_at",
-                    "payload",
-                    "receipt"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            },
-            "required": [
-              "command",
-              "effects"
-            ],
-            "additionalProperties": false
-          }
-        },
         "summary": {
           "type": "object",
           "properties": {
@@ -5872,14 +5714,6 @@
               "type": "boolean"
             },
             "eventCount": {
-              "type": "integer",
-              "minimum": 0
-            },
-            "commandCount": {
-              "type": "integer",
-              "minimum": 0
-            },
-            "pendingEffectCount": {
               "type": "integer",
               "minimum": 0
             },
@@ -5892,18 +5726,10 @@
               "properties": {
                 "events": {
                   "type": "boolean"
-                },
-                "commands": {
-                  "type": "boolean"
-                },
-                "effects": {
-                  "type": "boolean"
                 }
               },
               "required": [
-                "events",
-                "commands",
-                "effects"
+                "events"
               ],
               "additionalProperties": false
             }
@@ -5911,8 +5737,6 @@
           "required": [
             "terminal",
             "eventCount",
-            "commandCount",
-            "pendingEffectCount",
             "cleanupFailureCount",
             "truncated"
           ],
@@ -5925,7 +5749,6 @@
         "invocation",
         "turn",
         "events",
-        "commands",
         "summary"
       ],
       "additionalProperties": false

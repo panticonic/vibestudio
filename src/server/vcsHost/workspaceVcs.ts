@@ -2,18 +2,8 @@ import { ByteArraySchema } from "@vibestudio/shared/binary";
 import { intrinsicContentDescriptor } from "@vibestudio/content-addressing";
 import { blobUploadPrincipal, hasBlobUploads, markPrivateWorkspaceBlobs } from "../storage/blobUploads.js";
 /**
- * Host boundary for the semantic workspace history.
- *
- * The semantic control plane owns meaning and history. This server boundary:
- *
- * - dispatches one semantic command;
- * - drains its exact journaled host effects;
- * - owns content bytes, context materialization, and protected-ref CAS;
- * - provides content-addressed reads and immutable build inputs; and
- * - exact host receipts for materialization and publication.
- *
- * There are no host commits, branches, merges, pending states, conflict
- * stores, staging areas, ancestry helpers, or provenance reconstructions.
+ * Host boundary for Dolt workspace history, content storage, working
+ * directories, immutable build inputs, and protected publication.
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -43,13 +33,14 @@ import type {
   VcsReadMemoryInput,
   VcsReadMemoryResult,
   VcsSearchInput,
+  VcsSearchHit,
   VcsStateNodeRef,
   VcsWalkInput,
   VcsWalkResult,
 } from "@vibestudio/service-schemas/vcs";
 import { z } from "zod";
 import { vcsQueryResultSchema, vcsReadMemoryResultSchema, vcsTrajectoryInvocationRefSchema } from "@vibestudio/service-schemas/vcs";
-import { vcsCommitResultSchema, vcsDiscardResultSchema, vcsExternalDeltaResultSchema, vcsImportSnapshotResultSchema, vcsMethods, type VcsMethodName } from "@vibestudio/service-schemas/vcs";
+import { vcsCommitResultSchema, vcsDiscardResultSchema, vcsExternalDeltaResultSchema, vcsImportSnapshotResultSchema, vcsMethods } from "@vibestudio/service-schemas/vcs";
 import type {
   ProtectedPublicationEvent,
   ProtectedPublicationFileChange,
@@ -62,7 +53,6 @@ import {
 } from "@vibestudio/content-addressing";
 import {
   contextMaterializationCommand,
-  ContextMaterializationCommandSchema,
   type ContextMaterializationCommand,
   type WorkspaceMaterializationBlob,
   WorkspaceMaterializationRepositorySchema,
@@ -110,10 +100,6 @@ import { DiskProjector } from "./diskProjector.js";
 import { ContextMaterializer } from "./contextMaterializer.js";
 import type {
   WorkspaceSemanticPort,
-  WorkspaceSourceSemanticDispatchResult,
-  WorkspaceSourceSemanticEffect,
-  WorkspaceSourceHostReadRequest,
-  WorkspaceSourceHostContentRequest,
   WorkspaceSourceProviderRef,
 } from "../workspaceSourceProvider.js";
 import type { DODispatch } from "../doDispatch.js";
@@ -136,6 +122,7 @@ import {
   type HistoryTrajectoryProvenanceRequest,
   type HistorySearchCause,
   type GadJsonRecord,
+  type semanticFileHostReadSchema,
 } from "@vibestudio/service-schemas/workspaceSource";
 import { WorkspaceRepositories } from "./workspaceRepositories.js";
 import {
@@ -151,7 +138,6 @@ import {
   workspaceHistoryFileContentVisible,
   workspaceHistoryPlacementInContexts,
   workspaceParticipantIdentity,
-  putPreparedWorkspaceContent,
   readWorkspaceCanonicalMain,
   advanceWorkspaceCommitMemoryIndex,
   readWorkspaceHistoryTemplateInstallation,
@@ -178,76 +164,10 @@ import {
 import type { WorkspaceRootTemplateBootstrap } from "../workspaceRootTemplateBootstrap.js";
 import { retainedBlobDigests, withBlobContentLock } from "../storage/blobRetentions.js";
 
-/**
- * The semantic wire surface, derived from the port rather than mirrored beside
- * it. A hand-written dispatch switch let `vcs.walk`, `vcs.query`, and
- * `vcs.search` ship with schemas, host authorization, and DO implementations
- * while every call still failed at this hop, because nothing typed the two
- * lists against each other. `satisfies` now makes an undispatched port method
- * a compile error.
- */
-export type WorkspaceSemanticMethod = Extract<keyof WorkspaceSemanticPort, `vcs${string}`>;
-type VcsApiMethodForWire<M extends WorkspaceSemanticMethod> = M extends `vcs${infer Name}`
-  ? Uncapitalize<Name> extends VcsMethodName
-    ? Uncapitalize<Name>
-    : never
-  : never;
-export type WorkspaceSemanticInput<M extends WorkspaceSemanticMethod> = ReturnType<
-  (typeof vcsMethods)[VcsApiMethodForWire<M>]["args"]["parse"]
->[0];
-export type WorkspaceSemanticOutput<M extends WorkspaceSemanticMethod> = ReturnType<
-  (typeof vcsMethods)[VcsApiMethodForWire<M>]["returns"]["parse"]
->;
-type SemanticResultDecoder<T> = (value: unknown) => T;
-function semanticApiMethodForWire(method: WorkspaceSemanticMethod): VcsMethodName {
-  const name = method.slice(3);
-  const apiMethod = `${name[0]?.toLowerCase() ?? ""}${name.slice(1)}`;
-  if (!Object.hasOwn(vcsMethods, apiMethod)) {
-    throw new Error(`Semantic VCS wire method ${method} has no canonical result schema`);
-  }
-  return apiMethod as VcsMethodName;
-}
-
-const SEMANTIC_WIRE_METHODS = {
-  vcsEdit: true,
-  vcsMove: true,
-  vcsCopy: true,
-  vcsMerge: true,
-  vcsRevert: true,
-  vcsCommit: true,
-  vcsDiscard: true,
-  vcsImportSnapshot: true,
-  vcsRegisterExternalDelta: true,
-  vcsSupersedeExternalDelta: true,
-  vcsFinalizeExternalDelta: true,
-  vcsPush: true,
-  vcsStatus: true,
-  vcsMainState: true,
-  vcsCompare: true,
-  vcsInspect: true,
-  vcsNeighbors: true,
-  vcsHistory: true,
-  vcsBlame: true,
-  vcsWalk: true,
-  vcsQuery: true,
-  vcsSearch: true,
-  vcsReadMemory: true,
-  vcsResolveRepository: true,
-  vcsReadFile: true,
-  vcsReadFiles: true,
-  vcsListDirectory: true,
-  vcsListFiles: true,
-} as const satisfies Record<WorkspaceSemanticMethod, true>;
-
-export function isSemanticWireMethod(method: string): method is WorkspaceSemanticMethod {
-  return Object.hasOwn(SEMANTIC_WIRE_METHODS, method);
-}
-
 const SYSTEM_ACTOR = { id: "system", kind: "system" } as const;
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 const BUILDS_LOG_ID = "builds:workspace";
 const CONTENT_OBSERVATION_CONCURRENCY = 32;
-const SLOW_SEMANTIC_EFFECT_MS = 500;
 
 type ParticipantHistoryAttachment = WorkspaceHistorySource & {
   /** Physical allocations inherit this provider lifetime and cannot reenter their creating DO. */
@@ -311,23 +231,6 @@ export interface PreparedWorkspaceGc {
   commit(): Promise<{ scanned: number; swept: number; bytes: number }>;
 }
 
-interface SemanticRequest<M extends WorkspaceSemanticMethod> {
-  input: WorkspaceSemanticInput<M>;
-  ingress: {
-    causalParent: import("@vibestudio/rpc").RpcCausalParent | null;
-  };
-}
-
-/** Host lifecycle/source operations are not model cognition. */
-
-function semanticRequestContextId(request: unknown): string | null {
-  if (!request || typeof request !== "object") return null;
-  const input = (request as Record<string, unknown>)["input"];
-  if (!input || typeof input !== "object") return null;
-  const contextId = (input as Record<string, unknown>)["contextId"];
-  return typeof contextId === "string" && contextId.length > 0 ? contextId : null;
-}
-
 function semanticCallAbortError(signal: AbortSignal): Error {
   if (signal.reason instanceof Error) return signal.reason;
   const error = new Error(
@@ -365,31 +268,6 @@ function abortableSemanticCall<T>(operation: () => Promise<T>, signal: AbortSign
 /** Cancellation stops actual publication effects through their gate signal.
  * Keep the context fence until the complete dispatch joins: even a reply that
  * arrives after cancellation can contain a committed working-head receipt. */
-async function ownedSemanticCall<T>(operation: () => Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) throw semanticCallAbortError(signal);
-  let cancellation: Error | undefined;
-  const onAbort = (): void => {
-    cancellation = semanticCallAbortError(signal);
-  };
-  signal.addEventListener("abort", onAbort, { once: true });
-  try {
-    const value = await operation();
-    if (cancellation) throw cancellation;
-    return value;
-  } catch (error) {
-    if (cancellation && error !== cancellation) {
-      throw new AggregateError(
-        [cancellation, error],
-        "Cancelled semantic operation failed while joining its owned work",
-        { cause: cancellation }
-      );
-    }
-    throw error;
-  } finally {
-    signal.removeEventListener("abort", onAbort);
-  }
-}
-
 const outgoingHistoryGrant = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("applied"), head: z.string() }).strict(),
   z.object({ kind: z.literal("staged"), head: z.string() }).strict(),
@@ -480,12 +358,6 @@ type PublicationGateContext =
   | CallerPublicationGateContext
   | { kind: "workspace-initialization" }
   | { kind: "chronolog" };
-
-type SemanticEffect = Pick<
-  WorkspaceSourceSemanticEffect,
-  "effectId" | "scopeKind" | "scopeId" | "commandId" | "kind" | "payloadDigest"
-> & { payload: GadJsonRecord };
-type SemanticDispatchResult = WorkspaceSourceSemanticDispatchResult;
 
 const VERIFIED_BUILD_TREE_LIMIT = 10_000;
 
@@ -778,12 +650,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       const { eventId, head, requestDigest } = staged;
       const publicationId = `workspace-root:${requestDigest}`;
       await this.publishMain({
-        effectId: publicationId,
-        payload: GadJsonRecordSchema.parse({
-          previousEventId: `${publicationId}:empty`,
-          publishedEventId: eventId,
-          repositories: staged.repositories,
-        }),
+        publicationId,
+        previousEventId: `${publicationId}:empty`,
+        publishedEventId: eventId,
+        repositories: staged.repositories,
       }, { kind: "workspace-initialization" }, {
         approved: async () => {
           const receipt = await read();
@@ -880,11 +750,12 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           await putBytes(this.deps.blobsDir, Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength));
         });
       }
-      await this.publishMain({ effectId: publicationId, payload: GadJsonRecordSchema.parse({
+      await this.publishMain({
+        publicationId,
         previousEventId: `${publicationId}:empty`,
         publishedEventId: seed.eventId,
         repositories: candidate.repositories,
-      }) }, { kind: "workspace-initialization" }, {
+      }, { kind: "workspace-initialization" }, {
         approved: async () => {
           const receipt = await readReceipt();
           return receipt?.installed === true && canonicalJson(receipt.seed) === canonicalJson(seed);
@@ -1066,11 +937,12 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           await dispatch.dispatch(canonical, "acknowledgeHistoryPublication", { publicationId });
         },
       };
-      await this.publishMain({ effectId: publicationId, payload: GadJsonRecordSchema.parse({
+      await this.publishMain({
+        publicationId,
         previousEventId: candidate.previousEventId,
         publishedEventId: candidate.state.eventId,
         repositories: candidate.repositories,
-      }) }, { kind: "chronolog" }, canonicalPublication);
+      }, { kind: "chronolog" }, canonicalPublication);
       this.deps.refs.acknowledgePublication(publicationId);
       return transition.proposedHead;
     });
@@ -1304,7 +1176,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   async searchParticipantHistory(input: WorkspaceHistoryParticipant & {
     search: VcsSearchInput;
     signal?: AbortSignal;
-  }): Promise<WorkspaceSemanticOutput<"vcsSearch">> {
+  }): Promise<VcsSearchHit[]> {
     requireWorkspaceParticipantOwner(input);
     const { search, dispatch, owner, signal } = input;
     const protectedEventId = this.deps.refs.readMainSemanticState()?.eventId;
@@ -1460,120 +1332,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     return this.gad().getChannelEnvelope(input);
   }
 
-  /** Dispatch meaning, drain exact host commands, acknowledge, and continue. */
-  async semanticCall<M extends WorkspaceSemanticMethod>(
-    method: M,
-    request: SemanticRequest<M>,
-    publicationGateContext?: CallerPublicationGateContext
-  ): Promise<WorkspaceSemanticOutput<M>> {
-    await this.whenSemanticReady(
-      publicationGateContext?.kind === "caller" ? publicationGateContext.signal : undefined
-    );
-    return this.dispatchSemanticCall(method, request, publicationGateContext);
-  }
-
-  private async dispatchSemanticCall<M extends WorkspaceSemanticMethod>(
-    method: M,
-    request: SemanticRequest<M>,
-    publicationGateContext?: PublicationGateContext
-  ): Promise<WorkspaceSemanticOutput<M>> {
-    const dispatch = async (): Promise<WorkspaceSemanticOutput<M>> => {
-      const owner = this.gad();
-      const next = await this.dispatchSemanticWire(owner, method, request);
-      return this.drainSemanticResult(
-        owner,
-        next,
-        (value) =>
-          vcsMethods[semanticApiMethodForWire(method)].returns.parse(
-            value
-          ) as WorkspaceSemanticOutput<M>,
-        publicationGateContext
-      );
-    };
-    const operation = (): Promise<WorkspaceSemanticOutput<M>> => {
-      const signal =
-        publicationGateContext?.kind === "caller" ? publicationGateContext.signal : undefined;
-      return signal ? ownedSemanticCall(dispatch, signal) : dispatch();
-    };
-    const contextId = semanticRequestContextId(request);
-    return contextId ? this.locked(`context-lifecycle:${contextId}`, operation) : operation();
-  }
-
-  private dispatchSemanticWire<M extends WorkspaceSemanticMethod>(
-    owner: WorkspaceSemanticPort,
-    method: M,
-    request: SemanticRequest<M>
-  ): Promise<WorkspaceSourceSemanticDispatchResult> {
-    if (!isSemanticWireMethod(method)) {
-      throw new Error(`Invalid semantic VCS method ${JSON.stringify(method)}`);
-    }
-    return owner[method](request);
-  }
-
-  semanticDirectCall<M extends WorkspaceSemanticMethod>(
-    method: M,
-    input: WorkspaceSemanticInput<M>
-  ): Promise<WorkspaceSemanticOutput<M>> {
-    return this.semanticCall(method, {
-      input,
-      ingress: { causalParent: null },
-    });
-  }
-
-  /** Record the one upstream causal edge carried by a trusted host adapter. */
-  semanticCausalCall<M extends WorkspaceSemanticMethod>(
-    method: M,
-    input: WorkspaceSemanticInput<M>,
-    causalParent: RpcCausalParent | null
-  ): Promise<WorkspaceSemanticOutput<M>> {
-    return this.semanticCall(method, {
-      input,
-      ingress: { causalParent },
-    });
-  }
-
-  /** Publish through the ordinary semantic request while keeping authorization
-   * at the protected-ref gate, separate from causal provenance. */
-  semanticPublishCall(
-    input: WorkspaceSemanticInput<"vcsPush">,
-    causalParent: RpcCausalParent | null,
-    caller: VerifiedCaller,
-    signal?: AbortSignal
-  ): Promise<WorkspaceSemanticOutput<"vcsPush">> {
-    return this.withProtectedMainMutation(
-      () =>
-        this.semanticCall(
-          "vcsPush",
-          {
-            input,
-            ingress: { causalParent },
-          },
-          { kind: "caller", caller, ...(signal ? { signal } : {}) }
-        ),
-      signal
-    );
-  }
-
-  semanticEpochTransitionPublishCall(
-    input: WorkspaceSemanticInput<"vcsPush">,
-    causalParent: RpcCausalParent | null,
-    caller: VerifiedCaller,
-    signal?: AbortSignal
-  ): Promise<WorkspaceSemanticOutput<"vcsPush">> {
-    return this.withProtectedMainMutation(
-      () =>
-        this.semanticCall(
-          "vcsPush",
-          {
-            input,
-            ingress: { causalParent },
-          },
-          { kind: "caller", caller, epochTransition: true, ...(signal ? { signal } : {}) }
-        ),
-      signal
-    );
-  }
-
   /** Advance the participant's exact saved revision through the protected gate. */
   async publishParticipantContext(input: Omit<WorkspaceHistoryParticipant, "caller"> & {
     push: VcsPushInput;
@@ -1664,12 +1422,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         });
       }
       await this.publishMain({
-        effectId: publicationId,
-        payload: GadJsonRecordSchema.parse({
-          previousEventId: push.expectedMainEventId,
-          publishedEventId: push.expectedCommittedEventId,
-          repositories: candidate.repositories,
-        }),
+        publicationId,
+        previousEventId: push.expectedMainEventId,
+        publishedEventId: push.expectedCommittedEventId,
+        repositories: candidate.repositories,
       }, gateContext, participant(main.head, candidate.head));
       const publication = this.deps.refs.readAppliedPublication(publicationId);
       if (!publication) throw new Error("Workspace publication has no host receipt");
@@ -1717,12 +1473,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           throw new Error("Canonical history cannot prove the approved publication");
         }
         await this.publishMain({
-          effectId: approval.publicationId,
-          payload: GadJsonRecordSchema.parse({
-            previousEventId: approval.previousEventId,
-            publishedEventId: approval.proposedEventId,
-            repositories: revision.repositories,
-          }),
+          publicationId: approval.publicationId,
+          previousEventId: approval.previousEventId,
+          publishedEventId: approval.proposedEventId,
+          repositories: revision.repositories,
         }, undefined, observeAppliedWorkspacePublication({ ...input, approval }));
         this.deps.refs.acknowledgePublication(approval.publicationId);
         pending.splice(pending.indexOf(record), 1);
@@ -1738,8 +1492,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     read: VcsReadFilesInput;
   }): Promise<VcsReadFileResult[]> {
     const files = await readWorkspaceParticipantFileDescriptors(input);
-    const result = await this.executeHostRead({ kind: "read-semantic-blobs", files });
-    return vcsMethods.readFiles.returns.parse(result);
+    return vcsMethods.readFiles.returns.parse(await Promise.all(
+      files.map((file) => file === null ? null : this.executeSingleSemanticBlobRead(file)),
+    ));
   }
 
   /** Restore the selected saved state, then realize the participant's current files. */
@@ -2002,9 +1757,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   /**
    * One workspace-wide protected-main authoring lease. Callers that must read
    * main, author a candidate, journal its publication intent, and publish may
-   * hold this across the whole sequence. Ordinary pushes enter the same lease
-   * through `semanticPublishCall`, so no second serialization domain can move
-   * main between preparation and publication.
+   * hold this across the whole sequence. Participant publication uses the
+   * same lease to keep main stable between preparation and publication.
    */
   async withProtectedMainMutation<T>(
     operation: () => Promise<T>,
@@ -2030,148 +1784,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     }
   }
 
-  private async drainSemanticResult<T>(
-    owner: WorkspaceSemanticPort,
-    initial: SemanticDispatchResult,
-    decode: SemanticResultDecoder<T>,
-    publicationGateContext?: PublicationGateContext
-  ): Promise<T> {
-    let result = initial;
-    for (let step = 0; step < 1_000; step += 1) {
-      if (result.kind === "complete") {
-        return decode(result.result);
-      }
-      if (result.kind === "host-read") {
-        if (result.request["kind"] === "read-merge-content") {
-          result = await this.executeMergeContentHostRead(owner, result.request);
-          continue;
-        }
-        return decode(await this.executeHostRead(result.request));
-      }
-      if (result.kind === "host-content") {
-        const request = result.request;
-        result = await withBlobContentLock(this.deps.blobsDir, () =>
-          this.prepareSemanticContent(owner, request)
-        );
-        continue;
-      }
-      const effect = result.effects[0];
-      if (!effect) throw new Error("semantic command reported effects-pending without an effect");
-      const effectStartedAt = performance.now();
-      const receipt = await this.executeSemanticEffect(effect, publicationGateContext);
-      const executeMs = performance.now() - effectStartedAt;
-      // The applied head remains replay evidence; marking it acknowledged
-      // before the semantic ack closes the crash gap that could otherwise
-      // leave one uncompactible evidence row per publication.
-      if (effect.kind === "publish-main") {
-        this.deps.refs.acknowledgePublication(effect.effectId);
-      }
-      const acknowledgeStartedAt = performance.now();
-      result = await owner.semanticEffectAck({
-        acknowledgement: {
-          effectId: effect.effectId,
-          payloadDigest: effect.payloadDigest,
-          receipt: GadJsonRecordSchema.parse(receipt),
-        },
-      });
-      const acknowledgeMs = performance.now() - acknowledgeStartedAt;
-      const totalMs = performance.now() - effectStartedAt;
-      if (totalMs >= SLOW_SEMANTIC_EFFECT_MS) {
-        console.info("[Vcs] slow semantic effect", {
-          kind: effect.kind,
-          executeMs: Math.round(executeMs),
-          acknowledgeMs: Math.round(acknowledgeMs),
-          totalMs: Math.round(totalMs),
-        });
-      }
-    }
-    throw new Error("semantic command exceeded the host-effect drain limit");
-  }
-
-  /** Drain the semantic outbox independently of the request that created it. */
-  async recoverPendingSemanticEffects(): Promise<number> {
-    // Ref commit, host observers, and semantic acknowledgement are separate
-    // durable phases. Older/interrupted hosts may already have acknowledged a
-    // committed head before its observers finished; recover that exact head
-    // even when its semantic outbox is empty.
-    await this.mutateProtectedMain(async () => {
-      const head = this.deps.refs.readHeadPublication();
-      if (head) await this.replayPublicationObservers(head);
-    });
-    const owner = this.gad();
-    let recovered = 0;
-    for (let step = 0; step < 1_000; step += 1) {
-      const effects = await owner.pendingSemanticEffects();
-      // Publication authorization belongs to the request that initiated the
-      // protected advance. A generic restart has no caller or lifecycle
-      // authority and must never manufacture one. It may only finish the
-      // semantic acknowledgement after the exact publication is already
-      // durably applied. An unapplied publication remains pending until the
-      // original caller or trusted lifecycle operation retries it, but it is
-      // not a global outbox barrier: later safe host effects and already-
-      // applied publications remain independently recoverable.
-      let selected:
-        | { effect: SemanticEffect; publication: null }
-        | {
-            effect: SemanticEffect;
-            publication: AppliedPublication;
-          }
-        | null = null;
-      for (const effect of effects) {
-        if (effect.kind !== "publish-main") {
-          selected = { effect, publication: null };
-          break;
-        }
-        const publication = this.deps.refs.readAppliedPublication(effect.effectId);
-        if (publication) {
-          selected = { effect, publication };
-          break;
-        }
-      }
-      if (!selected) return recovered;
-      const { effect, publication } = selected;
-      const recover = async (): Promise<boolean> => {
-        // Selection happens outside the lifecycle lock. Re-check after joining
-        // it so an effect cancelled by context deletion cannot recreate the
-        // disposable projection from a stale command.
-        const pending = await owner.pendingSemanticEffects();
-        if (
-          !pending.some(
-            (candidate) =>
-              candidate.effectId === effect.effectId &&
-              candidate.payloadDigest === effect.payloadDigest
-          )
-        ) {
-          return false;
-        }
-        if (publication) {
-          await this.mutateProtectedMain(() => this.replayPublicationObservers(publication));
-        }
-        const receipt: Record<string, unknown> = publication
-          ? {
-              applied: true,
-              appliedAt: new Date(publication.appliedAt).toISOString(),
-            }
-          : await this.executeSemanticEffect(effect);
-        if (publication) this.deps.refs.acknowledgePublication(effect.effectId);
-        await owner.semanticEffectAck({
-          acknowledgement: {
-            effectId: effect.effectId,
-            payloadDigest: effect.payloadDigest,
-            receipt: GadJsonRecordSchema.parse(receipt),
-          },
-        });
-        return true;
-      };
-      const didRecover =
-        effect.scopeKind === "context"
-          ? await this.locked(`context-lifecycle:${effect.scopeId}`, recover)
-          : await recover();
-      if (didRecover) recovered += 1;
-    }
-    throw new Error("semantic outbox recovery exceeded the host-effect drain limit");
-  }
-
   private async replayPublicationObservers(publication: AppliedPublication): Promise<void> {
     if (publication.observersAppliedAt !== null) return;
     // Re-enter the existing exact-evidence replay admission. It checks the
@@ -2186,47 +1798,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         hostRefsBasisDigest: publication.hostRefsBasisDigest,
       },
     });
-  }
-
-  private async executeSemanticEffect(
-    effect: SemanticEffect,
-    publicationGateContext?: PublicationGateContext
-  ): Promise<GadJsonRecord> {
-    switch (effect.kind) {
-      case "observe-content":
-        return this.observeContent(effect);
-      case "materialize-context": {
-        const command = ContextMaterializationCommandSchema.parse(effect.payload);
-        const receipt = await this.materializer.materialize(command);
-        return GadJsonRecordSchema.parse(receipt);
-      }
-      case "publish-main":
-        if (!publicationGateContext) {
-          throw new Error("protected publication has no verified gate context");
-        }
-        return this.publishMain(effect, publicationGateContext);
-    }
-  }
-
-  private async observeContent(effect: SemanticEffect): Promise<GadJsonRecord> {
-    const representation = effect.payload["representation"];
-    if (representation !== "bytes" && representation !== "descriptor") {
-      throw new Error(
-        `content observation has unsupported representation ${JSON.stringify(representation)}`
-      );
-    }
-    const files = effect.payload["files"];
-    if (!Array.isArray(files)) throw new Error("content observation effect lacks files");
-    const contentHashes = files.map((value) => {
-      if (!value || typeof value !== "object") {
-        throw new Error("content observation contains an invalid file");
-      }
-      const file = value as Record<string, unknown>;
-      const contentHash = String(file["contentHash"] ?? "");
-      if (!contentHash) throw new Error("content observation contains an empty content hash");
-      return contentHash;
-    });
-    return this.observeContentHashes(contentHashes, representation);
   }
 
   private async observeContentHashes(
@@ -2255,32 +1826,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   /** Prepared bytes remain transient until the source commits their content identities. */
-  private async prepareSemanticContent(
-    owner: WorkspaceSemanticPort,
-    request: WorkspaceSourceHostContentRequest
-  ): Promise<SemanticDispatchResult> {
-    // Validate the full request before writing, then await every store before
-    // allowing the source to commit references. The GC lease spans the ack.
-    const contentHashes = await putPreparedWorkspaceContent(this.deps.blobsDir, request.blobs);
-    return owner.semanticContentAck({ acknowledgement: { request, contentHashes } });
-  }
-
-  private async executeHostRead(
-    request: Exclude<WorkspaceSourceHostReadRequest, { kind: "read-merge-content" }>
-  ): Promise<unknown> {
-    if (request.kind === "read-semantic-blobs") {
-      return Promise.all(
-        request.files.map(async (file) => {
-          if (file === null) return null;
-          return this.executeSingleSemanticBlobRead(file);
-        })
-      );
-    }
-    return this.executeSingleSemanticBlobRead(request);
-  }
-
   private async executeSingleSemanticBlobRead(
-    request: Extract<WorkspaceSourceHostReadRequest, { kind: "read-semantic-blob" }>
+    request: z.infer<typeof semanticFileHostReadSchema>
   ): Promise<NonNullable<VcsReadFileResult>> {
     const bytes = await getBytes(this.deps.blobsDir, request.contentHash);
     if (!bytes) throw new Error(`semantic content blob ${request.contentHash} is missing`);
@@ -2302,31 +1849,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     };
   }
 
-  private async executeMergeContentHostRead(
-    owner: WorkspaceSemanticPort,
-    request: Extract<WorkspaceSourceHostReadRequest, { kind: "read-merge-content" }>
-  ): Promise<SemanticDispatchResult> {
-    const files = await Promise.all(
-      request.contentHashes.map(async (contentHash) => {
-        const bytes = await getBytes(this.deps.blobsDir, contentHash);
-        if (!bytes) throw new Error(`semantic content blob ${contentHash} is missing`);
-        let text: string;
-        try {
-          text = UTF8_DECODER.decode(bytes);
-        } catch (error) {
-          throw new Error(`semantic merge content ${contentHash} is not UTF-8 text`, {
-            cause: error,
-          });
-        }
-        return { contentHash, text };
-      })
-    );
-    return owner.semanticHostReadAck({ acknowledgement: { request, files } });
-  }
-
   private fileContent(
     bytes: Uint8Array,
-    descriptor: Extract<WorkspaceSourceHostReadRequest, { kind: "read-semantic-blob" }>
+    descriptor: z.infer<typeof semanticFileHostReadSchema>
   ): NonNullable<VcsReadFileResult>["content"] {
     if (descriptor["byteLength"] !== bytes.byteLength) {
       throw new Error("semantic file byte length does not match its stored content");
@@ -2347,22 +1872,19 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   private async publishMain(
-    effect: Pick<SemanticEffect, "effectId" | "payload">,
+    candidate: {
+      publicationId: string;
+      previousEventId: string;
+      publishedEventId: string;
+      repositories: readonly WorkspaceMaterializationRepository[];
+    },
     gateContext: PublicationGateContext | undefined,
-    canonical?: CanonicalRefPublication
-  ): Promise<GadJsonRecord> {
-    if (!gateContext && !canonical) throw new Error("Protected publication has no authority source");
+    canonical: CanonicalRefPublication
+  ): Promise<void> {
     const profileStartedAt = performance.now();
-    const repositories = effect.payload["repositories"];
-    if (!Array.isArray(repositories)) {
-      throw new Error("publication effect lacks exact repository manifests");
-    }
-    const publishedEventId = String(effect.payload["publishedEventId"] ?? "");
-    if (!publishedEventId) throw new Error("publication effect lacks its published event identity");
-    const placement = canonical ? { kind: "event" as const, eventId: publishedEventId } : undefined;
-    const roots = await this.materializer.contentRoots(
-      repositories as WorkspaceMaterializationRepository[], placement,
-    );
+    const { publicationId, previousEventId, publishedEventId, repositories } = candidate;
+    const placement = { kind: "event" as const, eventId: publishedEventId };
+    const roots = await this.materializer.contentRoots(repositories, placement);
     const contentRootsCompletedAt = performance.now();
     const current = this.deps.refs.listMains();
     const currentByPath = new Map(current.map((entry) => [entry.repoPath, entry.contentRoot]));
@@ -2408,18 +1930,17 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         next: targetByPath.get(repoPath) ?? null,
       })),
       evidence: {
-        publicationId: effect.effectId,
-        previousEventId: String(effect.payload["previousEventId"] ?? ""),
-        publishedEventId: String(effect.payload["publishedEventId"] ?? ""),
+        publicationId,
+        previousEventId,
+        publishedEventId,
         hostRefsBasisDigest,
       },
       ...(gateContext ? { gateContext: { ...gateContext, getCandidateWorkspaceState } } : {}),
     };
-    if (canonical) await this.deps.refs.updateMains(update, canonical);
-    else await this.deps.refs.updateMains(update);
+    await this.deps.refs.updateMains(update, canonical);
     const refsCompletedAt = performance.now();
-    const publication = this.deps.refs.readAppliedPublication(effect.effectId);
-    if (!publication) throw new Error(`protected publication ${effect.effectId} was not recorded`);
+    const publication = this.deps.refs.readAppliedPublication(publicationId);
+    if (!publication) throw new Error(`protected publication ${publicationId} was not recorded`);
     const profileCompletedAt = performance.now();
     if (profileCompletedAt - profileStartedAt >= 100) {
       console.info("[VcsProfile] protected main publication", {
@@ -2432,10 +1953,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         totalMs: profileCompletedAt - profileStartedAt,
       });
     }
-    return GadJsonRecordSchema.parse({
-      applied: true,
-      appliedAt: new Date(publication.appliedAt).toISOString(),
-    });
   }
 
   private gad(): WorkspaceSemanticPort {

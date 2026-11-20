@@ -63,43 +63,10 @@ export function createCausalEnvelopeReader(
 type WorkspaceSemanticClient = import("@vibestudio/shared/typedServiceClient").TypedServiceClient<
   typeof gadWireMethods
 >;
-type SemanticWireMethodName =
-  | "vcsEdit"
-  | "vcsMove"
-  | "vcsCopy"
-  | "vcsMerge"
-  | "vcsRevert"
-  | "vcsCommit"
-  | "vcsDiscard"
-  | "vcsImportSnapshot"
-  | "vcsRegisterExternalDelta"
-  | "vcsSupersedeExternalDelta"
-  | "vcsFinalizeExternalDelta"
-  | "vcsPush"
-  | "vcsStatus"
-  | "vcsMainState"
-  | "vcsCompare"
-  | "vcsInspect"
-  | "vcsNeighbors"
-  | "vcsHistory"
-  | "vcsBlame"
-  | "vcsWalk"
-  | "vcsQuery"
-  | "vcsSearch"
-  | "vcsReadMemory"
-  | "vcsResolveRepository"
-  | "vcsReadFile"
-  | "vcsReadFiles"
-  | "vcsListDirectory"
-  | "vcsListFiles";
-export type WorkspaceSemanticPort = Pick<WorkspaceSemanticClient, SemanticWireMethodName> & HistoryCommitMemoryIndex & {
+export type WorkspaceSemanticPort = HistoryCommitMemoryIndex & {
   getChannelEnvelope(
     input: Parameters<WorkspaceSemanticClient["getChannelEnvelope"]>[0]
   ): Promise<{ contentClass: "internal" | "external" } | null>;
-  semanticEffectAck: WorkspaceSemanticClient["vcsSemanticEffectAck"];
-  semanticHostReadAck: WorkspaceSemanticClient["vcsSemanticHostReadAck"];
-  semanticContentAck: WorkspaceSemanticClient["vcsSemanticContentAck"];
-  pendingSemanticEffects: WorkspaceSemanticClient["vcsPendingSemanticEffects"];
   appendLogEvent: WorkspaceSemanticClient["appendLogEvent"];
   getLogEvent: WorkspaceSemanticClient["getLogEvent"];
   inspectInvocationState: WorkspaceSemanticClient["inspectInvocationState"];
@@ -112,33 +79,6 @@ export type WorkspaceSemanticPort = Pick<WorkspaceSemanticClient, SemanticWireMe
   searchHistoryTrajectory(input: HistoryTrajectorySearchInput):
     Promise<import("@vibestudio/service-schemas/vcs").VcsSearchHit[]>;
 };
-type RawWorkspaceSourceSemanticDispatchResult = Awaited<
-  ReturnType<WorkspaceSemanticClient[SemanticWireMethodName]>
->;
-export type WorkspaceSourceSemanticEffect = Awaited<
-  ReturnType<WorkspaceSemanticClient["vcsPendingSemanticEffects"]>
->[number];
-type PendingSemanticEffect = Extract<
-  RawWorkspaceSourceSemanticDispatchResult,
-  { kind: "effects-pending" }
->["effects"][number];
-export type WorkspaceSourceHostReadRequest = Extract<
-  RawWorkspaceSourceSemanticDispatchResult,
-  { kind: "host-read" }
->["request"];
-export type WorkspaceSourceHostContentRequest = Extract<
-  RawWorkspaceSourceSemanticDispatchResult,
-  { kind: "host-content" }
->["request"];
-export type WorkspaceSourceSemanticDispatchResult =
-  | { kind: "complete"; result: unknown }
-  | {
-      kind: "effects-pending";
-      result: unknown;
-      effects: PendingSemanticEffect[];
-    }
-  | Extract<RawWorkspaceSourceSemanticDispatchResult, { kind: "host-read" | "host-content" }>;
-
 export function createWorkspaceSemanticPort(
   dispatch: Pick<DODispatch, "dispatch">,
   provider: WorkspaceSourceProviderRef
@@ -153,38 +93,6 @@ export function createWorkspaceSemanticPort(
       const envelope = await client.getChannelEnvelope(input);
       return envelope ? { contentClass: envelope.contentClass } : null;
     },
-    vcsEdit: (input) => client.vcsEdit(input),
-    vcsMove: (input) => client.vcsMove(input),
-    vcsCopy: (input) => client.vcsCopy(input),
-    vcsMerge: (input) => client.vcsMerge(input),
-    vcsRevert: (input) => client.vcsRevert(input),
-    vcsCommit: (input) => client.vcsCommit(input),
-    vcsDiscard: (input) => client.vcsDiscard(input),
-    vcsImportSnapshot: (input) => client.vcsImportSnapshot(input),
-    vcsRegisterExternalDelta: (input) => client.vcsRegisterExternalDelta(input),
-    vcsSupersedeExternalDelta: (input) => client.vcsSupersedeExternalDelta(input),
-    vcsFinalizeExternalDelta: (input) => client.vcsFinalizeExternalDelta(input),
-    vcsPush: (input) => client.vcsPush(input),
-    vcsStatus: (input) => client.vcsStatus(input),
-    vcsMainState: (input) => client.vcsMainState(input),
-    vcsCompare: (input) => client.vcsCompare(input),
-    vcsInspect: (input) => client.vcsInspect(input),
-    vcsNeighbors: (input) => client.vcsNeighbors(input),
-    vcsHistory: (input) => client.vcsHistory(input),
-    vcsBlame: (input) => client.vcsBlame(input),
-    vcsWalk: (input) => client.vcsWalk(input),
-    vcsQuery: (input) => client.vcsQuery(input),
-    vcsSearch: (input) => client.vcsSearch(input),
-    vcsReadMemory: (input) => client.vcsReadMemory(input),
-    vcsResolveRepository: (input) => client.vcsResolveRepository(input),
-    vcsReadFile: (input) => client.vcsReadFile(input),
-    vcsReadFiles: (input) => client.vcsReadFiles(input),
-    vcsListDirectory: (input) => client.vcsListDirectory(input),
-    vcsListFiles: (input) => client.vcsListFiles(input),
-    semanticEffectAck: (input) => client.vcsSemanticEffectAck(input),
-    semanticHostReadAck: (input) => client.vcsSemanticHostReadAck(input),
-    semanticContentAck: (input) => client.vcsSemanticContentAck(input),
-    pendingSemanticEffects: () => client.vcsPendingSemanticEffects(),
     appendLogEvent: (input) => client.appendLogEvent(input),
     getLogEvent: (input) => client.getLogEvent(input),
     inspectInvocationState: (input) => client.inspectInvocationState(input),
