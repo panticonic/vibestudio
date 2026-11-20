@@ -138,11 +138,13 @@ const contracts = [
     runtime: "bundled sql.js runtime",
     mustStartWithBytes: [0x00, 0x61, 0x73, 0x6d],
   },
-  ...OWNERSHIP_REAPER_FILES.map((filename) => ({
-    path: `dist/${filename}`,
-    runtime: "ownership reaper (plain file beside the host bundles)",
-    format: "esm",
-  })),
+  ...["dist", "dist/cli"].flatMap((directory) =>
+    OWNERSHIP_REAPER_FILES.map((filename) => ({
+      path: `${directory}/${filename}`,
+      runtime: "ownership reaper (plain file beside the host bundles)",
+      format: "esm",
+    }))
+  ),
   ...Object.values(SERVER_WORKER_ENTRIES.standalone).map((filename) => ({
     path: `dist/${filename}`,
     runtime: "standalone Node worker",

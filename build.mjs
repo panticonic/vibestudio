@@ -694,6 +694,7 @@ function copyAssets() {
   fs.copyFileSync("hosts/desktop/main/displayCapture.html", "dist/displayCapture.html");
   copySqlJsRuntimeAsset("dist");
   copyOwnershipReaperAssets("dist");
+  copyOwnershipReaperAssets("dist/cli");
   copyBrandAssets();
   // Bundled agent skill consumed by `vibestudio agent skill install|print`
   // (resolved as a sibling of dist/cli/client.mjs).
