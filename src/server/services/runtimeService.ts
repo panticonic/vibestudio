@@ -243,7 +243,7 @@ export interface RuntimeServiceInternal {
     ownerRuntimeId: string;
     parentContextId: string;
     targetContextId: string;
-  }): Promise<{
+  }, caller: VerifiedCaller): Promise<{
     contextId: string;
     parentContextId: string;
     parentWorkingHead: VcsStateNodeRef;
@@ -294,20 +294,14 @@ export interface RuntimeSemanticContexts {
   ensureContext(contextId: string): Promise<void>;
   /** Drop the semantic context and its disposable host projection. */
   dropContext(contextId: string): Promise<void>;
-  /**
-   * Fork the source context's exact working frontier into an independent target
-   * semantic context. Used by clone/subagent lifecycle orchestration.
-   */
-  forkContext(sourceContextId: string, targetContextId: string): Promise<void>;
-  forkParticipantContext?(input: {
-    caller: VerifiedCaller | undefined;
+  /** Fork the caller's exact working revision into an independent context. */
+  forkParticipantContext(input: {
+    caller: VerifiedCaller;
     sourceContextId: string;
     targetContextId: string;
     ownerContextId?: string;
     retainForRuntime?: boolean;
-  }): Promise<VcsStateNodeRef | null>;
-  /** Exact semantic state pointer without materializing a native projection. */
-  resolveWorkingState(contextId: string): Promise<VcsStateNodeRef>;
+  }): Promise<VcsStateNodeRef>;
   /** Enumerate durable semantic contexts, optionally restricted by exact prefix. */
   listContexts(prefix?: string): Promise<string[]>;
 }
@@ -1017,11 +1011,16 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         : {}),
     });
     inheritTaskAuthority(record.id, actors, contextId);
-    // The reservation owns an isolated child frontier, not a fresh main
-    // snapshot. The canonical fork command is replayable after interruption
-    // and retains the first selected frontier on reservation retries.
+    // The reservation retains the parent's selected revision for the child
+    // runtime, including on a retry of the same reservation.
     if (ownerContextId && ownerContextId !== contextId) {
-      await deps.semanticContexts.forkContext(ownerContextId, contextId);
+      await deps.semanticContexts.forkParticipantContext({
+        caller: contextOwner,
+        sourceContextId: ownerContextId,
+        targetContextId: contextId,
+        ownerContextId,
+        retainForRuntime: true,
+      });
     }
     // An implicit reservation is the semantic creation boundary for its
     // derived lifecycle context. Register it immediately, before activation
@@ -2196,13 +2195,12 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         const targetCtx = newContextIdOf.get(srcCtx) as string;
         // Fork semantic state first so every cloned runtime observes the exact
         // source working frontier and can then diverge independently.
-        const participantFork = await deps.semanticContexts.forkParticipantContext?.({
+        await deps.semanticContexts.forkParticipantContext({
           caller: semanticCaller, sourceContextId: srcCtx, targetContextId: targetCtx,
           retainForRuntime: true,
           ...(semanticOwner ? { ownerContextId: semanticOwner } : {}),
         });
         if (!existingContexts.has(targetCtx)) {
-          if (!participantFork) await deps.semanticContexts.forkContext(srcCtx, targetCtx);
           if (isRoot) {
             await store.recordContextEdge({
               contextId: targetCtx,
@@ -2645,12 +2643,11 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
 
     const contextId = contextIdForTargetKey(args.targetKey);
     // Order mirrors cloneContext: fork semantic state, then materialize its projection.
-    const admitted = await deps.semanticContexts.forkParticipantContext?.({
+    await deps.semanticContexts.forkParticipantContext({
       caller, sourceContextId: args.parentContextId, targetContextId: contextId,
       ownerContextId: caller.agentBinding?.contextId ?? args.parentContextId,
       retainForRuntime: true,
     });
-    if (!admitted) await deps.semanticContexts.forkContext(args.parentContextId, contextId);
     await deps.contextFolders.ensureContextFolder(contextId);
     await store.recordContextEdge({
       contextId,
@@ -2671,7 +2668,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
 
   async function forkSemanticContext(
     input: { ownerRuntimeId: string; parentContextId: string; targetContextId: string },
-    caller?: VerifiedCaller
+    caller: VerifiedCaller
   ): Promise<{
     contextId: string;
     parentContextId: string;
@@ -2689,13 +2686,9 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     }
     const parentContextId = input.parentContextId;
     const contextId = input.targetContextId;
-    const selected = await deps.semanticContexts.forkParticipantContext?.({
+    const selected = await deps.semanticContexts.forkParticipantContext({
       caller, sourceContextId: parentContextId, targetContextId: contextId,
     });
-    const parentWorkingHead = selected ?? await deps.semanticContexts.resolveWorkingState(parentContextId);
-    // Semantic state only: do not create a projection folder and do not touch
-    // entity/DO state. forkContext is valid even when the parent is empty.
-    if (!selected) await deps.semanticContexts.forkContext(parentContextId, contextId);
     await store.recordContextEdge({
       contextId,
       ownerContextId: parentContextId,
@@ -2703,8 +2696,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       ownerEntityId: input.ownerRuntimeId,
     });
     await deps.onContextCreated?.({ contextId, ownerContextId: parentContextId });
-    const childBaseState = selected ?? await deps.semanticContexts.resolveWorkingState(contextId);
-    return { contextId, parentContextId, parentWorkingHead, childBaseState };
+    return { contextId, parentContextId, parentWorkingHead: selected, childBaseState: selected };
   }
 
   async function dropSemanticContext(contextId: string): Promise<void> {
@@ -2998,6 +2990,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
           const owner = admittedEvalContextOwner(store.cache, principal);
           return owner?.runtimeId === input.ownerRuntimeId && owner.contextId === input.parentContextId;
         });
+        if (!caller) throw new Error("The verified caller must own the workspace context being forked");
         return forkSemanticContext(input, caller);
       },
       dropSemanticContext: async (_ctx, [{ contextId }]) => {

@@ -561,9 +561,6 @@ describe("WorkspaceVcs semantic host orchestration", () => {
         expect(input).toMatchObject({ projection: "deferred" });
         return { kind: "complete", result: semanticContextResult(head()) };
       }
-      if (method === "vcsForkContext") {
-        return { kind: "complete", result: semanticContextResult(head()) };
-      }
       if (method === "vcsEdit") {
         revision = 1;
         return {
@@ -600,8 +597,6 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     await vcs.attachGad(providerFromWireCall(call));
     const first = await vcs.resolveContextState("context:source");
     expect(vcs.executionStateForContent(first)).toEqual(head());
-    await vcs.forkContext("context:source", "context:fork");
-    expect(await vcs.resolveContextState("context:fork")).toBe(first);
     expect(commands).toHaveLength(1);
     const targets = await vcs.contextRepoTargets("context:source");
     const retained = structuredClone(targets);

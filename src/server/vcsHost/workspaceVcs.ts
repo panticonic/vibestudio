@@ -2641,32 +2641,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     return this.ensureFresh();
   }
 
-  async forkContext(sourceContextId: string, targetContextId: string): Promise<VcsStateNodeRef> {
-    await this.whenSemanticReady();
-    this.projector.contextDir(sourceContextId);
-    this.projector.contextDir(targetContextId);
-    return this.locked(`context-lifecycle:${targetContextId}`, async () => {
-      this.contextHeads.delete(targetContextId);
-      const commandId = `fork-context:${sha256HexSyncText(
-        canonicalJson({
-          workspaceId: this.deps.workspaceId,
-          sourceContextId,
-          targetContextId,
-        })
-      )}`;
-      const owner = this.gad();
-      const result = await owner.forkContext({
-        sourceContextId,
-        targetContextId,
-        commandId,
-        ingress: { causalParent: null },
-      });
-      const context = await this.drainSemanticResult(owner, result, parseSemanticContextResult);
-      this.publishContextHead(targetContextId, context.working.ref);
-      return context.working.ref;
-    });
-  }
-
   async dropContext(contextId: string): Promise<void> {
     await this.whenSemanticReady();
     await this.locked(`context-lifecycle:${contextId}`, async () => {

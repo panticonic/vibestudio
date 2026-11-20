@@ -127,7 +127,6 @@ export type WorkspaceSemanticPort = Pick<WorkspaceSemanticClient, SemanticWireMe
   pendingSemanticEffects: WorkspaceSemanticClient["vcsPendingSemanticEffects"];
   ensureContext: WorkspaceSemanticClient["vcsEnsureContext"];
   contextMaterializationCommand: WorkspaceSemanticClient["vcsContextMaterializationCommand"];
-  forkContext: WorkspaceSemanticClient["vcsForkContext"];
   dropContext: WorkspaceSemanticClient["vcsDropContext"];
   appendLogEvent: WorkspaceSemanticClient["appendLogEvent"];
   getLogEvent: WorkspaceSemanticClient["getLogEvent"];
@@ -219,7 +218,6 @@ export function createWorkspaceSemanticPort(
     pendingSemanticEffects: () => client.vcsPendingSemanticEffects(),
     ensureContext: (input) => client.vcsEnsureContext(input),
     contextMaterializationCommand: (input) => client.vcsContextMaterializationCommand(input),
-    forkContext: (input) => client.vcsForkContext(input),
     dropContext: (input) => client.vcsDropContext(input),
     appendLogEvent: (input) => client.appendLogEvent(input),
     getLogEvent: (input) => client.getLogEvent(input),

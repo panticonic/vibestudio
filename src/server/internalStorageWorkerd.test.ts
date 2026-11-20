@@ -953,8 +953,7 @@ describe.skipIf(!celldBinary)("internal storage DOs on celld", () => {
       semanticContexts: {
         ensureContext: async () => {},
         dropContext: async () => {},
-        forkContext: async () => {},
-        resolveWorkingState: async () => ({ kind: "event", eventId: "event:retirement" }),
+        forkParticipantContext: async () => ({ kind: "event", eventId: "event:retirement" }),
         listContexts: async () => [],
       },
       hooks: {

@@ -94,6 +94,8 @@ function makeDODispatch(instance: WorkspaceStateDO): {
   };
 }
 
+const forkedRevision = { kind: "event", eventId: "event:test" } as const;
+
 interface BuildDepsOptions {
   resolveNativeOwner?: (
     input: import("@vibestudio/shared/runtime/entitySpec").EntityActivationInput
@@ -206,8 +208,7 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     dropContext: vi.fn(async (contextId: string) => {
       semanticContextIds.delete(contextId);
     }),
-    forkContext: vi.fn(async () => {}),
-    resolveWorkingState: vi.fn(async () => ({ kind: "event" as const, eventId: "event:test" })),
+    forkParticipantContext: vi.fn(async () => forkedRevision),
     listContexts: vi.fn(async () => [
       ...new Set([...semanticContextIds, ...contextFolders.existing]),
     ]),
@@ -611,13 +612,11 @@ describe("runtimeService system-test agent execution policy", () => {
 });
 
 describe("runtimeService.forkSemanticContext", () => {
-  it("returns the authenticated participant's selected fork without touching the legacy workspace", async () => {
+  it("returns the authenticated participant's selected fork", async () => {
     const selected = { kind: "application" as const, applicationId: "unsaved-private-edit" };
     const forkParticipantContext = vi.fn(async () => selected);
-    const forkContext = vi.fn(async () => {});
-    const resolveWorkingState = vi.fn();
     const { service, entityCache, contextFolders } = await buildDeps({
-      semanticContexts: { forkParticipantContext, forkContext, resolveWorkingState },
+      semanticContexts: { forkParticipantContext },
     });
     const caller = panelCaller("panel:development");
     entityCache._onActivate({
@@ -635,21 +634,14 @@ describe("runtimeService.forkSemanticContext", () => {
     expect(forkParticipantContext).toHaveBeenCalledWith({
       caller, sourceContextId: "ctx-parent", targetContextId: "ctx-child",
     });
-    expect(forkContext).not.toHaveBeenCalled();
-    expect(resolveWorkingState).not.toHaveBeenCalled();
     expect(contextFolders.ensureContextFolder).not.toHaveBeenCalled();
   });
 
   it("forks semantic state only and records a deterministic lifecycle edge for an empty context", async () => {
-    const forkContext = vi.fn(async () => {});
-    const resolveWorkingState = vi.fn(async (contextId: string) =>
-      contextId === "ctx-parent"
-        ? { kind: "event" as const, eventId: "event:parent" }
-        : { kind: "event" as const, eventId: "event:child" }
-    );
+    const forkParticipantContext = vi.fn(async () => forkedRevision);
     const { internal, service, contextFolders, entityCache, cloneDurableStorage } = await buildDeps(
       {
-        semanticContexts: { forkContext, resolveWorkingState },
+        semanticContexts: { forkParticipantContext },
       }
     );
     const caller = panelCaller("panel:development");
@@ -669,23 +661,25 @@ describe("runtimeService.forkSemanticContext", () => {
       parentContextId: "ctx-parent",
       targetContextId: "ctx-development-session-1",
     };
-    const first = await internal.forkSemanticContext(input);
-    const second = await internal.forkSemanticContext(input);
+    const first = await internal.forkSemanticContext(input, caller);
+    const second = await internal.forkSemanticContext(input, caller);
     await expect(
       internal.forkSemanticContext({
         ...input,
         ownerRuntimeId: "panel:other",
-      })
+      }, caller)
     ).rejects.toThrow(/does not own semantic context ctx-parent/);
 
     expect(first).toMatchObject({
       parentContextId: "ctx-parent",
-      parentWorkingHead: { kind: "event", eventId: "event:parent" },
-      childBaseState: { kind: "event", eventId: "event:child" },
+      parentWorkingHead: forkedRevision,
+      childBaseState: forkedRevision,
     });
     expect(second.contextId).toBe(first.contextId);
-    expect(forkContext).toHaveBeenCalledWith("ctx-parent", first.contextId);
-    expect(forkContext).toHaveBeenCalledTimes(2);
+    expect(forkParticipantContext).toHaveBeenCalledWith({
+      caller, sourceContextId: "ctx-parent", targetContextId: first.contextId,
+    });
+    expect(forkParticipantContext).toHaveBeenCalledTimes(2);
     expect(contextFolders.ensureContextFolder).not.toHaveBeenCalled();
     expect(cloneDurableStorage).not.toHaveBeenCalled();
     const edges = (await service.handler({ caller: serverCaller }, "listOwnedContexts", [
@@ -907,10 +901,10 @@ describe("runtimeService deferred panel activation", () => {
 
   it("forks an implicit panel's source frontier before activating its isolated lifecycle context", async () => {
     const onContextCreated = vi.fn(async () => {});
-    const forkContext = vi.fn(async () => {});
+    const forkParticipantContext = vi.fn(async () => forkedRevision);
     const { service, instance, preparePanel } = await buildDeps({
       onContextCreated,
-      semanticContexts: { forkContext },
+      semanticContexts: { forkParticipantContext },
     });
     const creator = (await service.handler({ caller: serverCaller }, "createEntity", [
       {
@@ -931,7 +925,13 @@ describe("runtimeService deferred panel activation", () => {
     ])) as { id: string; contextId: string };
 
     expect(reserved.contextId).not.toBe("ctx-creator");
-    expect(forkContext).toHaveBeenCalledWith("ctx-creator", reserved.contextId);
+    expect(forkParticipantContext).toHaveBeenCalledWith(expect.objectContaining({
+      caller: mediatedCreator,
+      sourceContextId: "ctx-creator",
+      targetContextId: reserved.contextId,
+      ownerContextId: "ctx-creator",
+      retainForRuntime: true,
+    }));
     await service.handler({ caller: mediatedCreator }, "activateReservedEntity", [
       {
         kind: "panel",
@@ -3322,8 +3322,7 @@ interface OwnedContexts {
 describe("runtimeService.cloneContext", () => {
   it("captures the admitted author's working copy before cloning entities", async () => {
     const forkParticipantContext = vi.fn(async () => ({ kind: "application" as const, applicationId: "private-edit" }));
-    const forkContext = vi.fn(async () => {});
-    const { service, cloneDurableStorage } = await buildDeps({ semanticContexts: { forkParticipantContext, forkContext } });
+    const { service, cloneDurableStorage } = await buildDeps({ semanticContexts: { forkParticipantContext } });
     const source = await seedDO(service, "participant-root", "author");
     const caller = createVerifiedCaller(source.id, "do");
     const input = [{ sourceContextId: "participant-root", targetKey: "participant-ordinary-clone" }];
@@ -3333,7 +3332,6 @@ describe("runtimeService.cloneContext", () => {
       retainForRuntime: true,
     });
     expect(forkParticipantContext.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(cloneDurableStorage).mock.invocationCallOrder[0]!);
-    expect(forkContext).not.toHaveBeenCalled();
     expect(await service.handler({ caller }, "cloneContext", input)).toEqual(cloned);
     expect(forkParticipantContext).toHaveBeenCalledOnce();
   });
@@ -3412,10 +3410,10 @@ describe("runtimeService.cloneContext", () => {
       admitted();
       await held;
     });
-    const forkContext = vi.fn(async () => {});
+    const forkParticipantContext = vi.fn(async () => forkedRevision);
     const { service, cloneDurableStorage } = await buildDeps({
       initializeDurableClone,
-      semanticContexts: { forkContext },
+      semanticContexts: { forkParticipantContext },
     });
     await seedDO(service, "ctx-overlap", "source");
     const input = [{ sourceContextId: "ctx-overlap", targetKey: "overlap-owner" }];
@@ -3426,7 +3424,7 @@ describe("runtimeService.cloneContext", () => {
     expect(await second).toEqual(await first);
     expect(cloneDurableStorage).toHaveBeenCalledOnce();
     expect(initializeDurableClone).toHaveBeenCalledOnce();
-    expect(forkContext).toHaveBeenCalledOnce();
+    expect(forkParticipantContext).toHaveBeenCalledOnce();
   });
 
   it.each(["active", "preparing"] as const)(
@@ -3509,16 +3507,16 @@ describe("runtimeService.cloneContext", () => {
     ).rejects.toThrow(/cloneDefinition|identity/i);
   });
 
-  it("re-adopts its sealed interrupted preparation without reforking the context or rebuilding its image", async () => {
+  it("re-adopts its sealed preparation using the same retained fork and executable", async () => {
     const initializeDurableClone = vi.fn<RuntimeEntityHooks["initializeDurableClone"]>(
       async () => {}
     );
     const cloneDurableStorage = vi.fn(async () => {});
-    const forkContext = vi.fn(async () => {});
+    const forkParticipantContext = vi.fn(async () => forkedRevision);
     const { service, instance, prepareDurableObject, recoverExactExecution } = await buildDeps({
       initializeDurableClone,
       cloneDurableStorage,
-      semanticContexts: { forkContext },
+      semanticContexts: { forkParticipantContext },
     });
     const originalSource = await seedDO(service, "ctx-resumed", "source");
     const input = [{ sourceContextId: "ctx-resumed", targetKey: "resumed-owner" }];
@@ -3546,8 +3544,14 @@ describe("runtimeService.cloneContext", () => {
     vi.mocked(initializeDurableClone).mockClear();
     vi.mocked(cloneDurableStorage).mockClear();
     const preparationCalls = vi.mocked(prepareDurableObject).mock.calls.length;
+    const forkRequest = expect.objectContaining({
+      caller: serverCaller, sourceContextId: "ctx-resumed",
+      targetContextId: first.contextId, retainForRuntime: true,
+    });
     expect(await service.handler({ caller: serverCaller }, "cloneContext", input)).toEqual(first);
-    expect(forkContext).toHaveBeenCalledOnce();
+    expect(forkParticipantContext).toHaveBeenCalledTimes(2);
+    expect(forkParticipantContext).toHaveBeenNthCalledWith(1, forkRequest);
+    expect(forkParticipantContext).toHaveBeenLastCalledWith(forkRequest);
     expect(vi.mocked(prepareDurableObject).mock.calls).toHaveLength(preparationCalls);
     expect(recoverExactExecution).toHaveBeenCalledWith(preparation);
     expect(cloneDurableStorage).toHaveBeenCalledWith(
@@ -3614,11 +3618,11 @@ describe("runtimeService.cloneContext", () => {
 
   it("retires its captured lineage reservation when the first semantic snapshot fails", async () => {
     const original = new Error("semantic snapshot unavailable");
-    const forkContext = vi.fn(async () => {
+    const forkParticipantContext = vi.fn(async () => {
       throw original;
     });
     const { service, instance, cloneDurableStorage, initializeDurableClone } = await buildDeps({
-      semanticContexts: { forkContext },
+      semanticContexts: { forkParticipantContext },
     });
     await seedDO(service, "capture-failure", "source");
     const targetKey = "capture-failure-key";
@@ -3760,9 +3764,9 @@ describe("runtimeService.cloneContext", () => {
   });
 
   it("refuses a pre-existing foreign descendant context before any clone mutation", async () => {
-    const forkContext = vi.fn(async () => {});
+    const forkParticipantContext = vi.fn(async () => forkedRevision);
     const { service, instance, contextFolders, cloneDurableStorage } = await buildDeps({
-      semanticContexts: { forkContext },
+      semanticContexts: { forkParticipantContext },
     });
     const root = await seedDO(service, "descendant-root", "root");
     await seedDO(service, "descendant-source", "child");
@@ -3782,7 +3786,7 @@ describe("runtimeService.cloneContext", () => {
       ])
     ).rejects.toThrow(/cloneContextOwner/);
     expect(instance.entityResolve(foreign.id)).toEqual(before);
-    expect(forkContext).not.toHaveBeenCalled();
+    expect(forkParticipantContext).not.toHaveBeenCalled();
     expect(cloneDurableStorage).not.toHaveBeenCalled();
     expect(contextFolders.removeContext).not.toHaveBeenCalled();
     expect(instance.contextEdgeListByChild(contextIdForTargetKey(targetKey))).toEqual([]);
@@ -3877,11 +3881,11 @@ describe("runtimeService.cloneContext", () => {
   });
 
   it("clones every durable entity into a fresh isolated context, mapping source→clone", async () => {
-    const forkContext = vi.fn(async () => {});
+    const forkParticipantContext = vi.fn(async () => forkedRevision);
     const onContextCreated = vi.fn(async () => {});
     const { service, entityCache, cloneDurableStorage, contextFolders, prepareDurableObject } =
       await buildDeps({
-        semanticContexts: { forkContext },
+        semanticContexts: { forkParticipantContext },
         onContextCreated,
       });
     const { ch, agent } = await seedConversation(service, "ctx-src");
@@ -3894,7 +3898,9 @@ describe("runtimeService.cloneContext", () => {
     expect(result.contextId).toMatch(/^[0-9a-f-]{36}$/);
     expect(result.contextId).not.toBe("ctx-src");
     // File state snapshotted source→target, folder materialized.
-    expect(forkContext).toHaveBeenCalledWith("ctx-src", result.contextId);
+    expect(forkParticipantContext).toHaveBeenCalledWith(expect.objectContaining({
+      sourceContextId: "ctx-src", targetContextId: result.contextId,
+    }));
     expect(contextFolders.existing.has(result.contextId)).toBe(true);
     expect(onContextCreated).toHaveBeenCalledWith({
       contextId: result.contextId,
@@ -4222,14 +4228,14 @@ describe("runtimeService.cloneContext", () => {
   });
 
   it("rolls back (retires clones, deletes cloned storage, drops the new context) on failure", async () => {
-    const forkContext = vi.fn(async (_source: string, _target: string) => {});
+    const forkParticipantContext = vi.fn(async (_input: { targetContextId: string }) => forkedRevision);
     // Fail storage-cloning the SECOND DO so the clone loop throws mid-way.
     const cloneDurableStorage = vi
       .fn()
       .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(new Error("clone boom"));
     const { service, entityCache, destroyDurableStorage, contextFolders } = await buildDeps({
-      semanticContexts: { forkContext },
+      semanticContexts: { forkParticipantContext },
       cloneDurableStorage,
     });
     await seedConversation(service, "ctx-roll");
@@ -4238,7 +4244,7 @@ describe("runtimeService.cloneContext", () => {
       service.handler({ caller: serverCaller }, "cloneContext", [{ sourceContextId: "ctx-roll" }])
     ).rejects.toThrow(/clone boom/);
 
-    const targetContextId = forkContext.mock.calls[0]![1];
+    const targetContextId = forkParticipantContext.mock.calls[0]![0].targetContextId;
     // The new context's folder + VCS were torn down.
     expect(contextFolders.removeContext).toHaveBeenCalledWith(targetContextId);
     // The one clone that was activated before the failure is gone again.
@@ -4249,7 +4255,7 @@ describe("runtimeService.cloneContext", () => {
 
   it("returns the context + entity rewiring maps (non-recursive)", async () => {
     const { service } = await buildDeps({
-      semanticContexts: { forkContext: vi.fn(async () => {}) },
+      semanticContexts: { forkParticipantContext: vi.fn(async () => forkedRevision) },
     });
     await seedConversation(service, "ctx-maps");
     const result = (await service.handler({ caller: serverCaller }, "cloneContext", [
@@ -4270,7 +4276,7 @@ describe("runtimeService.cloneContext", () => {
 
   it("lets the cloning owner durably bind a cloned agent to its child channel", async () => {
     const { service, instance, cloneDurableStorage } = await buildDeps({
-      semanticContexts: { forkContext: vi.fn(async () => {}) },
+      semanticContexts: { forkParticipantContext: vi.fn(async () => forkedRevision) },
     });
     const channel = (await service.handler({ caller: serverCaller }, "createEntity", [
       {
@@ -4340,7 +4346,7 @@ describe("runtimeService.cloneContext", () => {
 
   it("is idempotent under targetKey (same child + deterministic keys) and records a lineage edge", async () => {
     const { service } = await buildDeps({
-      semanticContexts: { forkContext: vi.fn(async () => {}) },
+      semanticContexts: { forkParticipantContext: vi.fn(async () => forkedRevision) },
     });
     await seedConversation(service, "ctx-idem");
 
@@ -4370,7 +4376,7 @@ describe("runtimeService.cloneContext", () => {
 
   it("recursively clones the LIFECYCLE subtree, re-parenting cloned children (never following lineage)", async () => {
     const { service, instance } = await buildDeps({
-      semanticContexts: { forkContext: vi.fn(async () => {}) },
+      semanticContexts: { forkParticipantContext: vi.fn(async () => forkedRevision) },
     });
     const rootAgent = await seedDO(service, "ctx-root", "root-agent");
     await seedDO(service, "ctx-child", "child-agent");
@@ -5011,10 +5017,10 @@ describe("runtimeService context-relationship registry", () => {
 
 describe("runtimeService.createSubagentContext", () => {
   it("forks the parent, materializes the folder, records a lifecycle edge, idempotent under targetKey", async () => {
-    const forkContext = vi.fn(async () => {});
+    const forkParticipantContext = vi.fn(async () => forkedRevision);
     const onContextCreated = vi.fn(async () => {});
     const { service, contextFolders } = await buildDeps({
-      semanticContexts: { forkContext },
+      semanticContexts: { forkParticipantContext },
       onContextCreated,
     });
     const owner = await seedDO(service, "ctx-parent", "a1");
@@ -5023,7 +5029,9 @@ describe("runtimeService.createSubagentContext", () => {
       { parentContextId: "ctx-parent", ownerEntityId: owner.id, targetKey: "run:r1" },
     ])) as { contextId: string };
     expect(out1.contextId).toMatch(/^ctx-[0-9a-f]{32}$/);
-    expect(forkContext).toHaveBeenCalledWith("ctx-parent", out1.contextId);
+    expect(forkParticipantContext).toHaveBeenCalledWith(expect.objectContaining({
+      sourceContextId: "ctx-parent", targetContextId: out1.contextId,
+    }));
     expect(contextFolders.existing.has(out1.contextId)).toBe(true);
     expect(onContextCreated).toHaveBeenCalledWith({
       contextId: out1.contextId,
@@ -5049,8 +5057,8 @@ describe("runtimeService.createSubagentContext", () => {
   });
 
   it("allows the owner DO to create its own subagent context", async () => {
-    const forkContext = vi.fn(async () => {});
-    const { service, approvalQueue } = await buildDeps({ semanticContexts: { forkContext } });
+    const forkParticipantContext = vi.fn(async () => forkedRevision);
+    const { service, approvalQueue } = await buildDeps({ semanticContexts: { forkParticipantContext } });
     const owner = await seedDO(service, "ctx-parent-do", "owner");
 
     const out = (await service.handler(
@@ -5059,13 +5067,15 @@ describe("runtimeService.createSubagentContext", () => {
       [{ parentContextId: "ctx-parent-do", ownerEntityId: owner.id, targetKey: "run:owner" }]
     )) as { contextId: string };
 
-    expect(forkContext).toHaveBeenCalledWith("ctx-parent-do", out.contextId);
+    expect(forkParticipantContext).toHaveBeenCalledWith(expect.objectContaining({
+      sourceContextId: "ctx-parent-do", targetContextId: out.contextId,
+    }));
     expect(approvalQueue.request).not.toHaveBeenCalled();
   });
 
   it("allows the owner DO to create an entity inside its lifecycle child context without approval", async () => {
-    const forkContext = vi.fn(async () => {});
-    const { service, approvalQueue } = await buildDeps({ semanticContexts: { forkContext } });
+    const forkParticipantContext = vi.fn(async () => forkedRevision);
+    const { service, approvalQueue } = await buildDeps({ semanticContexts: { forkParticipantContext } });
     const owner = await seedDO(service, "ctx-parent-attach", "owner");
     const caller = createVerifiedCaller(owner.id, "do");
 
@@ -5087,8 +5097,8 @@ describe("runtimeService.createSubagentContext", () => {
   });
 
   it("rejects owner spoofing before forking or recording a lifecycle edge", async () => {
-    const forkContext = vi.fn(async () => {});
-    const { service } = await buildDeps({ semanticContexts: { forkContext } });
+    const forkParticipantContext = vi.fn(async () => forkedRevision);
+    const { service } = await buildDeps({ semanticContexts: { forkParticipantContext } });
     const owner = await seedDO(service, "ctx-parent-spoof", "owner");
 
     await expect(
@@ -5097,7 +5107,7 @@ describe("runtimeService.createSubagentContext", () => {
       ])
     ).rejects.toThrow(/cannot create subagent contexts/i);
 
-    expect(forkContext).not.toHaveBeenCalled();
+    expect(forkParticipantContext).not.toHaveBeenCalled();
     const owned = (await service.handler({ caller: serverCaller }, "listOwnedContexts", [
       { contextId: "ctx-parent-spoof", kind: "lifecycle" },
     ])) as OwnedContexts;
@@ -5105,10 +5115,10 @@ describe("runtimeService.createSubagentContext", () => {
   });
 
   it("gates a caller-created owner before forking a foreign existing parent context", async () => {
-    const forkContext = vi.fn(async () => {});
+    const forkParticipantContext = vi.fn(async () => forkedRevision);
     const { service, dispatch, entityCache, approvalQueue } = await buildDeps({
       approvalDecision: "deny",
-      semanticContexts: { forkContext },
+      semanticContexts: { forkParticipantContext },
     });
     const caller = panelCaller("panel:subagent-owner", "ctx-caller");
     entityCache._onActivate({
@@ -5133,7 +5143,7 @@ describe("runtimeService.createSubagentContext", () => {
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({ capability: "context.boundary" })
     );
-    expect(forkContext).not.toHaveBeenCalled();
+    expect(forkParticipantContext).not.toHaveBeenCalled();
   });
 });
 

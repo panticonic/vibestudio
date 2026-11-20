@@ -4812,28 +4812,14 @@ async function main() {
           semanticContexts: {
             ensureContext: (contextId) => workspaceVcs.ensureRuntimeContext(contextId),
             dropContext: (contextId) => workspaceVcs.dropContext(contextId),
-            forkContext: async (sourceContextId, targetContextId) => {
-              await workspaceVcs.forkContext(sourceContextId, targetContextId);
-            },
-            forkParticipantContext: ({ caller, sourceContextId, targetContextId, ownerContextId = sourceContextId, retainForRuntime }) => {
-              if (!workspaceVcs.participantHistoryAttached) return Promise.resolve(null);
-              if (!caller) {
-                throw new Error("The verified caller must own the workspace context being forked");
-              }
+            forkParticipantContext: async ({ caller, sourceContextId, targetContextId, ownerContextId = sourceContextId, retainForRuntime }) => {
+              await workspaceVcs.whenSemanticReady();
               return workspaceVcs.forkParticipantContext({
                 parent: { caller, contextId: sourceContextId, ownerContextId },
                 child: { caller, contextId: targetContextId, ownerContextId },
                 ...(retainForRuntime ? { retainForRuntime: true } : {}),
               });
             },
-            resolveWorkingState: (contextId) =>
-              workspaceVcs
-                .semanticDirectCall("vcsStatus", { contextId })
-                .then(
-                  (status) =>
-                    (status as import("@vibestudio/service-schemas/vcs").VcsStatusResult)
-                      .workingHead
-                ),
             listContexts: (prefix) => workspaceVcs.listSemanticContexts(prefix),
           },
           hooks: {
