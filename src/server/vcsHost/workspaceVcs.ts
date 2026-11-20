@@ -2820,10 +2820,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     return snapshot.repositories.map((repository) => ({ ...repository }));
   }
 
-  async materializeContextRepos(contextId: string, _scopes: string[] | "all"): Promise<void> {
-    await this.ensureContext(contextId);
-  }
-
   /** Recover an editable directory from the verified participant's current history. */
   async materializeParticipantContext(input: {
     dispatch: Pick<DODispatch, "dispatch">;
@@ -2887,12 +2883,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     });
     const materializer = new ContextMaterializer({ blobsDir: this.deps.blobsDir, workspaceId: this.deps.workspaceId, disk });
     return { ownerKey, root, disk, materializer };
-  }
-
-  async isContextRepoMaterialized(contextId: string, repoPath: string): Promise<boolean> {
-    const normalized = normalizeRepositoryPath(repoPath);
-    const state = await this.materializer.materializationState(contextId);
-    return state?.repositories.some((repository) => repository.repoPath === normalized) ?? false;
   }
 
   /**

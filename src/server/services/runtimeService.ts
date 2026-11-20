@@ -291,9 +291,8 @@ export interface PreparedRuntimeExecution {
   authorityRequests?: readonly import("@vibestudio/shared/authorityManifest").UnitAuthorityRequest[];
 }
 
-/** Disposable host projection directories for semantic contexts. */
+/** Host directory cleanup for retired contexts. */
 export interface RuntimeContextFolders {
-  ensureContextFolder(contextId: string): Promise<string>;
   removeContext(contextId: string): Promise<void>;
 }
 
@@ -2235,8 +2234,6 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
             });
           }
         }
-        await deps.contextFolders.ensureContextFolder(targetCtx);
-
         for (const src of clonableIn(srcCtx, isRoot ? rootInclude : null)) {
           const capturedMember = definition!.members.find((member) => member.source.id === src.id)!;
           const newKey = capturedMember.targetKey;
@@ -2666,13 +2663,11 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     await assertSubagentOwnerAllowed(caller, args);
 
     const contextId = contextIdForTargetKey(args.targetKey);
-    // Order mirrors cloneContext: fork semantic state, then materialize its projection.
     await deps.semanticContexts.forkParticipantContext({
       caller, sourceContextId: args.parentContextId, targetContextId: contextId,
       ownerContextId: caller.agentBinding?.contextId ?? args.parentContextId,
       retainForRuntime: true,
     });
-    await deps.contextFolders.ensureContextFolder(contextId);
     await store.recordContextEdge({
       contextId,
       ownerContextId: args.parentContextId,

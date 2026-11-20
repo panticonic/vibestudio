@@ -947,13 +947,15 @@ describe.skipIf(!celldBinary)("internal storage DOs on celld", () => {
       unitSupervisor: new UnitSupervisor(),
       contextBoundary: { contextExists: () => true, resolveContextOwnerLabel: () => undefined },
       contextFolders: {
-        ensureContextFolder: async () => "/unused-retirement-context",
         removeContext: async () => {},
       },
       semanticContexts: {
         ensureContext: async () => {},
         dropContext: async () => {},
         forkParticipantContext: async () => ({ kind: "event", eventId: "event:retirement" }),
+        readForkSource: async () => {
+          throw new Error("Retirement fixture does not read a fork source");
+        },
         listContexts: async () => [],
       },
       hooks: {

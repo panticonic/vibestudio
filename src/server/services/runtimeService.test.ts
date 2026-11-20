@@ -3900,11 +3900,11 @@ describe("runtimeService.cloneContext", () => {
     // Fresh, isolated target context — never the source.
     expect(result.contextId).toMatch(/^[0-9a-f-]{36}$/);
     expect(result.contextId).not.toBe("ctx-src");
-    // File state snapshotted source→target, folder materialized.
+    // The fork selects source state before any runtime needs its files.
     expect(forkParticipantContext).toHaveBeenCalledWith(expect.objectContaining({
       sourceContextId: "ctx-src", targetContextId: result.contextId,
     }));
-    expect(contextFolders.existing.has(result.contextId)).toBe(true);
+    expect(contextFolders.ensureContextFolder).not.toHaveBeenCalled();
     expect(onContextCreated).toHaveBeenCalledWith({
       contextId: result.contextId,
       ownerContextId: "ctx-src",
@@ -5024,7 +5024,7 @@ describe("runtimeService context-relationship registry", () => {
 });
 
 describe("runtimeService.createSubagentContext", () => {
-  it("forks the parent, materializes the folder, records a lifecycle edge, idempotent under targetKey", async () => {
+  it("forks the parent and records its lifecycle edge without projecting files, idempotent under targetKey", async () => {
     const forkParticipantContext = vi.fn(async () => forkedRevision);
     const onContextCreated = vi.fn(async () => {});
     const { service, contextFolders } = await buildDeps({
@@ -5040,7 +5040,7 @@ describe("runtimeService.createSubagentContext", () => {
     expect(forkParticipantContext).toHaveBeenCalledWith(expect.objectContaining({
       sourceContextId: "ctx-parent", targetContextId: out1.contextId,
     }));
-    expect(contextFolders.existing.has(out1.contextId)).toBe(true);
+    expect(contextFolders.ensureContextFolder).not.toHaveBeenCalled();
     expect(onContextCreated).toHaveBeenCalledWith({
       contextId: out1.contextId,
       ownerContextId: "ctx-parent",
