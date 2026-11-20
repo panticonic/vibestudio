@@ -724,7 +724,7 @@ async function main() {
   // ===========================================================================
 
   const tokenManager = new TokenManager();
-  const { EntityCache, callerRuntimeContextId, callerBuildContextId } =
+  const { EntityCache, callerBuildContextId } =
     await import("@vibestudio/shared/runtime/entityCache");
   const { ConnectionGrantService } = await import("@vibestudio/shared/connectionGrants");
   const { RuntimeDiagnosticsStore } = await import("./runtimeDiagnosticsStore.js");
@@ -2704,7 +2704,7 @@ async function main() {
       lifecycleContextStore, buildContextOwner(caller, ownerContextId), ownerContextId, targetContextId,
     );
   const readableBuildContexts = async (caller: VerifiedCaller, ownerContextId: string | null) => {
-    if (!ownerContextId || !workspaceVcs.participantHistoryAttached) return [];
+    if (!ownerContextId) return [];
     const contexts = [ownerContextId];
     const seen = new Set(contexts);
     for (const contextId of contexts) {
@@ -3062,7 +3062,6 @@ async function main() {
           buildSystem,
           getCallerContextId: (callerId) => callerBuildContextId(entityCache, callerId),
           resolveContextBuildSource: async (ctx, contextId) => {
-            if (!workspaceVcs.participantHistoryAttached) return null;
             const callerContext = buildCallerContext(ctx.caller);
             if (!callerContext || !await canBuildFromContext(ctx.caller, callerContext, contextId))
               throw Object.assign(new Error("Build context is outside the caller's working copy"), { code: "EACCES" });
@@ -3082,14 +3081,12 @@ async function main() {
               await readableBuildContexts(ctx.caller, contextId),
             );
           },
-          executionVisibility: (ctx) => workspaceVcs.participantHistoryAttached
-            ? async (artifact) => {
-                const contextId = buildCallerContext(ctx.caller);
-                return workspaceVcs.participantExecutionVisible(
-                  artifact, ctx.caller, contextId, ctx.signal, await readableBuildContexts(ctx.caller, contextId),
-                );
-              }
-            : undefined,
+          executionVisibility: (ctx) => async (artifact) => {
+            const contextId = buildCallerContext(ctx.caller);
+            return workspaceVcs.participantExecutionVisible(
+              artifact, ctx.caller, contextId, ctx.signal, await readableBuildContexts(ctx.caller, contextId),
+            );
+          },
           listUnits: () =>
             listBuildUnitCatalog({
               buildSystem,
@@ -4888,7 +4885,7 @@ async function main() {
                 stateHash: string;
                 semanticState: ExecutionSourceStateRef;
               } | null | undefined = cloneWorkspaceSource;
-              if (!existingBuildKey && workspaceVcs.participantHistoryAttached && sourceAuthority) {
+              if (!existingBuildKey && sourceAuthority) {
                 const { caller, contextId: sourceContext } = sourceAuthority;
                 const artifact = spec.execution.artifact;
                 if (artifact) {
@@ -5680,8 +5677,7 @@ async function main() {
           await durableObjectExecutionReadiness.ensureReady(ref);
         },
         workspaceRecallCauses: async (ref, caller, args, signal) => {
-          if (!workspaceVcs.participantHistoryAttached
-              || ref.source !== semanticWorkspaceService.source
+          if (ref.source !== semanticWorkspaceService.source
               || ref.className !== semanticWorkspaceService.className
               || ref.objectKey !== semanticWorkspaceService.objectKey) return undefined;
           return workspaceVcs.participantRecallCauses(caller, args, signal);
@@ -5884,17 +5880,13 @@ async function main() {
                 : undefined;
             const hostIntrinsic = isHostIntrinsicDirectMethod(method);
             if (!catalogMethod && !hostIntrinsic) {
-              const callerContextId = workspaceVcs.participantHistoryAttached
-                ? caller.agentBinding?.contextId ?? callerRuntimeContextId(entityCache, caller.runtime.id)
-                : entityCache.resolveContext(caller.runtime.id);
+              const callerContextId = participantDiscoveryContext(caller);
               let candidateStateHash: string | null = null;
               let candidateBuildKey: string | null = null;
               let candidateDeclaresMethod = false;
               if (callerContextId) {
                 try {
-                  candidateStateHash = workspaceVcs.participantHistoryAttached
-                    ? (await workspaceVcs.resolveCallerContextState(callerContextId, caller)).stateHash
-                    : await workspaceVcs.resolveContextState(callerContextId);
+                  candidateStateHash = (await workspaceVcs.resolveCallerContextState(callerContextId, caller)).stateHash;
                   const candidateReport = buildSystem?.peekBuildReport?.(
                     source,
                     candidateStateHash
@@ -6012,21 +6004,14 @@ async function main() {
           if (live.length > 0) return live;
 
           const targetId = `do:${source}:${className}:${objectKey}`;
-          const contextId = entityCache.resolveActive(targetId)?.contextId;
-          if (!contextId) return [];
-          try {
-            const stateHash = await workspaceVcs.resolveContextState(contextId);
-            const declarations = await readWorkspaceDeclarationsFromState(
-              workspaceVcs,
-              workspaceId,
-              stateHash
-            );
-            return await authoritiesFrom(declarations);
-          } catch {
-            // Main workspace singletons may use host-owned context ids rather
-            // than VCS operation contexts.
-            return [];
-          }
+          const active = entityCache.resolveActive(targetId);
+          if (!active?.activeBuildKey || !active.activeExecutionDigest) return [];
+          const buildSystem = container.get<import("./buildV2/index.js").BuildSystemV2>("buildSystem");
+          const build = await buildSystem?.getBuildByExecution(active.activeBuildKey, active.activeExecutionDigest);
+          if (!build?.sourceStateHash) return [];
+          return authoritiesFrom(await readWorkspaceDeclarationsFromState(
+            workspaceVcs, workspaceId, build.sourceStateHash,
+          ));
         },
         liveCallerGate,
         // RpcServer starts before workerd by design. Resolve the declared
@@ -7129,27 +7114,15 @@ async function main() {
           buildSystem: buildSystemInst,
           workspaceDecls,
           workspaceId,
-          // A runtime that relays an agent's work carries that agent's binding
-          // on its entity record, and the binding's context is the one the
-          // relayed work belongs to. `vcsService.callerContextId` already
-          // resolves a caller this way; without it here, an extension invoked
-          // from an agent — launching an external subagent, say — has no
-          // context of its own and resolving a creator-context service fails
-          // outright. Kept as a fallback rather than a preference, so a caller
-          // that already resolves keeps resolving exactly as before.
-          getCallerContextId: (caller) => workspaceVcs.participantHistoryAttached
-            ? participantDiscoveryContext(caller)
-            : callerRuntimeContextId(entityCache, caller.runtime.id),
+          getCallerContextId: participantDiscoveryContext,
           loadContextSource: async (contextId, ctx) => {
-            const exact = workspaceVcs.participantHistoryAttached
-              ? await workspaceVcs.resolveCallerContextState(contextId, ctx.caller, ctx.signal)
-              : null;
+            const { stateHash, semanticState } = await workspaceVcs.resolveCallerContextState(
+              contextId, ctx.caller, ctx.signal,
+            );
             return {
-              buildRef: exact?.stateHash ?? `ctx:${contextId}`,
-              ...(exact ? { sourceState: exact.semanticState } : {}),
-              readDeclarations: async () => readWorkspaceDeclarationsFromState(
-                workspaceVcs, workspaceId, exact?.stateHash ?? await workspaceVcs.resolveContextState(contextId),
-              ),
+              buildRef: stateHash,
+              sourceState: semanticState,
+              readDeclarations: () => readWorkspaceDeclarationsFromState(workspaceVcs, workspaceId, stateHash),
             };
           },
           canDiscoverCrossWorkspaceMethod: (ctx, { target, operation }) => {
@@ -7870,15 +7843,10 @@ async function main() {
           workerRuntime: workerRuntimeSurface,
         },
         workspaceServicesForCaller: async (ctx) => {
-          const participant = workspaceVcs.participantHistoryAttached;
-          const contextId = participant
-            ? participantDiscoveryContext(ctx.caller)
-            : entityCache.resolveContext(ctx.caller.runtime.id);
-          const stateHash = !contextId
-            ? (await workspaceVcs.ensureFresh()).stateHash
-            : participant
-              ? (await workspaceVcs.resolveCallerContextState(contextId, ctx.caller, ctx.signal)).stateHash
-              : await workspaceVcs.resolveContextState(contextId);
+          const contextId = participantDiscoveryContext(ctx.caller);
+          const stateHash = contextId
+            ? (await workspaceVcs.resolveCallerContextState(contextId, ctx.caller, ctx.signal)).stateHash
+            : (await workspaceVcs.ensureFresh()).stateHash;
           const cached = workspaceDocsByState.get(stateHash);
           if (cached) {
             rememberWorkspaceDocs(stateHash, cached);

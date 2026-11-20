@@ -419,6 +419,15 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     expect(legacy).not.toHaveBeenCalled();
   });
 
+  it("requires native proof for private build sources", async () => {
+    const { vcs } = await harness();
+    const caller = createVerifiedCaller("shell:build", "shell");
+    const state = { kind: "application", applicationId: "private-draft" } as const;
+    await expect(vcs.participantBuildStateReachable(state, caller, null)).resolves.toBe(false);
+    await expect(vcs.resolveParticipantBuildSource(`state:${"a".repeat(64)}`, caller, null))
+      .rejects.toThrow("Participant workspace history is unavailable");
+  });
+
   it("keeps participant projections separate, advances one, and repairs its binding on retry", async () => {
     const { vcs, blobsDir, deps } = await harness();
     const contextId = "context:shared";

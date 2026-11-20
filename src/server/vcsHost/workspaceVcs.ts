@@ -1373,12 +1373,13 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     signal?: AbortSignal,
     readableContextIds: readonly string[] = []
   ): Promise<boolean> {
-    const source = this.participantHistorySource;
-    if (!source) return true;
     if (!state) return false;
     if (state.kind === "bootstrap-snapshot") {
       return state.snapshotHash === this.deps.initialContentState;
     }
+    if (!this.participantHistorySource) await this.whenSemanticReady(signal);
+    const source = this.participantHistorySource;
+    if (!source) return false;
     if (await workspaceMainStateReachable(source, state)) return true;
     if (!contextId) return false;
     const scope = await this.openParticipantScope({
@@ -2981,7 +2982,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     signal?: AbortSignal,
     readableContextIds: readonly string[] = []
   ) {
-    if (!this.participantHistoryAttached) return null;
+    if (!this.participantHistorySource) await this.whenSemanticReady(signal);
+    if (!this.participantHistorySource) throw new Error("Participant workspace history is unavailable");
     if (/^state:[0-9a-f]{64}$/u.test(stateHash)) {
       const scope = contextId && (caller.nativeInvocation || caller.taskAuthority || caller.subject?.userId)
         ? await this.requireParticipantContentScope(contextId, caller, signal)
