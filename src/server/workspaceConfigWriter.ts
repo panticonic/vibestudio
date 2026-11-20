@@ -1,4 +1,4 @@
-/** Publish workspace-config edits through the caller's clean task context when available. */
+/** Publish workspace configuration from an isolated host working copy. */
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import YAML from "yaml";
@@ -8,7 +8,6 @@ import {
 } from "@vibestudio/workspace/templateManifest";
 import { rpcErrorDataOf } from "@vibestudio/rpc";
 import { verifiedInitiator, type ServiceContext, type VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-import type { RpcCausalParent } from "@vibestudio/rpc";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import {
   readWorkspaceConfig,
@@ -19,22 +18,11 @@ import {
   changedWorkspaceConfigPaths,
   workspaceConfigDigest,
 } from "@vibestudio/workspace/preparedConfig";
-import type {
-  VcsListFilesResult,
-  VcsNeighborsResult,
-  VcsStateNodeRef,
-  VcsStatusResult,
-} from "@vibestudio/service-schemas/vcs";
-import type {
-  WorkspaceSemanticInput,
-  WorkspaceSemanticMethod,
-  WorkspaceVcs,
-} from "./vcsHost/workspaceVcs.js";
+import type { WorkspaceVcs } from "./vcsHost/workspaceVcs.js";
 import { readWorkspaceParticipantStatus, workspaceParticipantCatalog } from "./vcsHost/workspaceHistoryHost.js";
 
 const META_REPO_PATH = "meta";
 const WORKSPACE_CONFIG_FILE = "vibestudio.yml";
-const PAGE_LIMIT = 500;
 
 export interface WorkspaceConfigMainWriter {
   wouldMutate(mutate: WorkspaceConfigMutation): Promise<boolean>;
@@ -66,23 +54,6 @@ interface WorkspaceConfigContents {
   sourceFiles: Map<string, string | null>;
   readSourceFile(path: string): Promise<string | null>;
 }
-interface WorkspaceConfigAtState extends WorkspaceConfigContents {
-  status: VcsStatusResult;
-  repositoryId: string;
-  fileId: string;
-}
-
-function sameState(left: VcsStateNodeRef, right: VcsStateNodeRef): boolean {
-  return (
-    left.kind === right.kind &&
-    (left.kind === "event"
-      ? right.kind === "event" && left.eventId === right.eventId
-      : right.kind === "application" && left.applicationId === right.applicationId)
-  );
-}
-
-const SYSTEM_CAUSE: RpcCausalParent | null = null;
-
 function errorDetail(error: unknown): {
   message: string;
   code?: string;
@@ -143,8 +114,12 @@ function attachCleanupFailure(primary: unknown, cleanup: unknown, contextId: str
 export function createWorkspaceConfigMainWriter(deps: {
   /** Hub-owned workspace identity. Never derive authority from a mutable checkout path. */
   workspaceId: string;
-  vcs: WorkspaceVcs;
-  authoringCaller?: VerifiedCaller;
+  vcs: Pick<WorkspaceVcs,
+    | "whenSemanticReady" | "withProtectedMainMutation" | "ensureFresh" | "readFile"
+    | "openParticipantScope" | "dropContext" | "readParticipantFiles"
+    | "editParticipantContext" | "saveParticipantContext" | "publishParticipantContext"
+  >;
+  authoringCaller: VerifiedCaller;
 }): WorkspaceConfigMainWriter {
   const loadConfig = async (text: string, readText: (path: string) => Promise<string | null>) => {
     const filePath = `${META_REPO_PATH}/${WORKSPACE_CONFIG_FILE}`;
@@ -158,121 +133,10 @@ export function createWorkspaceConfigMainWriter(deps: {
     const config = await readWorkspaceConfig({ readText: readSourceFile }, deps.workspaceId);
     return { text, config, sourceFiles, readSourceFile };
   };
-  const readConfig = async (
-    contextId: string,
-    causalParent: RpcCausalParent | null,
-    knownStatus?: VcsStatusResult
-  ): Promise<WorkspaceConfigAtState> => {
-    const call = <M extends WorkspaceSemanticMethod>(method: M, input: WorkspaceSemanticInput<M>) =>
-      deps.vcs.semanticCausalCall(method, input, causalParent);
-    const status = knownStatus ?? (await call("vcsStatus", { contextId }));
-    const state = status.workingHead;
-    const repositoryRefs = new Map<
-      string,
-      Extract<VcsNeighborsResult["edges"][number]["to"], { kind: "repository" }>
-    >();
-    let cursor: string | undefined;
-    do {
-      const page = await call("vcsNeighbors", {
-        root: state,
-        limit: PAGE_LIMIT,
-        ...(cursor ? { cursor } : {}),
-      });
-      for (const edge of page.edges) {
-        for (const node of [edge.from, edge.to]) {
-          if (node.kind === "repository" && sameState(node.state, state)) {
-            repositoryRefs.set(node.repositoryId, node);
-          }
-        }
-      }
-      cursor = page.nextCursor ?? undefined;
-    } while (cursor);
-
-    let repositoryId: string | null = null;
-    for (const repository of repositoryRefs.values()) {
-      const inspected = await call("vcsInspect", {
-        node: repository,
-        edgeLimit: 1,
-      });
-      if (
-        inspected.node.kind === "repository" &&
-        inspected.node.value.kind === "present" &&
-        inspected.node.value.repoPath === META_REPO_PATH
-      ) {
-        repositoryId = inspected.node.value.repositoryId;
-        break;
-      }
-    }
-    if (!repositoryId) {
-      throw new Error(`Cannot persist workspace config: ${META_REPO_PATH} repository is absent`);
-    }
-
-    const metaFiles = new Map<string, string>();
-    cursor = undefined;
-    do {
-      const page: VcsListFilesResult = await call("vcsListFiles", {
-        state,
-        repositoryId,
-        prefix: "",
-        limit: PAGE_LIMIT,
-        ...(cursor ? { cursor } : {}),
-      });
-      for (const file of page.files) metaFiles.set(file.path, file.fileId);
-      cursor = page.nextCursor ?? undefined;
-    } while (cursor);
-    const fileId = metaFiles.get(WORKSPACE_CONFIG_FILE) ?? null;
-    if (!fileId) {
-      throw new Error(
-        `Cannot persist workspace config: ${META_REPO_PATH}/${WORKSPACE_CONFIG_FILE} is absent`
-      );
-    }
-
-    const content = await call("vcsReadFile", {
-      state,
-      repositoryId,
-      file: { kind: "id", fileId },
-    });
-    if (!content || content.content.kind !== "text") {
-      throw new Error(
-        `Cannot persist workspace config: ${META_REPO_PATH}/${WORKSPACE_CONFIG_FILE} is not text`
-      );
-    }
-    const parsed = await loadConfig(content.content.text, async (filePath) => {
-      const repoPath = filePath.slice(0, -"/package.json".length);
-      const repo = await call("vcsResolveRepository", {
-        state,
-        repoPath,
-      });
-      const file = repo
-        ? await call("vcsReadFile", {
-            state,
-            repositoryId: repo.repositoryId,
-            file: { kind: "path", path: "package.json" },
-          })
-        : null;
-      return file?.content.kind === "text" ? file.content.text : null;
-    });
-    return {
-      ...parsed,
-      status,
-      repositoryId,
-      fileId,
-    };
-  };
-
   const withTemporaryContext = async <T>(operation: (contextId: string) => Promise<T>): Promise<T> => {
     const contextId = `system:workspace-config:${randomUUID()}`;
-    // Config mutation is entirely semantic: every read/edit/commit below is
-    // addressed through the content graph, and no operation consumes a
-    // filesystem path. Eagerly projecting the whole workspace here made an
-    // approval click compete with (and delay) unrelated unit builds and Iroh
-    // control traffic. Preserve the exact same isolated VCS authority without
-    // manufacturing a disposable checkout that nobody reads.
-    // The context drop is mandatory, but it can't live in a `finally`: a throw
-    // there hijacks the control flow leaving the try block (that's what
-    // no-unsafe-finally warns about). Settle both outcomes first, then decide
-    // what propagates — the operation's own failure always stays primary, with
-    // any cleanup failure attached to it.
+    // The isolated context holds only the configuration changes. Preserve the
+    // operation failure if cleanup also fails.
     let outcome: { ok: true; value: T } | { ok: false; error: unknown };
     try {
       outcome = { ok: true, value: await operation(contextId) };
@@ -294,24 +158,6 @@ export function createWorkspaceConfigMainWriter(deps: {
     }
     if (!outcome.ok) throw outcome.error;
     return outcome.value;
-  };
-
-  const withFreshContext = <T>(operation: (contextId: string) => Promise<T>) =>
-    withTemporaryContext(async (contextId) => {
-      await deps.vcs.ensureSemanticContext(contextId);
-      return operation(contextId);
-    });
-
-  const withMutationContext = async <T>(
-    ctx: ServiceContext,
-    operation: (contextId: string, borrowed: boolean) => Promise<T>
-  ): Promise<T> => {
-    const callerContextId =
-      ctx.evalInvocation?.contextId ??
-      ctx.caller.executionSession?.contextId ??
-      ctx.authorizingCaller?.executionSession?.contextId;
-    if (callerContextId) return operation(callerContextId, true);
-    return withFreshContext((contextId) => operation(contextId, false));
   };
 
   const render = async (currentState: WorkspaceConfigContents, mutate: WorkspaceConfigMutation) => {
@@ -340,92 +186,10 @@ export function createWorkspaceConfigMainWriter(deps: {
     };
   };
 
-  const applyMutationInContext = async (
-    input: Parameters<WorkspaceConfigMainWriter["applyMutation"]>[0],
-    contextId: string,
-    borrowed: boolean
-  ): Promise<WorkspaceConfigMutationResult> => {
-    const causalParent = input.ctx.causalParent ?? null;
-    // Borrowing a clean caller context keeps it aligned with the config
-    // publication. A dirty or behind context may contain unrelated work, so
-    // preserve the established isolated-context behavior instead of either
-    // publishing that work or refusing a previously valid config mutation.
-    const borrowedStatus = borrowed
-      ? await deps.vcs.semanticCausalCall("vcsStatus", { contextId }, causalParent)
-      : undefined;
-    if (borrowedStatus && (!borrowedStatus.clean || borrowedStatus.mainRelation !== "at")) {
-      return withFreshContext((freshContextId) =>
-        applyMutationInContext(input, freshContextId, false)
-      );
-    }
-    const current = await readConfig(contextId, causalParent, borrowedStatus);
-    const rendered = await render(current, input.mutate);
-    if (rendered.nextContent === current.text) {
-      return { changed: false, nextConfig: rendered.nextConfig };
-    }
-
-    const commandStem = `workspace-config:${input.ctx.requestId ?? randomUUID()}`;
-    const edit = await deps.vcs.semanticCausalCall(
-      "vcsEdit",
-      {
-        contextId,
-        commandId: `${commandStem}:edit`,
-        expectedWorkingHead: current.status.workingHead,
-        intentSummary: input.summary,
-        changes: [
-          {
-            kind: "text-edit",
-            repositoryId: current.repositoryId,
-            fileId: current.fileId,
-            edits: [{ start: 0, end: current.text.length, text: rendered.nextContent }],
-          },
-        ],
-      },
-      causalParent
-    );
-    const committed = await deps.vcs.semanticCausalCall(
-      "vcsCommit",
-      {
-        contextId,
-        commandId: `${commandStem}:commit`,
-        expectedWorkingHead: edit.workingHead,
-        message: input.summary,
-      },
-      causalParent
-    );
-    if (committed.event.kind !== "event") {
-      throw new Error("Workspace config commit did not produce an event");
-    }
-    const pushInput = {
-      contextId,
-      commandId: `${commandStem}:push`,
-      expectedCommittedEventId: committed.event.eventId,
-      expectedMainEventId: current.status.mainEventId,
-    };
-    // Provider methods may perform a config mutation as a nested RPC while
-    // servicing an authenticated shell/agent request. The extension is the
-    // immediate transport caller, but it did not originate the protected
-    // main advance. Preserve the verified authorizing principal just as the
-    // VCS service does for other provider relays.
-    const publishingCaller = verifiedInitiator(input.ctx);
-    if (input.ctx.signal) {
-      await deps.vcs.semanticPublishCall(
-        pushInput,
-        causalParent,
-        publishingCaller,
-        input.ctx.signal
-      );
-    } else {
-      await deps.vcs.semanticPublishCall(pushInput, causalParent, publishingCaller);
-    }
-    return { changed: true, nextConfig: rendered.nextConfig };
-  };
-
   const applyParticipantMutation = (
     input: Parameters<WorkspaceConfigMainWriter["applyMutation"]>[0]
   ): Promise<WorkspaceConfigMutationResult> => withTemporaryContext(async (contextId) => {
     const author = deps.authoringCaller;
-    if (!author?.hostOriginated) throw new Error("Workspace configuration requires a host author");
     const scope = await deps.vcs.openParticipantScope({
       contextId, caller: author, ownerContextId: contextId,
       ...(input.ctx.signal ? { signal: input.ctx.signal } : {}),
@@ -498,12 +262,6 @@ export function createWorkspaceConfigMainWriter(deps: {
 
   const wouldMutate = async (mutate: WorkspaceConfigMutation): Promise<boolean> => {
     await deps.vcs.whenSemanticReady();
-    if (!deps.vcs.participantHistoryAttached) {
-      return withFreshContext(async (contextId) => {
-        const current = await readConfig(contextId, SYSTEM_CAUSE);
-        return (await render(current, mutate)).nextContent !== current.text;
-      });
-    }
     const { stateHash } = await deps.vcs.ensureFresh();
     const readText = async (filePath: string) => {
       const file = await deps.vcs.readFile(stateHash, filePath);
@@ -519,12 +277,9 @@ export function createWorkspaceConfigMainWriter(deps: {
     input: Parameters<WorkspaceConfigMainWriter["applyMutation"]>[0]
   ): Promise<WorkspaceConfigMutationResult> => {
     await deps.vcs.whenSemanticReady(input.ctx.signal);
-    return deps.vcs.withProtectedMainMutation(() => deps.vcs.participantHistoryAttached
-      ? applyParticipantMutation(input)
-      : withMutationContext(input.ctx, (contextId, borrowed) =>
-          applyMutationInContext(input, contextId, borrowed)
-        )
-    );
+    if (!deps.authoringCaller.hostOriginated)
+      throw new Error("Workspace configuration requires a host author");
+    return deps.vcs.withProtectedMainMutation(() => applyParticipantMutation(input));
   };
 
   return {
