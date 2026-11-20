@@ -123,6 +123,7 @@ import type { RpcCausalParent } from "@vibestudio/rpc";
 import {
   GadJsonRecordSchema,
   gadWireMethods,
+  workspaceHistoryInitializationInputSchema,
   HISTORY_QUERY_CAUSE_LIMIT,
   HISTORY_SEARCH_CAUSE_LIMIT,
   HistoryQueryBasisSchema,
@@ -821,9 +822,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       if (!rootTemplate) return false;
       const prepared = await rootTemplate.prepareInitialization();
       if (!prepared) return false;
-      const [request] = gadWireMethods.workspaceSourceInitializeExactSnapshot.args.parse([
-        exactWorkspaceSourceRequest(prepared),
-      ]);
+      const request = workspaceHistoryInitializationInputSchema.parse(exactWorkspaceSourceRequest(prepared));
       const staged = freshHistoryRoot.extend({ repositories: incomingHistory.shape.repositories }).parse(
         await dispatch.dispatch(canonical, "stageFreshHistoryRoot", request),
       );

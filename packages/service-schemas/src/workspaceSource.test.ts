@@ -4,6 +4,7 @@ import {
   AgentHealthInspectionSchema,
   gadMethods,
   gadWireMethods,
+  workspaceHistoryInitializationInputSchema,
   InspectAgentHealthInputSchema,
 } from "@vibestudio/service-schemas/workspaceSource";
 
@@ -228,15 +229,13 @@ describe("GAD runtime schema", () => {
     };
 
     expect(
-      gadWireMethods.workspaceSourceInitializeExactSnapshot.args.safeParse([input]).success
+      workspaceHistoryInitializationInputSchema.safeParse(input).success
     ).toBe(true);
     expect(
-      gadWireMethods.workspaceSourceInitializeExactSnapshot.args.safeParse([
-        {
-          ...input,
-          repositories: [{ ...input.repositories[0], contentRoot: "state:not-a-digest" }],
-        },
-      ]).success
+      workspaceHistoryInitializationInputSchema.safeParse({
+        ...input,
+        repositories: [{ ...input.repositories[0], contentRoot: "state:not-a-digest" }],
+      }).success
     ).toBe(false);
   });
 });

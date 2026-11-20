@@ -1769,52 +1769,14 @@ const semanticAcknowledgementSchema = z
     receipt: GadJsonRecordSchema,
   })
   .strict();
-const workspaceInitializationInputSchema = z
+export const workspaceHistoryInitializationInputSchema = z
   .object({
     commandId: nonemptyText,
     pin: workspacePinSchema,
     repositories: z.array(workspaceSnapshotRepositorySchema),
     installation: WorkspaceTemplateInstallationSchema,
-    acknowledgement: semanticAcknowledgementSchema.optional(),
   })
   .strict();
-const workspaceSourceEffectSchema = semanticEffectSchema
-  .omit({
-    receipt: true,
-    createdAt: true,
-  })
-  .extend({ status: z.literal("pending") });
-const workspaceInitializationInspectionSchema = z.discriminatedUnion("state", [
-  z.object({ state: z.literal("empty") }).strict(),
-  z
-    .object({
-      state: z.literal("initializing"),
-      commandId: nonemptyText,
-      pendingEffect: workspaceSourceEffectSchema.optional(),
-    })
-    .strict(),
-  z
-    .object({
-      state: z.literal("ready"),
-      commandId: nonemptyText,
-      receipt: z
-        .object({
-          commandId: nonemptyText,
-          pin: workspacePinSchema,
-          initializedEventId: nonemptyText,
-          initializedStateHash: nonemptyText,
-        })
-        .strict(),
-    })
-    .strict(),
-  z
-    .object({
-      state: z.literal("failed"),
-      commandId: nonemptyText,
-      failure: rpcFailureSchema,
-    })
-    .strict(),
-]);
 const genericSemanticResultSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("complete"), result: GadJsonValueSchema }).strict(),
   z
@@ -1985,73 +1947,6 @@ const forkLogResultSchema = z
 const channelInviteKeySchema = z.object({ channelId: nonemptyText, userId: nonemptyText }).strict();
 
 const gadInternalWireMethods = defineServiceMethods({
-  workspaceSourceTemplateInstallation: {
-    website: {
-      kind: "closed",
-      reason: "Installation provenance requires a reviewed source consumer.",
-    } as const,
-    description: "Read installation provenance at an exact workspace publication event.",
-    args: z.tuple([z.object({ eventId: nonemptyText }).strict()]),
-    returns: WorkspaceTemplateInstallationSchema.nullable(),
-    agentFacing: false,
-  },
-  workspaceSourceInitializeExactSnapshot: {
-    website: {
-      kind: "closed",
-      reason:
-        "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
-    } as const,
-    description: "Initialize the provider from one exact root snapshot.",
-    args: z.tuple([workspaceInitializationInputSchema]),
-    returns: workspaceInitializationInspectionSchema,
-    agentFacing: false,
-  },
-  workspaceSourceResolve: {
-    website: {
-      kind: "closed",
-      reason:
-        "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
-    } as const,
-    description: "Resolve an exact source reference.",
-    args: z.tuple([z.object({ ref: nonemptyText }).strict()]),
-    returns: z.object({ stateHash: nonemptyText }).strict(),
-    agentFacing: false,
-  },
-  workspaceSourceCurrent: {
-    website: {
-      kind: "closed",
-      reason:
-        "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
-    } as const,
-    description: "Read the current source state.",
-    args: z.tuple([]),
-    returns: z.object({ stateHash: nonemptyText }).strict().nullable(),
-    agentFacing: false,
-  },
-  workspaceSourceInspectInitialization: {
-    website: {
-      kind: "closed",
-      reason:
-        "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
-    } as const,
-    description: "Inspect exact-root initialization.",
-    args: z.tuple([]),
-    returns: workspaceInitializationInspectionSchema,
-    agentFacing: false,
-  },
-  workspaceSourceHealth: {
-    website: {
-      kind: "closed",
-      reason:
-        "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
-    } as const,
-    description: "Check the workspace-source bootstrap protocol.",
-    args: z.tuple([]),
-    returns: z
-      .object({ ok: z.literal(true), protocol: z.literal("vibestudio.workspace-source.v1") })
-      .strict(),
-    agentFacing: false,
-  },
   vcsSemanticEffectAck: {
     website: {
       kind: "closed",
@@ -2763,7 +2658,6 @@ const GAD_AUTHORITY_GROUPS: readonly GadAuthorityGroup[] = [
   },
   {
     methods: [
-      "workspaceSourceInitializeExactSnapshot",
       "vcsSemanticEffectAck",
       "vcsSemanticHostReadAck",
       "vcsSemanticContentAck",
@@ -2779,11 +2673,6 @@ const GAD_AUTHORITY_GROUPS: readonly GadAuthorityGroup[] = [
   },
   {
     methods: [
-      "workspaceSourceResolve",
-      "workspaceSourceCurrent",
-      "workspaceSourceInspectInitialization",
-      "workspaceSourceTemplateInstallation",
-      "workspaceSourceHealth",
       "vcsPendingSemanticEffects",
       "vcsContentGcRoots",
       "vcsListContexts",

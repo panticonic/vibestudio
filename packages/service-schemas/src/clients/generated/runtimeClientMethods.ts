@@ -259,12 +259,6 @@ export const GAD_METHOD_NAMES = [
 ] as const;
 
 export const GAD_WIRE_METHOD_NAMES = [
-  "workspaceSourceTemplateInstallation",
-  "workspaceSourceInitializeExactSnapshot",
-  "workspaceSourceResolve",
-  "workspaceSourceCurrent",
-  "workspaceSourceInspectInitialization",
-  "workspaceSourceHealth",
   "vcsSemanticEffectAck",
   "vcsSemanticHostReadAck",
   "vcsSemanticContentAck",

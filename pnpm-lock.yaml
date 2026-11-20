@@ -1319,9 +1319,6 @@ importers:
 
   packages/workspace-contracts:
     dependencies:
-      '@vibestudio/rpc':
-        specifier: workspace:*
-        version: link:../rpc
       semver:
         specifier: ^7.8.4
         version: 7.8.5
