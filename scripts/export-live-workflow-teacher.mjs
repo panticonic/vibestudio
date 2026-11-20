@@ -17,6 +17,14 @@ const templateGoalDomains = {
     checks: ["scopedMobileBuild", "verifiedMobileCacheBoundary", "verifiedMobileReconnect", "verifiedMobileRouteOwnership",
       "discoveredScopedMobileProfile", "joinedExactMobileObservations", "matchedBoundMobileDecision", "preservedMobileSourceAndScope"],
   },
+  "api-readiness": {
+    namespace: "vibestudio:quiet-api-readiness",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-api-readiness-managed.ts" },
+    callable: "workOnApiReadinessGoal",
+    skill: "apiReadiness",
+    checks: ["exactIntegrationFrontiers", "trustedIntegrationSelection", "explicitQuietIntegration", "observedIntegrationLifecycles",
+      "groundedIntegrationDisposition", "verifiedPrivateIntegrationNote", "preservedIntegrationWorkspace", "rejectedForeignIntegration"],
+  },
   "news-evidence": {
     namespace: "vibestudio:news:retained-evidence",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-news-evidence-managed.ts" },
@@ -1396,14 +1404,14 @@ export async function loadLiveTeacherCases(checkouts) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
     const distinctGoals = new Set();
-    const { openGoalWorlds, openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
+    const { openGoalWorlds, openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openApiReadinessWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
       spectroliteGoalWorlds = [], openGoalGoogleWorlds = [], openGoalPersonalWorlds = [],
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
       openTerminalWorlds = [], openOwnedResearchWorlds = [], personalWelcomeWorlds = [], dictationHandoffWorlds = [], specialistHandoffWorlds = [], providerHandoffWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
     for (const assignment of [...openGoalWorlds, ...openMobileContinuityWorlds, ...openInstalledPackageWorlds, ...openAssetIntegrityWorlds, ...openTendrilRouteWorlds, ...openExtensionDossierWorlds, ...openDeployedInterfaceWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
-      ...openNewsEvidenceWorlds, ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
+      ...openApiReadinessWorlds, ...openNewsEvidenceWorlds, ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
       ...openGoalCalendarWorlds, ...openPersonalArtifactWorlds, ...openPersonalHistoryWorlds,
@@ -7478,6 +7486,66 @@ function retainedNewsEvidence(exercise, world, proof, skill) {
   );
 }
 
+function quietApiReadinessEvidence(exercise, world, proof, skill) {
+  const outcome = exercise.report.outcome;
+  const { plan, review, audit, handoff } = outcome;
+  const { explanation, ...facts } = plan;
+  const { index, snapshots, planned, calls, seenPlan, observations } = proof;
+  const [earlier, current] = snapshots;
+  const records = exercise.calls.map(({ record }) => record);
+  const child = (parent, name) => records.filter(record => record.parent_call_id === parent.call_id &&
+    record.definition?.name === name && record.outcome === "done");
+  const effects = (name, service, method) => records.flatMap(record =>
+    record.definition?.name === name && record.outcome === "done" ? (record.effects ?? [])
+      .filter(effect => effect.service === service && effect.method === method && !effect.error) : []);
+  const listed = effects("discoverIntegrationReview", "quietIntegrationIndex", "list");
+  const reads = effects("readIntegrationSelection", "quietIntegrationJournal", "read");
+  const opened = effects("openQuietIntegrationPlan", "quietIntegrationProtocol", "open");
+  const audited = effects("readQuietIntegrationAudit", "quietIntegrationProtocol", "audit");
+  const plans = effects("readIntegrationPlan", "integrationPlanRead", "observe");
+  const binding = effects("resolveBinding", "integrationCredentialLookup", "resolve");
+  const stages = effects("stageIntegrationReadiness", "quietIntegrationHandoff", "stage");
+  const chosen = child(skill, "chooseIntegrationProfile");
+  const checked = child(skill, "checkIntegrationSelection");
+  const decisions = child(skill, "decideApiReadiness");
+  const reviewers = child(skill, "reviewQuietCredentials");
+  const installed = reviewers.length === 1 ? child(reviewers[0], "reviewIntegration") : [];
+
+  requireEvidence(
+    index.scope.approvals === "pregranted-only" && planned.providerAccess === "unobserved" &&
+      listed.length === 1 && matchesValue(listed[0].args, []) && matchesValue(listed[0].result, index) &&
+      reads.length === 2 && snapshots.length === 2 && snapshots.every((row, i) =>
+        matchesValue(reads[i].args, [index.scope.channelId]) && matchesValue(reads[i].result, row)) &&
+      chosen.length === 1 && matchesValue(chosen[0].inputs?.goal, world.goal) && matchesValue(chosen[0].inputs?.index, index) &&
+      checked.length === 1 && matchesValue(checked[0].inputs?.index, index) &&
+      matchesValue(checked[0].inputs?.earlier, earlier) && matchesValue(checked[0].inputs?.current, current) &&
+      (!plan.profileId || child(checked[0], "confirmTrustedSelection").length === 1) &&
+      isDeepStrictEqual(facts, planned) && typeof explanation === "string" &&
+      decisions.length === 1 && matchesValue(decisions[0].inputs?.current, current) &&
+      matchesValue(decisions[0].inputs?.audit, audit) && matchesValue(decisions[0].output, plan) &&
+      (plan.action === "hold" ? review === null && audit === null && proof.audit === null &&
+        opened.length === 0 && calls.length === 0 && plans.length === 0 && binding.length === 0 && audited.length === 0 &&
+        reviewers.length === 0 && observations.length === 0 :
+        review && audit && calls.length === 1 && opened.length === 1 && plans.length === 1 && audited.length === 1 &&
+        isDeepStrictEqual(review.request, calls[0].request) && isDeepStrictEqual(audit, proof.audit) &&
+        audit.approvals === "pregranted-only" && audit.providerAccess === "unobserved" &&
+        matchesValue(opened[0].args, [calls[0].profileId, calls[0].message]) && matchesValue(opened[0].result, review.request) &&
+        matchesValue(plans[0].args, [review.request.operationId]) && matchesValue(plans[0].result, seenPlan) &&
+        matchesValue(audited[0].args, [review.request.operationId]) && matchesValue(audited[0].result, audit) &&
+        reviewers.length === 1 && installed.length === 1 && matchesValue(reviewers[0].inputs?.request, review.request) &&
+        matchesValue(reviewers[0].output, review) && matchesValue(installed[0].inputs?.request, review.request) &&
+        matchesValue(installed[0].output, review.result) && binding.length === observations.length &&
+        observations.every((row, i) => matchesValue(binding[i].args, [seenPlan.receipt, row.id]) &&
+          matchesValue(binding[i].result, row))) &&
+      stages.length === Number(world.expected.action === "stage") &&
+      (stages.length ? matchesValue(stages[0].args, [{ ...outcome, handoff: null }]) && matchesValue(stages[0].result, handoff) &&
+        isDeepStrictEqual(handoff, proof.handoff) && typeof proof.artifact === "string" &&
+        hash(proof.artifact) === handoff?.sha256 && Buffer.byteLength(proof.artifact) === handoff?.bytes :
+        handoff === null && proof.handoff === null && proof.artifact === null),
+    "Expected the exact quiet integration plan, resolver observations and scoped local handoff"
+  );
+}
+
 export function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
   const proof = execution.diagnostics.openGoalVerification;
   const world = workflow.assignment;
@@ -7500,7 +7568,9 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
     "Expected a verified live goal and its actual installed Natlang skill call"
   );
   const evidence = { workspace: { proof } };
-  if (world.kind === "news-evidence") {
+  if (world.kind === "api-readiness") {
+    quietApiReadinessEvidence(exercise, world, proof, skill);
+  } else if (world.kind === "news-evidence") {
     retainedNewsEvidence(exercise, world, proof, skill);
   } else if (world.kind === "personal-welcome") {
     personalWelcomeEvidence(exercise, world, proof, skill);
