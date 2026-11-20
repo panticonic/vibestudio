@@ -1,4 +1,3 @@
-import { deserializeRpcFailure } from "@vibestudio/rpc";
 import { ByteArraySchema } from "@vibestudio/shared/binary";
 import { intrinsicContentDescriptor } from "@vibestudio/content-addressing";
 import { blobUploadPrincipal, hasBlobUploads, markPrivateWorkspaceBlobs } from "../storage/blobUploads.js";
@@ -110,11 +109,8 @@ import { joinRepoPrefix, normalizeRepositoryPath } from "./paths.js";
 import { ContentProjectionStore } from "./contentProjectionStore.js";
 import { DiskProjector } from "./diskProjector.js";
 import { ContextMaterializer } from "./contextMaterializer.js";
-import { discoverRepos } from "@vibestudio/shared/runtime/repoDiscovery";
-import type { WorkspaceSourceInitializationReceipt } from "@vibestudio/workspace-contracts/workspaceSource";
 import type {
   WorkspaceSemanticPort,
-  WorkspaceSourceProviderV1,
   WorkspaceSourceSemanticDispatchResult,
   WorkspaceSourceSemanticEffect,
   WorkspaceSourceHostReadRequest,
@@ -183,7 +179,6 @@ import type { WorkspaceRootTemplateBootstrap } from "../workspaceRootTemplateBoo
 import {
   installWorkspaceReplayBlobScopes,
   readWorkspaceHistoryReplayReceipt, registerWorkspaceHistoryReplayOwners,
-  restoreWorkspaceHistorySourceInitialization,
 } from "./workspaceHistoryMigration.js";
 import { retainedBlobDigests, withBlobContentLock } from "../storage/blobRetentions.js";
 
@@ -334,20 +329,8 @@ export interface WorkspaceVcsDeps {
   /** The only pre-userland template path: acquire one exact root for first publication. */
   rootTemplateBootstrap?: Pick<
     WorkspaceRootTemplateBootstrap,
-    "prepareSource" | "prepareInitialization" | "preparedBuildForContent"
+    "prepareInitialization" | "preparedBuildForContent"
   >;
-}
-
-export interface WorkspaceActivationTimings {
-  ensureContextAndMaterializationMs: number;
-  inspectMs: number;
-  sourceScanMs: number;
-  sourceHashAndBlobIngestMs: number;
-  casTreeMirrorMs: number;
-  importSnapshotMs: number;
-  initializationPushMs: number;
-  ensureFreshMs: number;
-  totalMs: number;
 }
 
 export interface PreparedWorkspaceGc {
@@ -544,7 +527,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   private gadCaller: WorkspaceSemanticPort | null = null;
-  private sourceProviderCaller: WorkspaceSourceProviderV1 | null = null;
   private seededWorkspace: boolean;
   private readonly outgoingHistoryPackets = new Map<string, {
     senderId: string;
@@ -852,16 +834,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   async readTemplateInstallation(eventId: string) {
     await this.whenSemanticReady();
-    if (this.participantHistorySource)
-      return readWorkspaceHistoryTemplateInstallation(this.participantHistorySource, eventId);
-    return this.workspaceSourceProvider().readTemplateInstallation({ eventId });
-  }
-
-  attachWorkspaceSourceProvider(provider: WorkspaceSourceProviderV1): void {
-    if (this.sourceProviderCaller) {
-      throw new Error("workspace source provider is already attached");
-    }
-    this.sourceProviderCaller = provider;
+    if (!this.participantHistorySource) throw new Error("Native workspace history has not been attached");
+    return readWorkspaceHistoryTemplateInstallation(this.participantHistorySource, eventId);
   }
 
   async attachParticipantHistory(source: ParticipantHistoryAttachment): Promise<void> {
@@ -1741,28 +1715,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       input,
       ingress: { causalParent: null },
     });
-  }
-
-  private dispatchSemanticInput<M extends WorkspaceSemanticMethod>(
-    method: M,
-    input: WorkspaceSemanticInput<M>
-  ): Promise<WorkspaceSemanticOutput<M>> {
-    return this.dispatchSemanticCall(method, { input, ingress: { causalParent: null } });
-  }
-
-  private semanticWorkspaceInitializationPush(
-    input: WorkspaceSemanticInput<"vcsPush">
-  ): Promise<WorkspaceSemanticOutput<"vcsPush">> {
-    return this.mutateProtectedMain(() =>
-      this.dispatchSemanticCall(
-        "vcsPush",
-        {
-          input,
-          ingress: { causalParent: null },
-        },
-        { kind: "workspace-initialization" }
-      )
-    );
   }
 
   /** Record the one upstream causal edge carried by a trusted host adapter. */
@@ -2683,13 +2635,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     return this.gadCaller;
   }
 
-  private workspaceSourceProvider(): WorkspaceSourceProviderV1 {
-    if (!this.sourceProviderCaller) {
-      throw new Error("workspace source provider bootstrap ABI is not attached");
-    }
-    return this.sourceProviderCaller;
-  }
-
   // -----------------------------------------------------------------------
   // Context lifecycle
   // -----------------------------------------------------------------------
@@ -2816,358 +2761,11 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     this.verifiedProjectionStates.set(contextId, canonicalJson(state));
   }
 
-  async activateWorkspaceFromSource(nativeHistoryReady?: true): Promise<{
-    stateHash: string;
-    initialized: boolean;
-    timings: WorkspaceActivationTimings;
-  }> {
-    const activationStartedAt = performance.now();
-    const timings: WorkspaceActivationTimings = {
-      ensureContextAndMaterializationMs: 0,
-      inspectMs: 0,
-      sourceScanMs: 0,
-      sourceHashAndBlobIngestMs: 0,
-      casTreeMirrorMs: 0,
-      importSnapshotMs: 0,
-      initializationPushMs: 0,
-      ensureFreshMs: 0,
-      totalMs: 0,
-    };
-    if (nativeHistoryReady) {
-      if (!this.participantHistoryAttached) throw new Error("Native workspace history has not been attached");
-      const fresh = await this.ensureFresh();
-      timings.ensureFreshMs = timings.totalMs = performance.now() - activationStartedAt;
-      return { ...fresh, initialized: false, timings };
+  async activateNativeWorkspace(): Promise<{ stateHash: string }> {
+    if (!this.participantHistoryAttached || !this.deps.refs.readMainSemanticState()) {
+      throw new Error("Native workspace history has no attached protected main");
     }
-    const contextId = `workspace-initialization:${this.deps.workspaceId}`;
-    const rootPin = this.deps.rootTemplateBootstrap
-      ? await this.deps.rootTemplateBootstrap.prepareSource()
-      : null;
-    if (rootPin) {
-      let spanStartedAt = performance.now();
-      const verifyPin = (receipt: WorkspaceSourceInitializationReceipt) => {
-        if (
-          receipt.pin.url !== rootPin.url ||
-          receipt.pin.ref !== rootPin.ref ||
-          receipt.pin.commit !== rootPin.commit
-        ) {
-          throw new Error(
-            "Workspace source initialization receipt does not match the exact root template"
-          );
-        }
-      };
-      const inspectLegacy = () => this.workspaceSourceProvider().inspectInitialization();
-      const history = this.participantHistorySource;
-      const retained = this.retiredLegacyRetention;
-      const initialization = history && retained
-        ? await restoreWorkspaceHistorySourceInitialization({
-            ...history, receiptDigest: retained.receiptDigest, inspectLegacy, verifyPin,
-          })
-        : await inspectLegacy();
-      timings.inspectMs = performance.now() - spanStartedAt;
-      if (initialization.state === "ready") {
-        verifyPin(initialization.receipt);
-        spanStartedAt = performance.now();
-        const fresh = await this.ensureFresh();
-        timings.ensureFreshMs = performance.now() - spanStartedAt;
-        timings.totalMs = performance.now() - activationStartedAt;
-        return { ...fresh, initialized: false, timings };
-      }
-      if (initialization.state === "failed") {
-        throw deserializeRpcFailure(initialization.failure);
-      }
-      const preparedRoot = await this.deps.rootTemplateBootstrap!.prepareInitialization();
-      if (!preparedRoot) {
-        throw new Error("Workspace root template disappeared during source initialization");
-      }
-      spanStartedAt = performance.now();
-      const receipt = await this.initializeExactWorkspaceSource(preparedRoot);
-      timings.importSnapshotMs = performance.now() - spanStartedAt;
-      spanStartedAt = performance.now();
-      const fresh = await this.ensureFresh();
-      timings.ensureFreshMs = performance.now() - spanStartedAt;
-      timings.totalMs = performance.now() - activationStartedAt;
-      const protectedMain = this.deps.refs.readMainSemanticState();
-      if (protectedMain?.eventId !== receipt.initializedEventId) {
-        throw new Error(
-          `Workspace source receipt event ${receipt.initializedEventId} does not match protected main ${protectedMain?.eventId ?? "absent"}`
-        );
-      }
-      return { ...fresh, initialized: true, timings };
-    }
-    if (this.participantHistoryAttached) {
-      const started = performance.now();
-      const fresh = await this.ensureFresh();
-      timings.ensureFreshMs = performance.now() - started;
-      timings.totalMs = performance.now() - activationStartedAt;
-      return { ...fresh, initialized: false, timings };
-    }
-    let spanStartedAt = performance.now();
-    const state = await this.ensureContextOnce(contextId);
-    timings.ensureContextAndMaterializationMs = performance.now() - spanStartedAt;
-    spanStartedAt = performance.now();
-    const inspected = await this.dispatchSemanticInput("vcsInspect", {
-      node: state,
-      edgeLimit: 1,
-    });
-    timings.inspectMs = performance.now() - spanStartedAt;
-    const existingRefs = this.deps.refs.listMains();
-    if (
-      (inspected.node.kind !== "event" || inspected.node.value.kind !== "genesis") &&
-      existingRefs.length > 0
-    ) {
-      spanStartedAt = performance.now();
-      const fresh = await this.ensureFresh();
-      timings.ensureFreshMs = performance.now() - spanStartedAt;
-      timings.totalMs = performance.now() - activationStartedAt;
-      return { ...fresh, initialized: false, timings };
-    }
-
-    const initializationEvidence = await this.initializationEvidence(state);
-
-    const scanned = await this.contentProjection.localState(this.deps.workspaceRoot);
-    timings.sourceScanMs = scanned.timings.scanMs;
-    timings.sourceHashAndBlobIngestMs = scanned.timings.hashAndBlobIngestMs;
-    timings.casTreeMirrorMs = scanned.timings.treeMirrorMs;
-    if (scanned.skipped.length > 0) {
-      throw new Error(
-        `workspace source contains unsupported entries: ${scanned.skipped
-          .map((entry) => `${entry.path} (${entry.kind}${entry.reason ? `: ${entry.reason}` : ""})`)
-          .join(", ")}`
-      );
-    }
-    if (!scanned.files.some((file) => file.path === "meta/vibestudio.yml")) {
-      throw new Error("workspace source is missing meta/vibestudio.yml");
-    }
-
-    const sourceFiles = [...scanned.files];
-    sourceFiles.sort((left, right) => compareUtf16CodeUnits(left.path, right.path));
-    const repositories = [];
-    for (const repository of discoverRepos(sourceFiles.map((file) => file.path))) {
-      const prefix = `${repository.repoPath}/`;
-      const repositoryFiles = sourceFiles.filter((file) => file.path.startsWith(prefix));
-      const files = repositoryFiles.map((file) => ({
-        path: file.path.slice(prefix.length),
-        contentHash: file.contentHash,
-        mode: file.mode & 0o777,
-      }));
-      repositories.push({
-        repoPath: repository.repoPath,
-        files,
-      });
-    }
-
-    let workingHead = state;
-    spanStartedAt = performance.now();
-    const localSnapshotRevision = scanned.stateHash;
-    const localAlreadyImported = initializationEvidence.some(
-      (evidence) =>
-        evidence.sourceKind === "filesystem" &&
-        evidence.sourceUri === "vibestudio://workspace/source" &&
-        evidence.snapshotRevision === localSnapshotRevision
-    );
-    if (!localAlreadyImported) {
-      const importResult = await this.dispatchSemanticInput("vcsImportSnapshot", {
-        contextId,
-        commandId: `initial-import:${localSnapshotRevision}`,
-        expectedWorkingHead: workingHead,
-        intentSummary: "Import the initial local workspace snapshot",
-        source: {
-          kind: "filesystem",
-          uri: "vibestudio://workspace/source",
-          snapshotRevision: localSnapshotRevision,
-        },
-        repositories,
-        message: "Import initial local workspace snapshot",
-      });
-      workingHead = { kind: "event", eventId: importResult.eventId };
-    }
-    timings.importSnapshotMs = performance.now() - spanStartedAt;
-    const genesisEventId = await this.initializationGenesisEventId(workingHead);
-    if (workingHead.kind !== "event") {
-      throw new Error("Workspace initialization did not produce a committed event head");
-    }
-    spanStartedAt = performance.now();
-    await this.semanticWorkspaceInitializationPush({
-      contextId,
-      commandId: `initial-push:${workingHead.eventId}`,
-      expectedCommittedEventId: workingHead.eventId,
-      expectedMainEventId: genesisEventId,
-    });
-    timings.initializationPushMs = performance.now() - spanStartedAt;
-    spanStartedAt = performance.now();
-    const fresh = await this.ensureFresh();
-    timings.ensureFreshMs = performance.now() - spanStartedAt;
-    timings.totalMs = performance.now() - activationStartedAt;
-    return { ...fresh, initialized: true, timings };
-  }
-
-  private initializeExactWorkspaceSource(
-    prepared: import("../workspaceRootTemplateBootstrap.js").PreparedRootTemplateInitialization
-  ): Promise<
-    import("@vibestudio/workspace-contracts/workspaceSource").WorkspaceSourceInitializationReceipt
-  > {
-    return this.mutateProtectedMain(async () => {
-      const startedAt = performance.now();
-      let providerMs = 0;
-      let effectMs = 0;
-      const effects: Record<string, { count: number; totalMs: number }> = {};
-      const providerSteps: Array<{
-        step: number;
-        elapsedMs: number;
-        state: string;
-        pendingEffect: string | null;
-      }> = [];
-      const provider = this.workspaceSourceProvider();
-      const request = exactWorkspaceSourceRequest(prepared);
-      let acknowledgement:
-        | import("@vibestudio/workspace-contracts/workspaceSource").WorkspaceSourceEffectAcknowledgement
-        | undefined;
-      for (let step = 0; step < 1_000; step += 1) {
-        const providerStartedAt = performance.now();
-        const inspection = await provider.initializeExactSnapshot({
-          ...request,
-          ...(acknowledgement ? { acknowledgement } : {}),
-        });
-        const providerElapsedMs = performance.now() - providerStartedAt;
-        providerMs += providerElapsedMs;
-        providerSteps.push({
-          step,
-          elapsedMs: providerElapsedMs,
-          state: inspection.state,
-          pendingEffect:
-            inspection.state === "initializing" ? (inspection.pendingEffect?.kind ?? null) : null,
-        });
-        acknowledgement = undefined;
-        if (inspection.state === "ready") {
-          const totalMs = performance.now() - startedAt;
-          if (totalMs >= 100) {
-            console.info("[VcsProfile] exact workspace initialization", {
-              repositories: prepared.repositories.length,
-              files: prepared.repositories.reduce(
-                (count, repository) => count + repository.files.length,
-                0
-              ),
-              providerMs,
-              providerSteps,
-              effectMs,
-              effects,
-              totalMs,
-            });
-          }
-          return inspection.receipt;
-        }
-        if (inspection.state === "failed") {
-          throw deserializeRpcFailure(inspection.failure);
-        }
-        if (inspection.state === "empty") {
-          throw new Error("Workspace source provider did not record initialization");
-        }
-        const effect = inspection.pendingEffect;
-        if (!effect) continue;
-        const effectStartedAt = performance.now();
-        const receipt = await this.executeSemanticEffect(
-          {
-            effectId: effect.effectId,
-            scopeKind: effect.scopeKind,
-            scopeId: effect.scopeId,
-            commandId: effect.commandId,
-            kind: effect.kind,
-            payloadDigest: effect.payloadDigest,
-            payload: GadJsonRecordSchema.parse(effect.payload),
-          },
-          {
-            kind: "workspace-initialization",
-          }
-        );
-        const elapsedMs = performance.now() - effectStartedAt;
-        effectMs += elapsedMs;
-        const effectProfile = effects[effect.kind] ?? { count: 0, totalMs: 0 };
-        effectProfile.count += 1;
-        effectProfile.totalMs += elapsedMs;
-        effects[effect.kind] = effectProfile;
-        if (effect.kind === "publish-main") {
-          this.deps.refs.acknowledgePublication(effect.effectId);
-        }
-        acknowledgement = {
-          effectId: effect.effectId,
-          payloadDigest: effect.payloadDigest,
-          receipt,
-        };
-      }
-      throw new Error("Workspace source initialization exceeded the host-effect limit");
-    });
-  }
-
-  private async initializationGenesisEventId(state: VcsStateNodeRef): Promise<string> {
-    let cursor = state;
-    for (;;) {
-      if (cursor.kind !== "event") {
-        throw new Error("Workspace initialization history contains a non-event state");
-      }
-      const inspected = await this.dispatchSemanticInput("vcsInspect", {
-        node: cursor,
-        edgeLimit: 1,
-      });
-      if (inspected.node.kind !== "event") {
-        throw new Error(`Workspace initialization event ${cursor.eventId} cannot be inspected`);
-      }
-      if (inspected.node.value.kind === "genesis") return inspected.node.value.eventId;
-      if (inspected.node.value.parentEventIds.length !== 1) {
-        throw new Error("Workspace initialization history is not a single import chain");
-      }
-      cursor = { kind: "event", eventId: inspected.node.value.parentEventIds[0]! };
-    }
-  }
-
-  private async initializationEvidence(state: VcsStateNodeRef): Promise<
-    Array<{
-      sourceKind: string;
-      sourceUri: string;
-      snapshotRevision: string;
-      canonicalSnapshot?: string;
-      sourceSubdir?: string | null;
-      eventId: string;
-    }>
-  > {
-    const evidence: Array<{
-      sourceKind: string;
-      sourceUri: string;
-      snapshotRevision: string;
-      canonicalSnapshot?: string;
-      sourceSubdir?: string | null;
-      eventId: string;
-    }> = [];
-    let cursor = state;
-    for (;;) {
-      if (cursor.kind !== "event") break;
-      const event = await this.dispatchSemanticInput("vcsInspect", {
-        node: cursor,
-        edgeLimit: 1,
-      });
-      if (event.node.kind !== "event" || event.node.value.kind === "genesis") break;
-      for (const applicationId of event.node.value.applicationIds) {
-        const application = await this.dispatchSemanticInput("vcsInspect", {
-          node: { kind: "application", applicationId },
-          edgeLimit: 1,
-        });
-        if (application.node.kind !== "application") continue;
-        const workUnit = await this.dispatchSemanticInput("vcsInspect", {
-          node: { kind: "work-unit", workUnitId: application.node.value.workUnitId },
-          edgeLimit: 1,
-        });
-        if (workUnit.node.kind !== "work-unit" || !workUnit.node.value.externalSnapshot) continue;
-        evidence.push({
-          ...workUnit.node.value.externalSnapshot,
-          eventId: event.node.value.eventId,
-        });
-      }
-      if (event.node.value.parentEventIds.length !== 1) {
-        throw new Error("Workspace initialization history is not a single import chain");
-      }
-      cursor = { kind: "event", eventId: event.node.value.parentEventIds[0]! };
-    }
-    return evidence;
+    return this.ensureFresh();
   }
 
   async forkContext(sourceContextId: string, targetContextId: string): Promise<VcsStateNodeRef> {

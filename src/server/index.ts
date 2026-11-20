@@ -7469,10 +7469,9 @@ async function main() {
     },
     activateSemanticWorkspace: async (vcs) => {
       const activationStartedAt = performance.now();
-      const activated = await vcs.activateWorkspaceFromSource(true);
-      // Activation either created the workspace (and its creation publication
-      // recorded the review it owes) or restored one: only now is "nothing to
-      // review" a fact rather than a guess.
+      const activated = await vcs.activateNativeWorkspace();
+      const nativeActivationMs = performance.now() - activationStartedAt;
+      // Native initialization records any required creation review before activation.
       if (
         !workspaceCreationReview.isPending() &&
         workspaceCreationReviewState.status === "preparing"
@@ -7502,13 +7501,13 @@ async function main() {
       const configReloadMs = performance.now() - spanStartedAt;
       warnMissingWorkspaceTrust();
       console.log("[Vcs] semantic activation report", {
-        ...activated.timings,
+        nativeActivationMs,
         configReadMs,
         configReloadMs,
         lifecycleTotalMs: performance.now() - activationStartedAt,
       });
       console.log(
-        `[WorkspaceConfig] ${activated.initialized ? "Initialized" : "Loaded"} semantic main ${activated.stateHash}`
+        `[WorkspaceConfig] Loaded semantic main ${activated.stateHash}`
       );
     },
   });

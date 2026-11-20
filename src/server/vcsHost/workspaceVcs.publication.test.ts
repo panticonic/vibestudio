@@ -59,7 +59,7 @@ describe("WorkspaceVcs protected publication notification", () => {
       workspaceId: "workspace:test", blobsDir, workspaceRoot: path.join(root, "source"),
       contextProjectionsRoot: path.join(root, "contexts"), buildSourcesRoot: path.join(root, "builds"),
       refs, rootTemplateBootstrap: {
-        prepareInitialization, prepareSource: vi.fn(async () => pin), preparedBuildForContent: () => null,
+        prepareInitialization, preparedBuildForContent: () => null,
       },
     });
     const canonical = { source: "workers/workspace-source", className: "GadHistoryDO", objectKey: "canonical" };
@@ -69,6 +69,8 @@ describe("WorkspaceVcs protected publication notification", () => {
     let installed = false;
     const receipt = () => ({ head, eventId, installed, requestDigest, originalHead: "d".repeat(40), pin });
     const dispatch = vi.fn(async (_target, method: string, input?: unknown) => {
+      if (method === "listHistoryAppliedPublications") return [];
+      if (method === "readHistoryMain") return { head, eventId };
       if (method === "readFreshHistoryRoot") return requestDigest ? receipt() : null;
       if (method === "stageFreshHistoryRoot") {
         requestDigest = sha256HexSyncText(canonicalJson(input));
@@ -93,6 +95,10 @@ describe("WorkspaceVcs protected publication notification", () => {
     await expect(vcs.initializeFreshHistory(source)).resolves.toBe(true);
     expect(prepareInitialization).toHaveBeenCalledOnce();
     expect(gate).toHaveBeenCalledOnce();
+
+    await expect(vcs.activateNativeWorkspace()).rejects.toThrow("no attached protected main");
+    await vcs.attachParticipantHistory({ ...source, nativeOnly: true });
+    await expect(vcs.activateNativeWorkspace()).resolves.toEqual(await vcs.ensureFresh());
   });
 
   it.each([false, true])("projects shared main only after the gated participant push is confirmed (template: %s)", async (template) => {
