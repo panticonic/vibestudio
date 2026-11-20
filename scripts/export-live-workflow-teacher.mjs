@@ -10,6 +10,15 @@ import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
 
 const sharedProgram = "skills/vibestudio-workflows/runWorkflow.nl";
 const templateGoalDomains = {
+  "provider-handoff": {
+    namespace: "vibestudio:retained-provider",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-provider-handoff-managed.ts" },
+    callable: "workOnProviderHandoffGoal",
+    skill: "providerHandoff",
+    checks: ["exactApprovalVisibility", "discoveredOwnedConversation", "exactRetainedProviderFrontier",
+      "exactProviderAttributionAndResult", "independentProviderOutput", "exactScopedHandoff",
+      "protectedOwnedProviderWorkspace", "rejectedUnownedEvidence"],
+  },
   "problem-report": {
     namespace: "vibestudio:problem-report",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-problem-report-managed.ts" },
@@ -1276,13 +1285,13 @@ export async function loadLiveTeacherCases(checkouts) {
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
-      openTerminalWorlds = [], openOwnedResearchWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
+      openTerminalWorlds = [], openOwnedResearchWorlds = [], providerHandoffWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
     for (const assignment of [...openGoalWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
       ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
       ...openGoalCalendarWorlds, ...openPersonalArtifactWorlds, ...openPersonalHistoryWorlds,
-      ...openTerminalWorlds, ...openOwnedResearchWorlds, ...openGoalEvalHandoffWorlds, ...openGoalProgramRunWorlds, ...openGoalAuthoringWorlds, ...openGoalGoogleHandoffWorlds, ...openPersonalAutomationWorlds, ...openGoalOwnedPreviewWorlds, ...openDiagnosticWorlds, ...openLocalDeliveryWorlds, ...openGoalPanelRecoveryWorlds, ...openBrowserMigrationWorlds]) {
+      ...openTerminalWorlds, ...openOwnedResearchWorlds, ...providerHandoffWorlds, ...openGoalEvalHandoffWorlds, ...openGoalProgramRunWorlds, ...openGoalAuthoringWorlds, ...openGoalGoogleHandoffWorlds, ...openPersonalAutomationWorlds, ...openGoalOwnedPreviewWorlds, ...openDiagnosticWorlds, ...openLocalDeliveryWorlds, ...openGoalPanelRecoveryWorlds, ...openBrowserMigrationWorlds]) {
       const split = assignment.split ?? "train";
       const sourceGroups = [assignment.sourceGroup, assignment.relatedSourceGroup].filter(Boolean);
       const scenario = `open-goal-${assignment.id}`;
@@ -6992,6 +7001,98 @@ function openPdfEffectsValid(effects, proof, report, expected) {
     });
 }
 
+function retainedProviderHandoffEvidence(exercise, world, proof, skill) {
+  const { plan, handoff, reviews } = exercise.report.outcome;
+  const { card, snapshots, listedCards, outputs, expectedTransition } = proof;
+  const [earlier, current] = snapshots;
+  const records = exercise.calls.map(({ record }) => record);
+  const observed = (lambda, service, method) => records.flatMap(record =>
+    record.definition?.name === lambda ? (record.effects ?? []).filter(effect =>
+      effect.service === service && effect.method === method && !effect.error) : []);
+  const listed = observed("discoverRetainedConversations", "retainedConversationIndex", "list");
+  const read = observed("readProviderConversation", "retainedConversationState", "read")
+    .filter(effect => matchesValue(effect.args, [card.channelId]));
+  const output = observed("readProviderOutput", "retainedProviderOutput", "read");
+  const stage = observed("stageProviderHandoff", "retainedProviderHandoff", "stage");
+
+  const reviewBound = (parentName, name, review) => {
+    const parents = records.filter(record => record.parent_call_id === skill.call_id &&
+      record.definition?.name === parentName && record.outcome === "done");
+    if (parents.length !== 1 || !matchesValue(parents[0].output, review)) return false;
+    const calls = records.filter(record => record.parent_call_id === parents[0].call_id &&
+      record.definition?.name === name && record.outcome === "done");
+    return calls.length === 1 && Object.keys(calls[0].inputs ?? {}).length === 1 &&
+      matchesValue(calls[0].inputs.request, review.request) && matchesValue(calls[0].output, review.result);
+  };
+  const approval = reviews?.approval;
+  const sources = card.viewer === "device-workspace" ? ["workspace", "hub"] :
+    card.viewer === "device-account" ? ["hub"] : ["workspace"];
+  const queueBound = (snapshot, receipts, result) => {
+    const latest = new Map(snapshot.rows.filter(row => row.record.kind === "queue" &&
+      sources.includes(row.record.receipt.source)).map(row => [row.record.receipt.source, row.record.receipt]));
+    if (!Array.isArray(receipts) || receipts.length !== latest.size ||
+        ![...latest.values()].every(receipt => receipts.some(item => isDeepStrictEqual(item, receipt)))) return false;
+    const surfaces = sources.map(source => {
+      const receipt = latest.get(source);
+      return {
+        source,
+        state: receipt?.kind === "snapshot" ? "visible" :
+          receipt?.kind === "unavailable" ? "unavailable" : "awaiting-snapshot",
+        ids: receipt?.kind === "snapshot" ? receipt.ids : [],
+      };
+    });
+    const visible = surfaces.filter(surface => surface.state === "visible").length;
+    const coverage = visible === surfaces.length ? "complete" : visible ? "partial" : "unknown";
+    const source = surfaces.find(surface => surface.ids.includes(card.request.id))?.source ?? null;
+    const location = { source, status: source ? "located" : coverage === "complete" ? "absent" : "unconfirmed" };
+    return isDeepStrictEqual(result, { coverage, surfaces, location });
+  };
+
+  const delivery = reviews?.delivery;
+  const exactRows = current.rows.filter(row => row.messageId === plan.resultMessage &&
+    row.record.kind === "result" && isDeepStrictEqual(row.record.request, card.request));
+  const exactResult = exactRows.length === 1 ? exactRows[0].record : null;
+  const replayMatches = exactResult?.state === "committed" && !!plan.output &&
+    outputs.some(item => item.message === plan.resultMessage && isDeepStrictEqual(item.result, plan.output) &&
+      item.result.digest === exactResult.digest);
+  const expectedDelivery = {
+    kind: "delivery", goal: world.goal, channelId: card.channelId,
+    channelAccepted: !!exactResult, originMatched: !!exactResult, durableCount: exactRows.length,
+    recipientsResolved: !!exactResult, membershipVerified: !!exactResult, replayMeaningMatches: replayMatches,
+    settlement: replayMatches ? "delivered" : exactResult?.state === "failed" ? "failed" : "pending", accountedRetry: false,
+  };
+  const blockers = [
+    ...(!exactResult ? ["accepted", "origin", "durable-count"] : []),
+    ...(!replayMatches ? ["replay"] : []),
+    ...(!exactResult ? ["membership", "addressing"] : []),
+    ...(!replayMatches ? ["settlement"] : []),
+    ...(expectedDelivery.settlement === "failed" ? ["outbox"] : []),
+  ];
+
+  requireEvidence(
+    listed.length === 1 && matchesValue(listed[0].args, []) && matchesValue(listed[0].result, listedCards) &&
+      Array.isArray(listedCards) && listedCards.filter(item => isDeepStrictEqual(item, card)).length === 1 &&
+      snapshots.length === 2 && read.length === 2 && snapshots.every((snapshot, index) => matchesValue(read[index].result, snapshot)) &&
+      plan.channelId === card.channelId && plan.requestId === card.request.id && plan.through === current.through &&
+      approval?.request?.goal === world.goal && approval.request.approvalId === card.request.id &&
+      approval.request.caller === card.viewer && approval.result?.transition === expectedTransition &&
+      queueBound(earlier, approval.request.earlier, approval.result.earlier) &&
+      queueBound(current, approval.request.later, approval.result.later) &&
+      reviewBound("reviewRetainedApproval", "reviewApprovalTransition", approval) &&
+      isDeepStrictEqual(delivery?.request, expectedDelivery) &&
+      isDeepStrictEqual(delivery.result, { kind: "delivery", basis: card.channelId, blockers, ready: blockers.length === 0 }) &&
+      reviewBound("reviewRetainedDelivery", "reviewConversation", delivery) &&
+      (plan.disposition !== "ready" || delivery.result.ready) &&
+      output.length === outputs.length && outputs.every((item, index) =>
+        matchesValue(output[index].args, [card.channelId, item.message]) && matchesValue(output[index].result, item.result)) &&
+      stage.length === Number(world.expected.stage) &&
+      (stage.length ? matchesValue(stage[0].args, [plan]) && matchesValue(stage[0].result, handoff) &&
+        isDeepStrictEqual(handoff, proof.handoff) && typeof proof.artifact === "string" &&
+        hash(proof.artifact) === handoff?.sha256 : handoff === null && proof.handoff === null),
+    "Expected exact retained native conversation snapshots, caller-scoped approval review, original result readback and authorized scratch"
+  );
+}
+
 export function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
   const proof = execution.diagnostics.openGoalVerification;
   const world = workflow.assignment;
@@ -7014,7 +7115,9 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
     "Expected a verified live goal and its actual installed Natlang skill call"
   );
   const evidence = { workspace: { proof } };
-  if (world.kind === "terminal-handoff") {
+  if (world.kind === "provider-handoff") {
+    retainedProviderHandoffEvidence(exercise, world, proof, skill);
+  } else if (world.kind === "terminal-handoff") {
     const outcome = exercise.report.outcome;
     const performedBy = (lambda, service, method) => exercise.calls.flatMap(({ record }) =>
       record.definition?.name === lambda ? (record.effects ?? []).filter(effect =>
