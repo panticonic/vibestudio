@@ -1,4 +1,3 @@
-import { rpcFailureSchema } from "./rpcFailure.js";
 import type {
   EnvelopeId,
   EventId,

@@ -10,8 +10,6 @@ import {
   ensureLayout,
   mirrorWorktreeTree,
   putBytes,
-  readFileAtTree,
-  getBytes,
 } from "../services/blobstoreService.js";
 import { createProtectedRefStore } from "../services/protectedRefStore.js";
 import { createWorkspaceSemanticPort } from "../workspaceSourceProvider.js";

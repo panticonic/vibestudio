@@ -140,7 +140,6 @@ import {
 import {
   parseWorkspaceSystemEpochEnvelope,
   parseWorkspaceAppCompatibilityEnvelope,
-  readWorkspaceConfig,
   WORKSPACE_CONFIG_PATH,
 } from "@vibestudio/workspace/configParser";
 import { WorkspaceCreationDescriptorSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
@@ -7716,7 +7715,7 @@ async function main() {
     },
     getGatewayPort: () => gatewayPortResolved,
     eventService,
-    ensureContextScratch: (contextId) => contextFolderManager.ensureContextScratch(contextId),
+    ensureContextScratch: (contextId: string) => contextFolderManager.ensureContextScratch(contextId),
     resolveCallerContext: (callerId: string) => getEntityStore().resolveContext(callerId),
     approvalQueue,
     registerSlotStateListener: (listener: (change?: SlotStateChange) => void) => {

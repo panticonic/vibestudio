@@ -33,7 +33,7 @@ import type {
   VcsReadMemoryInput,
   VcsReadMemoryResult,
   VcsSearchInput,
-  VcsSearchHit,
+  VcsSearchResult,
   VcsStateNodeRef,
   VcsWalkInput,
   VcsWalkResult,
@@ -1176,7 +1176,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   async searchParticipantHistory(input: WorkspaceHistoryParticipant & {
     search: VcsSearchInput;
     signal?: AbortSignal;
-  }): Promise<VcsSearchHit[]> {
+  }): Promise<VcsSearchResult> {
     requireWorkspaceParticipantOwner(input);
     const { search, dispatch, owner, signal } = input;
     const protectedEventId = this.deps.refs.readMainSemanticState()?.eventId;

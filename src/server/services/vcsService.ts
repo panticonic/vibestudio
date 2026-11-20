@@ -58,6 +58,7 @@ export interface VcsServiceDeps {
     | "whenSemanticReady"
     | "participantHistoryAttached"
     | "readParticipantMain"
+    | "readTrajectoryProvenance"
     | "openParticipantScope"
     | "editParticipantContext"
     | "transferParticipantContext"
