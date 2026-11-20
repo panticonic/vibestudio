@@ -992,6 +992,29 @@ export async function loadLiveTeacherCases(checkouts) {
     })
   );
   const cases = new Map(originalCases);
+  const openGoalFile = path.join(directory, "open-goal-worlds.ts");
+  const openGoalSource = await readFile(openGoalFile).catch((error) => {
+    if (error.code !== "ENOENT") throw error;
+    return null;
+  });
+  if (openGoalSource) {
+    const imported = await import(pathToFileURL(openGoalFile).href);
+    for (const assignment of (imported.default ?? imported).openGoalWorlds) {
+      cases.set(`open-goal-${assignment.id}`, {
+        family: `workspace-open-user-goal-${assignment.kind}`,
+        workspace: "examples",
+        namespace: assignment.kind === "research" ? "vibestudio:web-research" : "vibestudio:workspace-edit",
+        group: assignment.sourceGroup,
+        sourceGroups: [assignment.sourceGroup, assignment.relatedSourceGroup].filter(Boolean),
+        interaction: "open-user-goal",
+        program: "skills/open-user-goal/runUserGoal.nl",
+        root: "runUserGoal",
+        validator: { template: "system-testing", path: "skills/system-testing/open-goal-managed.ts" },
+        assignment,
+        evidence: openGoalEvidence,
+      });
+    }
+  }
   for (const assignment of managedGitHubDiagnosisWorlds) {
     cases.set(`github-diagnosis-live-${assignment.id}`, {
       family: "personal-live-github-diagnosis",
@@ -6616,6 +6639,54 @@ function researchHandoffEvidence(execution, exercise, scenario, workflow) {
   return { world: { context_id: contextId, case_id: caseId }, checks, evidence: { workspace: { fixture } } };
 }
 
+function openGoalEvidence(execution, exercise, _scenario, workflow) {
+  const proof = execution.diagnostics.openGoalVerification;
+  const { id, goal, kind } = workflow.assignment;
+  const root = exercise.calls.find(({ callId }) => callId === exercise.rootCallIds[0])?.record;
+  const effects = exercise.calls.flatMap(({ record }) => record.effects ?? []);
+  const researchChecks = ["discoveredSources", "exactPageReadback", "answeredGoal", "groundedCitations", "requiredEvidence"];
+  const editChecks = ["discoveredWorkspace", "recoveredConcurrentEdit", "exactDocumentReadback", "preservedOtherDocuments", "reportedStoredRevision"];
+  const checks = [
+    ...(kind === "workspace-edit" ? [] : researchChecks),
+    ...(kind === "research" ? [] : editChecks),
+  ];
+  const methods = [
+    ...(kind === "workspace-edit" ? [] : [["goalDiscovery", "search"], ["web", "fetch"]]),
+    ...(kind === "research" ? [] : [["goalWorkspace", "list"], ["goalWorkspace", "read"], ["goalWorkspace", "revise"]]),
+  ];
+  requireEvidence(
+    proof?.passed === true &&
+      proof.caseId === id &&
+      typeof proof.contextId === "string" &&
+      proof.contextId === execution.provenance?.contextId &&
+      proof.goal === goal &&
+      checks.every((check) => proof.checks?.[check] === true) &&
+      Object.keys(root?.inputs ?? {}).length === 1 &&
+      matchesValue(root.inputs.goal, goal) &&
+      methods.every(([service, method]) =>
+        effects.some((effect) => effect.service === service && effect.method === method && !effect.error)),
+    "Expected the original user goal, model-led discovery, and independently checked outcomes"
+  );
+  if (kind === "research-and-edit") {
+    const children = exercise.calls.map(({ record }) => record)
+      .filter(({ parent_call_id }) => parent_call_id === root.call_id);
+    const research = children.find((record) => record.definition.name === "investigatePublicQuestion");
+    const edit = children.find((record) => record.definition.name === "reviseWorkspaceDocument");
+    const evidence = exercise.report?.research;
+    requireEvidence(
+      matchesValue(research?.output, evidence) &&
+        matchesValue(edit?.inputs?.research, evidence) &&
+        Date.parse(research.ended_at) <= Date.parse(edit.started_at),
+      "Expected verified research to determine the later workspace revision"
+    );
+  }
+  return {
+    world: { context_id: proof.contextId },
+    checks: Object.fromEntries(checks.map((check) => [check, true])),
+    evidence: { workspace: { proof } },
+  };
+}
+
 function webBriefEvidence(execution, exercise, _scenario, workflow) {
   const fixture = execution.diagnostics.managedWebBrief;
   const { caseId, contextId, request, reads, tails, cache, checks } = fixture ?? {};
@@ -10678,6 +10749,9 @@ export async function exportLiveTeacherWorkflow({
     "Workspace baseline differs from the authored instance pin"
   );
   const observed = workflow.evidence(execution, exercise, test.name, workflow);
+  const interaction = workflow.interaction === "open-user-goal"
+    ? { interaction: { kind: workflow.interaction, goal: workflow.assignment.goal, program: workflow.program } }
+    : {};
   const world = {
     instance: source.instance,
     run_id: source.run_id,
@@ -10730,6 +10804,7 @@ export async function exportLiveTeacherWorkflow({
     world,
     status: "passed",
     checks: observed.checks,
+    ...interaction,
     validator: validatorFile,
     root_call_ids: [rootId],
     calls: captured.map(({ callId, summary }) => ({
@@ -10751,6 +10826,7 @@ export async function exportLiveTeacherWorkflow({
     source_revisions: sourceRevisions,
     code,
     learner_kinds: ["natlang-executor"],
+    ...interaction,
     world,
     required_effect_kinds: evidence.map(({ kind }) => kind),
     calls,

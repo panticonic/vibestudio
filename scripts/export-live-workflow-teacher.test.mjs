@@ -943,6 +943,48 @@ test("live panel export rejects a child from a different evaluation", async (t) 
   await assert.rejects(() => exportLiveTeacherWorkflow(options), /different EvalDO/);
 });
 
+test("open goal export attests the goal-only invocation and rejects a hidden assignment", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  entry.test.name = "open-goal-reconcile-workshop-update";
+  const workflow = cases.get(entry.test.name);
+  const { id, goal } = workflow.assignment;
+  const pins = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(options.pins, JSON.stringify({ ...pins, workspace: workflow.workspace }));
+  const run = diagnostics.natlangTeacher;
+  run.programPath = workflow.program;
+  const [root, child] = run.calls;
+  const encoded = JSON.stringify(goal);
+  root.record.definition.name = "runUserGoal";
+  root.record.inputs = {
+    goal: { complete: true, bytes: Buffer.byteLength(encoded), hash: createHash("sha256").update(encoded).digest("hex") },
+  };
+  child.record.definition.name = "reviseWorkspaceDocument";
+  child.record.effects = ["list", "read", "revise"].map((method) => ({ service: "goalWorkspace", method }));
+  diagnostics.openGoalVerification = {
+    passed: true, caseId: id, contextId: "ctx", goal,
+    checks: {
+      discoveredWorkspace: true, recoveredConcurrentEdit: true, exactDocumentReadback: true,
+      preservedOtherDocuments: true, reportedStoredRevision: true,
+    },
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  const manifest = JSON.parse(await readFile(path.join(options.out, "manifest.json"), "utf8"));
+  const verification = JSON.parse(await readFile(path.join(options.out, "verification.json"), "utf8"));
+  assert.deepEqual(manifest.interaction, { kind: "open-user-goal", goal, program: workflow.program });
+  assert.deepEqual(verification.interaction, manifest.interaction);
+  root.record.inputs.work = {};
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: path.join(path.dirname(options.out), "rejected") }),
+    /original user goal/u
+  );
+});
+
 test("panel health export rejects an old console record cited after recovery", async (t) => {
   const { options, diagnostics, entry, save } = await fixture(t);
   const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(

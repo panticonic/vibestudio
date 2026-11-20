@@ -357,9 +357,11 @@ async function loadAuthoredWorkflowBank(checkouts) {
         family: workflow.family,
         execution: "managed-workspace",
         workspace: workflow.workspace ?? "system",
-        operations: workflow.assignedSkills ?? workflow.skills ?? [workflow.root],
+        ...(workflow.interaction === "open-user-goal"
+          ? { interaction: workflow.interaction, goal: workflow.assignment.goal }
+          : { operations: workflow.assignedSkills ?? workflow.skills ?? [workflow.root] }),
         sourceGroups: workflowSourceGroups(workflow),
-        program,
+        program: workflow.interaction === "open-user-goal" ? workflow.program : program,
       },
     })),
     ...fixtureGroups.flat(),
@@ -419,8 +421,9 @@ if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === imp
     const managedWorkspace = cases.filter(
       ({ execution }) => execution === "managed-workspace"
     ).length;
+    const openUserGoals = cases.filter(({ interaction }) => interaction === "open-user-goal").length;
     console.log(
-      JSON.stringify({ total: cases.length, managedWorkspace, scopedRunnable, counts }, null, 2)
+      JSON.stringify({ total: cases.length, managedWorkspace, scopedRunnable, openUserGoals, counts }, null, 2)
     );
   } else {
     for (const scenario of cases) console.log(JSON.stringify(scenario));

@@ -26,6 +26,7 @@ const { values } = parseArgs({
     "review-model": { type: "string" },
     out: { type: "string" },
     model: { type: "string", default: "openai-codex:gpt-6-luna" },
+    "open-goals": { type: "boolean" },
   },
 });
 const list = values.list && !values.preflight && values.case === undefined && values.out === undefined;
@@ -37,13 +38,18 @@ if (
   (!list && !preflight && (values.list || values.preflight || !values.out || !requested.length))
 ) {
   throw new Error(
-    "Usage: pnpm natlang:teacher --list | --preflight [--case WORKFLOW_CASE ...] | --case WORKFLOW_CASE [--case WORKFLOW_CASE ...] --out NEW_DIR [--model PROVIDER:MODEL]"
+    "Usage: pnpm natlang:teacher --list | --preflight [--case WORKFLOW_CASE ...] | --case WORKFLOW_CASE [--case WORKFLOW_CASE ...] --out NEW_DIR [--model PROVIDER:MODEL] [--open-goals]"
   );
 }
 
 const host = fileURLToPath(new URL("../", import.meta.url));
 const { checkouts } = requireDevelopmentTemplateCheckouts(host);
 const liveTeacherCases = await loadLiveTeacherCases(checkouts);
+if (values["open-goals"]) {
+  for (const [scenario, workflow] of liveTeacherCases)
+    if (workflow.interaction !== "open-user-goal") liveTeacherCases.delete(scenario);
+  if (!liveTeacherCases.size) throw new Error("No open user goals are installed in these checkouts");
+}
 if (list) {
   for (const [scenario, workflow] of liveTeacherCases)
     console.log(
@@ -53,6 +59,7 @@ if (list) {
         sourceGroup: workflow.group,
         workspace: workflow.workspace ?? "system",
         sourceGroups: workflowSourceGroups(workflow),
+        ...(workflow.interaction ? { interaction: workflow.interaction } : {}),
         requiresReview: Boolean(workflow.requiresReview),
         ...(workflow.workspaceBaseline ? { workspaceBaseline: workflow.workspaceBaseline } : {}),
         ...(workflow.devices ? { devices: workflow.devices } : {}),

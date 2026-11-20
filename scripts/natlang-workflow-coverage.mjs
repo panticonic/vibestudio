@@ -280,6 +280,7 @@ export async function inspectWorkflowCoverage(checkouts, cases, sources) {
     const scoped = scenario.execution === "scoped-fixture";
     const workspace = scoped ? null : scenario.workspace;
     const installed = workspaceSources.get(workspace);
+    if (scenario.interaction === "open-user-goal") continue;
     const requested = scoped
       ? (scenario.request?.work ?? []).map((work) =>
           work.kind === "domain" ? work.domain + "/" + work.operation : work.kind
