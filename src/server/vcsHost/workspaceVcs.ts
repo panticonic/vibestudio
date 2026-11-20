@@ -127,9 +127,11 @@ import type { ServiceContext, VerifiedCaller } from "@vibestudio/shared/serviceD
 import type { RpcCausalParent } from "@vibestudio/rpc";
 import {
   GadJsonRecordSchema,
+  gadWireMethods,
   HISTORY_QUERY_CAUSE_LIMIT,
   HISTORY_SEARCH_CAUSE_LIMIT,
   HistoryQueryBasisSchema,
+  HistoryRecallBasisSchema,
   type HistoryQueryTrajectory,
   HistorySearchBasisSchema,
   HistorySearchCausePageSchema,
@@ -1229,6 +1231,50 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     return { kind: "event" as const, eventId: main.eventId };
   }
 
+  async participantRecallCauses(
+    caller: VerifiedCaller, args: readonly unknown[], signal?: AbortSignal,
+  ): Promise<HistorySearchCause[]> {
+    const [{ kinds }] = gadWireMethods.recallMemory.args.parse(args);
+    const contextId = caller.agentBinding?.contextId;
+    if (!contextId || (kinds?.length && !kinds.includes("message"))) return [];
+    const { dispatch, owner } = await this.requireParticipantContentScope(contextId, caller, signal);
+    const protectedEventId = this.deps.refs.readMainSemanticState()?.eventId;
+    if (!protectedEventId) throw new Error("Workspace recall needs a protected main event");
+    const revisions = HistoryRecallBasisSchema.parse(
+      await dispatch.dispatch(owner, "readHistoryRecallBasis", { contextId, protectedEventId }),
+    );
+    const causes = new Map<string, HistorySearchCause>();
+    for await (const page of this.participantHistoryCausePages({ dispatch, owner }, revisions, signal)) {
+      for (const cause of page) causes.set(canonicalJson(cause), cause);
+    }
+    signal?.throwIfAborted();
+    return [...causes.values()];
+  }
+
+  private async *participantHistoryCausePages(
+    { dispatch, owner }: Pick<WorkspaceHistoryParticipant, "dispatch" | "owner">,
+    revisions: readonly string[],
+    signal?: AbortSignal,
+  ) {
+    for (const revision of new Set(revisions)) {
+      let after: HistorySearchCause | null = null;
+      for (;;) {
+        signal?.throwIfAborted();
+        const page = HistorySearchCausePageSchema.parse(
+          await dispatch.dispatch(owner, "readHistorySearchCauses", { revision, after }),
+        );
+        signal?.throwIfAborted();
+        if (page.length === 0) break;
+        const next = page.at(-1)!;
+        if (canonicalJson(after) === canonicalJson(next))
+          throw new Error("Workspace history causal page did not advance");
+        yield page;
+        if (page.length < HISTORY_SEARCH_CAUSE_LIMIT) break;
+        after = next;
+      }
+    }
+  }
+
   async queryParticipantHistory(input: WorkspaceHistoryParticipant & {
     query: VcsQueryInput;
     signal?: AbortSignal;
@@ -1243,25 +1289,13 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     let trajectory: HistoryQueryTrajectory = { invocations: [], turns: [], messages: [], truncated: false };
     if (basis.needsTrajectory) {
       const causes = new Map<string, HistorySearchCause>();
-      revisions: for (const revision of new Set(basis.revisions)) {
-        let after: HistorySearchCause | null = null;
-        for (;;) {
-          signal?.throwIfAborted();
-          const page = HistorySearchCausePageSchema.parse(
-            await dispatch.dispatch(owner, "readHistorySearchCauses", { revision, after }),
-          );
-          for (const cause of page) {
-            causes.set(canonicalJson(cause), cause);
-            if (causes.size > HISTORY_QUERY_CAUSE_LIMIT) {
-              trajectory.truncated = true;
-              break revisions;
-            }
+      pages: for await (const page of this.participantHistoryCausePages({ dispatch, owner }, basis.revisions, signal)) {
+        for (const cause of page) {
+          causes.set(canonicalJson(cause), cause);
+          if (causes.size > HISTORY_QUERY_CAUSE_LIMIT) {
+            trajectory.truncated = true;
+            break pages;
           }
-          if (page.length < HISTORY_SEARCH_CAUSE_LIMIT) break;
-          const next = page.at(-1)!;
-          if (canonicalJson(after) === canonicalJson(next))
-            throw new Error("Workspace query causal page did not advance");
-          after = next;
         }
       }
       if (causes.size && !trajectory.truncated)
@@ -1381,30 +1415,17 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       // The history owner captured these exact revisions under its read
       // boundary. The separate trajectory mirror receives only bounded
       // pages of the recorded invocation coordinates from those revisions.
-      revisions: for (const revision of new Set(basis.revisions)) {
-        let after: HistorySearchCause | null = null;
-        for (;;) {
-          signal?.throwIfAborted();
-          const causes = HistorySearchCausePageSchema.parse(
-            await dispatch.dispatch(owner, "readHistorySearchCauses", { revision, after }),
-          );
-          if (causes.length === 0) break;
-          const found = await this.gad().searchHistoryTrajectory({
-            text: search.text, limit: search.limit, causes,
-          });
-          if (found.length > search.limit + 1 ||
-              found.some((hit) => hit.subjectKind !== "trajectory-message" || hit.node.kind !== "trajectory-message")) {
-            throw new Error("Workspace trajectory mirror returned different search subjects");
-          }
-          for (const hit of found) {
-            hits.set(canonicalJson(hit.node), hit);
-            if (hits.size > search.limit) break revisions;
-          }
-          if (causes.length < HISTORY_SEARCH_CAUSE_LIMIT) break;
-          const next = causes.at(-1)!;
-          if (canonicalJson(after) === canonicalJson(next))
-            throw new Error("Workspace search causal page did not advance");
-          after = next;
+      pages: for await (const causes of this.participantHistoryCausePages({ dispatch, owner }, basis.revisions, signal)) {
+        const found = await this.gad().searchHistoryTrajectory({
+          text: search.text, limit: search.limit, causes,
+        });
+        if (found.length > search.limit + 1 ||
+            found.some((hit) => hit.subjectKind !== "trajectory-message" || hit.node.kind !== "trajectory-message")) {
+          throw new Error("Workspace trajectory mirror returned different search subjects");
+        }
+        for (const hit of found) {
+          hits.set(canonicalJson(hit.node), hit);
+          if (hits.size > search.limit) break pages;
         }
       }
     }

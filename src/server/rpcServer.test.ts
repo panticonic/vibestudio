@@ -3988,6 +3988,52 @@ describe("RpcServer relay behavior", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
+  it("attests native recall causes after workspace service admission", async () => {
+    const causes = [["log:reader", "main", "invocation:reader"]] as [string, string, string][];
+    const workspaceRecallCauses = vi.fn(async () => causes);
+    const { server, entityCache } = createServer({
+      workspaceRecallCauses,
+      resolveWorkspaceDirectAuthority: async () => [
+        {
+          capability: "workspace-service:gad.workspace",
+          serviceBinding: "declared",
+          methodEffect: { kind: "open" },
+          methodTier: "open",
+          principals: ["code"],
+          presentation: { domain: "automation", verb: "manage" },
+          title: "Workspace data",
+          action: "read workspace memory",
+          declaredBy: "workers/workspace-source",
+        },
+      ],
+    });
+    const ref = { source: "workers/workspace-source", className: "GadWorkspaceDO", objectKey: "workspace" };
+    const args = [{ query: "remember" }];
+    const caller = createVerifiedCaller("do:workers/history-reader:Reader:reader", "do", {
+      callerId: "do:workers/history-reader:Reader:reader",
+      callerKind: "do",
+      repoPath: "workers/history-reader",
+      effectiveVersion: "ev-reader",
+      executionDigest: "a".repeat(64),
+      requested: [{ capability: "workspace-service:gad.workspace", resource: { kind: "prefix", prefix: "" } }],
+    }, {
+      entityId: "entity:reader", contextId: "context:reader", channelId: "channel:reader",
+    });
+    entityCache._onActivate(makeRecord(caller.runtime.id, "do", {
+      repoPath: "workers/history-reader",
+      effectiveVersion: "ev-reader",
+    }));
+    const authorize = (method: string) =>
+      testServer(server).directDOAuthorization({ caller, ref, method, args });
+    await expect(authorize("otherRead")).resolves.toMatchObject({
+      context: expect.not.objectContaining({ workspaceRecallCauses: expect.anything() }),
+    });
+    await expect(authorize("recallMemory")).resolves.toMatchObject({
+      context: { workspaceRecallCauses: causes },
+    });
+    expect(workspaceRecallCauses).toHaveBeenCalledExactlyOnceWith(ref, caller, args, undefined);
+  });
+
   it("treats a declared-for workspace-service binding as wiring only for named units", async () => {
     const request = vi.fn(() => ({
       acquisitionId: "acq:flowboard-store",

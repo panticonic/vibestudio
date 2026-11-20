@@ -52,6 +52,10 @@ export type HistorySearchCause = z.infer<typeof historySearchCause>;
 export const HistorySearchCauseRequestSchema = z.object({
   revision: historySearchRevision, after: historySearchCause.nullable(),
 }).strict();
+export const HistoryRecallBasisRequestSchema = z.object({
+  contextId: z.string().min(1), protectedEventId: z.string().min(1),
+}).strict();
+export const HistoryRecallBasisSchema = z.array(historySearchRevision).min(1).max(2);
 export const HistorySearchBasisSchema = z.object({
   revisions: z.array(historySearchRevision).min(1).max(514),
   hits: z.array(vcsSearchHitSchema).max(50),

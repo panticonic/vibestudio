@@ -194,6 +194,46 @@ afterEach(async () => {
 });
 
 describe("WorkspaceVcs semantic host orchestration", () => {
+  it("admits recall causes only from the bound participant and protected workspace revisions", async () => {
+    const { vcs, refs } = await harness();
+    const eventId = "published-event";
+    const contextId = "context:reader";
+    const owner = { ...TEST_PROVIDER, objectKey: "reader" };
+    const canonical = { ...TEST_PROVIDER, objectKey: "canonical" };
+    const caller = {
+      ...createVerifiedCaller("agent:reader", "server"),
+      agentBinding: { contextId, channelId: "channel:reader", entityId: "agent:reader" },
+    } satisfies Parameters<WorkspaceVcs["participantRecallCauses"]>[0];
+    const privateCause = ["private-log", "main", "private-invocation"];
+    const sharedCause = ["shared-log", "main", "shared-invocation"];
+    const dispatch = vi.fn(async (_target: typeof owner, method: string, input: unknown) => {
+      if (method === "readHistoryRecallBasis") return ["private-revision", "protected-revision"];
+      if (method === "readHistorySearchCauses") {
+        return (input as { revision: string }).revision === "private-revision"
+          ? [privateCause, sharedCause] : [sharedCause];
+      }
+      throw new Error(`Unexpected history call ${method}`);
+    });
+    const scope = vi.spyOn(vcs, "openParticipantScope").mockResolvedValue({
+      dispatch: { dispatch }, canonical, owner, caller, contextId, ownerContextId: contextId,
+      workingHead: "private-revision",
+    });
+    vi.spyOn(refs, "readMainSemanticState").mockReturnValue({ kind: "event", eventId });
+    await expect(vcs.participantRecallCauses(caller, [{ query: "Northstar" }]))
+      .resolves.toEqual([privateCause, sharedCause]);
+    expect(scope).toHaveBeenCalledExactlyOnceWith({ caller, contextId, ownerContextId: contextId });
+    expect(dispatch.mock.calls).toEqual([
+      [owner, "readHistoryRecallBasis", { contextId, protectedEventId: eventId }],
+      [owner, "readHistorySearchCauses", { revision: "private-revision", after: null }],
+      [owner, "readHistorySearchCauses", { revision: "protected-revision", after: null }],
+    ]);
+    await expect(vcs.participantRecallCauses(caller, [{ query: "Northstar", kinds: ["commit"] }]))
+      .resolves.toEqual([]);
+    await expect(vcs.participantRecallCauses(createVerifiedCaller("panel:reader", "panel"), [{ query: "Northstar" }]))
+      .resolves.toEqual([]);
+    expect(scope).toHaveBeenCalledTimes(1);
+  });
+
   it("rebuilds commit recall from the exact protected event when native history attaches", async () => {
     const { vcs, refs } = await harness();
     const eventId = "native-main";

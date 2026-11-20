@@ -5659,6 +5659,13 @@ async function main() {
         ensureUserlandDoReady: async (ref) => {
           await durableObjectExecutionReadiness.ensureReady(ref);
         },
+        workspaceRecallCauses: async (ref, caller, args, signal) => {
+          if (!workspaceVcs.participantHistoryAttached
+              || ref.source !== semanticWorkspaceService.source
+              || ref.className !== semanticWorkspaceService.className
+              || ref.objectKey !== semanticWorkspaceService.objectKey) return undefined;
+          return workspaceVcs.participantRecallCauses(caller, args, signal);
+        },
         executionSessionForRuntime: (runtimeId, nonce) =>
           agentExecutionSessions.resolveInvocation(runtimeId, nonce),
         executionSessionForDispatch: (controllerRuntimeId, executorRuntimeId, method, nonce) =>

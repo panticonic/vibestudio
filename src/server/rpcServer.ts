@@ -682,6 +682,12 @@ export class RpcServer {
       websiteDocuments?: Pick<import("./services/websiteDocuments.js").WebsiteDocuments, "fact">;
       /** Exact active-row readiness barrier required before direct DO relay. */
       ensureUserlandDoReady: (ref: DORef) => Promise<void>;
+      workspaceRecallCauses?: (
+        ref: DORef,
+        caller: VerifiedCaller,
+        args: readonly unknown[],
+        signal?: AbortSignal,
+      ) => Promise<DirectAuthorityAttestation["context"]["workspaceRecallCauses"]>;
       /** Live host-created admission for one concrete evaluated run. */
       executionSessionForRuntime?: (
         runtimeId: string,
@@ -4900,6 +4906,12 @@ export class RpcServer {
       if (!decision.consumable && decision.grantId) {
         this.deps.directAuthorityAcquirer?.touch?.(decision.grantId);
       }
+    }
+    if (input.method === "recallMemory" && result.context.authorizingOrigin.kind !== "host") {
+      const causes = await this.deps.workspaceRecallCauses?.(
+        input.ref, input.caller, input.args, input.signal,
+      );
+      if (causes) result.context = { ...result.context, workspaceRecallCauses: causes };
     }
     return result;
   }

@@ -355,6 +355,8 @@ export interface AuthorizationContext {
   initiatorChain: readonly string[];
   ownerChain: readonly `user:${string}`[];
   agentBinding: { entity: EntityPrincipal; contextId: string; channelId: string } | null;
+  /** Exact invocation coordinates admitted for this workspace memory recall. */
+  workspaceRecallCauses?: readonly (readonly [logId: string, head: string, invocationId: string])[];
   executionSession: ExecutionAdmissionFact | null;
   /**
    * Host-attested unattended-test policy for the live execution context.
