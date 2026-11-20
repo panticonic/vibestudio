@@ -292,6 +292,8 @@ export interface WorkspaceVcsDeps {
   workspaceId: string;
   buildSourcesRoot: string;
   refs: ProtectedRefStore;
+  /** A verified seed origin was loaded before graph discovery starts. */
+  seededWorkspace?: boolean;
   /** Exact acquired content used until the first protected semantic publication. */
   initialContentState?: string;
   /** Exact source contexts attested by the admitted runtime creation record. */
@@ -463,7 +465,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   private gadCaller: WorkspaceSemanticPort | null = null;
   private sourceProviderCaller: WorkspaceSourceProviderV1 | null = null;
-  private seededWorkspace = false;
+  private seededWorkspace: boolean;
   private readonly outgoingHistoryPackets = new Map<string, {
     senderId: string;
     send(bytes: Uint8Array): Promise<Uint8Array>;
@@ -504,6 +506,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   private ensureFreshInFlight: Promise<{ stateHash: string }> | null = null;
 
   constructor(private readonly deps: WorkspaceVcsDeps) {
+    this.seededWorkspace = deps.seededWorkspace ?? false;
     this.contentProjection = new ContentProjectionStore({ blobsDir: deps.blobsDir });
     this.projector = new DiskProjector({
       contentProjection: this.contentProjection,

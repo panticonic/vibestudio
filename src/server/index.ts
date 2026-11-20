@@ -1856,6 +1856,7 @@ async function main() {
     contextProjectionsRoot: layout.contextProjections.current,
     buildSourcesRoot: layout.buildSourcesDir,
     refs: protectedRefStore,
+    seededWorkspace: sharedHistorySeed !== null,
     rootTemplateBootstrap,
     initialContentState: bootstrapStateHash,
     runtimeForkSources: async (caller, contextId) => {

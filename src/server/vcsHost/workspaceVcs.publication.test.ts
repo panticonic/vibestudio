@@ -297,14 +297,15 @@ describe("WorkspaceVcs protected publication notification", () => {
     ensureLayout(blobsDir);
     const gate = vi.fn(async () => undefined);
     const refs = createProtectedRefStore({ statePath: path.join(root, "refs"), gate });
-    const vcs = new WorkspaceVcs({
+    const dependencies = {
       workspaceId: "workspace:test",
       blobsDir,
       workspaceRoot: path.join(root, "source"),
       contextProjectionsRoot: path.join(root, "contexts"),
       buildSourcesRoot: path.join(root, "build-sources"),
       refs,
-    });
+    };
+    const vcs = new WorkspaceVcs(dependencies);
     const canonical = {
       source: "workers/workspace-source", className: "GadHistoryDO", objectKey: "canonical",
     };
@@ -358,7 +359,8 @@ describe("WorkspaceVcs protected publication notification", () => {
     await expect(vcs.whenSemanticReady()).resolves.toBeUndefined();
     expect(refs.readMainSemanticState()?.eventId).toBe(seed.eventId);
     const { stateHash } = await vcs.ensureFresh();
-    const graph = await vcs.discoverGraph(stateHash);
+    const reopened = new WorkspaceVcs({ ...dependencies, seededWorkspace: true });
+    const graph = await reopened.discoverGraph(stateHash);
     const node = graph.allNodes().find((unit) => unit.relativePath === "packages/a");
     expect(node).toBeDefined();
     await expect(fsp.readFile(path.join(node!.path, "package.json"), "utf8")).resolves.toBe(body);
