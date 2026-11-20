@@ -89,6 +89,12 @@ and retires each instance. Pass `--case CASE` to check a subset. It makes no
 model calls and writes no trajectory data. The collector applies the same
 installed-case check before starting a selected task.
 
+Qualification is a model-free system test. A reference sequence drives the
+assigned services in a disposable VibeStudio workspace, and the independent
+oracle checks the resulting state and required blocked actions. A teacher
+run separately checks whether the model can drive the Natlang call tree to
+that outcome. Qualification produces no teacher trajectories.
+
 The catalog includes browser-driven panel repair, workspace VCS integration, worker diagnosis and repair,
 grounded document projects, and stateful incident and release handoffs. Worker worlds cover behavior such
 as routing precedence, event ordering and queue admission. Content worlds include access offboarding,
@@ -628,6 +634,11 @@ handoff in one Examples context. The scratch sources are materialized only once
 the upstream reads establish the release and scope findings. The artifact must
 quote the exact source lines. Run `release-review-handoff-oracle-qualification`
 for model-free verification of the dependency gates and persisted artifact.
+The Git Bridge migration case checks the published runtime, groups the two
+authorized guide paths by origin, and carries the held incident-console link
+into the handoff. Qualification also checks that partial extension and
+authority reads cannot expose scratch sources and that reading just one source
+cannot stage an artifact.
 
 Extension review cases reconcile the working and protected-main repository
 trees and manifests with the real host status and exposed methods. Two cases
