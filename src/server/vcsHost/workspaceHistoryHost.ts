@@ -36,7 +36,7 @@ import {
   type VcsTrajectorySenderRef,
   type VcsWorkingMutationResult,
 } from "@vibestudio/service-schemas/vcs";
-import { GadJsonRecordSchema, semanticFileHostReadSchema } from "@vibestudio/service-schemas/workspaceSource";
+import { GadJsonRecordSchema, HistoryCommitMemoryMarkerSchema, semanticFileHostReadSchema } from "@vibestudio/service-schemas/workspaceSource";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import { canonicalEntityId } from "@vibestudio/shared/runtime/entitySpec";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
@@ -383,10 +383,6 @@ const historyCommitMemoryPageSchema = z.object({
   documents: historyCommitMemorySchema.array().max(16),
   nextAfter: z.string().min(1).nullable(),
 }).strict();
-const historyCommitMemoryMarkerSchema = z.object({
-  completedEventId: z.string().min(1).nullable(),
-  pending: z.object({ eventId: z.string().min(1), after: z.string().min(1) }).strict().nullable(),
-}).strict();
 
 export interface HistoryCommitMemoryIndex {
   readHistoryCommitMemoryIndex?(): Promise<string | null>;
@@ -432,9 +428,9 @@ export async function advanceWorkspaceCommitMemoryIndex(input: WorkspaceHistoryS
     return;
   }
   let raw = await index.readHistoryCommitMemoryIndex();
-  let marker: z.infer<typeof historyCommitMemoryMarkerSchema> = raw === null
+  let marker: z.infer<typeof HistoryCommitMemoryMarkerSchema> = raw === null
     ? { completedEventId: null, pending: null }
-    : historyCommitMemoryMarkerSchema.parse(JSON.parse(raw));
+    : HistoryCommitMemoryMarkerSchema.parse(JSON.parse(raw));
   while (marker.pending || marker.completedEventId !== eventId) {
     const target = marker.pending?.eventId ?? eventId;
     const after = marker.pending?.after ?? null;
