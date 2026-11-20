@@ -54,6 +54,14 @@ const templateGoalDomains = {
     checks: ["exactWelcomeResource", "exactWelcomeFrontiers", "exactWelcomeDecision", "verifiedWelcomeOwner",
       "verifiedWelcomeTour", "verifiedWelcomeRetry", "exactWelcomeHandoff", "preservedWelcomeContext", "rejectedForeignWelcome"],
   },
+  "installed-package": {
+    namespace: "vibestudio:installed-package",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-installed-package-managed.ts" },
+    callable: "reviewInstalledPackage",
+    skill: "installedPackage",
+    checks: ["boundOwnedInstallation", "usedExactPackageBaseline", "honoredReviewAssignment",
+      "verifiedLocalManifestEffect", "exactStateVerificationPlan", "preservedProtectedAndNeighbors"],
+  },
   "local-width": {
     namespace: "vibestudio:local-width",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-local-width-managed.ts" },
@@ -1381,13 +1389,13 @@ export async function loadLiveTeacherCases(checkouts) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
     const distinctGoals = new Set();
-    const { openGoalWorlds, openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
+    const { openGoalWorlds, openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
       spectroliteGoalWorlds = [], openGoalGoogleWorlds = [], openGoalPersonalWorlds = [],
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
       openTerminalWorlds = [], openOwnedResearchWorlds = [], personalWelcomeWorlds = [], dictationHandoffWorlds = [], specialistHandoffWorlds = [], providerHandoffWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
-    for (const assignment of [...openGoalWorlds, ...openAssetIntegrityWorlds, ...openTendrilRouteWorlds, ...openExtensionDossierWorlds, ...openDeployedInterfaceWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
+    for (const assignment of [...openGoalWorlds, ...openInstalledPackageWorlds, ...openAssetIntegrityWorlds, ...openTendrilRouteWorlds, ...openExtensionDossierWorlds, ...openDeployedInterfaceWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
       ...openNewsEvidenceWorlds, ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
@@ -8257,6 +8265,35 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
         receipts.splice(index, 1);
         return true;
       }), "Expected exact extension package and release evidence, original owner scope and private dossier effects");
+  } else if (world.kind === "installed-package") {
+    const outcome = exercise.report.outcome;
+    const names = new Set(["installedPackageRead", "installedPackageChange", "testSuitePlanRead", "testSuiteVerificationRun"]);
+    const observed = effects.filter(effect => names.has(effect.service));
+    const receipts = proof.effects?.slice();
+    const parent = exercise.calls.find(({ record }) => record === skill);
+    const verification = exercise.calls.filter(({ record }) => record.parent_call_id === parent?.callId &&
+      record.definition?.name === "reviewVerification" && record.outcome === "done");
+    const suite = exercise.calls.filter(({ record }) => record.parent_call_id === verification[0]?.callId &&
+      record.definition?.name === "reviewTestSuite" && record.outcome === "done");
+    const latest = proof.repair?.observation ?? proof.observed;
+    const exactVerification = proof.plan ? Boolean(outcome.verification) &&
+      isDeepStrictEqual(outcome.verification.plan, proof.plan) && outcome.verification.execution === null &&
+      outcome.verification.result === null && outcome.verification.decision?.next === "report-plan" &&
+      outcome.verification.decision?.route?.runtime === proof.plan.runtime &&
+      outcome.verification.decision.route.nativeApproval === (proof.plan.runtime === "native") && suite.length === 1 &&
+      matchesValue(suite[0].record.inputs?.request, latest.suiteRequest) && matchesValue(suite[0].record.output, outcome.verification)
+      : outcome.verification === null && suite.length === 0;
+    requireEvidence(isDeepStrictEqual(outcome.assignment, proof.assignment) && isDeepStrictEqual(outcome.observed, proof.observed) &&
+      outcome.finding?.decision === proof.decision && isDeepStrictEqual(outcome.repair, proof.repair) &&
+      verification.length === 1 && matchesValue(verification[0].record.inputs?.observed, latest) && exactVerification &&
+      Array.isArray(receipts) && receipts.length === observed.length && observed.every(({ service, method, args, result, error }) => {
+        if (error) return false;
+        const index = receipts.findIndex(item => item.service === service && item.method === method &&
+          matchesValue(args, item.args) && matchesValue(result, item.result));
+        if (index < 0) return false;
+        receipts.splice(index, 1);
+        return true;
+      }), "Expected exact package baseline, scoped local effect and installed native verification plan trajectory");
   } else if (world.kind === "local-width") {
     const outcome = exercise.report.outcome;
     const { reason: _reason, ...finding } = outcome.finding;
