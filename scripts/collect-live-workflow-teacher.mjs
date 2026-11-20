@@ -124,6 +124,7 @@ if (preflight) {
   let unavailableCount = 0;
   for (const group of groups.values()) {
     const { workspace, workspaceBaseline, cases } = group;
+    let stopStatus;
     try {
       if (command(systemTestArgs(group, ["doctor", "--approve-startup", "--model", values.model]), "ignore") !== 0) {
         throw new Error("Managed workspace did not pass readiness checks");
@@ -139,9 +140,10 @@ if (preflight) {
       unavailableCount += cases.length;
       console.log(JSON.stringify({ workspace, workspaceBaseline, checked: 0, error: String(error) }));
     } finally {
-      if (command(systemTestArgs(group, ["stop"]), "ignore") !== 0) {
-        throw new Error(`Could not retire the managed ${workspace} workspace ${group.instance}`);
-      }
+      stopStatus = command(systemTestArgs(group, ["stop"]), "ignore");
+    }
+    if (stopStatus !== 0) {
+      throw new Error(`Could not retire the managed ${workspace} workspace ${group.instance}`);
     }
   }
   await new Promise((resolve) => process.stdout.write("", resolve));
