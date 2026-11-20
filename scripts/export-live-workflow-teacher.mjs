@@ -10,6 +10,13 @@ import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
 
 const sharedProgram = "skills/vibestudio-workflows/runWorkflow.nl";
 const templateGoalDomains = {
+  visualRecovery: {
+    namespace: "vibestudio:visual-panel-recovery",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-panel-recovery-managed.ts" },
+    callable: "recoverPanelGoal",
+    checks: ["exactOwnedDiscovery", "exactOrderedRecovery", "boundRendererReadback", "untouchedCompanions",
+      "exactHealthDisposition", "protectedHeads"],
+  },
   "program-run": {
     namespace: "vibestudio:program-run",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-program-run-managed.ts" },
@@ -1153,13 +1160,13 @@ export async function loadLiveTeacherCases(checkouts) {
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
-      openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [] } = imported.default ?? imported;
+      openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [] } = imported.default ?? imported;
     for (const assignment of [...openGoalWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
       ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
       ...openGoalCalendarWorlds, ...openPersonalArtifactWorlds, ...openPersonalHistoryWorlds,
-      ...openGoalProgramRunWorlds, ...openGoalAuthoringWorlds, ...openGoalGoogleHandoffWorlds, ...openPersonalAutomationWorlds, ...openGoalOwnedPreviewWorlds, ...openDiagnosticWorlds, ...openLocalDeliveryWorlds]) {
+      ...openGoalProgramRunWorlds, ...openGoalAuthoringWorlds, ...openGoalGoogleHandoffWorlds, ...openPersonalAutomationWorlds, ...openGoalOwnedPreviewWorlds, ...openDiagnosticWorlds, ...openLocalDeliveryWorlds, ...openGoalPanelRecoveryWorlds]) {
       const split = assignment.split ?? "train";
       const sourceGroups = [assignment.sourceGroup, assignment.relatedSourceGroup].filter(Boolean);
       const scenario = `open-goal-${assignment.id}`;
@@ -7151,6 +7158,36 @@ function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
   } else if (world.kind === "pdf") {
     requireEvidence(openPdfEffectsValid(effects, proof, exercise.report.outcome, world.expected),
       "Expected exact original PDF discovery, scoped native reads and matching retained raster evidence");
+  } else if (world.kind === "visualRecovery") {
+    const { expected } = world;
+    const outcome = exercise.report.outcome;
+    const tools = method => effects.filter(effect => effect.service === "panelRecovery" && effect.method === method);
+    const [discover, ...extraDiscoveries] = tools("discover");
+    const [bind, ...extraBindings] = tools("bind");
+    const observations = tools("inspect");
+    const recovery = tools("apply");
+    const latest = proof.observations?.at(-1);
+    const target = proof.finalSurfaces?.find(surface => surface.id === expected.selected);
+    requireEvidence(
+      proof.binding?.surface?.id === expected.selected && outcome.surfaceId === expected.selected &&
+        !extraDiscoveries.length && !extraBindings.length && matchesValue(discover?.args, []) &&
+        matchesValue(discover?.result, proof.catalog) &&
+        matchesValue(bind?.args, [proof.catalog.revision, expected.selected]) && matchesValue(bind?.result, proof.binding) &&
+        observations.length === proof.observations?.length && observations.length >= 1 &&
+        observations.every(({ args, result }, index) =>
+          matchesValue(args, []) && matchesValue(result, proof.observations[index].view)) &&
+        recovery.length === expected.effects.length && recovery.length === proof.effects?.length &&
+        recovery.every(({ args, result }, index) => {
+          const receipt = proof.effects[index];
+          return matchesValue(args, [receipt.revision, receipt.action]) && matchesValue(result, receipt);
+        }) &&
+        target?.pane.generation.protocol === "panel-cdp-generation.v1" &&
+        target?.pane.generation.panelId === target?.snapshot.panelId &&
+        target?.pane.generation.runtimeEntityId === target?.snapshot.runtimeEntityId &&
+        target?.pane.revision === latest?.view.revision &&
+        outcome.status === expected.outcome && isDeepStrictEqual(outcome.effects, proof.effects),
+      "Expected exact scoped recovery steps and independent readback from the actual target renderer"
+    );
   } else if (world.kind === "ownedPreview") {
     const expected = world.expected;
     const outcome = exercise.report.outcome;
