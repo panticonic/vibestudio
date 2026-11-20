@@ -17,6 +17,14 @@ const templateGoalDomains = {
     checks: ["discoveredPresentationRecords", "retainedSourceIntegrity", "joinedCurrentPresentationRevision",
       "matchedPresentationDisposition", "independentlyVerifiedPresentationDom", "protectedPresentationHeadUnchanged"],
   },
+  "deployed-interface": {
+    namespace: "vibestudio:deployed-interface",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-deployed-interface-managed.ts" },
+    callable: "reviewDeployedInterface",
+    skill: "deployedInterface",
+    checks: ["inspectedExactInstalledDefinition", "verifiedExactProviderBoundary", "honoredRetainedReviewScope",
+      "distinguishedDeployedDefinition", "verifiedExactLocalHandoff", "preservedWorkspaceState"],
+  },
   "local-width": {
     namespace: "vibestudio:local-width",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-local-width-managed.ts" },
@@ -1336,13 +1344,13 @@ export async function loadLiveTeacherCases(checkouts) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
     const distinctGoals = new Set();
-    const { openGoalWorlds, openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], newsGoalWorlds = [],
+    const { openGoalWorlds, openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], newsGoalWorlds = [],
       spectroliteGoalWorlds = [], openGoalGoogleWorlds = [], openGoalPersonalWorlds = [],
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
       openTerminalWorlds = [], openOwnedResearchWorlds = [], dictationHandoffWorlds = [], specialistHandoffWorlds = [], providerHandoffWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
-    for (const assignment of [...openGoalWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
+    for (const assignment of [...openGoalWorlds, ...openDeployedInterfaceWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
       ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
@@ -7953,6 +7961,28 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
         return request && profiles.some(({ record }) => matchesValue(record.inputs?.request, request) &&
           matchesValue(record.output, review));
       }), "Expected both retained source authority and exact native performance hierarchy evidence");
+  } else if (world.kind === "deployed-interface") {
+    const outcome = exercise.report.outcome;
+    const names = new Set(["interfaceEvidence", "architectureProviderRead", "interfaceReviewHandoff"]);
+    const observed = effects.filter(effect => names.has(effect.service));
+    const receipts = proof.effects?.slice();
+    const parent = exercise.calls.find(({ record }) => record === skill);
+    const architecture = exercise.calls.filter(({ record }) => record.parent_call_id === parent?.callId &&
+      record.definition?.name === "reviewArchitectureBoundary" && record.outcome === "done");
+    const actualBoundary = proof.observation?.architecture ? architecture.length === 1 &&
+      matchesValue(architecture[0].record.inputs?.request, proof.observation.architecture) &&
+      matchesValue(architecture[0].record.output, proof.architecture) : architecture.length === 0;
+    requireEvidence(isDeepStrictEqual(outcome.survey, proof.survey) &&
+      isDeepStrictEqual(outcome.observation, proof.observation) && isDeepStrictEqual(outcome.architecture, proof.architecture) &&
+      outcome.finding?.decision === proof.decision && isDeepStrictEqual(outcome.handoff, proof.handoff) && actualBoundary &&
+      Array.isArray(receipts) && receipts.length === observed.length && observed.every(({ service, method, args, result, error }) => {
+        if (error) return false;
+        const index = receipts.findIndex(item => item.service === service && item.method === method &&
+          matchesValue(args, item.args) && matchesValue(result, item.result));
+        if (index < 0) return false;
+        receipts.splice(index, 1);
+        return true;
+      }), "Expected exact interface evidence, installed ownership decisions and authorized local handoff effects");
   } else if (world.kind === "local-width") {
     const outcome = exercise.report.outcome;
     const { reason: _reason, ...finding } = outcome.finding;
