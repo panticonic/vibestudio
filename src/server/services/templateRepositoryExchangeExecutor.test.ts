@@ -249,8 +249,8 @@ describe("TemplateRepositoryExchangeExecutor", () => {
     const result = await apply(prepared, alice);
     expect(result.direction).toBe("import");
     const request = fx.semanticImport.mock.calls[0]![0];
-    const principal = request.ingress.participant!.uploadPrincipal;
-    expect(request.ingress.participant?.access.caller).toBe(alice.caller);
+    const principal = request.ingress.uploadPrincipal;
+    expect(request.ingress.access.caller).toBe(alice.caller);
     const digests = [...new Set(request.descriptor.files.map(({ contentHash }) => contentHash))];
     const blobsDir = path.join(fx.root, "blobs");
     expect(hasBlobUploads(blobsDir, principal, digests)).toBe(true);

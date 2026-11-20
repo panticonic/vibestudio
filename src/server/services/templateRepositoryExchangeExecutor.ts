@@ -143,7 +143,7 @@ export class TemplateRepositoryExchangeExecutor {
     operationId: string;
     intentDigest: string;
     checkout: string;
-    ingress: NativeDevelopmentSemanticIngress;
+    ingress: Pick<NativeDevelopmentSemanticIngress, "causalParent">;
   }, ctx: ServiceContext): Promise<TemplateExchangeApplyReceipt> {
     const operationRoot = path.join(this.deps.root, input.intentDigest);
     assertWithin(this.deps.root, operationRoot);
@@ -185,7 +185,7 @@ export class TemplateRepositoryExchangeExecutor {
         expectedWorkingHead: marker.expectedWorkingHead,
         commandId: `template-exchange:${marker.operationId}`,
         descriptor,
-        ingress: { ...input.ingress, participant: { access, uploadPrincipal } },
+        ingress: { causalParent: input.ingress.causalParent, access, uploadPrincipal },
       });
     }
     const exchange = completeTemplateRepositoryExchange(marker.plan, pending);

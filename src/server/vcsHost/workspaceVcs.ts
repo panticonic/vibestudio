@@ -1930,6 +1930,18 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     return result;
   }
 
+  async saveParticipantContextFromAccess(input: {
+    commit: VcsCommitInput;
+    access: ParticipantRepositoryAccess;
+    cause: { parent: RpcCausalParent | null };
+  }): Promise<VcsCommitResult> {
+    const { commit, access, cause } = input;
+    const scope = await this.requireParticipantContentScope(
+      commit.contextId, access.caller, access.signal, access.ownerContextId,
+    );
+    return this.saveParticipantContext({ ...scope, head: scope.workingHead, commit, cause });
+  }
+
   /** Bind one verified filesystem request to a participant's branch and projection directory. */
   async bindParticipantFilesystem(input: {
     caller: VerifiedCaller;
@@ -2714,7 +2726,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
    */
   async planExactContextRepository(
     input: ExactRepositorySnapshotSelection & { contextId: string },
-    access?: ParticipantRepositoryAccess
+    access: ParticipantRepositoryAccess
   ): Promise<ExactRepositorySnapshotPlan> {
     const { contextId, ...selection } = input;
     const [plan] = await this.planExactContextRepositories({ contextId, repositories: [selection] }, access);
@@ -2724,22 +2736,17 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   async planExactContextRepositories(input: {
     contextId: string;
     repositories: readonly ExactRepositorySnapshotSelection[];
-  }, access?: ParticipantRepositoryAccess): Promise<ExactRepositorySnapshotPlan[]> {
-    const command = access
-      ? await this.readParticipantRepositoryProjection(input.contextId, access)
-      : await this.gad().contextMaterializationCommand({
-          contextId: input.contextId, materializedState: null,
-        });
+  }, access: ParticipantRepositoryAccess): Promise<ExactRepositorySnapshotPlan[]> {
+    const command = await this.readParticipantRepositoryProjection(input.contextId, access);
     return Promise.all(input.repositories.map((selection) =>
-      this.planExactRepository(input.contextId, selection, command, access ? command.targetState : undefined)
+      this.planExactRepository(input.contextId, selection, command)
     ));
   }
 
   private async planExactRepository(
     contextId: string,
     input: ExactRepositorySnapshotSelection,
-    command: Pick<ContextMaterializationCommand, "targetState" | "repositories" | "blobs">,
-    placement?: VcsStateNodeRef
+    command: Pick<ContextMaterializationCommand, "targetState" | "repositories" | "blobs">
   ): Promise<ExactRepositorySnapshotPlan> {
     const repositoryCommand = command.repositories.find(
       (
@@ -2824,7 +2831,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       realization: {
         repository: repositoryCommand,
         blobs: realizationBlobs,
-        ...(placement ? { placement } : {}),
+        placement: command.targetState,
       },
     };
     return {

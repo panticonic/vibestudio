@@ -154,12 +154,12 @@ export async function wireDevelopmentNative(
         root: deps.layout.development.nativeSessionsDir,
         blobsDir: deps.layout.blobsDir,
         semantic,
-        planSource: ({ developmentContextId, repositoryId }) =>
+        planSource: ({ developmentContextId, repositoryId }, access) =>
           deps.workspaceVcs.planExactContextRepository({
             contextId: developmentContextId,
             repositoryId,
             requiredFiles: [],
-          }),
+          }, access),
         materializeSource: (plan, destination) =>
           deps.workspaceVcs.materializeExactRepositoryPlan(plan, destination),
       });
@@ -188,6 +188,7 @@ export async function wireDevelopmentNative(
           }),
       });
       developmentNativeService = createDevelopmentNativeService({
+        resolveParticipantAccess: resolveAccess,
         native: nativeDevelopmentController,
         executor: developmentExecutor,
         isolatedExecutor,

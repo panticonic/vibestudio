@@ -100,6 +100,9 @@ type NativeBuildState = {
  * callers must present the exact run and snapshot identity on every effect.
  */
 export function createDevelopmentNativeService(deps: {
+  resolveParticipantAccess(
+    contextId: string, ctx: ServiceContext,
+  ): ReturnType<NativeDevelopmentSemanticIngress["resolveAccess"]>;
   native: ExactNativeDevelopmentController;
   executor: Pick<
     DevelopmentExecutor,
@@ -145,6 +148,10 @@ export function createDevelopmentNativeService(deps: {
     repositoryId: string;
   }, ctx: ServiceContext) => Promise<{ repoPath: string; workingHead: VcsStateNodeRef } | null>;
 }): { definition: ServiceDefinition; close(): Promise<void> } {
+  const semanticIngress = (ctx: ServiceContext): NativeDevelopmentSemanticIngress => ({
+    causalParent: ctx.causalParent ?? null,
+    resolveAccess: (contextId) => deps.resolveParticipantAccess(contextId, ctx),
+  });
   const plans = new Map<string, { plan: PreparedDevelopmentBuild; ownerRuntimeId: string }>();
   const builds = new Map<string, NativeBuildState>();
   const admissions = new Set<Promise<unknown>>();
@@ -730,10 +737,6 @@ export function createDevelopmentNativeService(deps: {
       }));
     },
   };
-}
-
-function semanticIngress(ctx: ServiceContext): NativeDevelopmentSemanticIngress {
-  return { causalParent: ctx.causalParent ?? null };
 }
 
 function needsClientExecutor(target: DevelopmentRun["target"]): boolean {
