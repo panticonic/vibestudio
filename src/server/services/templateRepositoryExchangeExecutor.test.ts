@@ -64,12 +64,14 @@ async function fixture() {
     },
   } as never;
   const semanticImport = vi.fn(async (_input: unknown) => imported);
+  const materializeSource = vi.fn(async (_plan: ExactRepositorySnapshotPlan, destination: string) =>
+    writeTree(destination, semanticValue));
   fs.mkdirSync(path.join(root, "blobs", "tmp"), { recursive: true });
   const executor = new TemplateRepositoryExchangeExecutor({
     root: path.join(root, "operations"),
     blobsDir: path.join(root, "blobs"),
     planSource: async () => sourcePlan,
-    materializeSource: async (_plan, destination) => writeTree(destination, semanticValue),
+    materializeSource,
     semantic: { commitChildBase: vi.fn(), importSnapshot: semanticImport },
   });
   return {
@@ -77,6 +79,7 @@ async function fixture() {
     checkout,
     executor,
     semanticImport,
+    materializeSource,
     setSemantic: (value: string) => (semanticValue = value),
   };
 }
@@ -86,6 +89,26 @@ afterEach(() => {
 });
 
 describe("TemplateRepositoryExchangeExecutor", () => {
+  it.each(["import", "export"] as const)(
+    "refuses to prepare an %s against a different working revision",
+    async (direction) => {
+      const fx = await fixture();
+      await expect(fx.executor.prepare({
+        direction,
+        checkout: fx.checkout,
+        contextId: "context",
+        repositoryId: "repository",
+        expectedWorkingHead: { kind: "application", applicationId: "other-working-revision" },
+        idempotencyKey: "changed-basis",
+      })).rejects.toMatchObject({ code: "EREVISIONCHANGED" });
+      expect(fx.materializeSource).not.toHaveBeenCalled();
+      expect(fx.semanticImport).not.toHaveBeenCalled();
+      expect(await fsp.readdir(path.join(fx.root, "operations"))).toEqual([]);
+      expect(await fsp.readFile(path.join(fx.checkout, "clients", "one", "package.json"), "utf8"))
+        .toBe("semantic\n");
+    },
+  );
+
   it("replays an exact terminal export receipt after a lost response and cleans source bytes", async () => {
     const fx = await fixture();
     const baseline = await fx.executor.prepare({

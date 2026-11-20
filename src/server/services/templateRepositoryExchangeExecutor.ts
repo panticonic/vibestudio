@@ -97,6 +97,9 @@ export class TemplateRepositoryExchangeExecutor {
       ) {
         throw coded("EIDENTITYDRIFT", "Semantic template repository identity changed");
       }
+      if (canonicalJson(sourcePlan.sourceState) !== canonicalJson(input.expectedWorkingHead)) {
+        throw coded("EREVISIONCHANGED", "The template repository changed before the exchange was prepared");
+      }
       await this.deps.materializeSource(sourcePlan, semanticRoot);
       const plan = planTemplateRepositoryExchange({
         workspace: semanticRoot,
