@@ -3,7 +3,6 @@ import { browserVaultMethods } from "./browserData.js";
 import { workspaceStateMethods } from "./workspaceState.js";
 import { webhookEngineMethods } from "./webhookEngine.js";
 import { workspaceStateEngineMethods } from "./workspaceStateEngine.js";
-import { workspaceStateLegacyMethods } from "./workspaceStateLegacy.js";
 import { WORKSPACE_STATE_LOCAL_TABLES } from "./workspaceStateStorage.js";
 // BUILTIN_SCAFFOLD_IMPORTS
 
@@ -92,26 +91,6 @@ export const PRODUCT_BUILTINS = [
       residency: false,
       storage: "dolt",
       doltLocal: WORKSPACE_STATE_LOCAL_TABLES,
-    },
-    residentCapabilityRequests: [],
-    hostCapabilityRequests: [],
-  },
-  {
-    // The SQLite store `WorkspaceStateDO` replaced. Deployed for one release,
-    // read-only, as the source of the one-time import (docs/dolt-redesign.md §9.2).
-    kind: "engine",
-    source: "vibestudio/internal",
-    name: "workspace.state.legacy",
-    className: "WorkspaceDO",
-    implementation: "@panticonic/builtin/workspace-state",
-    sourceFile: "packages/builtin/src/workspace-state/WorkspaceDO.ts",
-    builtinBecause: "durable-data",
-    directMethods: workspaceStateLegacyMethods,
-    durableObject: { keyVersion: 1, objectKey: "workspace", keyMode: "workspace-scoped" },
-    runtime: {
-      staticAuthorityProjection: true,
-      codegen: false,
-      residency: false,
     },
     residentCapabilityRequests: [],
     hostCapabilityRequests: [],

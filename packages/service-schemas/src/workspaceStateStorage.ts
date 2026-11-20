@@ -7,7 +7,7 @@
 /**
  * Tables a reset does not rewind and a fork does not copy (L3): the close-cleanup
  * outbox, the lifecycle registry, the alarm schedule, the durable work owners and
- * every `local_` table (the panel-tree revision, the legacy import's staging).
+ * every `local_` table (including the panel-tree revision).
  * The framework adds its own (`vsl_%`, `state`) in `doltLocalPatterns`.
  */
 export const WORKSPACE_STATE_LOCAL_TABLES = [

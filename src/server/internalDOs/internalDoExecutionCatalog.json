@@ -8,13 +8,6 @@
       "requests": [],
       "methodScopedRequests": []
     },
-    "WorkspaceDO": {
-      "implementation": "@panticonic/builtin/workspace-state",
-      "durableWorkQueues": [],
-      "provides": [],
-      "requests": [],
-      "methodScopedRequests": []
-    },
     "BrowserVaultDO": {
       "implementation": "@panticonic/builtin/browser-data",
       "durableWorkQueues": [],

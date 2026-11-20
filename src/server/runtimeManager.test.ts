@@ -893,14 +893,14 @@ describe("RuntimeManager", () => {
       const before = vi.mocked(spawn).mock.calls.length;
       const schemas = vi.spyOn(manager, "probeDurableObjectSchema");
       await manager.registerAllDOClasses(
-        ["WorkspaceDO", "BrowserVaultDO", "WebhookStoreDO"].map((className) => ({
+        ["WorkspaceStateDO", "BrowserVaultDO", "WebhookStoreDO"].map((className) => ({
           source: INTERNAL_DO_SOURCE,
           className,
         }))
       );
       expect(vi.mocked(spawn).mock.calls.length - before).toBe(1);
       await manager.registerAllDOClasses(
-        ["WorkspaceDO", "BrowserVaultDO", "WebhookStoreDO"].map((className) => ({
+        ["WorkspaceStateDO", "BrowserVaultDO", "WebhookStoreDO"].map((className) => ({
           source: INTERNAL_DO_SOURCE,
           className,
         }))
@@ -922,11 +922,9 @@ describe("RuntimeManager", () => {
         durable_objects: { bindings: Array<{ name: string; class_name: string }> };
       };
       expect(deployed.durable_objects.bindings.map((binding) => binding.class_name).sort()).toEqual(
-        ["BrowserVaultDO", "UniversalDO", "WebhookStoreDO", "WorkspaceDO", "WorkspaceStateDO"]
+        ["BrowserVaultDO", "UniversalDO", "WebhookStoreDO", "WorkspaceStateDO"]
       );
-      // The workspace state is a Dolt class (a class's engine is fixed when it is
-      // created, so the retired SQLite class stays beside it for the import), and
-      // its local tables are declared with it.
+      // The deployment declares the workspace state's Dolt engine and local tables.
       const config = celldDeployments.at(-1)!.config as unknown as {
         migrations: Array<{ new_sqlite_classes?: string[]; new_dolt_classes?: string[] }>;
         celld: { durable_objects: Record<string, { doltLocal?: string[] }> };
@@ -936,7 +934,7 @@ describe("RuntimeManager", () => {
       ]);
       expect(
         config.migrations.flatMap((migration) => migration.new_sqlite_classes ?? [])
-      ).toContain("WorkspaceDO");
+      ).not.toContain("WorkspaceStateDO");
       expect(config.celld.durable_objects["WorkspaceStateDO"]?.doltLocal).toEqual(
         expect.arrayContaining(["do_alarms", "lifecycle_leases", "local_%", "vsl_%", "state"])
       );

@@ -92,7 +92,6 @@ import { workspacePresenceMethods } from "./workspacePresence.js";
 import { gadWireMethods } from "./workspaceSource.js";
 import { workspaceStateMethods } from "./workspaceState.js";
 import { workspaceStateEngineMethods } from "./workspaceStateEngine.js";
-import { workspaceStateLegacyMethods } from "./workspaceStateLegacy.js";
 import { workspacePresentationMethods } from "./workspacePresentation.js";
 import { websiteHostingMethods } from "./websiteHosting.js";
 import { RPC_PROGRESS_SEMANTICS } from "./progressSemantics.generated.js";
@@ -255,11 +254,6 @@ const serviceTables: ServiceTable[] = [
     service: "workspaceStateEngine",
     file: "workspaceStateEngine.ts",
     methods: workspaceStateEngineMethods,
-  },
-  {
-    service: "workspaceStateLegacy",
-    file: "workspaceStateLegacy.ts",
-    methods: workspaceStateLegacyMethods,
   },
   {
     service: "workspacePresentation",

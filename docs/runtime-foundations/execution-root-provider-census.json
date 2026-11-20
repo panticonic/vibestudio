@@ -7,7 +7,7 @@
     },
     {
       "id": "panel-history",
-      "backingSources": ["packages/builtin/src/workspace-state/WorkspaceDO.ts"],
+      "backingSources": ["packages/builtin/src/workspace-state/WorkspaceStateDO.ts"],
       "reviewedReaders": ["src/server/panelHttpServer.ts", "src/server/panelRuntimeRegistration.ts"]
     },
     {

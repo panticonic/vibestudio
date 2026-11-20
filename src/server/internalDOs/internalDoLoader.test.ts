@@ -42,7 +42,7 @@ describe("internalDOExecutionIdentity", () => {
 
   it("seals exact bundle bytes, class entrypoint, and reviewed authority", () => {
     const webhook = internalDOExecutionIdentity(bundle(), "WebhookStoreDO");
-    const workspace = internalDOExecutionIdentity(bundle(), "WorkspaceDO");
+    const workspace = internalDOExecutionIdentity(bundle(), "WorkspaceStateDO");
 
     expect(webhook).toMatchObject({
       source: "vibestudio/internal",

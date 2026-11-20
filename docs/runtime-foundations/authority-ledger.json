@@ -1556,90 +1556,6 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:legacyManifest",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
-      "source": "vibestudio/internal",
-      "method": "legacyManifest",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "read",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "workspace.runtime-state.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "schema-authority",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:legacyReadRows",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
-      "source": "vibestudio/internal",
-      "method": "legacyReadRows",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "read",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "workspace.runtime-state.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "schema-authority",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
       "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmAdoptWorker",
       "rpcPlane": "workspace-do",
       "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
@@ -3149,258 +3065,6 @@
       "r3b": {
         "review": "host-owned-once-only-template-panel-initialization",
         "change": "Adds a host-only workspace.runtime-state.manage write that reserves template initial panels and creates their slots with one durable initialization marker in the same workspace transaction. Existing panel history is adopted without recreating user-deleted panels. The host supplies the workspace configuration; the receiver grants no user identity or execution authority, and existing sealed execution reconciliation activates the reserved panels. Hosted panel connections still require the current authenticated viewer and exact runtime lease."
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:legacyImportBegin",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
-      "source": "vibestudio/internal",
-      "method": "legacyImportBegin",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "write",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "workspace.runtime-state.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "schema-authority",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:legacyImportFinish",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
-      "source": "vibestudio/internal",
-      "method": "legacyImportFinish",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "write",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "workspace.runtime-state.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "schema-authority",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:legacyImportReplay",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
-      "source": "vibestudio/internal",
-      "method": "legacyImportReplay",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "write",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "workspace.runtime-state.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "schema-authority",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:legacyImportSkip",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
-      "source": "vibestudio/internal",
-      "method": "legacyImportSkip",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "write",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "workspace.runtime-state.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "schema-authority",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:legacyImportStage",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
-      "source": "vibestudio/internal",
-      "method": "legacyImportStage",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "write",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "workspace.runtime-state.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "schema-authority",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:legacyImportStatus",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
-      "source": "vibestudio/internal",
-      "method": "legacyImportStatus",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "read",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "workspace.runtime-state.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "schema-authority",
-        "change": null
       },
       "parityAssertion": "generated-census:direct-authority"
     },
@@ -13194,6 +12858,852 @@
         "change": null
       },
       "capability": "service:chromiumFetch.read",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chronolog.groups.create",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "groups.create",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "grant-authority",
+      "mechanismFamily": "chronolog.control",
+      "reviewRationale": "The prepared group operation selects the approved membership change.",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0,
+        "path": [
+          "operationId"
+        ]
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:chronolog.groups.create",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chronolog.groups.create#capability:chronolog.write",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "groups.create",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "grant-authority",
+      "mechanismFamily": "chronolog.control",
+      "reviewRationale": "The prepared group operation selects the approved membership change.",
+      "capability": "chronolog.write",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "chronolog.groups.create"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chronolog.groups.identity",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "groups.identity",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "transport",
+      "mechanismFamily": "chronolog.read",
+      "reviewRationale": "Group reads use the authenticated account and a group-scoped grant.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "membership"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:chronolog.groups.identity",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chronolog.groups.invite",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "groups.invite",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "grant-authority",
+      "mechanismFamily": "chronolog.control",
+      "reviewRationale": "The prepared group operation selects the approved membership change.",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0,
+        "path": [
+          "group"
+        ]
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:chronolog.groups.invite",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chronolog.groups.invite#capability:chronolog.write",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "groups.invite",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "grant-authority",
+      "mechanismFamily": "chronolog.control",
+      "reviewRationale": "The prepared group operation selects the approved membership change.",
+      "capability": "chronolog.write",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "chronolog.groups.invite"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chronolog.groups.join",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "groups.join",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "grant-authority",
+      "mechanismFamily": "chronolog.control",
+      "reviewRationale": "The prepared group operation selects the approved membership change.",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0,
+        "path": [
+          "group"
+        ]
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:chronolog.groups.join",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chronolog.groups.join#capability:chronolog.write",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "groups.join",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "grant-authority",
+      "mechanismFamily": "chronolog.control",
+      "reviewRationale": "The prepared group operation selects the approved membership change.",
+      "capability": "chronolog.write",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "chronolog.groups.join"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chronolog.groups.list",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "groups.list",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "transport",
+      "mechanismFamily": "chronolog.read",
+      "reviewRationale": "Group reads use the authenticated account and a group-scoped grant.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "membership"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:chronolog.groups.list",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chronolog.history.current",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "history.current",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "transport",
+      "mechanismFamily": "chronolog.read",
+      "reviewRationale": "Group reads use the authenticated account and a group-scoped grant.",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0,
+        "path": [
+          "group"
+        ]
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:chronolog.history.current",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chronolog.history.publish",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "history.publish",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "grant-authority",
+      "mechanismFamily": "chronolog.control",
+      "reviewRationale": "The prepared group operation selects the approved membership change.",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0,
+        "path": [
+          "group"
+        ]
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:chronolog.history.publish",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chronolog.history.publish#capability:chronolog.write",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "history.publish",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "grant-authority",
+      "mechanismFamily": "chronolog.control",
+      "reviewRationale": "The prepared group operation selects the approved membership change.",
+      "capability": "chronolog.write",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "chronolog.history.publish"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chronolog.history.share",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "history.share",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "grant-authority",
+      "mechanismFamily": "chronolog.control",
+      "reviewRationale": "The prepared group operation selects the approved membership change.",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0,
+        "path": [
+          "group"
+        ]
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:chronolog.history.share",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chronolog.history.share#capability:chronolog.write",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "history.share",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "grant-authority",
+      "mechanismFamily": "chronolog.control",
+      "reviewRationale": "The prepared group operation selects the approved membership change.",
+      "capability": "chronolog.write",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "chronolog.history.share"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chronolog.outcome",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "outcome",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "transport",
+      "mechanismFamily": "chronolog.read",
+      "reviewRationale": "Group reads use the authenticated account and a group-scoped grant.",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0,
+        "path": [
+          "group"
+        ]
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:chronolog.outcome",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chronolog.query",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "query",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "transport",
+      "mechanismFamily": "chronolog.read",
+      "reviewRationale": "Group reads use the authenticated account and a group-scoped grant.",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0,
+        "path": [
+          "group"
+        ]
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:chronolog.query",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chronolog.subscribe",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "subscribe",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "transport",
+      "mechanismFamily": "chronolog.read",
+      "reviewRationale": "Group reads use the authenticated account and a group-scoped grant.",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0,
+        "path": [
+          "group"
+        ]
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:chronolog.subscribe",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chronolog.transact",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "transact",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "protected-write",
+      "mechanismFamily": "chronolog.transact",
+      "reviewRationale": "The prepared program selects the exact group and approved contents.",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0,
+        "path": [
+          "group"
+        ]
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:chronolog.transact",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chronolog.transact#capability:chronolog.write",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "transact",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "protected-write",
+      "mechanismFamily": "chronolog.transact",
+      "reviewRationale": "The prepared program selects the exact group and approved contents.",
+      "capability": "chronolog.write",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "chronolog.transact.program"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -28105,6 +28615,50 @@
         "change": "Makes the method’s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method’s existing capability and sensitivity; administrative lifecycle methods remain closed."
       },
       "capability": "service:runtime.forkSemanticContext",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:runtime.forwardHistoryPacket",
+      "rpcPlane": "host-service",
+      "owner": "runtime",
+      "method": "forwardHistoryPacket",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "transport",
+      "mechanismFamily": "runtime.history",
+      "reviewRationale": "One transfer, sender and remote destination are verified by the host.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:runtime.forwardHistoryPacket"
+      },
+      "authorityPrincipals": [
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(code,service:runtime.forwardHistoryPacket),workspace-member)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:runtime.forwardHistoryPacket",
       "parityAssertion": "generated-census:host-authority"
     },
     {

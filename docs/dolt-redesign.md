@@ -742,12 +742,10 @@ The durable-base survey splits `WorkspaceDO` (3,899 lines) into three parts.
 
 ### 4.6 P3 as built
 
-**`WorkspaceStateDO`.** A cell's engine is fixed when its class creates it, so
-the Dolt store is a new class and the SQLite `WorkspaceDO` stays one release,
-read-only, as the import's source (`packages/builtin/src/workspace-state/`).
-The deployment lists `WorkspaceDO` in `new_sqlite_classes` and
-`WorkspaceStateDO` in `new_dolt_classes` with its `doltLocal` patterns
-(`runtime.storage`, `runtime.doltLocal` of the builtin catalog).
+**`WorkspaceStateDO`.** The fresh-workspace release deploys the Dolt class
+with its `doltLocal` patterns in the builtin catalog. The SQLite
+`WorkspaceDO` and its one-time import code were removed after the scope
+changed. Existing SQLite workspace files remain on disk.
 
 - **Versioned:** `entities`, `runtime_resource_bindings`, `slots`,
   `slot_history`, `context_edges`, `workspace_meta` (the template-seeding

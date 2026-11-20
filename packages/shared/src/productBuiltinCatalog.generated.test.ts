@@ -12,7 +12,6 @@ describe("generated product builtin catalog", () => {
   it("catalogs every product-owned internal Durable Object", () => {
     expect(INTERNAL_DO_CLASSES).toEqual([
       "WorkspaceStateDO",
-      "WorkspaceDO",
       "BrowserVaultDO",
       "WebhookStoreDO",
     ]);
