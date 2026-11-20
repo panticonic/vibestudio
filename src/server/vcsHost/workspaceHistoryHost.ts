@@ -36,7 +36,7 @@ import {
   type VcsTrajectorySenderRef,
   type VcsWorkingMutationResult,
 } from "@vibestudio/service-schemas/vcs";
-import { GadJsonRecordSchema, HistoryCommitMemoryMarkerSchema, semanticFileHostReadSchema } from "@vibestudio/service-schemas/workspaceSource";
+import { GadJsonRecordSchema, HistoryCommitMemoryMarkerSchema, semanticFileHostReadSchema, type HistoryTrajectoryProvenanceRequest } from "@vibestudio/service-schemas/workspaceSource";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import { canonicalEntityId } from "@vibestudio/shared/runtime/entitySpec";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
@@ -344,6 +344,40 @@ export async function readWorkspaceParticipantHistory(input: WorkspaceHistoryPar
       result.entries.length > history.limit ||
       result.entries.some(({ node }) => node.kind !== expectedEntryKind)) {
     throw new Error("Workspace history returned a different timeline");
+  }
+  return result;
+}
+
+export function parseWorkspaceTrajectoryProvenance(
+  request: HistoryTrajectoryProvenanceRequest,
+  response: unknown,
+) {
+  const root = request.operation === "inspect" ? request.request.node : request.request.root;
+  if (!("logId" in root)) throw new Error("Workspace trajectory provenance requires a transcript coordinate");
+  const result = request.operation === "inspect"
+    ? vcsInspectResultSchema.parse(response)
+    : vcsNeighborsResultSchema.parse(response);
+  const limit = request.operation === "inspect" ? request.request.edgeLimit : request.request.limit;
+  requireWorkspaceProvenanceEdges(root, result, limit);
+  if ((!request.expand && (result.edges.length || ("hasMoreEdges" in result ? result.hasMoreEdges : result.nextCursor))) ||
+      result.edges.some(({ from, to }) => [from, to].some((ref) =>
+        !("logId" in ref) || ref.logId !== root.logId || ref.head !== root.head
+      ))) {
+    throw new Error("Workspace history returned provenance outside the admitted transcript");
+  }
+  if ("node" in result) {
+    const { node } = result;
+    const sameCoordinate = node.kind === root.kind && "logId" in node.value &&
+      node.value.logId === root.logId && node.value.head === root.head;
+    const sameIdentity =
+      (node.kind === "trajectory" && root.kind === "trajectory") ||
+      (node.kind === "trajectory-invocation" && root.kind === "trajectory-invocation" &&
+        node.value.invocationId === root.invocationId) ||
+      (node.kind === "trajectory-turn" && root.kind === "trajectory-turn" &&
+        node.value.turnId === root.turnId) ||
+      (node.kind === "trajectory-message" && root.kind === "trajectory-message" &&
+        node.value.messageId === root.messageId);
+    if (!sameCoordinate || !sameIdentity) throw new Error("Workspace history returned different provenance");
   }
   return result;
 }

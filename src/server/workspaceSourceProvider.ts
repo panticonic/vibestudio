@@ -8,6 +8,8 @@ import {
   HistoryQueryTrajectorySchema,
   type HistoryQueryTrajectory,
   type HistorySearchCause,
+  HistoryTrajectoryProvenanceRequestSchema,
+  type HistoryTrajectoryProvenanceRequest,
   HistoryTrajectorySearchInputSchema,
   HistoryTrajectorySearchMatchesSchema,
   HistoryWalkCohortSchema,
@@ -101,6 +103,7 @@ export type WorkspaceSemanticPort = Pick<WorkspaceSemanticClient, SemanticWireMe
   appendLogEvent: WorkspaceSemanticClient["appendLogEvent"];
   getLogEvent: WorkspaceSemanticClient["getLogEvent"];
   inspectInvocationState: WorkspaceSemanticClient["inspectInvocationState"];
+  readHistoryTrajectoryProvenance(input: HistoryTrajectoryProvenanceRequest): Promise<unknown>;
   readHistoryMemoryCause(input: ReturnType<typeof vcsTrajectoryInvocationRefSchema.parse>):
     Promise<ReturnType<typeof vcsReadMemoryCauseSchema.parse> | null>;
   readHistoryWalkInvocation(input: HistoryWalkInvocation): Promise<HistoryWalkPage>;
@@ -185,6 +188,9 @@ export function createWorkspaceSemanticPort(
     appendLogEvent: (input) => client.appendLogEvent(input),
     getLogEvent: (input) => client.getLogEvent(input),
     inspectInvocationState: (input) => client.inspectInvocationState(input),
+    readHistoryTrajectoryProvenance: (input) => dispatch.dispatch(
+      provider, "readHistoryTrajectoryProvenance", HistoryTrajectoryProvenanceRequestSchema.parse(input),
+    ),
     readHistoryMemoryCause: async (input) => vcsReadMemoryCauseSchema.nullable().parse(
       await dispatch.dispatch(provider, "readHistoryMemoryCause", vcsTrajectoryInvocationRefSchema.parse(input)),
     ),

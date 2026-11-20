@@ -36,7 +36,7 @@ import {
   type MethodSchema,
   type ServiceMethodSchemas,
 } from "@vibestudio/shared/typedServiceClient";
-import { vcsFileLineageSchema, vcsMethods, vcsQueryInputSchema, vcsSearchHitSchema, vcsSearchInputSchema, vcsStateNodeRefSchema, vcsTrajectoryInvocationRefSchema, vcsTrajectoryTurnRefSchema, vcsWalkEntrySchema, vcsWalkInputSchema } from "./vcs.js";
+import { vcsInspectInputSchema, vcsNeighborsInputSchema, vcsFileLineageSchema, vcsMethods, vcsQueryInputSchema, vcsSearchHitSchema, vcsSearchInputSchema, vcsStateNodeRefSchema, vcsTrajectoryInvocationRefSchema, vcsTrajectoryTurnRefSchema, vcsWalkEntrySchema, vcsWalkInputSchema } from "./vcs.js";
 
 const readAccess = { sensitivity: "read" as const };
 const writeAccess = { sensitivity: "write" as const };
@@ -69,6 +69,12 @@ export const HistoryTrajectorySearchInputSchema = vcsSearchInputSchema.pick({ te
   .extend({ causes: HistorySearchCausePageSchema }).strict();
 export type HistoryTrajectorySearchInput = z.infer<typeof HistoryTrajectorySearchInputSchema>;
 export const HistoryTrajectorySearchMatchesSchema = z.array(vcsSearchHitSchema).max(51);
+
+export const HistoryTrajectoryProvenanceRequestSchema = z.discriminatedUnion("operation", [
+  z.object({ operation: z.literal("inspect"), request: vcsInspectInputSchema, expand: z.boolean() }).strict(),
+  z.object({ operation: z.literal("neighbors"), request: vcsNeighborsInputSchema, expand: z.boolean() }).strict(),
+]);
+export type HistoryTrajectoryProvenanceRequest = z.infer<typeof HistoryTrajectoryProvenanceRequestSchema>;
 
 /** Bounded data crossing the native-history and trajectory owner boundary. */
 export const HistoryWalkPageSchema = z.object({

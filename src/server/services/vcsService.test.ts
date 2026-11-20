@@ -15,7 +15,7 @@ import {
   commandIdForTrajectoryInvocation,
 } from "@vibestudio/trajectory-identity";
 import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
-import { workspaceParticipantIdentity } from "../vcsHost/workspaceHistoryHost.js";
+import { parseWorkspaceTrajectoryProvenance, workspaceParticipantIdentity } from "../vcsHost/workspaceHistoryHost.js";
 import { createVcsService, type VcsServiceDeps } from "./vcsService.js";
 
 const EVENT = { kind: "event" as const, eventId: "event:one" };
@@ -156,6 +156,9 @@ function participantFixture(
       const owner = { ...canonical, objectKey: `work-${sha256HexSyncText(participant)}` };
       return { canonical, owner, dispatch: { dispatch }, caller, contextId, ownerContextId, workingHead: "head" };
     }),
+    readTrajectoryProvenance: vi.fn<WorkspaceVcs["readTrajectoryProvenance"]>(async (input) =>
+      parseWorkspaceTrajectoryProvenance(input, await read("readHistoryTrajectoryProvenance", input))
+    ),
     readParticipantMain: vi.fn(async () => {
       await read("readHistoryMain");
       return EVENT;
@@ -1105,7 +1108,30 @@ describe("canonical vcsService", () => {
       { node: { kind: "trajectory", logId: trajectory.logId, head: trajectory.head } },
     ])).rejects.toBe(inspected);
 
-    expect(read).toHaveBeenCalledOnce();
+    expect(read).toHaveBeenCalledExactlyOnceWith("readHistoryTrajectoryProvenance", {
+      operation: "inspect",
+      request: { node: { kind: "trajectory", logId: trajectory.logId, head: trajectory.head }, edgeLimit: 100 },
+      expand: true,
+    });
+  });
+
+  it("rejects an adjacency response that leaves the admitted transcript head", async () => {
+    const { logId, head } = channelTrajectoryFor("channel:own");
+    const root = { kind: "trajectory-invocation", logId, head, invocationId: "invocation:own" };
+    const { definition } = service({
+      referencesReachable: false,
+      readHistory: () => ({
+        root,
+        edges: [{
+          kind: "triggered-by", from: root,
+          to: { kind: "trajectory-message", logId: "channel:foreign", head, messageId: "message:foreign" },
+        }],
+        nextCursor: null,
+      }),
+    });
+
+    await expect(definition.handler(agentContext("channel:own"), "neighbors", [{ root }]))
+      .rejects.toThrow("outside the admitted transcript");
   });
 
   it("admits only the command derived from its live causal invocation", async () => {
@@ -1211,6 +1237,7 @@ describe("canonical vcsService", () => {
         contextIds[0] === "context:own" &&
         references.every(({ value }) => reachable.has(key(value))),
       readHistory: (method, inputValue) => {
+        if (method === "readHistoryTrajectoryProvenance") return { root: invocation, edges: [], nextCursor: null };
         if (method !== "readHistoryNeighbors") throw new Error(`unexpected history method ${method}`);
         const { neighbors: { root } } = inputValue as { neighbors: { root: VcsSemanticNodeRef } };
         return { root, edges: adjacency.get(key(root)) ?? [], nextCursor: null };
@@ -1233,6 +1260,12 @@ describe("canonical vcsService", () => {
         ).toBe(true);
       }
     }
+
+    await expect(definition.handler(caller, "neighbors", [{ root: invocation, limit: 20 }]))
+      .resolves.toEqual({ root: invocation, edges: [], nextCursor: null });
+    expect(read).toHaveBeenLastCalledWith("readHistoryTrajectoryProvenance", {
+      operation: "neighbors", request: { root: invocation, limit: 20 }, expand: false,
+    });
 
     const siblingInvocation = {
       kind: "trajectory-invocation" as const,
@@ -1260,7 +1293,7 @@ describe("canonical vcsService", () => {
         reference: siblingInvocation,
       },
     });
-    expect(read).toHaveBeenCalledTimes(workspaceChain.length);
+    expect(read).toHaveBeenCalledTimes(workspaceChain.length + 1);
   });
 
   it("carries the verified caller only to the protected publication gate", async () => {

@@ -133,6 +133,7 @@ import {
   HistorySearchCausePageSchema,
   HistoryWalkPageSchema,
   HistoryWalkPlanSchema,
+  type HistoryTrajectoryProvenanceRequest,
   type HistorySearchCause,
   type GadJsonRecord,
 } from "@vibestudio/service-schemas/workspaceSource";
@@ -162,6 +163,7 @@ import {
   readWorkspacePublicationApproval,
   readWorkspacePublishedRevision,
   requireWorkspaceParticipantOwner,
+  parseWorkspaceTrajectoryProvenance,
   rememberWorkspaceParticipantContentSource,
   reviewWorkspaceParticipantMerge,
   retireWorkspaceParticipantContext,
@@ -1173,6 +1175,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         after = next;
       }
     }
+  }
+
+  async readTrajectoryProvenance(request: HistoryTrajectoryProvenanceRequest) {
+    return parseWorkspaceTrajectoryProvenance(request, await this.gad().readHistoryTrajectoryProvenance(request));
   }
 
   async queryParticipantHistory(input: WorkspaceHistoryParticipant & {

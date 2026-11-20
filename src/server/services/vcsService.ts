@@ -374,6 +374,22 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
     epochTransition = false
   ): Promise<unknown> => {
     if (method === "mainState") return workspace.readParticipantMain();
+    if (method === "inspect") {
+      const inspect = vcsMethods.inspect.args.parse([input])[0];
+      if ("logId" in inspect.node) {
+        const expand = privileged(ctx, deps) ||
+          isCallerTrajectoryRoot(ctx, deps, { kind: "node", value: inspect.node });
+        return workspace.readTrajectoryProvenance({ operation: "inspect", request: inspect, expand });
+      }
+    }
+    if (method === "neighbors") {
+      const neighbors = vcsMethods.neighbors.args.parse([input])[0];
+      if ("logId" in neighbors.root) {
+        const expand = privileged(ctx, deps) ||
+          isCallerTrajectoryRoot(ctx, deps, { kind: "node", value: neighbors.root });
+        return workspace.readTrajectoryProvenance({ operation: "neighbors", request: neighbors, expand });
+      }
+    }
     const scope = await participantOperationScope(ctx, method, input, effectCaller);
     const cause = { parent: ctx.causalParent ?? null };
     const common = { ...scope, head: scope.workingHead, cause };
