@@ -164,6 +164,10 @@ shared Natlang root. The scoped receipts cover both caller tiers, account-only
 devices, independently unavailable queues, and watch snapshots that replace the
 previous pending set. The verifier checks queue ownership and whether the
 assigned ID is located, absent, or unconfirmed.
+Run `node scripts/smoke-natlang-approval-visibility.mjs` to compare initial
+hub and workspace watch snapshots with the paired CLI's independent list
+readback. It stops the owned System instance, then passes the redacted
+receipts through the shared Natlang root with a scripted executor.
 
 Gmail compose audits run in an owned channel in the Google Workspace template.
 The shared program calls the compose-history skill, projects a typed draft or
