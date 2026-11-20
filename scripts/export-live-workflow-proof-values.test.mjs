@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { test } from "node:test";
-import { openTemplateGoalEvidence } from "./export-live-workflow-teacher.mjs";
+import { openOwnedResearchEvidence, openTemplateGoalEvidence } from "./export-live-workflow-teacher.mjs";
 
 const hash = value => createHash("sha256").update(value).digest("hex");
 function ref(value) {
@@ -197,4 +197,59 @@ test("unit rollout checks the actual local commit instead of hashing a plain rep
   const report = { status: "released", revision: "new", release };
   assert.doesNotThrow(() => evidence(report));
   assert.throws(() => evidence({ ...report, release: { ...release, revision: "other" } }));
+});
+
+test("owned research authenticates cached bytes and the rebased revision by whole IR receipts", () => {
+  const world = { id: "owned-research", goal: "Confirm the current hours, then revise the note.",
+    tail: "hours", edit: { destination: "note.md", expected: "Current hours" } };
+  const url = "http://127.0.0.1:12345/fixture/hours";
+  const text = "First-hand evidence for current hours";
+  const digest = hash(text);
+  const queries = ["current hours"];
+  const sources = [{ query: queries[0], sources: [{ url }] }];
+  const page = { url, digest, session: "public", headBytes: 10 };
+  const read = { digest, offset: 10, bytes: 20 };
+  const fetchRequest = [{ url, session: "public" }];
+  const cacheRequest = [{ digest, offset: 10, limit: 20 }];
+  const attempts = [
+    { path: "note.md", version: "old", text: "previous proposal", status: "changed" },
+    { path: "note.md", version: "fresh", text: world.edit.expected, status: "written" },
+  ];
+  const research = { question: world.goal, status: "answered" };
+  const report = { status: "edited", version: "written-version", research };
+  const live = {
+    provenance: { contextId: "owned" },
+    diagnostics: { openGoalVerification: {
+      caseId: world.id, contextId: "owned", goal: world.goal, passed: true,
+      checks: new Proxy({}, { get: () => true }),
+      fetched: [page], searches: [{ queries, result: sources }],
+      fetchReceipts: [{ args: fetchRequest, result: page }],
+      cacheReceipts: [{ args: cacheRequest, result: read }],
+      readback: [{ text, digest, exact: true }],
+      document: { attempts, contents: { "note.md": world.edit.expected } },
+    } },
+  };
+  const exercise = { rootCallIds: ["root"], report, calls: [
+    { callId: "root", record: { ...node("runUserGoal", [], { goal: world.goal }), call_id: "root" } },
+    { callId: "research", record: {
+      ...node("investigatePublicQuestion", [effect("goalDiscovery", "search", [queries], sources),
+        effect("web", "fetch", fetchRequest, page), effect("web", "read", cacheRequest, read)], { goal: world.goal }, research),
+      parent_call_id: "root", ended_at: "2026-11-20T00:00:01Z",
+    } },
+    { callId: "revision", record: {
+      ...node("reviseWorkspaceDocument", attempts.map(({ path, version, text, status }) =>
+        effect("goalWorkspace", "revise", [path, version, text], status === "changed" ? { status } : { status, version: report.version })),
+      { research }),
+      parent_call_id: "root", started_at: "2026-11-20T00:00:02Z",
+    } },
+  ] };
+  const verify = () => openOwnedResearchEvidence(live, exercise, null, { assignment: world });
+  assert.doesNotThrow(verify);
+  const traces = exercise.calls[1].record.effects;
+  const recorded = traces[1].result;
+  traces[1].result = page;
+  assert.throws(verify);
+  traces[1].result = recorded;
+  live.diagnostics.openGoalVerification.document.attempts[1].version = "unobserved";
+  assert.throws(verify);
 });

@@ -7876,7 +7876,7 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
   };
 }
 
-function openOwnedResearchEvidence(execution, exercise, _scenario, workflow) {
+export function openOwnedResearchEvidence(execution, exercise, _scenario, workflow) {
   const proof = execution.diagnostics.openGoalVerification;
   const world = workflow.assignment;
   const root = exercise.calls.find(({ callId }) => callId === exercise.rootCallIds[0])?.record;
@@ -7889,6 +7889,17 @@ function openOwnedResearchEvidence(execution, exercise, _scenario, workflow) {
   const fetches = effects.filter(effect => effect.service === "web" && effect.method === "fetch" && !effect.error);
   const cacheReads = effects.filter(effect => effect.service === "web" && effect.method === "read" && !effect.error);
   const changes = effects.filter(effect => effect.service === "goalWorkspace" && effect.method === "revise" && !effect.error);
+  const bindReceipts = (effects, receipts) => {
+    if (!Array.isArray(receipts) || effects.length !== receipts.length) return false;
+    const remaining = receipts.slice();
+    return effects.every(effect => {
+      const index = remaining.findIndex(receipt =>
+        matchesValue(effect.args, receipt.args) && matchesValue(effect.result, receipt.result));
+      if (index === -1) return false;
+      remaining.splice(index, 1);
+      return true;
+    });
+  };
   const checks = ["discoveredOwnedSources", "exactOwnedPageReadback", "groundedOwnedCitations",
     "readOwnedCacheContinuation", "answeredOwnedGoal", "protectedOwnedResearchScope",
     ...(world.edit ? ["discoveredWorkspace", "recoveredConcurrentEdit", "exactDocumentReadback",
@@ -7901,20 +7912,25 @@ function openOwnedResearchEvidence(execution, exercise, _scenario, workflow) {
       matchesValue(root.inputs.goal, world.goal) && research?.outcome === "done" &&
       matchesValue(research.inputs?.goal, world.goal) && matchesValue(research.output, exercise.report?.research) &&
       searches.length > 0 && fetches.length > 0 &&
-      proof.fetched.every(page => fetches.some(effect => effect.result?.url === page.url &&
-        effect.result.digest === page.digest && effect.result.session === "public" &&
-        searches.some(search => Array.isArray(search.result) && search.result.some(row =>
-          row.sources?.some(source => source.url === page.url))))) &&
+      bindReceipts(searches, proof.searches?.map(({ queries, result }) => ({ args: [queries], result }))) &&
+      bindReceipts(fetches, proof.fetchReceipts) && bindReceipts(cacheReads, proof.cacheReceipts) &&
+      proof.fetched.every(page => page.session === "public" && proof.fetchReceipts.some(({ result }) =>
+        isDeepStrictEqual(result, page)) && proof.searches.some(({ result }) =>
+        result.some(row => row.sources.some(source => source.url === page.url)))) &&
       proof.readback.every(page => page.exact === true && hash(page.text) === page.digest) &&
-      (!world.tail || cacheReads.some(effect => proof.fetched.some(page =>
-        new URL(page.url).pathname.endsWith("/" + world.tail) && effect.result?.digest === page.digest &&
-          effect.result.offset === page.headBytes && effect.result.bytes > 0))) &&
+      (!world.tail || proof.cacheReceipts.some(({ result }) => proof.fetched.some(page =>
+        new URL(page.url).pathname.endsWith("/" + world.tail) && result.digest === page.digest &&
+          result.offset === page.headBytes && result.bytes > 0))) &&
       (world.edit ? revisions.length === 1 && revisions[0].outcome === "done" && changes.length === 2 &&
         matchesValue(revisions[0].inputs?.research, research.output) &&
         Date.parse(research.ended_at) <= Date.parse(revisions[0].started_at) &&
-        changes[0].result?.status === "changed" && changes[1].result?.status === "written" &&
-        changes[1].result.version === exercise.report.version &&
-        proof.document?.contents?.[world.edit.destination] === world.edit.expected
+        proof.document?.attempts?.length === 2 &&
+        changes.every((effect, index) => {
+          const { path, version, text, status } = proof.document.attempts[index];
+          const expected = index === 0 ? { status: "changed" } : { status: "written", version: exercise.report.version };
+          return status === expected.status && path === world.edit.destination &&
+            matchesValue(effect.args, [path, version, text]) && matchesValue(effect.result, expected);
+        }) && proof.document.contents?.[world.edit.destination] === world.edit.expected
         : revisions.length === 0 && changes.length === 0 && exercise.report?.status === "answered"),
     "Expected the original user goal, exact owned HTTP and citation evidence, and separately observed revision recovery"
   );
