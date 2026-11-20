@@ -3,7 +3,7 @@ import {
   credentialCallerUse,
   type CredentialCallerFacts,
 } from "@vibestudio/credential-client/credentialActor";
-import { findMatchingUrlAudience } from "@vibestudio/credential-client/urlAudience";
+import { findCredentialBinding } from "@vibestudio/credential-client/urlBoundSelection";
 
 export interface UrlBoundCredentialStore {
   listUrlBound(): Promise<Credential[]> | Credential[];
@@ -30,10 +30,7 @@ export async function resolveCredentialByLabel(
       credential.label === input.label &&
       (input.caller === undefined ||
         credentialCallerUse(credential, input.caller).kind === "direct") &&
-      credential.bindings?.some(
-        (binding) =>
-          binding.use === input.use && !!findMatchingUrlAudience(target, binding.audience)
-      )
+      !!findCredentialBinding(credential, target, input.use)
   );
   if (matches.length > 1) {
     throw new Error(`Credential label ${JSON.stringify(input.label)} is not unique`);

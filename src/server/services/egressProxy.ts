@@ -28,9 +28,9 @@ import { credentialLifecycle as credentialLifecycleStatus } from "@vibestudio/cr
 import {
   credentialCallerUse,
   credentialRefusesAgentGrant,
-  credentialSelectionRefusal,
   type CredentialCallerFacts,
 } from "@vibestudio/credential-client/credentialActor";
+import { findCredentialBinding, matchUrlBoundCredentialCandidates } from "@vibestudio/credential-client/urlBoundSelection";
 import {
   credentialCarrierStripHeaders,
   findMatchingUrlAudience,
@@ -1692,7 +1692,7 @@ export class EgressProxy {
         attribution,
         ...injected,
         binding: credential
-          ? this.findCredentialBinding(credential, params.targetUrl, params.credentialUse)
+          ? findCredentialBinding(credential, params.targetUrl, params.credentialUse)
           : null,
         connectionId: credential?.id ?? null,
         scopes: credential?.scopes ?? [],
@@ -1719,7 +1719,7 @@ export class EgressProxy {
     if (credential.expiresAt && credential.expiresAt <= Date.now()) {
       throw new ForwardRejection(403, "credential-expired", "credential-expired");
     }
-    const binding = this.findCredentialBinding(credential, params.targetUrl, params.credentialUse);
+    const binding = findCredentialBinding(credential, params.targetUrl, params.credentialUse);
     if (!binding) {
       throw new ForwardRejection(
         403,
@@ -1871,31 +1871,20 @@ export class EgressProxy {
       )
     );
     signal.throwIfAborted();
-    const audienceMatches = credentials.filter(
-      (credential) =>
-        !credential.revokedAt &&
-        (label === undefined || credential.label === label) &&
-        !!this.findCredentialBinding(credential, targetUrl, use)
-    );
-    // A credential this caller can never use is not a selection candidate:
-    // another member's personal credential, or a personal credential an agent
-    // could only reach without an agent exchange. When nothing usable is left,
-    // say why instead of reporting no match — never fall back to someone else's.
     const facts: CredentialCallerFacts = {
       ...(attribution.agentId ? { agentId: attribution.agentId } : {}),
       ...(requestedByUserId ? { userId: requestedByUserId } : {}),
     };
-    const matchingCredentials = audienceMatches.filter(
-      (credential) => credentialCallerUse(credential, facts).kind !== "refused"
+    const { candidates: matchingCredentials, refusal } = matchUrlBoundCredentialCandidates(
+      credentials, targetUrl, use, facts, { label }
     );
-    const refusal = credentialSelectionRefusal(audienceMatches, facts);
     if (matchingCredentials.length === 0 && refusal) {
       throw new ForwardRejection(403, refusal, refusal);
     }
     if (matchingCredentials.length === 1) {
       const credential = matchingCredentials[0] ?? null;
       if (credential) {
-        const binding = this.findCredentialBinding(credential, targetUrl, use);
+        const binding = findCredentialBinding(credential, targetUrl, use);
         if (!binding) {
           throw new ForwardRejection(
             403,
@@ -1957,14 +1946,9 @@ export class EgressProxy {
         this.upgradeBindingCatalog(credential)
       )
     );
-    const audienceMatches = credentials.filter(
-      (credential) =>
-        !credential.revokedAt && !!this.findCredentialBinding(credential, targetUrl, use)
+    const { candidates: matching, refusal } = matchUrlBoundCredentialCandidates(
+      credentials, targetUrl, use, facts, { directOnly: true }
     );
-    const matching = audienceMatches.filter(
-      (credential) => credentialCallerUse(credential, facts).kind === "direct"
-    );
-    const refusal = credentialSelectionRefusal(audienceMatches, facts);
     if (matching.length === 0 && refusal) {
       throw new ForwardRejection(403, refusal, refusal);
     }
@@ -2384,19 +2368,6 @@ export class EgressProxy {
     };
     await this.deps.credentialStore.saveUrlBound?.(upgraded as Credential & { id: string });
     return upgraded;
-  }
-
-  private findCredentialBinding(
-    credential: Credential,
-    targetUrl: URL,
-    use: CredentialBindingUse
-  ): CredentialBinding | null {
-    const binding = this.credentialBindings(credential).find(
-      (binding) => binding.use === use && !!findMatchingUrlAudience(targetUrl, binding.audience)
-    );
-    if (binding) return binding;
-
-    return null;
   }
 
   private async handleConnect(

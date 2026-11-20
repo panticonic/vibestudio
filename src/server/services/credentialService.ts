@@ -7,11 +7,11 @@ import {
   type ClientConfigRecord,
 } from "@vibestudio/credential-client/clientConfigStore";
 import { CredentialStore } from "@vibestudio/credential-client/store";
+import { findCredentialBinding, matchUrlBoundCredentialCandidates } from "@vibestudio/credential-client/urlBoundSelection";
 import { credentialLifecycle as summarizeCredentialLifecycle } from "@vibestudio/credential-client/credentialStatus";
 import {
   credentialCallerUse,
   credentialRefusesAgentGrant,
-  credentialSelectionRefusal,
   type CredentialCallerFacts,
 } from "@vibestudio/credential-client/credentialActor";
 import type {
@@ -1338,18 +1338,9 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     use: CredentialBindingUse = "fetch",
     label?: string
   ): Promise<{ credential: Credential; usage: CredentialUseContext } | null> {
-    const audienceMatches = (await credentialStore.listUrlBound()).filter(
-      (credential) =>
-        !credential.revokedAt &&
-        (label === undefined || credential.label === label) &&
-        !!findCredentialBinding(credential, targetUrl, use)
+    const { audienceMatches, candidates: credentials, refusal } = matchUrlBoundCredentialCandidates(
+      await credentialStore.listUrlBound(), targetUrl, use, caller, { label }
     );
-    // Another member's personal credential is never a candidate; with nothing
-    // usable left, the acting member is asked to connect their own.
-    const credentials = audienceMatches.filter(
-      (credential) => credentialCallerUse(credential, caller).kind !== "refused"
-    );
-    const refusal = credentialSelectionRefusal(audienceMatches, caller);
     if (credentials.length === 0 && refusal) {
       throw credentialCallerRefusalError(audienceMatches[0]!, refusal);
     }
@@ -2048,18 +2039,6 @@ function credentialBindings(credential: Credential): CredentialBinding[] {
     return credential.bindings;
   }
   return [];
-}
-
-function findCredentialBinding(
-  credential: Credential,
-  targetUrl: URL,
-  use: CredentialBindingUse
-): CredentialBinding | null {
-  return (
-    credentialBindings(credential).find(
-      (binding) => binding.use === use && !!findMatchingUrlAudience(targetUrl, binding.audience)
-    ) ?? null
-  );
 }
 
 function credentialUseContext(
