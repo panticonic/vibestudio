@@ -28,10 +28,10 @@ const canonical = {
   className: "GadHistoryDO",
   objectKey: "canonical",
 };
-const native = (taskId: number, callId: string): VerifiedCaller => ({
-  runtime: { kind: "do", id: "do:workers/agent:AgentDO:agent" },
+const native = (taskId: number, callId: string, agent = "agent"): VerifiedCaller => ({
+  runtime: { kind: "do", id: `do:workers/agent:AgentDO:${agent}` },
   nativeInvocation: {
-    owner: { runtimeId: "agent", authoritySessionId: "sealed" },
+    owner: { runtimeId: agent, authoritySessionId: "sealed" },
     task: { conversationId: 3, taskId },
     operation: { kind: "tool", assistantEntryId: 0, callId },
   },
@@ -86,7 +86,7 @@ it("resumes an interrupted commit recall backfill before indexing a newer protec
   expect(JSON.parse(marker!)).toEqual({ completedEventId: "next-tip", pending: null });
 });
 
-it("uses the verified task and owner context to choose a working copy", async () => {
+it("uses the verified agent lifetime and owner context to choose a working copy", async () => {
   const dispatch = vi.fn(
     async (_ref: WorkspaceSourceProviderRef, method: string, input: unknown) => {
       if (method === "reserveHistoryParticipant") {
@@ -112,8 +112,10 @@ it("uses the verified task and owner context to choose a working copy", async ()
   const first = await launch(native(1, "call-1"));
   const second = await launch(native(1, "call-2"));
   const third = await launch(native(2, "call-3"));
+  const otherAgent = await launch(native(1, "call-1", "other-agent"));
   expect(first.owner).toEqual(second.owner);
-  expect(first.owner).not.toEqual(third.owner);
+  expect(first.owner).toEqual(third.owner);
+  expect(first.owner).not.toEqual(otherAgent.owner);
   const child = await launch(native(1, "child"), "owner", "child-context");
   const independentTaskContext = await launch(native(1, "independent"), "other-owner", "other-context");
   expect(child.owner).toEqual(first.owner);
@@ -129,7 +131,7 @@ it("uses the verified task and owner context to choose a working copy", async ()
   expect(editor.owner).not.toEqual(independent.owner);
 });
 
-it("retains a user's interactive working copy across signed runs without collapsing native tasks", () => {
+it("retains a user's interactive working copy across signed runs and distinguishes agents", () => {
   const signed = (run: string, userId = "person", contextId = "session-context"): VerifiedCaller => {
     const caller = createVerifiedCaller("do:workers/session:SessionDO:session", "do", null, null, {
       userId, handle: userId,
@@ -251,7 +253,7 @@ it("reads status only from the verified participant and context", async () => {
   await expect(readWorkspaceParticipantStatus(request)).resolves.toEqual(status);
   expect(dispatch).toHaveBeenLastCalledWith(owner, "readHistoryStatus", { contextId: "context" });
   await expect(
-    readWorkspaceParticipantStatus({ ...request, caller: native(2, "other-task") })
+    readWorkspaceParticipantStatus({ ...request, caller: native(1, "other-call", "other-agent") })
   ).rejects.toThrow("history belongs to a different participant");
   expect(dispatch).toHaveBeenCalledTimes(1);
   await expect(

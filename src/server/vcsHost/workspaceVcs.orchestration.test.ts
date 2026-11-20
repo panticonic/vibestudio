@@ -220,17 +220,17 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       }
       throw new Error(`Unexpected participant dispatch ${method}`);
     });
-    const taskCaller = (taskId: number) => ({
-      runtime: { kind: "do", id: "agent" },
+    const taskCaller = (agent: number) => ({
+      runtime: { kind: "do", id: `agent-${agent}` },
       nativeInvocation: {
-        owner: { runtimeId: "agent", authoritySessionId: "sealed" },
-        task: { conversationId: 0, taskId },
+        owner: { runtimeId: `agent-${agent}`, authoritySessionId: "sealed" },
+        task: { conversationId: 0, taskId: 1 },
         operation: { kind: "tool", assistantEntryId: 0, callId: "bind" },
       },
     } as const);
-    const bind = (taskId: number) => vcs.bindParticipantFilesystem({
+    const bind = (agent: number) => vcs.bindParticipantFilesystem({
       contextId,
-      caller: taskCaller(taskId),
+      caller: taskCaller(agent),
       isTracked: async () => true,
     });
     await expect(bind(1)).rejects.toThrow("Participant workspace history is unavailable");

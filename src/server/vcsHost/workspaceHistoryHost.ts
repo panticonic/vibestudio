@@ -1038,8 +1038,9 @@ export function workspaceInteractiveSessionParticipant(userId: string, contextId
 export function workspaceParticipantIdentity(caller: VerifiedCaller, ownerContextId: string | undefined): string {
   const invocation = caller.nativeInvocation;
   if (invocation) {
-    // Tool calls in one task reuse the copy for the same admitted owner.
-    return canonicalJson(["task", invocation.owner, invocation.task, ownerContextId]);
+    // Native tasks identify individual invocations. Their authenticated agent
+    // lifetime owns the working copy and survives across calls and turns.
+    return canonicalJson(["agent", invocation.owner, ownerContextId]);
   }
   const session = verifiedInteractiveSession(caller);
   if (session && session.contextId === ownerContextId) {

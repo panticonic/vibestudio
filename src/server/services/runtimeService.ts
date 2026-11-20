@@ -2675,7 +2675,8 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     const contextId = contextIdForTargetKey(args.targetKey);
     await deps.semanticContexts.forkParticipantContext({
       caller, sourceContextId: args.parentContextId, targetContextId: contextId,
-      ownerContextId: caller.agentBinding?.contextId ?? args.parentContextId,
+      ownerContextId: caller.agentBinding?.contextId ??
+        await store.resolveWorkContext(caller.runtime.id) ?? args.parentContextId,
       retainForRuntime: true,
     });
     await store.recordContextEdge({

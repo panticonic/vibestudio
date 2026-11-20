@@ -1894,8 +1894,18 @@ async function main() {
         )) ? [clone.sourceContextId] : [];
       }
       const edges = await store.listContextEdgesByChild(contextId);
-      return edges.flatMap((edge) => edge.kind === "lifecycle" && edge.ownerEntityId === record.parentId
-        ? [edge.ownerContextId] : []);
+      // A launcher may own the fork through a worker it created, such as an
+      // orchestrator reserving the context before attaching an agent.
+      const parent = record.parentId ? entityCache.resolve(record.parentId) : null;
+      const sources: string[] = [];
+      for (const edge of edges) {
+        if (edge.kind !== "lifecycle" || !edge.ownerEntityId) continue;
+        if (edge.ownerEntityId === record.parentId ||
+            (parent && await callerControlsLifecycleContext(store, parent.id, parent.contextId, contextId))) {
+          sources.push(edge.ownerContextId);
+        }
+      }
+      return sources;
     },
     // Public context bindings contain durable identities only. Reachability is
     // resolved from the caller's current hub/session credential.
@@ -2688,6 +2698,14 @@ async function main() {
     };
   const buildCallerContext = (caller: VerifiedCaller) =>
     caller.agentBinding?.contextId ?? callerBuildContextId(entityCache, caller.runtime.id);
+  const buildSourceCaller = ({ caller, authorizingCaller }: ServiceContext) => {
+    if (caller.runtime.kind !== "extension" || !authorizingCaller?.agentBinding) return caller;
+    if (caller.nativeInvocation &&
+        caller.nativeInvocation.owner.runtimeId !== authorizingCaller.agentBinding.entityId) return caller;
+    return caller.nativeInvocation
+      ? { ...authorizingCaller, nativeInvocation: caller.nativeInvocation }
+      : authorizingCaller;
+  };
   const participantDiscoveryContext = (caller: VerifiedCaller) =>
     caller.nativeInvocation || caller.taskAuthority || caller.subject?.userId
       ? buildCallerContext(caller)
@@ -3061,29 +3079,33 @@ async function main() {
           buildSystem,
           getCallerContextId: (callerId) => callerBuildContextId(entityCache, callerId),
           resolveContextBuildSource: async (ctx, contextId) => {
-            const callerContext = buildCallerContext(ctx.caller);
-            if (!callerContext || !await canBuildFromContext(ctx.caller, callerContext, contextId))
+            const caller = buildSourceCaller(ctx);
+            const callerContext = buildCallerContext(caller);
+            if (!callerContext || !await canBuildFromContext(caller, callerContext, contextId))
               throw Object.assign(new Error("Build context is outside the caller's working copy"), { code: "EACCES" });
-            return workspaceVcs.resolveCallerContextState(contextId, ctx.caller, ctx.signal, callerContext);
+            return workspaceVcs.resolveCallerContextState(contextId, caller, ctx.signal, callerContext);
           },
           resolveContentBuildSource: async (ctx, stateHash) => {
-            const contextId = buildCallerContext(ctx.caller);
+            const caller = buildSourceCaller(ctx);
+            const contextId = buildCallerContext(caller);
             return workspaceVcs.resolveParticipantBuildSource(
-              stateHash, ctx.caller, contextId, ctx.signal, await readableBuildContexts(ctx.caller, contextId),
+              stateHash, caller, contextId, ctx.signal, await readableBuildContexts(caller, contextId),
             );
           },
           canReadBuild: async (ctx, build) => {
             if (build.sourceStateHash === null) return true;
-            const contextId = buildCallerContext(ctx.caller);
+            const caller = buildSourceCaller(ctx);
+            const contextId = buildCallerContext(caller);
             return workspaceVcs.participantBuildStateReachable(
-              build.metadata.sourceState, ctx.caller, contextId, ctx.signal,
-              await readableBuildContexts(ctx.caller, contextId),
+              build.metadata.sourceState, caller, contextId, ctx.signal,
+              await readableBuildContexts(caller, contextId),
             );
           },
           executionVisibility: (ctx) => async (artifact) => {
-            const contextId = buildCallerContext(ctx.caller);
+            const caller = buildSourceCaller(ctx);
+            const contextId = buildCallerContext(caller);
             return workspaceVcs.participantExecutionVisible(
-              artifact, ctx.caller, contextId, ctx.signal, await readableBuildContexts(ctx.caller, contextId),
+              artifact, caller, contextId, ctx.signal, await readableBuildContexts(caller, contextId),
             );
           },
           listUnits: () =>
