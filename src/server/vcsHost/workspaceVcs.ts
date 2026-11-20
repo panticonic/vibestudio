@@ -134,7 +134,6 @@ import {
   HistoryWalkPageSchema,
   HistoryWalkPlanSchema,
   type HistorySearchCause,
-  SemanticContextResultSchema,
   GadJsonValueSchema,
   type GadJsonRecord,
 } from "@vibestudio/service-schemas/workspaceSource";
@@ -199,10 +198,6 @@ export type WorkspaceSemanticOutput<M extends WorkspaceSemanticMethod> = ReturnT
   (typeof vcsMethods)[VcsApiMethodForWire<M>]["returns"]["parse"]
 >;
 type SemanticResultDecoder<T> = (value: unknown) => T;
-function parseSemanticContextResult(value: unknown) {
-  return SemanticContextResultSchema.parse(value);
-}
-
 function semanticApiMethodForWire(method: WorkspaceSemanticMethod): VcsMethodName {
   const name = method.slice(3);
   const apiMethod = `${name[0]?.toLowerCase() ?? ""}${name.slice(1)}`;
@@ -519,15 +514,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   private readonly locks = new Map<string, Promise<unknown>>();
   private protectedMainMutationTail: Promise<void> = Promise.resolve();
   private readonly protectedMainMutationScope = new AsyncLocalStorage<boolean>();
-  private readonly semanticContextInitializations = new Map<string, Promise<VcsStateNodeRef>>();
   /** Exact working-head receipts owned by this host's context mutation fence.
    * A null receipt records explicit deletion; a missing receipt needs recovery. */
   private readonly contextHeads = new Map<string, VcsStateNodeRef | null>();
-  private readonly contextInitializations = new Map<string, Promise<VcsStateNodeRef>>();
   private readonly semanticStateByContent = new Map<string, VcsStateNodeRef>();
-  /** Exact materialization receipt verified during this host generation. An
-   * absent entry (including after restart) requires one disk integrity scan. */
-  private readonly verifiedProjectionStates = new Map<string, string>();
   /**
    * Exact immutable build-source entries established during this host
    * generation. Build roots are private derived data and never editable;
@@ -742,23 +732,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   async listSemanticContexts(prefix?: string): Promise<string[]> {
     await this.whenSemanticReady();
-    if (this.participantHistorySource)
-      return listWorkspaceHistoryRuntimeContexts(this.participantHistorySource, prefix);
-    return this.gad().listContexts({
-      ...(prefix === undefined ? {} : { prefix }),
-    });
-  }
-
-  async isStateDescendant(
-    ancestor: VcsStateNodeRef,
-    descendant: VcsStateNodeRef
-  ): Promise<boolean> {
-    await this.whenSemanticReady();
-    return this.gad().isStateDescendant({
-      ancestor,
-      descendant,
-      maxEdges: 100_000,
-    });
+    const source = this.participantHistorySource;
+    if (!source) throw new Error("Participant workspace history is unavailable");
+    return listWorkspaceHistoryRuntimeContexts(source, prefix);
   }
 
   /** The attachment owns one initialization flight. Content reads keep using
@@ -2262,7 +2238,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       case "materialize-context": {
         const command = ContextMaterializationCommandSchema.parse(effect.payload);
         const receipt = await this.materializer.materialize(command);
-        await this.rememberVerifiedProjection(command.contextId);
         return GadJsonRecordSchema.parse(receipt);
       }
       case "publish-main":
@@ -2515,10 +2490,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   async ensureRuntimeContext(contextId: string): Promise<void> {
     await this.whenSemanticReady();
     const source = this.participantHistorySource;
-    if (!source) {
-      await this.ensureSemanticContext(contextId);
-      return;
-    }
+    if (!source) throw new Error("Participant workspace history is unavailable");
     if (contextId === source.infrastructureContextId) return;
     await this.locked(`context-lifecycle:${contextId}`, async () => {
       if (this.contextHeads.get(contextId) === null)
@@ -2527,111 +2499,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     });
   }
 
-  /**
-   * Ensure only the durable semantic coordinate exists.
-   *
-   * Runtime activation needs this authority boundary, but it does not need an
-   * editable checkout. Filesystem consumers continue through ensureContext(),
-   * which materializes the disposable projection on first use.
-   */
-  async ensureSemanticContext(contextId: string): Promise<VcsStateNodeRef> {
-    await this.whenSemanticReady();
-    const active = this.semanticContextInitializations.get(contextId);
-    if (active) return active;
-    const initialization = this.locked(`context-lifecycle:${contextId}`, async () => {
-      const head = this.contextHeads.get(contextId);
-      // A deferred coordinate admission has no projection to repair. Its
-      // exact owned receipt remains valid until this fence admits a mutation.
-      return head ? { ...head } : this.dispatchEnsureContext(contextId, "deferred");
-    }).finally(() => {
-      if (this.semanticContextInitializations.get(contextId) === initialization) {
-        this.semanticContextInitializations.delete(contextId);
-      }
-    });
-    this.semanticContextInitializations.set(contextId, initialization);
-    return initialization;
-  }
-
-  async ensureContext(contextId: string): Promise<VcsStateNodeRef> {
-    await this.whenSemanticReady();
-    const active = this.contextInitializations.get(contextId);
-    if (active) return active;
-    const initialization = this.locked(`context-lifecycle:${contextId}`, () =>
-      this.ensureContextOnce(contextId)
-    ).finally(() => {
-      if (this.contextInitializations.get(contextId) === initialization) {
-        this.contextInitializations.delete(contextId);
-      }
-    });
-    this.contextInitializations.set(contextId, initialization);
-    return initialization;
-  }
-
-  private async ensureContextOnce(contextId: string): Promise<VcsStateNodeRef> {
-    const working = await this.dispatchEnsureContext(contextId, "required");
-    const materialized = await this.materializer.materializationState(contextId);
-    const materializedKey = materialized ? canonicalJson(materialized) : null;
-    const targetMatches =
-      materialized && canonicalJson(materialized.targetState) === canonicalJson(working);
-    const alreadyVerified =
-      materializedKey !== null && this.verifiedProjectionStates.get(contextId) === materializedKey;
-    if (
-      !targetMatches ||
-      (!alreadyVerified && !(await this.materializer.projectionMatches(materialized)))
-    ) {
-      await this.repairContextMaterialization(contextId);
-    } else if (materializedKey !== null && !alreadyVerified) {
-      this.verifiedProjectionStates.set(contextId, materializedKey);
-    }
-    return working;
-  }
-
-  private async dispatchEnsureContext(
-    contextId: string,
-    projection: "required" | "deferred"
-  ): Promise<VcsStateNodeRef> {
-    this.contextHeads.delete(contextId);
-    this.projector.contextDir(contextId);
-    const operation = projection === "required" ? "ensure-context" : "ensure-context-coordinate";
-    const commandId = `${operation}:${sha256HexSyncText(
-      canonicalJson({
-        workspaceId: this.deps.workspaceId,
-        contextId,
-      })
-    )}`;
-    const owner = this.gad();
-    const result = await owner.ensureContext({
-      contextId,
-      commandId,
-      ...(projection === "deferred" ? { projection } : {}),
-      ingress: { causalParent: null },
-    });
-    const context = await this.drainSemanticResult(owner, result, parseSemanticContextResult);
-    this.publishContextHead(contextId, context.working.ref);
-    return context.working.ref;
-  }
-
   private publishContextHead(contextId: string, head: VcsStateNodeRef): void {
     this.contextHeads.set(contextId, Object.freeze({ ...head }));
-  }
-
-  private async repairContextMaterialization(contextId: string): Promise<void> {
-    const current = await this.materializer.materializationState(contextId);
-    const command = await this.gad().contextMaterializationCommand({
-      contextId,
-      materializedState: current?.targetState ?? null,
-    });
-    await this.materializer.materialize(command);
-    await this.rememberVerifiedProjection(contextId);
-  }
-
-  private async rememberVerifiedProjection(contextId: string): Promise<void> {
-    const state = await this.materializer.materializationState(contextId);
-    if (!state) {
-      this.verifiedProjectionStates.delete(contextId);
-      return;
-    }
-    this.verifiedProjectionStates.set(contextId, canonicalJson(state));
   }
 
   async activateNativeWorkspace(): Promise<{ stateHash: string }> {
@@ -2643,31 +2512,22 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   async dropContext(contextId: string): Promise<void> {
     await this.whenSemanticReady();
+    const source = this.participantHistorySource;
+    if (!source) throw new Error("Participant workspace history is unavailable");
     await this.locked(`context-lifecycle:${contextId}`, async () => {
-      const source = this.participantHistorySource;
-      if (source) {
-        this.contextHeads.set(contextId, null);
-        const retired = await retireWorkspaceParticipantContext({ ...source, contextId });
-        for (const owner of retired.owners) {
-          await source.destroyRetiredStorage?.(owner);
-          await fsp.rm(this.participantProjection(owner).root, { recursive: true, force: true });
-        }
-        for (const owner of retired.branchOwners) {
-          const { ownerKey, materializer } = this.participantProjection(owner);
-          await this.locked(canonicalJson(["participant-projection", ownerKey, contextId]), () =>
-            materializer.drop(contextId)
-          );
-        }
-      }
-      this.contextHeads.delete(contextId);
-      // Projection bytes are disposable and reconstructible from semantic
-      // authority. Remove them first so every interrupted ordering is
-      // recoverable: semantic failure can rematerialize, while semantic
-      // success can never be followed by a stale projection resurrection.
-      await this.materializer.drop(contextId);
-      this.verifiedProjectionStates.delete(contextId);
-      if (!source) await this.gad().dropContext({ contextId });
       this.contextHeads.set(contextId, null);
+      const retired = await retireWorkspaceParticipantContext({ ...source, contextId });
+      for (const owner of retired.owners) {
+        await source.destroyRetiredStorage?.(owner);
+        await fsp.rm(this.participantProjection(owner).root, { recursive: true, force: true });
+      }
+      for (const owner of retired.branchOwners) {
+        const { ownerKey, materializer } = this.participantProjection(owner);
+        await this.locked(canonicalJson(["participant-projection", ownerKey, contextId]), () =>
+          materializer.drop(contextId)
+        );
+      }
+      await this.materializer.drop(contextId);
     });
   }
 

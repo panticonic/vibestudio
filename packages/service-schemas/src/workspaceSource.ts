@@ -126,26 +126,6 @@ export const HistoryQueryRequestSchema = z.object({
 export type HistoryQueryBasis = z.infer<typeof HistoryQueryBasisSchema>;
 export type HistoryQueryTrajectory = z.infer<typeof HistoryQueryTrajectorySchema>;
 
-/** Exact coordinate returned by semantic context initialization and forking. */
-export const SemanticContextResultSchema = z
-  .object({
-    contextId: z.string().min(1),
-    committed: z
-      .object({
-        ref: z.object({ kind: z.literal("event"), eventId: z.string().min(1) }).strict(),
-        workspaceFactRootId: z.string().min(1),
-      })
-      .strict(),
-    working: z
-      .object({
-        ref: vcsStateNodeRefSchema,
-        workspaceFactRootId: z.string().min(1),
-      })
-      .strict(),
-    workingHeadApplicationId: z.string().min(1).nullable(),
-  })
-  .strict();
-
 export {
   JsonValueSchema as GadJsonValueSchema,
   JsonObjectSchema as GadJsonRecordSchema,
@@ -2004,17 +1984,6 @@ const gadInternalWireMethods = defineServiceMethods({
       .strict(),
     agentFacing: false,
   },
-  vcsListContexts: {
-    website: {
-      kind: "closed",
-      reason:
-        "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
-    } as const,
-    description: "List semantic context identifiers.",
-    args: z.tuple([z.object({ prefix: z.string().optional() }).strict()]),
-    returns: z.array(nonemptyText),
-    agentFacing: false,
-  },
   vcsReferencesReachable: {
     website: {
       kind: "closed",
@@ -2033,45 +2002,6 @@ const gadInternalWireMethods = defineServiceMethods({
     returns: z.boolean(),
     agentFacing: false,
   },
-  vcsIsStateDescendant: {
-    website: {
-      kind: "closed",
-      reason:
-        "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
-    } as const,
-    description: "Check semantic state ancestry within a bounded traversal.",
-    args: z.tuple([
-      z
-        .object({
-          ancestor: stateRefSchema,
-          descendant: stateRefSchema,
-          maxEdges: z.number().int().positive(),
-        })
-        .strict(),
-    ]),
-    returns: z.boolean(),
-    agentFacing: false,
-  },
-  vcsEnsureContext: {
-    website: {
-      kind: "closed",
-      reason:
-        "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
-    } as const,
-    description: "Ensure one semantic context and requested projection.",
-    args: z.tuple([
-      z
-        .object({
-          contextId: nonemptyText,
-          commandId: nonemptyText,
-          projection: z.enum(["required", "deferred"]).optional(),
-          ingress: semanticIngressSchema,
-        })
-        .strict(),
-    ]),
-    returns: genericSemanticResultSchema,
-    agentFacing: false,
-  },
   vcsContextMaterializationCommand: {
     website: {
       kind: "closed",
@@ -2083,17 +2013,6 @@ const gadInternalWireMethods = defineServiceMethods({
       z.object({ contextId: nonemptyText, materializedState: stateRefSchema.nullable() }).strict(),
     ]),
     returns: materializationCommandSchema,
-    agentFacing: false,
-  },
-  vcsDropContext: {
-    website: {
-      kind: "closed",
-      reason:
-        "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
-    } as const,
-    description: "Drop one semantic context.",
-    args: z.tuple([z.object({ contextId: nonemptyText }).strict()]),
-    returns: z.object({ dropped: z.boolean() }).strict(),
     agentFacing: false,
   },
   resolveRef: {
@@ -2641,7 +2560,6 @@ const GAD_AUTHORITY_GROUPS: readonly GadAuthorityGroup[] = [
       "vcsSemanticEffectAck",
       "vcsSemanticHostReadAck",
       "vcsSemanticContentAck",
-      "vcsEnsureContext",
       "vcsContextMaterializationCommand",
     ],
     capability: "workspace.source.write",
@@ -2654,9 +2572,7 @@ const GAD_AUTHORITY_GROUPS: readonly GadAuthorityGroup[] = [
     methods: [
       "vcsPendingSemanticEffects",
       "vcsContentGcRoots",
-      "vcsListContexts",
       "vcsReferencesReachable",
-      "vcsIsStateDescendant",
       "listChannelMembershipsForUser",
     ],
     capability: "workspace.source.read",
@@ -2679,14 +2595,6 @@ const GAD_AUTHORITY_GROUPS: readonly GadAuthorityGroup[] = [
     principals: ["host", "code"],
     tier: "open",
     sensitivity: "admin",
-    effect: { kind: "open" },
-  },
-  {
-    methods: ["vcsDropContext"],
-    capability: "workspace.source.delete",
-    principals: ["host"],
-    tier: "open",
-    sensitivity: "destructive",
     effect: { kind: "open" },
   },
   {

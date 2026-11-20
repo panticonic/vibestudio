@@ -93,8 +93,6 @@ type SemanticWireMethodName =
 export type WorkspaceSemanticPort = Pick<WorkspaceSemanticClient, SemanticWireMethodName> & HistoryCommitMemoryIndex & {
   contentGcRoots: WorkspaceSemanticClient["vcsContentGcRoots"];
   referencesReachable: WorkspaceSemanticClient["vcsReferencesReachable"];
-  listContexts: WorkspaceSemanticClient["vcsListContexts"];
-  isStateDescendant: WorkspaceSemanticClient["vcsIsStateDescendant"];
   getChannelEnvelope(
     input: Parameters<WorkspaceSemanticClient["getChannelEnvelope"]>[0]
   ): Promise<{ contentClass: "internal" | "external" } | null>;
@@ -102,9 +100,7 @@ export type WorkspaceSemanticPort = Pick<WorkspaceSemanticClient, SemanticWireMe
   semanticHostReadAck: WorkspaceSemanticClient["vcsSemanticHostReadAck"];
   semanticContentAck: WorkspaceSemanticClient["vcsSemanticContentAck"];
   pendingSemanticEffects: WorkspaceSemanticClient["vcsPendingSemanticEffects"];
-  ensureContext: WorkspaceSemanticClient["vcsEnsureContext"];
   contextMaterializationCommand: WorkspaceSemanticClient["vcsContextMaterializationCommand"];
-  dropContext: WorkspaceSemanticClient["vcsDropContext"];
   appendLogEvent: WorkspaceSemanticClient["appendLogEvent"];
   getLogEvent: WorkspaceSemanticClient["getLogEvent"];
   inspectInvocationState: WorkspaceSemanticClient["inspectInvocationState"];
@@ -155,8 +151,6 @@ export function createWorkspaceSemanticPort(
   return {
     contentGcRoots: () => client.vcsContentGcRoots(),
     referencesReachable: (input) => client.vcsReferencesReachable(input),
-    listContexts: (input) => client.vcsListContexts(input),
-    isStateDescendant: (input) => client.vcsIsStateDescendant(input),
     getChannelEnvelope: async (input) => {
       const envelope = await client.getChannelEnvelope(input);
       return envelope ? { contentClass: envelope.contentClass } : null;
@@ -193,9 +187,7 @@ export function createWorkspaceSemanticPort(
     semanticHostReadAck: (input) => client.vcsSemanticHostReadAck(input),
     semanticContentAck: (input) => client.vcsSemanticContentAck(input),
     pendingSemanticEffects: () => client.vcsPendingSemanticEffects(),
-    ensureContext: (input) => client.vcsEnsureContext(input),
     contextMaterializationCommand: (input) => client.vcsContextMaterializationCommand(input),
-    dropContext: (input) => client.vcsDropContext(input),
     appendLogEvent: (input) => client.appendLogEvent(input),
     getLogEvent: (input) => client.getLogEvent(input),
     inspectInvocationState: (input) => client.inspectInvocationState(input),

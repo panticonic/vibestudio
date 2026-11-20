@@ -175,7 +175,7 @@ describe("wireVcsDurability", () => {
 
   it("durably publishes the manifest source-provider entity before attaching it", async () => {
     const dispatch = {
-      dispatch: vi.fn(async () => ["direct-result"]),
+      dispatch: vi.fn(async () => []),
     } as unknown as DODispatch;
     const manager = {
       declaresRemoteDoltClass: vi.fn(() => false),
@@ -235,8 +235,8 @@ describe("wireVcsDurability", () => {
     });
     expect(workspaceVcs.attachGad).toHaveBeenCalledOnce();
 
-    await expect(gadClient?.listContexts({ prefix: "a" })).resolves.toEqual(["direct-result"]);
-    expect(dispatch.dispatch).toHaveBeenCalledWith(gadRef, "vcsListContexts", { prefix: "a" });
+    await expect(gadClient?.pendingSemanticEffects()).resolves.toEqual([]);
+    expect(dispatch.dispatch).toHaveBeenCalledWith(gadRef, "vcsPendingSemanticEffects");
   });
 
   it("releases attachment while semanticWorkspace awaits the owned initialization", async () => {

@@ -31,18 +31,6 @@ import { WorkspaceVcs } from "./workspaceVcs.js";
 const roots: string[] = [];
 const TEST_PROVIDER = { source: "test/provider", className: "TestProvider", objectKey: "test" };
 
-function semanticContextResult(working: import("@vibestudio/service-schemas/vcs").VcsStateNodeRef) {
-  return {
-    contextId: "context:test",
-    committed: {
-      ref:
-        working.kind === "event" ? working : { kind: "event" as const, eventId: "event:genesis" },
-      workspaceFactRootId: "workspace-fact-root:committed",
-    },
-    working: { ref: working, workspaceFactRootId: "workspace-fact-root:working" },
-    workingHeadApplicationId: working.kind === "application" ? working.applicationId : null,
-  };
-}
 const editInput = (contextId = "context:test") => ({
   commandId: "command:test",
   contextId,
@@ -318,10 +306,6 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       isTracked: async () => true,
     });
     await expect(bind(1)).rejects.toThrow("Participant workspace history is unavailable");
-    await vcs.attachGad(providerFromWireCall(vi.fn(async (method) => {
-      expect(method).toBe("vcsDropContext");
-      return { dropped: true };
-    })));
     const destroyRetiredStorage = vi.fn(async (_owner: typeof TEST_PROVIDER) => {});
     let permitAttachment!: () => void;
     const attachmentAllowed = new Promise<void>((resolve) => {
@@ -360,14 +344,19 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     await expect(fsp.stat(first.sourceRoot)).rejects.toHaveProperty("code", "ENOENT");
   });
 
-  it("uses native context registration and retirement while legacy history stays frozen", async () => {
+  it("registers, lists, and retires contexts in native history", async () => {
     const { vcs, refs } = await harness();
     const canonical = { ...TEST_PROVIDER, objectKey: "canonical" };
     const contextId = "native-runtime-context";
     const infrastructureContextId = "native-history-provider";
     const contexts = new Set<string>();
+    let finishAdmission!: () => void;
+    let noticeAdmission!: () => void;
+    const admissionRequested = new Promise<void>((resolve) => { noticeAdmission = resolve; });
+    const admissionAllowed = new Promise<void>((resolve) => { finishAdmission = resolve; });
+    let holdAdmission = false;
     vi.spyOn(refs, "readMainSemanticState").mockReturnValue({ kind: "event", eventId: "main-event" });
-    const legacy = vi.fn(async () => { throw new Error("Legacy workspace history is frozen"); });
+    const legacy = vi.fn(async () => { throw new Error("Unexpected legacy workspace call"); });
     await vcs.attachGad(providerFromWireCall(legacy));
     const dispatch = vi.fn(async (owner: typeof canonical, method: string, value?: unknown) => {
       expect(owner).toEqual(canonical);
@@ -376,6 +365,10 @@ describe("WorkspaceVcs semantic host orchestration", () => {
         case "listHistoryAppliedPublications": return [];
         case "ensureHistoryRuntimeContext":
           expect(value).toEqual({ contextId });
+          if (holdAdmission) {
+            noticeAdmission();
+            await admissionAllowed;
+          }
           contexts.add(contextId);
           return;
         case "listHistoryRuntimeContexts":
@@ -388,12 +381,21 @@ describe("WorkspaceVcs semantic host orchestration", () => {
         default: throw new Error(`Unexpected participant dispatch ${method}`);
       }
     });
+    await expect(vcs.ensureRuntimeContext(contextId)).rejects.toThrow("history is unavailable");
+    await expect(vcs.listSemanticContexts()).rejects.toThrow("history is unavailable");
+    await expect(vcs.dropContext(contextId)).rejects.toThrow("history is unavailable");
     await vcs.attachParticipantHistory({ canonical, dispatch: { dispatch }, infrastructureContextId });
     await vcs.ensureRuntimeContext(infrastructureContextId);
     await vcs.ensureRuntimeContext(contextId);
-    await vcs.ensureRuntimeContext(contextId);
     await expect(vcs.listSemanticContexts("native-runtime")).resolves.toEqual([contextId]);
-    await vcs.dropContext(contextId);
+    holdAdmission = true;
+    const pendingAdmission = vcs.ensureRuntimeContext(contextId);
+    await admissionRequested;
+    const retirement = vcs.dropContext(contextId);
+    await Promise.resolve();
+    expect(dispatch).not.toHaveBeenCalledWith(canonical, "retireHistoryContext", { contextId });
+    finishAdmission();
+    await Promise.all([pendingAdmission, retirement]);
     await expect(vcs.listSemanticContexts("native-runtime")).resolves.toEqual([]);
     await expect(vcs.ensureRuntimeContext(contextId)).rejects.toThrow("context has retired");
     expect(legacy).not.toHaveBeenCalled();
@@ -560,10 +562,6 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const head = () => ({ kind: "application" as const, applicationId: `application:${revision}` });
     const commands: ContextMaterializationCommand[] = [];
     const call = vi.fn(async (method: string, input: unknown) => {
-      if (method === "vcsEnsureContext") {
-        expect(input).toMatchObject({ projection: "deferred" });
-        return { kind: "complete", result: semanticContextResult(head()) };
-      }
       if (method === "vcsEdit") {
         revision = 1;
         return {
@@ -612,7 +610,6 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     expect(commands).toHaveLength(2);
     await vcs.resolveContextState("context:source");
     expect(commands).toHaveLength(2);
-    expect(call.mock.calls.some(([method]) => method === "vcsEnsureContext")).toBe(false);
     expect(await vcs.readFile(changed, "packages/config/settings.json")).toMatchObject({
       content: { kind: "text", text: secondBytes.toString() },
     });
@@ -677,8 +674,6 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     let commands = 0;
     let edits = 0;
     const call = vi.fn(async (method: string, input: unknown) => {
-      if (method === "vcsEnsureContext")
-        return { kind: "complete", result: semanticContextResult(head()) };
       if (method === "vcsContextMaterializationCommand") {
         commands++;
         return emptyRepairCommand(input as never, head());
@@ -694,18 +689,14 @@ describe("WorkspaceVcs semantic host orchestration", () => {
           result: { ...mutationResult(editInput(contextId)), workingHead: head() },
         };
       }
-      if (method === "vcsDropContext") return { dropped: true };
       throw new Error(`unexpected ${method}`);
     });
     await vcs.attachGad(providerFromWireCall(call));
-    await vcs.ensureSemanticContext(contextId);
+    await vcs.resolveContextState(contextId);
     const coordinate = await vcs.resolveWorkingState(contextId);
     expect(coordinate).toEqual(head());
     if (coordinate.kind === "application") coordinate.applicationId = "application:caller-edit";
     expect(await vcs.resolveWorkingState(contextId)).toEqual(head());
-    await vcs.ensureSemanticContext(contextId);
-    expect(call.mock.calls.map(([method]) => method)).toEqual(["vcsEnsureContext"]);
-    await vcs.resolveContextState(contextId);
     const edit = vcs.semanticDirectCall("vcsEdit", editInput(contextId));
     await started;
     let readSettled = false;
@@ -727,14 +718,6 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     expect(vcs.executionStateForContent(state)).toEqual(head());
     await vcs.resolveContextState(contextId);
     expect(commands).toBe(3);
-    await vcs.dropContext(contextId);
-    await expect(vcs.resolveWorkingState(contextId)).rejects.toThrow("was deleted");
-    await expect(vcs.resolveContextState(contextId)).rejects.toThrow("was deleted");
-    expect(commands).toBe(3);
-    await vcs.ensureSemanticContext(contextId);
-    expect(await vcs.resolveWorkingState(contextId)).toEqual(head());
-    await vcs.resolveContextState(contextId);
-    expect(call.mock.calls.filter(([method]) => method === "vcsEnsureContext")).toHaveLength(2);
   });
 
   it("holds a cancelled source dispatch until its committed receipt joins before admitting a later read", async () => {
@@ -844,31 +827,44 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     ]);
   });
 
-  it("serves prepared content while context requests await one semantic initialization", async () => {
-    const { deps } = await harness();
+  it("serves prepared content while runtime requests await native attachment", async () => {
+    const { deps, refs } = await harness();
     const initialContentState = `state:${"a".repeat(64)}`;
     const vcs = new WorkspaceVcs({ ...deps, initialContentState });
-    const ensureContext = vi.fn(async () => ({
-      kind: "complete",
-      result: semanticContextResult({ kind: "event", eventId: "event:initialized" }),
-    }));
-    await vcs.attachGad({ ensureContext } as never);
+    const canonical = { ...TEST_PROVIDER, objectKey: "canonical" };
+    const eventId = "event:initialized";
+    vi.spyOn(refs, "readMainSemanticState").mockReturnValue({ kind: "event", eventId });
+    const dispatch = vi.fn(async (_target: typeof canonical, method: string) => {
+      switch (method) {
+        case "readHistoryMain": return { head: "main", eventId };
+        case "listHistoryAppliedPublications": return [];
+        case "ensureHistoryRuntimeContext": return;
+        default: throw new Error(`Unexpected history method ${method}`);
+      }
+    });
     let finish!: () => void;
     const pending = new Promise<void>((resolve) => {
       finish = resolve;
     });
-    const initialize = vi.fn(() => pending);
+    const initialize = vi.fn(async () => {
+      await pending;
+      await vcs.attachParticipantHistory({ canonical, dispatch: { dispatch } });
+    });
     const flight = vcs.startSemanticInitialization(initialize);
     expect(vcs.startSemanticInitialization(initialize)).toBe(flight);
-    const first = vcs.ensureSemanticContext("context:editing");
-    const second = vcs.ensureSemanticContext("context:editing");
+    const first = vcs.ensureRuntimeContext("context:editing");
+    const second = vcs.ensureRuntimeContext("context:editing");
+    // Capture the prepared content before the refs gain their published event.
+    // The mocked protected ref is needed only when the native attachment starts.
+    vi.mocked(refs.readMainSemanticState).mockReturnValueOnce(null);
     await expect(vcs.ensureFresh()).resolves.toEqual({ stateHash: initialContentState });
     expect(initialize).toHaveBeenCalledOnce();
-    expect(ensureContext).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
     finish();
-    await expect(first).resolves.toEqual({ kind: "event", eventId: "event:initialized" });
-    await expect(second).resolves.toEqual({ kind: "event", eventId: "event:initialized" });
-    expect(ensureContext).toHaveBeenCalledOnce();
+    await Promise.all([first, second]);
+    expect(dispatch).toHaveBeenCalledWith(canonical, "ensureHistoryRuntimeContext", {
+      contextId: "context:editing",
+    });
   });
 
   it("cancels a waiting mutation without cancelling the shared initialization or acquiring its lease", async () => {
@@ -894,25 +890,22 @@ describe("WorkspaceVcs semantic host orchestration", () => {
 
   it("propagates the original initialization failure to pending and later editing requests", async () => {
     const { vcs } = await harness();
-    const ensureContext = vi.fn();
-    await vcs.attachGad({ ensureContext } as never);
     let fail!: (error: Error) => void;
     const pending = new Promise<void>((_resolve, reject) => {
       fail = reject;
     });
     const failure = new Error("Initial snapshot could not be persisted");
     const flight = vcs.startSemanticInitialization(() => pending);
-    const request = vcs.ensureSemanticContext("context:editing");
+    const request = vcs.ensureRuntimeContext("context:editing");
     const flightFailure = expect(flight).rejects.toBe(failure);
     const requestFailure = expect(request).rejects.toBe(failure);
     fail(failure);
     await Promise.all([flightFailure, requestFailure]);
-    await expect(vcs.ensureContext("context:later")).rejects.toBe(failure);
+    await expect(vcs.ensureRuntimeContext("context:later")).rejects.toBe(failure);
     await expect(vcs.semanticDirectCall("vcsStatus", { contextId: "context:later" })).rejects.toBe(
       failure
     );
     await expect(vcs.withProtectedMainMutation(async () => undefined)).rejects.toBe(failure);
-    expect(ensureContext).not.toHaveBeenCalled();
   });
 
   it("uses one source owner before and after semantic publication", async () => {
@@ -1660,36 +1653,6 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     );
   });
 
-  it("reuses one stable context-initialization command across host instances", async () => {
-    const { vcs, deps } = await harness();
-    const restarted = new WorkspaceVcs(deps);
-    const calls: unknown[] = [];
-    const gad = {
-      contextMaterializationCommand: vi.fn(async (input: unknown) =>
-        emptyRepairCommand(input as never, {
-          kind: "event",
-          eventId: "event:main",
-        })
-      ),
-      ensureContext: vi.fn(async (input: unknown) => {
-        calls.push(input);
-        return {
-          kind: "complete" as const,
-          result: semanticContextResult({ kind: "event" as const, eventId: "event:main" }),
-        };
-      }),
-    };
-    await Promise.all([vcs.attachGad(gad as never), restarted.attachGad(gad as never)]);
-
-    await vcs.ensureContext("context:stable");
-    await restarted.ensureContext("context:stable");
-
-    expect(calls).toHaveLength(2);
-    expect((calls[0] as { commandId: string }).commandId).toBe(
-      (calls[1] as { commandId: string }).commandId
-    );
-  });
-
   it("recovers an interrupted initial publication", async () => {
     const { vcs, refs } = await harness();
     const contextId = "workspace-initialization:workspace:test";
@@ -1745,12 +1708,6 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       if (method === "vcsSemanticEffectAck") {
         pending = false;
         return { kind: "complete", result: { eventId: importedEventId } };
-      }
-      if (method === "vcsEnsureContext") {
-        return {
-          kind: "complete",
-          result: semanticContextResult({ kind: "event", eventId: importedEventId }),
-        };
       }
       if (method === "vcsContextMaterializationCommand") {
         return emptyRepairCommand(input as never, {
@@ -2044,106 +2001,6 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     ).resolves.toMatchObject({ contextId: "context:aborted-publication" });
   });
 
-  it("coalesces concurrent initialization of the same large context", async () => {
-    const { vcs } = await harness();
-    let complete!: (value: unknown) => void;
-    const pending = new Promise((resolve) => {
-      complete = resolve;
-    });
-    const call = vi.fn(async (method: string, input: unknown) => {
-      if (method === "vcsContextMaterializationCommand") {
-        return emptyRepairCommand(input as never, {
-          kind: "event",
-          eventId: "event:main",
-        });
-      }
-      if (method !== "vcsEnsureContext") throw new Error(`unexpected ${method}`);
-      return await pending;
-    });
-    await vcs.attachGad(providerFromWireCall(call));
-
-    const first = vcs.ensureContext("context:large");
-    const second = vcs.ensureContext("context:large");
-    await Promise.resolve();
-    expect(call).toHaveBeenCalledOnce();
-
-    complete({
-      kind: "complete",
-      result: semanticContextResult({ kind: "event", eventId: "event:main" }),
-    });
-    await expect(Promise.all([first, second])).resolves.toEqual([
-      { kind: "event", eventId: "event:main" },
-      { kind: "event", eventId: "event:main" },
-    ]);
-  });
-
-  it("establishes a runtime context without materializing its filesystem projection", async () => {
-    const { root, vcs } = await harness();
-    const contextId = "context:runtime";
-    const call = vi.fn(async (method: string, input: unknown) => {
-      if (method !== "vcsEnsureContext") throw new Error(`unexpected ${method}`);
-      expect(input).toMatchObject({ projection: "deferred" });
-      return {
-        kind: "complete",
-        result: semanticContextResult({ kind: "event", eventId: "event:main" }),
-      };
-    });
-    await vcs.attachGad(providerFromWireCall(call));
-
-    await expect(vcs.ensureSemanticContext(contextId)).resolves.toEqual({
-      kind: "event",
-      eventId: "event:main",
-    });
-
-    expect(call).toHaveBeenCalledOnce();
-    await expect(
-      fsp.stat(path.join(root, "contexts", contextId, ".gad", "context-materialization.json"))
-    ).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("linearizes deletion after initialization and removes projection bytes first", async () => {
-    const { root, vcs } = await harness();
-    let completeEnsure!: (value: unknown) => void;
-    const pendingEnsure = new Promise((resolve) => {
-      completeEnsure = resolve;
-    });
-    const contextId = "context:lifecycle";
-    const contextDir = path.join(root, "contexts", contextId);
-    const call = vi.fn(async (method: string, input: unknown) => {
-      if (method === "vcsEnsureContext") return pendingEnsure;
-      if (method === "vcsContextMaterializationCommand") {
-        return emptyRepairCommand(input as never, {
-          kind: "event",
-          eventId: "event:main",
-        });
-      }
-      if (method === "vcsDropContext") {
-        await expect(fsp.stat(contextDir)).rejects.toMatchObject({ code: "ENOENT" });
-        return { dropped: true };
-      }
-      throw new Error(`unexpected ${method}`);
-    });
-    await vcs.attachGad(providerFromWireCall(call));
-
-    const initialization = vcs.ensureContext(contextId);
-    const deletion = vcs.dropContext(contextId);
-    await Promise.resolve();
-    expect(call).toHaveBeenCalledTimes(1);
-    expect(call).toHaveBeenLastCalledWith("vcsEnsureContext", expect.anything());
-
-    completeEnsure({
-      kind: "complete",
-      result: semanticContextResult({ kind: "event", eventId: "event:main" }),
-    });
-    await initialization;
-    await deletion;
-    expect(call.mock.calls.map(([method]) => method)).toEqual([
-      "vcsEnsureContext",
-      "vcsContextMaterializationCommand",
-      "vcsDropContext",
-    ]);
-  });
-
   it("materializes a self-contained effect and acknowledges its derived content root", async () => {
     const { root, blobsDir, vcs } = await harness();
     const bytes = Buffer.from("hello from semantics\n");
@@ -2328,79 +2185,6 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     finishAcknowledgement();
     await Promise.all([edit, sweep]);
     expect(await getBytes(blobsDir, contentHash)).toEqual(bytes);
-  });
-
-  it("executes a derived repair command directly without journaling or acknowledging it", async () => {
-    const { vcs } = await harness();
-    const command = contextMaterializationCommand({
-      contextId: "context:replay",
-      commandId: "command:replay",
-      mode: "replace",
-      previousState: null,
-      targetState: { kind: "application", applicationId: "application:replay" },
-      repositories: [],
-      blobs: [],
-    });
-    const call = vi.fn(async (method: string, input: unknown) => {
-      if (method === "vcsEnsureContext") {
-        return { kind: "complete", result: semanticContextResult(command.targetState) };
-      }
-      if (method === "vcsContextMaterializationCommand") {
-        expect(input).toEqual({ contextId: command.contextId, materializedState: null });
-        return command;
-      }
-      throw new Error(`unexpected ${method}`);
-    });
-    await vcs.attachGad(providerFromWireCall(call));
-
-    await expect(vcs.ensureContext(command.contextId)).resolves.toEqual(command.targetState);
-    expect(call.mock.calls.map(([method]) => method)).toEqual([
-      "vcsEnsureContext",
-      "vcsContextMaterializationCommand",
-    ]);
-  });
-
-  it("verifies a recovered projection once and trusts its exact receipt for this host generation", async () => {
-    const { vcs, deps } = await harness();
-    const contextId = "context:verified-projection";
-    const targetState = { kind: "event" as const, eventId: "event:main" };
-    const call = vi.fn(async (method: string, input: unknown) => {
-      if (method === "vcsEnsureContext") {
-        return { kind: "complete", result: semanticContextResult(targetState) };
-      }
-      if (method === "vcsContextMaterializationCommand") {
-        return emptyRepairCommand(input as never, targetState);
-      }
-      throw new Error(`unexpected ${method}`);
-    });
-    await vcs.attachGad(providerFromWireCall(call));
-    const firstGenerationMatches = vi.spyOn(
-      (
-        vcs as unknown as {
-          materializer: { projectionMatches: (state: unknown) => Promise<boolean> };
-        }
-      ).materializer,
-      "projectionMatches"
-    );
-
-    await vcs.ensureContext(contextId);
-    await vcs.ensureContext(contextId);
-    expect(firstGenerationMatches).not.toHaveBeenCalled();
-
-    const restarted = new WorkspaceVcs(deps);
-    await restarted.attachGad(providerFromWireCall(call));
-    const recoveredMatches = vi.spyOn(
-      (
-        restarted as unknown as {
-          materializer: { projectionMatches: (state: unknown) => Promise<boolean> };
-        }
-      ).materializer,
-      "projectionMatches"
-    );
-
-    await restarted.ensureContext(contextId);
-    await restarted.ensureContext(contextId);
-    expect(recoveredMatches).toHaveBeenCalledOnce();
   });
 
   it("observes import digests as intrinsic descriptors without returning blob bytes", async () => {
