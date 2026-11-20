@@ -51,6 +51,7 @@ import {
   type VerifiedCodeIdentity,
 } from "@vibestudio/shared/serviceDispatcher";
 import type { VcsStateNodeRef } from "@vibestudio/service-schemas/vcs";
+import type { ExecutionSourceStateRef } from "@vibestudio/shared/execution/contracts";
 import {
   doTargetId,
   omitTrailingUndefined,
@@ -4849,10 +4850,12 @@ async function main() {
                 ...(retainForRuntime ? { retainForRuntime: true } : {}),
               });
             },
+            readForkSource: ({ caller, contextId, ownerContextId, state }) =>
+              workspaceVcs.resolveParticipantRevisionSource(contextId, caller, ownerContextId, state),
             listContexts: (prefix) => workspaceVcs.listSemanticContexts(prefix),
           },
           hooks: {
-            prepare: (async ({ spec, key, contextId, existingBuildKey, parent, sourceAuthority }) => {
+            prepare: (async ({ spec, key, contextId, existingBuildKey, parent, sourceAuthority, cloneWorkspaceSource }) => {
               const targetId = canonicalEntityId({
                 kind: spec.kind,
                 source:
@@ -4882,7 +4885,10 @@ async function main() {
 
               const source = spec.execution.source;
               const requestedRef = spec.execution.ref;
-              let participantSource;
+              let participantSource: {
+                stateHash: string;
+                semanticState: ExecutionSourceStateRef;
+              } | null | undefined = cloneWorkspaceSource;
               if (!existingBuildKey && workspaceVcs.participantHistoryAttached && sourceAuthority) {
                 const { caller, contextId: sourceContext } = sourceAuthority;
                 const artifact = spec.execution.artifact;
@@ -7006,7 +7012,7 @@ async function main() {
       buildRef: string;
       participant?: {
         caller: VerifiedCaller;
-        sourceState: import("@vibestudio/shared/execution/contracts").ExecutionSourceStateRef;
+        sourceState: ExecutionSourceStateRef;
         signal?: AbortSignal;
       };
     }

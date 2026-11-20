@@ -162,11 +162,18 @@ export interface RuntimeEntityHooks {
   }) => Promise<void>;
 }
 
+interface RuntimeWorkspaceSource {
+  stateHash: string;
+  semanticState: VcsStateNodeRef;
+}
+
 export interface RuntimePreparationInput<S extends RuntimeEntityCreateSpec> {
   spec: S;
   key: string;
   contextId: string;
   sourceAuthority?: { caller: VerifiedCaller; contextId: string | null };
+  /** Exact workspace revision selected by this context clone's admission. */
+  cloneWorkspaceSource?: RuntimeWorkspaceSource;
   existingBuildKey?: string;
   parent?: {
     parentId: string;
@@ -273,6 +280,8 @@ interface RuntimeCreationActors {
   lifecycleCaller: VerifiedCaller;
   /** Host-verified root initiator whose human subject owns the new runtime. */
   initiatingCaller: VerifiedCaller;
+  /** Sealed and admitted by cloneContext before it activates any copied runtime. */
+  readCloneWorkspaceSource?: () => Promise<RuntimeWorkspaceSource>;
 }
 
 export interface PreparedRuntimeExecution {
@@ -302,6 +311,13 @@ export interface RuntimeSemanticContexts {
     ownerContextId?: string;
     retainForRuntime?: boolean;
   }): Promise<VcsStateNodeRef>;
+  /** Resolve build input at the exact revision retained by the admitted fork. */
+  readForkSource(input: {
+    caller: VerifiedCaller;
+    contextId: string;
+    ownerContextId: string;
+    state: VcsStateNodeRef;
+  }): Promise<RuntimeWorkspaceSource>;
   /** Enumerate durable semantic contexts, optionally restricted by exact prefix. */
   listContexts(prefix?: string): Promise<string[]>;
 }
@@ -1300,7 +1316,8 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         executionDigest: identity.activeExecutionDigest,
         authority: identity.activeAuthority,
       };
-    } else
+    } else {
+      const cloneWorkspaceSource = await actors.readCloneWorkspaceSource?.();
       prepared = (await deps.hooks.prepare({
         spec:
           spec.kind !== "session" && spec.execution.surface === "code"
@@ -1308,12 +1325,14 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
                 ...spec,
                 execution: {
                   ...spec.execution,
-                  ref: spec.execution.ref ?? (sourceContextId ? `ctx:${sourceContextId}` : "main"),
+                  ref: cloneWorkspaceSource?.stateHash ??
+                    spec.execution.ref ?? (sourceContextId ? `ctx:${sourceContextId}` : "main"),
                 },
               }
             : spec,
         key,
         contextId,
+        ...(cloneWorkspaceSource ? { cloneWorkspaceSource } : {}),
         // A storage fork can be provisioning the participant work cell itself.
         // Its source selection must not open that same work cell.
         ...(spec.kind !== "session" && spec.execution.surface === "code" && !cloneSource
@@ -1329,6 +1348,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
               : undefined,
         },
       })) as PreparedIncarnation;
+    }
     if (prepared.surface !== spec.execution.surface) {
       throw new Error(
         `Runtime preparation surface mismatch for ${canonicalId}: requested ${spec.execution.surface}, prepared ${prepared.surface}`
@@ -1866,9 +1886,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
   }
 
   /** Build a clone spec from a source record: same source + class, new key/context.
-   * `ref` selects the clone's semantic context explicitly, independent of the
-   * requesting caller's authoring context. The clone follows that context's exact
-   * working head. Code and cloned durable state therefore share one boundary. */
+   * Preparation binds the exact workspace revision admitted for the fork. */
   function buildCloneSpec(
     src: EntityRecord,
     contextId: string,
@@ -1880,7 +1898,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       }
       return {
         kind: "do",
-        execution: { surface: "code", source: src.source.repoPath, ref: `ctx:${contextId}` },
+        execution: { surface: "code", source: src.source.repoPath },
         className: src.className,
         key: newKey,
         contextId,
@@ -1889,7 +1907,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     }
     return {
       kind: "worker",
-      execution: { surface: "code", source: src.source.repoPath, ref: `ctx:${contextId}` },
+      execution: { surface: "code", source: src.source.repoPath },
       key: newKey,
       contextId,
       stateArgs: src.stateArgs,
@@ -2195,10 +2213,15 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         const targetCtx = newContextIdOf.get(srcCtx) as string;
         // Fork semantic state first so every cloned runtime observes the exact
         // source working frontier and can then diverge independently.
-        await deps.semanticContexts.forkParticipantContext({
+        const selectedState = await deps.semanticContexts.forkParticipantContext({
           caller: semanticCaller, sourceContextId: srcCtx, targetContextId: targetCtx,
           retainForRuntime: true,
           ...(semanticOwner ? { ownerContextId: semanticOwner } : {}),
+        });
+        let workspaceSource: Promise<RuntimeWorkspaceSource> | undefined;
+        const readCloneWorkspaceSource = () => workspaceSource ??= deps.semanticContexts.readForkSource({
+          caller: semanticCaller, contextId: targetCtx, ownerContextId: semanticOwner ?? srcCtx,
+          state: selectedState,
         });
         if (!existingContexts.has(targetCtx)) {
           if (isRoot) {
@@ -2235,6 +2258,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
               lifecycleCaller: caller,
               initiatingCaller: caller,
               retainedExecutionAuthority: src.executionAuthority,
+              readCloneWorkspaceSource,
             };
             const spec = buildCloneSpec(src, targetCtx, newKey);
             const cloneProvenance = capturedProvenance(src);

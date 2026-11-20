@@ -158,6 +158,7 @@ import {
   readWorkspaceParticipantContentSource,
   readWorkspaceParticipantFileDescriptors,
   readWorkspaceParticipantProjection,
+  readWorkspaceParticipantRevision,
   readWorkspaceParticipantStatus,
   readWorkspacePublicationApproval,
   readWorkspacePublishedRevision,
@@ -3121,6 +3122,20 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   ) {
     const scope = await this.requireParticipantContentScope(contextId, caller, signal, ownerContextId);
     return this.recordParticipantContextSource(scope);
+  }
+
+  async resolveParticipantRevisionSource(
+    contextId: string,
+    caller: VerifiedCaller,
+    ownerContextId: string,
+    state: VcsStateNodeRef
+  ) {
+    const scope = await this.requireParticipantContentScope(contextId, caller, undefined, ownerContextId);
+    const repositories = await readWorkspaceParticipantRevision({ ...scope, state });
+    const snapshot = await this.realizeContextContent({ targetState: state, repositories, blobs: [] }, state);
+    const { stateHash } = await this.repositories.contentView(snapshot.repositories, state);
+    await rememberWorkspaceParticipantContentSource({ ...scope, stateHash, state });
+    return { stateHash, semanticState: state };
   }
 
   private async recordParticipantContextSource(scope: WorkspaceHistoryParticipant & {

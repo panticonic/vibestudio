@@ -209,6 +209,9 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
       semanticContextIds.delete(contextId);
     }),
     forkParticipantContext: vi.fn(async () => forkedRevision),
+    readForkSource: vi.fn<Parameters<typeof createRuntimeService>[0]["semanticContexts"]["readForkSource"]>(
+      async ({ state }) => ({ stateHash: `state:${"b".repeat(64)}`, semanticState: state })
+    ),
     listContexts: vi.fn(async () => [
       ...new Set([...semanticContextIds, ...contextFolders.existing]),
     ]),
@@ -3883,7 +3886,7 @@ describe("runtimeService.cloneContext", () => {
   it("clones every durable entity into a fresh isolated context, mapping source→clone", async () => {
     const forkParticipantContext = vi.fn(async () => forkedRevision);
     const onContextCreated = vi.fn(async () => {});
-    const { service, entityCache, cloneDurableStorage, contextFolders, prepareDurableObject } =
+    const { service, entityCache, cloneDurableStorage, contextFolders, prepareDurableObject, semanticContexts } =
       await buildDeps({
         semanticContexts: { forkParticipantContext },
         onContextCreated,
@@ -3931,14 +3934,19 @@ describe("runtimeService.cloneContext", () => {
     const cloneRec = entityCache.resolveActive(chMap.newId);
     expect(cloneRec?.contextId).toBe(result.contextId);
     expect(cloneRec?.status).toBe("active");
-    // A host caller has no authoring context. Clones must still compile the
-    // forked source frontier, never default to the caller's protected main.
+    expect(semanticContexts.readForkSource).toHaveBeenCalledExactlyOnceWith({
+      caller: serverCaller,
+      contextId: result.contextId,
+      ownerContextId: "ctx-src",
+      state: forkedRevision,
+    });
+    // Both copies build from the one retained workspace revision.
     for (const clone of result.entities) {
       expect(prepareDurableObject).toHaveBeenCalledWith(
         expect.objectContaining({
           key: clone.newKey,
           contextId: result.contextId,
-          ref: `ctx:${result.contextId}`,
+          ref: `state:${"b".repeat(64)}`,
         })
       );
     }

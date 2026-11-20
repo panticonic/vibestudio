@@ -150,6 +150,18 @@ export async function readWorkspaceParticipantProjection(input: {
   );
 }
 
+export async function readWorkspaceParticipantRevision(input: WorkspaceHistoryParticipant & {
+  contextId: string;
+  state: VcsStateNodeRef;
+}) {
+  requireWorkspaceParticipantOwner(input);
+  return workspaceProjection.shape.repositories.parse(
+    await input.dispatch.dispatch(input.owner, "readHistoryContext", {
+      contextId: input.contextId, state: input.state,
+    })
+  );
+}
+
 export async function rememberWorkspaceParticipantContentSource(input: WorkspaceHistoryParticipant & {
   contextId: string;
   stateHash: string;
