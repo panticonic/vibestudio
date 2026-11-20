@@ -646,6 +646,13 @@ const adventureReviewWorkflow = {
   root: "reviewExample",
   evidence: adventureReviewEvidence,
 };
+const programmedAdventureWorkflow = {
+  ...adventureReviewWorkflow,
+  family: "examples-live-adventure-transition",
+  group: "adventure-programmed-interaction",
+  validator: { template: "examples", path: "skills/examples-review-fixtures/live-programmed-adventure.ts" },
+  evidence: programmedAdventureEvidence,
+};
 const regencyReviewWorkflow = {
   family: "examples-live-regency-forecast",
   workspace: "examples",
@@ -855,6 +862,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedTerminalEvidenceWorlds },
     { managedGitHubDiagnosisWorlds },
     { managedAdventureWorlds },
+    { programmedAdventureWorld },
     { managedRegencyWorlds },
     { managedExamplesPortfolioWorlds, examplesPortfolioAssignment },
   ] = await Promise.all(
@@ -939,6 +947,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "terminal-evidence-worlds.ts",
       "github-diagnosis-worlds.ts",
       "adventure-review-worlds.ts",
+      "adventure-transition-world.ts",
       "regency-review-worlds.ts",
       "examples-portfolio-worlds.ts",
     ].map(async (file) => {
@@ -1454,6 +1463,13 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of managedAdventureWorlds) {
     cases.set(`adventure-review-live-${assignment.id}`, { ...adventureReviewWorkflow, assignment });
+  }
+  if (programmedAdventureWorld) {
+    cases.set(programmedAdventureWorld.id, {
+      ...programmedAdventureWorkflow,
+      assignment: programmedAdventureWorld,
+      sourceGroups: [programmedAdventureWorkflow, adventureReviewWorkflow].flatMap(workflowSourceGroups),
+    });
   }
   for (const assignment of managedRegencyWorlds) {
     cases.set(`regency-review-live-${assignment.id}`, { ...regencyReviewWorkflow, assignment });
@@ -8430,6 +8446,92 @@ function examplesPortfolioEvidence(execution, exercise, scenario, { assignment }
   );
   return {
     world: { context_id: fixture.contextId, case_id: world.id, garden: gardenResult.world.garden, realm: realmResult.world.realm },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function programmedAdventureEvidence(execution, exercise, _scenario, { assignment }) {
+  const fixture = execution.diagnostics.managedProgrammedAdventure;
+  const original = execution.diagnostics.programmedInteraction;
+  const { journey, observed, expected, checks, passed, frames } = fixture?.verification ?? {};
+  const { before, current, openingArtwork, replacementArtwork, covering, repaint, reload } = observed ?? {};
+  const report = exercise.report;
+  const { request } = assignment;
+  const project = ({ location, asset, tick, narration, light }) => ({ location, asset, tick, narration, light });
+  requireEvidence(
+    typeof fixture?.contextId === "string" &&
+      fixture.contextId === execution.provenance?.contextId &&
+      passed === true &&
+      ["settled", "mutation", "browserMatches", "exactClaims", "exactReport"].every((key) => checks?.[key] === true) &&
+      /^natlang-adventure-[0-9a-f-]{36}$/u.test(journey) &&
+      before && current && openingArtwork && replacementArtwork && repaint && reload && covering && frames &&
+      original?.cleanupComplete === true && original.builderObserved === false &&
+      original.painted?.loaded === true && original.painted.fresh === "true" &&
+      original.reloaded?.loaded === true && original.reloaded.fresh === "true" &&
+      [[frames?.before, original.before], [frames?.after, original.after], [frames?.repaint, original.painted], [frames?.reload, original.reloaded]]
+        .every(([frame, source]) => source?.key === journey && isDeepStrictEqual(frame, project(source))) &&
+      before?.id === `${journey}:before` && current?.id === `${journey}:current` &&
+      before.place === current.place && current.tick > before.tick &&
+      reload?.id === `${journey}:reloaded` &&
+      openingArtwork?.id === frames.before.asset && openingArtwork.place === before.place &&
+      openingArtwork.signature === before.signature &&
+      replacementArtwork?.id === repaint?.asset && openingArtwork.id !== replacementArtwork.id &&
+      replacementArtwork.place === current.place && replacementArtwork.signature === current.signature &&
+      openingArtwork.signature !== current.signature &&
+      isDeepStrictEqual(project(repaint), frames.repaint) && isDeepStrictEqual(project(reload), frames.reload) &&
+      reload.asset === replacementArtwork.id && reload.tick === current.tick &&
+      reload.location === current.place && reload.narration === repaint.narration &&
+      frames.after.light.includes("blocked by a covering") && reload.light.includes("blocked by a covering") &&
+      observed.effectiveLight === false && covering?.from === request.covering && covering.to === request.lamp &&
+      typeof covering.id === "string" && covering.id.length > 0 &&
+      isDeepStrictEqual(report, expected) &&
+      isDeepStrictEqual(report?.components?.map(({ decision }) => decision),
+        ["supported", "supported", "supported", "contradicted", "supported", "supported"]),
+    "Adventure transition must join the original browser interaction, changed worker state and replacement artwork after reload"
+  );
+  const root = exercise.calls.find(({ callId }) => callId === exercise.rootCallIds[0]);
+  const children = (parent, name) => completedExampleChildren(exercise, parent, name);
+  const [review] = children(root, "reviewExample");
+  const [transition] = children(review, "reviewProgrammedAdventure");
+  const [read] = children(transition, "readTurn");
+  const [cover] = children(transition, "inspectCovering");
+  const [repaintReview] = children(transition, "inspectRepaint");
+  const [reloadReview] = children(transition, "inspectReload");
+  const [combined] = children(transition, "combineFindings");
+  const effects = exercise.calls.flatMap(({ record }) => record.effects ?? []);
+  const [observation] = effects;
+  const branches = (parent, name) => children(parent, "reviewAdventure")
+    .flatMap((call) => children(call, name));
+  const continuity = branches(transition, "compareJourney");
+  const artwork = branches(repaintReview, "compareIllustration");
+  const findings = report.components;
+  requireEvidence(
+    matchesValue(review?.record.inputs?.request, request) &&
+      matchesValue(transition?.record.inputs?.request, request) &&
+      matchesValue(transition?.record.output, report) && matchesValue(review?.record.output, report) &&
+      effects.length === 1 && read?.record.effects?.includes(observation) &&
+      observation?.service === "adventureTransitionRead" && observation.method === "observe" &&
+      !observation.error && matchesValue(observation.result, observed) &&
+      continuity.length === 2 && ["time-advanced", "same-place"].every((kind, index) =>
+        continuity.some(({ record }) => matchesValue(record.inputs?.check, { kind }) &&
+          matchesValue(record.inputs?.before, before) && matchesValue(record.inputs?.after, current) &&
+          matchesValue(record.output, findings[index]))
+      ) &&
+      matchesValue(cover?.record.inputs?.covering, request.covering) &&
+      matchesValue(cover?.record.inputs?.lamp, request.lamp) &&
+      [cover, repaintReview, reloadReview].every((branch) => matchesValue(branch?.record.inputs?.observed, observed)) &&
+      matchesValue(cover?.record.output, findings[2]) && matchesValue(reloadReview?.record.output, findings[5]) &&
+      artwork.length === 2 && [openingArtwork, replacementArtwork].every((asset, index) =>
+        artwork.some(({ record }) => matchesValue(record.inputs?.artwork, asset) &&
+          matchesValue(record.inputs?.current, current) && matchesValue(record.output, findings[3 + index]))
+      ) &&
+      matchesValue(repaintReview?.record.output, findings.slice(3, 5)) &&
+      matchesValue(combined?.record.inputs?.components, findings) && matchesValue(combined?.record.output, report),
+    "Adventure transition must retain the nested covering, continuity, artwork and reload review calls"
+  );
+  return {
+    world: { context_id: fixture.contextId, case_id: assignment.id, journey },
     checks,
     evidence: { workspace: { fixture } },
   };

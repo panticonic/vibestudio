@@ -114,6 +114,7 @@ test("authored template worlds flow into the collector without losing original s
       ["github-setup-worlds", "githubSetupWorlds", []],
       ["github-diagnosis-worlds", "managedGitHubDiagnosisWorlds", []],
       ["adventure-review-worlds", "managedAdventureWorlds", []],
+      ["adventure-transition-world", "programmedAdventureWorld", null],
       ["regency-review-worlds", "managedRegencyWorlds", []],
       ["examples-portfolio-worlds", "managedExamplesPortfolioWorlds", []],
       ["personal-resume-worlds", "personalResumeWorlds", []],
@@ -3206,6 +3207,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["github-setup-worlds", "export const githubSetupWorlds = [];"],
       ["github-diagnosis-worlds", "export const managedGitHubDiagnosisWorlds = [];"],
       ["adventure-review-worlds", "export const managedAdventureWorlds = [];"],
+      ["adventure-transition-world", "export const programmedAdventureWorld = null;"],
       ["regency-review-worlds", "export const managedRegencyWorlds = [];"],
       ["examples-portfolio-worlds", "export const managedExamplesPortfolioWorlds = [];"],
       ["template-release-worlds", "export const templateReleaseWorlds = [];"],
@@ -4852,6 +4854,73 @@ test("Regency export keeps the committed claim and forecast evidence distinct", 
   leaf.record.inputs.basis = ref("forecast");
   observation.args = ref([3]);
   assert.throws(() => workflow.evidence(execution, exercise, name, workflow), /saved or projected evidence/);
+});
+
+test("Programmed Adventure export requires the committed change, a repaint and the loaded image after reload", async () => {
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(path.resolve(import.meta.dirname, ".."));
+  const name = "adventure-live-repaint-and-reload";
+  const workflow = (await loadLiveTeacherCases(checkouts)).get(name);
+  const { request } = workflow.assignment;
+  const ref = (value) => {
+    const json = JSON.stringify(value);
+    return { complete: true, hash: createHash("sha256").update(json).digest("hex"), bytes: Buffer.byteLength(json) };
+  };
+  const journey = "natlang-adventure-11d71f32-0bb0-4c84-a05d-53d895943c34";
+  const before = { id: journey + ":before", place: "landing", tick: 0, signature: "lit" };
+  const current = { id: journey + ":current", place: "landing", tick: 1, signature: "covered" };
+  const openingArtwork = { id: "opening", place: before.place, signature: before.signature };
+  const replacementArtwork = { id: "replacement", place: current.place, signature: current.signature };
+  const repaint = { location: current.place, asset: replacementArtwork.id, tick: 1, narration: "turn", light: "Light is blocked by a covering" };
+  const reload = { ...repaint, id: journey + ":reloaded" };
+  const covering = { id: "connection", from: request.covering, to: request.lamp };
+  const observed = { before, current, openingArtwork, replacementArtwork, covering, effectiveLight: false, repaint, reload };
+  const frames = {
+    before: { location: before.place, asset: openingArtwork.id, tick: 0, narration: "", light: "Light is shining" },
+    after: { ...repaint, asset: openingArtwork.id }, repaint, reload: { ...repaint },
+  };
+  const frame = (value) => ({ ...value, key: journey, loaded: true, fresh: "true" });
+  const original = { before: frame(frames.before), after: frame(frames.after), painted: frame(repaint), reloaded: frame(frames.reload),
+    cleanupComplete: true, builderObserved: false };
+  const components = ["supported", "supported", "supported", "contradicted", "supported", "supported"].map((decision, index) => ({
+    decision, finding: "finding-" + index, evidenceIds: [current.id],
+  }));
+  const report = { decision: "contradicted", finding: "criteria-contradicted", evidenceIds: [current.id], components };
+  const checks = Object.fromEntries(["settled", "mutation", "browserMatches", "exactClaims", "exactReport"].map((key) => [key, true]));
+  const execution = { provenance: { contextId: "owned" }, diagnostics: {
+    programmedInteraction: original,
+    managedProgrammedAdventure: { contextId: "owned", verification: { passed: true, journey, frames, observed, expected: report, checks } },
+  } };
+  const call = (callId, parent, label, inputs = {}, output, effects) => ({
+    callId, record: {
+      parent_call_id: parent, outcome: "done", definition: { name: label },
+      inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+      ...(output && { output: ref(output) }), ...(effects && { effects }),
+    },
+  });
+  const applyArtwork = call("paint-check", "new", "compareIllustration", { current, artwork: replacementArtwork }, components[4]);
+  const exercise = { report, rootCallIds: ["root"], calls: [
+    call("root", null, "runWorkflow"),
+    call("review", "root", "reviewExample", { request }, report),
+    call("transition", "review", "reviewProgrammedAdventure", { request }, report),
+    call("read", "transition", "readTurn", {}, undefined, [{ service: "adventureTransitionRead", method: "observe", result: ref(observed) }]),
+    call("time", "transition", "reviewAdventure"),
+    call("time-check", "time", "compareJourney", { before, after: current, check: { kind: "time-advanced" } }, components[0]),
+    call("place", "transition", "reviewAdventure"),
+    call("place-check", "place", "compareJourney", { before, after: current, check: { kind: "same-place" } }, components[1]),
+    call("cover", "transition", "inspectCovering", { covering: request.covering, lamp: request.lamp, observed }, components[2]),
+    call("repaint", "transition", "inspectRepaint", { observed }, components.slice(3, 5)),
+    call("opening", "repaint", "reviewAdventure"),
+    call("opening-check", "opening", "compareIllustration", { current, artwork: openingArtwork }, components[3]),
+    call("new", "repaint", "reviewAdventure"), applyArtwork,
+    call("reload", "transition", "inspectReload", { observed }, components[5]),
+    call("combine", "transition", "combineFindings", { components }, report),
+  ] };
+  assert.ok(workflow.evidence(execution, exercise, name, workflow));
+  original.reloaded.loaded = false;
+  assert.throws(() => workflow.evidence(execution, exercise, name, workflow), /replacement artwork after reload/);
+  original.reloaded.loaded = true;
+  applyArtwork.record.inputs.artwork = ref(openingArtwork);
+  assert.throws(() => workflow.evidence(execution, exercise, name, workflow), /nested covering, continuity, artwork and reload/);
 });
 
 test("Adventure export joins the loaded cover to the saved journey and requires each nested reviewer", async () => {

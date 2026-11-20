@@ -440,6 +440,11 @@ panel's loaded image to the stored asset and canonical scene signature. The
 Embassy case checks an opening with the optional artwork configuration removed
 in the disposable context. Run
 `adventure-review-oracle-qualification` in Examples for the model-free check.
+The programmed Adventure task reuses the original oilskin-wrap interaction
+and verifies the committed covering, changed scene signature, replacement
+artwork and panel reload. The installed game actors run the turn and paint the
+scene before the captured Natlang review. Those setup calls use the workspace's
+game and image providers.
 Regency tasks compare the saved realm with a one- or three-month forecast
 computed by the installed policy engine. The Natlang settlement and economy
 reviewers cite the assigned source for each claim. Run
