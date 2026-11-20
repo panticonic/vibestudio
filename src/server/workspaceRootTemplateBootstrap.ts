@@ -400,6 +400,8 @@ export interface WorkspaceRootTemplateBootstrapDeps {
   acquire(pin: WorkspaceTemplatePin): Promise<ExactGitSnapshot>;
   sink: SnapshotContentSink;
   expectedSystemEpoch: number;
+  /** The host already loaded runtime settings from protected workspace history. */
+  restoredProtectedSource?: true;
   preparedTemplate?(
     pin: WorkspaceTemplatePin,
     purpose: "use" | "author"
@@ -540,10 +542,10 @@ export class WorkspaceRootTemplateBootstrap {
    * materialization receipt exists, restart no longer depends on the original
    * remote template being reachable.
    */
-  async prepareSource(opts?: { restoredProtectedSource: true }): Promise<WorkspaceTemplatePin> {
+  async prepareSource(): Promise<WorkspaceTemplatePin> {
     const descriptor = this.readDescriptor();
     if (this.preparedInitialization) return this.preparedInitialization.pin;
-    if (this.validateMaterializedSource(descriptor.rootTemplate, opts?.restoredProtectedSource)) {
+    if (this.validateMaterializedSource(descriptor.rootTemplate)) {
       return descriptor.rootTemplate;
     }
     const startedAt = performance.now();
@@ -764,7 +766,7 @@ export class WorkspaceRootTemplateBootstrap {
     };
   }
 
-  private validateMaterializedSource(pin: WorkspaceTemplatePin, restoredProtectedSource?: true): boolean {
+  private validateMaterializedSource(pin: WorkspaceTemplatePin): boolean {
     const receiptPath = path.join(this.deps.statePath, MATERIALIZATION_RECEIPT_PATH);
     if (!fs.existsSync(receiptPath)) return false;
     const receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8")) as unknown;
@@ -788,7 +790,7 @@ export class WorkspaceRootTemplateBootstrap {
     }
     // On restart the protected source already supplied the current runtime
     // configuration. The original scaffold serves only as materialization evidence.
-    if (!restoredProtectedSource) {
+    if (!this.deps.restoredProtectedSource) {
       parseWorkspaceConfigContentWithId(
         fs.readFileSync(manifestPath, "utf8"),
         this.deps.workspaceId,

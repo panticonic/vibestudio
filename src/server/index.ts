@@ -1769,12 +1769,16 @@ async function main() {
   } = await import("./preparedWorkspaceTemplate.js");
   const { blobCasPath } = await import("./storage/blobCas.js");
   const releaseResourceRoot = workspaceReleaseResourceRoot(appRoot);
+  if (restoredLaunch && !protectedRefStore.readMainSemanticState()) {
+    throw new Error("Workspace launch has no protected semantic main");
+  }
   const rootTemplateBootstrap = new WorkspaceRootTemplateBootstrap({
     releaseTemplates: Object.values(readDefaultWorkspaceTemplates(appRoot)),
     workspaceId,
     statePath,
     sourcePath: workspacePath,
     expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
+    ...(restoredLaunch ? { restoredProtectedSource: true } : {}),
     sink: { put: (bytes) => putBootstrapBytes(layout.blobsDir, Buffer.from(bytes)) },
     acquire: acquireWorkspaceTemplate,
     preparedTemplate: async (pin, purpose) => {
@@ -1818,10 +1822,7 @@ async function main() {
       };
     },
   });
-  if (restoredLaunch && !protectedRefStore.readMainSemanticState()) {
-    throw new Error("Workspace launch has no protected semantic main");
-  }
-  await rootTemplateBootstrap.prepareSource(restoredLaunch ? { restoredProtectedSource: true } : undefined);
+  await rootTemplateBootstrap.prepareSource();
   if (sharedHistorySeed) {
     // The template supplies bootstrap code, while the imported revision's
     // units carry their own creation review. Retire any provisional inventory
