@@ -10,6 +10,13 @@ import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
 
 const sharedProgram = "skills/vibestudio-workflows/runWorkflow.nl";
 const templateGoalDomains = {
+  localPresentation: {
+    namespace: "vibestudio:local-presentation",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-local-presentation-managed.ts" },
+    callable: "reviewLocalPresentation",
+    checks: ["discoveredPresentationRecords", "retainedSourceIntegrity", "joinedCurrentPresentationRevision",
+      "matchedPresentationDisposition", "independentlyVerifiedPresentationDom", "protectedPresentationHeadUnchanged"],
+  },
   "local-width": {
     namespace: "vibestudio:local-width",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-local-width-managed.ts" },
@@ -1329,13 +1336,13 @@ export async function loadLiveTeacherCases(checkouts) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
     const distinctGoals = new Set();
-    const { openGoalWorlds, openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], newsGoalWorlds = [],
+    const { openGoalWorlds, openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], newsGoalWorlds = [],
       spectroliteGoalWorlds = [], openGoalGoogleWorlds = [], openGoalPersonalWorlds = [],
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
       openTerminalWorlds = [], openOwnedResearchWorlds = [], dictationHandoffWorlds = [], specialistHandoffWorlds = [], providerHandoffWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
-    for (const assignment of [...openGoalWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
+    for (const assignment of [...openGoalWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
       ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
@@ -7676,6 +7683,40 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
           !stage && outcome.handoff === null && proof.handoff === null),
       "Expected exact owned client transitions, matching durable GAD records, and verified local handoff"
     );
+  } else if (world.kind === "localPresentation") {
+    const exact = effects.filter(({ service, error }) => service === "presentationRecords" && !error);
+    const journal = proof.journal ?? [];
+    const bound = exact.length === journal.length && journal.every(row => {
+      const index = exact.findIndex(effect => effect.method === row.method &&
+        matchesValue(effect.args, row.args) && matchesValue(effect.result, row.result));
+      if (index < 0) return false;
+      exact.splice(index, 1);
+      return true;
+    });
+    const attempts = journal.filter(row => row.method === "preview");
+    const skillId = exercise.calls.find(({ record }) => record === skill)?.callId;
+    const preparations = exercise.calls.map(({ record }) => record).filter(record =>
+      record.parent_call_id === skillId && record.definition?.name === "preparePresentation" && record.outcome === "done");
+    const linked = preparations.length === attempts.length && attempts.every(({ args: [id, revision, report] }) => {
+      const read = journal.find(row => row.method === "read" && row.args[0] === id && row.result.revision === revision);
+      return read && preparations.some(preparation =>
+        matchesValue(preparation.inputs?.request, { goal: world.goal, sections: read.result.sections }) &&
+        matchesValue(preparation.output, report));
+    });
+    const outcome = exercise.report.outcome;
+    const rendered = proof.display?.rendered;
+    const preview = proof.preview;
+    requireEvidence(bound && linked && performed("presentationRecords", "discover") && performed("presentationRecords", "read") &&
+      (world.expected.holds ? outcome.status === "held" && outcome.revision === (proof.current?.revision ?? null) &&
+        preview === null && proof.report === null && rendered?.revision === null && rendered.errors === 0 &&
+        Array.isArray(rendered.ids) && rendered.ids.length === 0 :
+        outcome.status === "visible" && isDeepStrictEqual(outcome.receipt, preview) &&
+        attempts.at(-1)?.result.status === "visible" && isDeepStrictEqual(attempts.at(-1).args[2], proof.report) &&
+        preview?.source === proof.current?.id && preview.revision === proof.current?.revision &&
+        rendered?.revision === preview.revision && rendered.errors === 0 &&
+        isDeepStrictEqual(rendered.ids, preview.viewIds) &&
+        isDeepStrictEqual(proof.display?.mdxDigests, preview.mdxDigests)),
+      "Expected exact owned record choices, installed visualization calls, and private renderer readback");
   } else if (world.kind === "adventure-journey") {
     const outcome = exercise.report.outcome;
     const calls = (service, method) => effects.filter(effect =>
