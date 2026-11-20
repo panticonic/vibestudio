@@ -114,14 +114,18 @@ it("uses the verified task and owner context to choose a working copy", async ()
   const third = await launch(native(2, "call-3"));
   expect(first.owner).toEqual(second.owner);
   expect(first.owner).not.toEqual(third.owner);
+  const child = await launch(native(1, "child"), "owner", "child-context");
+  const independentTaskContext = await launch(native(1, "independent"), "other-owner", "other-context");
+  expect(child.owner).toEqual(first.owner);
+  expect(independentTaskContext.owner).not.toEqual(first.owner);
   expect(first.workingHead).toBe("latest-main");
   expect(second.workingHead).toBe("latest-main");
   expect(dispatch.mock.calls[1]?.[0]).toEqual(first.owner);
   const device = createVerifiedCaller("shell:editor", "shell", null, null, { userId: "person", handle: "person" });
   const editor = await launch(device);
-  const child = await launch(device, "owner", "child-context");
+  const deviceChild = await launch(device, "owner", "child-context");
   const independent = await launch(device, "other-owner");
-  expect(editor.owner).toEqual(child.owner);
+  expect(editor.owner).toEqual(deviceChild.owner);
   expect(editor.owner).not.toEqual(independent.owner);
 });
 
@@ -147,6 +151,10 @@ it("retains a user's interactive working copy across signed runs without collaps
   expect(workspaceParticipantIdentity(signed("first"), "other-context")).not.toBe(first);
   expect(workspaceParticipantIdentity({ ...signed("first"), nativeInvocation: native(1, "one").nativeInvocation! }, "session-context"))
     .toBe(workspaceParticipantIdentity(native(1, "two"), "session-context"));
+  expect(workspaceParticipantIdentity(native(1, "one"), "session-context"))
+    .not.toBe(workspaceParticipantIdentity(native(1, "two"), "other-context"));
+  expect(workspaceParticipantIdentity(signed("first"), "other-context"))
+    .not.toBe(workspaceParticipantIdentity(signed("first"), "another-context"));
 });
 
 it("withholds a grant when history reports a different allocation", async () => {
@@ -225,10 +233,7 @@ it("avoids opening a new participant copy during shutdown", async () => {
 
 it("reads status only from the verified participant and context", async () => {
   const caller = native(1, "status-call");
-  const participantId = JSON.stringify(["task", {
-    authoritySessionId: "sealed",
-    runtimeId: "agent",
-  }, { conversationId: 3, taskId: 1 }]);
+  const participantId = workspaceParticipantIdentity(caller, "context");
   const owner = { ...canonical, objectKey: `work-${sha256HexSyncText(participantId)}` };
   const event = { kind: "event", eventId: "saved" };
   const status = {
@@ -242,7 +247,7 @@ it("reads status only from the verified participant and context", async () => {
     integrating: [],
   };
   const dispatch = vi.fn().mockResolvedValue(status);
-  const request = { dispatch: { dispatch }, canonical, owner, caller, contextId: "context" };
+  const request = { dispatch: { dispatch }, canonical, owner, caller, ownerContextId: "context", contextId: "context" };
   await expect(readWorkspaceParticipantStatus(request)).resolves.toEqual(status);
   expect(dispatch).toHaveBeenLastCalledWith(owner, "readHistoryStatus", { contextId: "context" });
   await expect(
@@ -256,14 +261,11 @@ it("reads status only from the verified participant and context", async () => {
 
 it("checks typed references through the admitted participant contexts", async () => {
   const caller = native(1, "visibility-call");
-  const participantId = JSON.stringify(["task", {
-    authoritySessionId: "sealed",
-    runtimeId: "agent",
-  }, { conversationId: 3, taskId: 1 }]);
+  const participantId = workspaceParticipantIdentity(caller, "context");
   const owner = { ...canonical, objectKey: `work-${sha256HexSyncText(participantId)}` };
   const application = { kind: "application", applicationId: "saved-application" };
   const dispatch = vi.fn().mockResolvedValue(true);
-  const scope = { dispatch: { dispatch }, canonical, owner, caller, contextIds: ["edit", "edit"] };
+  const scope = { dispatch: { dispatch }, canonical, owner, caller, ownerContextId: "context", contextIds: ["edit", "edit"] };
   await expect(workspaceParticipantReferencesReachable({
     ...scope,
     references: [
@@ -288,13 +290,11 @@ it("checks typed references through the admitted participant contexts", async ()
 
 it("binds catalog pages to the requested participant revision", async () => {
   const caller = native(1, "catalog-call");
-  const participant = JSON.stringify(["task", {
-    authoritySessionId: "sealed", runtimeId: "agent",
-  }, { conversationId: 3, taskId: 1 }]);
+  const participant = workspaceParticipantIdentity(caller, "context");
   const owner = { ...canonical, objectKey: `work-${sha256HexSyncText(participant)}` };
   const contextId = "context";
   const dispatch = vi.fn();
-  const catalog = workspaceParticipantCatalog({ dispatch: { dispatch }, caller, owner, canonical, contextId });
+  const catalog = workspaceParticipantCatalog({ dispatch: { dispatch }, caller, ownerContextId: "context", owner, canonical, contextId });
   const state = { kind: "event" as const, eventId: "saved" };
   const repository = { state, repoPath: "meta" };
   dispatch.mockResolvedValueOnce({ ...repository, repositoryId: "repository" });
@@ -319,9 +319,7 @@ it.each([
   const blobsDir = await mkdtemp(join(tmpdir(), "workspace-history-merge-"));
   try {
     const caller = native(1, "merge-call");
-    const participant = JSON.stringify(["task", {
-      authoritySessionId: "sealed", runtimeId: "agent",
-    }, { conversationId: 3, taskId: 1 }]);
+    const participant = workspaceParticipantIdentity(caller, "context");
     const owner = { ...canonical, objectKey: `work-${sha256HexSyncText(participant)}` };
     const mine = Buffer.from("my text");
     const { digest } = await putBytes(blobsDir, mine);
@@ -366,7 +364,7 @@ it.each([
     });
     const explicitSource = "source" in selection && Boolean(selection.source?.participantId);
     await expect(mergeWorkspaceParticipantContext({
-      dispatch: { dispatch }, caller, owner, canonical, blobsDir,
+      dispatch: { dispatch }, caller, ownerContextId: "context", owner, canonical, blobsDir,
       readableContextIds: ["owned-child"],
       ...(explicitSource ? { selection } : {}),
       cause: { parent: null },
@@ -384,9 +382,7 @@ it.each([
 
 it("validates the selected participant command and the endpoints of its provenance", async () => {
   const caller = native(1, "inspect");
-  const identity = JSON.stringify(["task", {
-    authoritySessionId: "sealed", runtimeId: "agent",
-  }, { conversationId: 3, taskId: 1 }]);
+  const identity = workspaceParticipantIdentity(caller, "context");
   const owner = { ...canonical, objectKey: `work-${sha256HexSyncText(identity)}` };
   const root = { kind: "command" as const, commandId: "command:one" };
   const other = { kind: "command" as const, commandId: "command:other" };
@@ -403,7 +399,7 @@ it("validates the selected participant command and the endpoints of its provenan
   const dispatch = vi.fn()
     .mockResolvedValueOnce(result)
     .mockResolvedValueOnce({ ...result, edges: [{ ...result.edges[0], to: other }] });
-  const input = { dispatch: { dispatch }, owner, canonical, caller, contextId: "context", inspect: { node: root, edgeLimit: 1 } };
+  const input = { dispatch: { dispatch }, owner, canonical, caller, ownerContextId: "context", contextId: "context", inspect: { node: root, edgeLimit: 1 } };
   await expect(inspectWorkspaceParticipantProvenance(input)).resolves.toEqual(result);
   expect(dispatch).toHaveBeenCalledWith(owner, "inspectHistoryNode", {
     contextId: "context", inspect: input.inspect,
@@ -423,9 +419,7 @@ it("observes exact bytes for a participant comparison and validates the returned
   const blobsDir = await mkdtemp(join(tmpdir(), "workspace-history-compare-"));
   try {
     const caller = native(1, "compare-call");
-    const participant = JSON.stringify(["task", {
-      authoritySessionId: "sealed", runtimeId: "agent",
-    }, { conversationId: 3, taskId: 1 }]);
+    const participant = workspaceParticipantIdentity(caller, "context");
     const owner = { ...canonical, objectKey: `work-${sha256HexSyncText(participant)}` };
     const { digest } = await putBytes(blobsDir, Buffer.from("Exact review content"));
     const target = { kind: "event" as const, eventId: "event:target" };
@@ -442,7 +436,7 @@ it("observes exact bytes for a participant comparison and validates the returned
       .mockResolvedValueOnce({ kind: "read-content", contentHashes: [digest] })
       .mockResolvedValueOnce({ kind: "reviewed", result })
       .mockResolvedValueOnce({ kind: "reviewed", result: { ...result, target: source } });
-    const input = { dispatch: { dispatch }, caller, owner, canonical, blobsDir, contextId: "context", compare };
+    const input = { dispatch: { dispatch }, caller, ownerContextId: "context", owner, canonical, blobsDir, contextId: "context", compare };
     await expect(reviewWorkspaceParticipantMerge(input)).resolves.toEqual(result);
     expect(dispatch).toHaveBeenNthCalledWith(2, owner, "reviewHistoryMerge", {
       contextId: "context", compare, readableContextIds: [], observation: { files: [{ contentHash: digest, text: "Exact review content" }] },

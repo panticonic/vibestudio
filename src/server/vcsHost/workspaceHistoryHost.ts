@@ -1038,8 +1038,8 @@ export function workspaceInteractiveSessionParticipant(userId: string, contextId
 export function workspaceParticipantIdentity(caller: VerifiedCaller, ownerContextId: string | undefined): string {
   const invocation = caller.nativeInvocation;
   if (invocation) {
-    // Every tool call in the same authenticated task reuses its working copy.
-    return canonicalJson(["task", invocation.owner, invocation.task]);
+    // Tool calls in one task reuse the copy for the same admitted owner.
+    return canonicalJson(["task", invocation.owner, invocation.task, ownerContextId]);
   }
   const session = verifiedInteractiveSession(caller);
   if (session && session.contextId === ownerContextId) {
@@ -1047,7 +1047,8 @@ export function workspaceParticipantIdentity(caller: VerifiedCaller, ownerContex
     // belong to the authenticated person's persistent session context.
     return workspaceInteractiveSessionParticipant(session.userId, session.contextId);
   }
-  if (caller.taskAuthority) return canonicalJson(["task-grant", caller.taskAuthority]);
+  if (caller.taskAuthority && ownerContextId)
+    return canonicalJson(["task-grant", caller.taskAuthority, ownerContextId]);
   const userId = caller.subject?.userId;
   if (userId && ownerContextId) {
     // One device can open several independent sessions with separate retirement.

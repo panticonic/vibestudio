@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CONTEXT_BINDING_FILE, parseContextBinding } from "@vibestudio/shared/contextBinding";
 import {
-  canonicalJson,
   EMPTY_STATE_HASH,
   sha256Hex,
   sha256HexSyncText,
@@ -598,9 +597,8 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       operation: { kind: "tool" as const, assistantEntryId: 0, callId: "call" },
     };
     const caller = { runtime: { kind: "do" as const, id: "agent" }, nativeInvocation };
-    const participant = canonicalJson(["task", nativeInvocation.owner, nativeInvocation.task]);
-    const owner = { ...TEST_PROVIDER, objectKey: `work-${sha256HexSyncText(participant)}` };
     const contextId = "context:test";
+    const owner = { ...TEST_PROVIDER, objectKey: `work-${sha256HexSyncText(workspaceParticipantIdentity(caller, contextId))}` };
     const state = { kind: "application" as const, applicationId: "app:test" };
     const repositoryId = "repo";
     const read = { state, files: [
@@ -628,7 +626,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     };
     const dispatch = vi.fn().mockResolvedValue([file, null]);
     const perform = () => vcs.readParticipantFiles({
-      dispatch: { dispatch }, canonical: TEST_PROVIDER, owner, caller, contextId, read,
+      dispatch: { dispatch }, canonical: TEST_PROVIDER, owner, caller, contextId, ownerContextId: contextId, read,
     });
     await expect(perform()).resolves.toMatchObject([
       { fileId: file.fileId, content: { kind: "text", text } }, null,
@@ -649,9 +647,8 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       operation: { kind: "tool" as const, assistantEntryId: 0, callId: "discard" },
     };
     const caller = { runtime: { kind: "do" as const, id: "agent" }, nativeInvocation };
-    const participant = canonicalJson(["task", nativeInvocation.owner, nativeInvocation.task]);
-    const owner = { ...TEST_PROVIDER, objectKey: `work-${sha256HexSyncText(participant)}` };
     const contextId = "context:test";
+    const owner = { ...TEST_PROVIDER, objectKey: `work-${sha256HexSyncText(workspaceParticipantIdentity(caller, contextId))}` };
     const discard = {
       contextId, commandId: "discard",
       expectedWorkingHead: { kind: "application" as const, applicationId: "original-work" },
@@ -666,7 +663,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     });
     const cause = { parent: null };
     await expect(vcs.discardParticipantContext({
-      dispatch: { dispatch }, canonical: TEST_PROVIDER, owner, caller,
+      dispatch: { dispatch }, canonical: TEST_PROVIDER, owner, caller, ownerContextId: contextId,
       discard, head: "original-head", cause,
     })).resolves.toEqual(saved);
     expect(dispatch).toHaveBeenCalledWith(owner, "discardHistoryContext", {
