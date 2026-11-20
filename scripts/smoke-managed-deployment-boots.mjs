@@ -1,7 +1,7 @@
 /** Exercise the managed server command on two boots of one disposable profile. */
 import assert from "node:assert/strict";
 import { createServer } from "node:net";
-import { mkdir, open, readFile } from "node:fs/promises";
+import { access, mkdir, open, readFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
@@ -11,6 +11,14 @@ import {
 } from "./cli/remote-deployment-workflow.mjs";
 import { managedServerArgs } from "./cli/remote-deploy.mjs";
 import { ownedEntry } from "./lib/owned-entry.mjs";
+
+const packagePath = process.argv[2];
+if (!packagePath || process.argv.length !== 3)
+  throw new Error("Pass the installed Vibestudio server npm package directory");
+const appRoot = path.resolve(packagePath);
+const packageManifest = JSON.parse(await readFile(path.join(appRoot, "package.json"), "utf8"));
+assert.equal(packageManifest.name, "@panticonic/vibestudio-server");
+await access(path.join(appRoot, "node_modules"));
 
 async function loopbackPort() {
   const listener = createServer();
@@ -43,11 +51,10 @@ await ownedEntry(
       HOME: home,
       XDG_CONFIG_HOME: path.join(home, ".config"),
       XDG_CACHE_HOME: path.join(home, ".cache"),
-      VIBESTUDIO_APP_ROOT: process.cwd(),
+      VIBESTUDIO_APP_ROOT: appRoot,
       VIBESTUDIO_PROFILE_ROOT: path.join(scratchRoot, "profile"),
       VIBESTUDIO_INSTANCE_ROOT: instance,
       VIBESTUDIO_SHARED_DERIVED_CACHE_DIR: getSharedDerivedDataPath(),
-      VIBESTUDIO_SERVER_ENTRY: "live",
       VIBESTUDIO_DISABLE_DEV_TEMPLATE_MIRROR: "1",
     };
 
@@ -75,17 +82,21 @@ await ownedEntry(
       const logPath = path.join(scratchRoot, label + ".log");
       const log = await open(logPath, "w", 0o600);
       const [, , ...args] = managedServerArgs(port, readyFile);
-      const owned = ownership.spawn(process.execPath, ["scripts/cli/remote-serve.mjs", ...args], {
-        env,
-        kill: "graceful",
-        label,
-        stdio: ["ignore", log.fd, log.fd],
-      });
+      const owned = ownership.spawn(
+        process.execPath,
+        [path.join(appRoot, "scripts/cli/remote-serve.mjs"), ...args],
+        {
+          env,
+          kill: "graceful",
+          label,
+          stdio: ["ignore", log.fd, log.fd],
+        }
+      );
       boot = { owned, log };
       try {
         await owned.registered;
-        // The checkout includes cold release preparation before server startup.
-        const deadline = AbortSignal.any([signal, AbortSignal.timeout(240_000)]);
+        // The packaged installer gives this same startup command two minutes.
+        const deadline = AbortSignal.any([signal, AbortSignal.timeout(120_000)]);
         while (!deadline.aborted) {
           if (owned.child.exitCode !== null || owned.child.signalCode !== null) break;
           const readback = await probe();
@@ -154,5 +165,5 @@ await ownedEntry(
       })
     );
   },
-  { appRoot: process.cwd(), scratchPrefix: "vibestudio-managed-deployment-" }
+  { appRoot, scratchPrefix: "vibestudio-managed-deployment-" }
 );
