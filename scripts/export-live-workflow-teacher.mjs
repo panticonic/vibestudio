@@ -794,6 +794,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { personalResumeWorlds },
     { missionFacilityWorlds },
     { managedUnitDesignWorlds },
+    { managedTerminalEvidenceWorlds },
   ] = await Promise.all(
     [
       "content-project-worlds.ts",
@@ -869,12 +870,28 @@ export async function loadLiveTeacherCases(checkouts) {
       "personal-resume-worlds.ts",
       "mission-facility-worlds.ts",
       "unit-design-worlds.ts",
+      "terminal-evidence-worlds.ts",
     ].map(async (file) => {
       const imported = await import(pathToFileURL(path.join(directory, file)).href);
       return imported.default ?? imported;
     })
   );
   const cases = new Map(originalCases);
+  for (const assignment of managedTerminalEvidenceWorlds) {
+    cases.set(`terminal-evidence-live-${assignment.id}`, {
+      ...terminalCheckWorkflow,
+      family: "workspace-live-terminal-evidence",
+      group: "retained-terminal-operation-provenance",
+      sourceGroups: [
+        "vibestudio:terminal:retained-terminal-operation-provenance",
+        ...workflowSourceGroups(terminalCheckWorkflow),
+      ],
+      root: "reviewDeviceAndTerminal",
+      validator: { template: "system-testing", path: "skills/system-testing/terminal-evidence-managed.ts" },
+      assignment,
+      evidence: terminalReceiptEvidence,
+    });
+  }
   for (const assignment of managedUnitDesignWorlds) {
     cases.set(`unit-design-live-${assignment.id}`, {
       ...extensionReleaseWorkflow,
@@ -6093,6 +6110,89 @@ function releaseReviewHandoffEvidence(execution, exercise, scenario, workflow) {
   );
   return {
     world: { context_id: contextId, case_id: caseId },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function terminalReceiptEvidence(execution, exercise, _scenario, { assignment }) {
+  const fixture = execution.diagnostics.terminalEvidence;
+  const { caseId, contextId, request, observation, assigned, retained, checks } = fixture ?? {};
+  const records = exercise.calls.map(({ record }) => record);
+  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const child = (parent, name) => parent && records.find(
+    (record) => record.parent_call_id === parent.call_id && record.definition.name === name
+  );
+  const review = child(root, "reviewDeviceAndTerminal");
+  const live = child(review, "reviewLiveTerminal");
+  const read = child(live, "readTerminalEvidence");
+  const inspect = child(live, "reviewTerminal");
+  const invocation = child(inspect, "inspectInvocation");
+  const result = child(inspect, "inspectExecution");
+  const effects = records.flatMap(({ effects: used }) => used ?? []);
+  const effect = read?.effects?.[0];
+  const operationId = request?.operationId;
+  const foreign = assignment.mode === "foreign";
+  const notice = assignment.mode === "notice";
+  const truncated = assignment.mode === "truncated";
+  const before = (earlier, later) => Date.parse(earlier?.ended_at) <= Date.parse(later?.started_at);
+  const nativeComplete = (row) =>
+    typeof row?.operationId === "string" && !!row.operationId && row.contextId === contextId &&
+    row.plan?.receipt === `${row.operationId}:plan` &&
+    row.plan.checks?.length === 1 && row.plan.checks[0].id === "evidence" &&
+    row.plan.checks[0].mode === (notice ? "script" : "argv") &&
+    row.result?.id === "evidence" && row.result.receipt === `${row.operationId}:check:evidence` &&
+    row.result.status === "complete" && row.result.exitCode === 0 && row.result.timedOut === false;
+  const expectedOutput = truncated
+    ? Array.from({ length: 500 }, (_, index) => `${index + 1}\n`).join("").slice(0, 1024)
+    : notice ? "release-ready" : "neighbor marker";
+  requireEvidence(
+    fixture?.passed === true && caseId === assignment.id &&
+    ["processes", "attribution", "preserved", "outcome"].every((key) => checks?.[key] === true) &&
+    typeof contextId === "string" && contextId === execution.provenance?.contextId &&
+    request?.kind === "terminal-receipt" && request.goal === assignment.goal &&
+    typeof operationId === "string" && !!operationId &&
+    nativeComplete(assigned) && nativeComplete(retained) && assigned.operationId === operationId &&
+    retained.result.stdout === expectedOutput && retained.result.truncated === truncated &&
+    retained.result.stderr === (notice ? "diagnostic notice" : "") &&
+    (foreign
+      ? retained.operationId !== operationId && assigned.result.stdout === "assigned marker" && !assigned.result.truncated
+      : isDeepStrictEqual(assigned, retained)) &&
+    isDeepStrictEqual(observation, {
+      kind: "terminal", goal: assignment.goal,
+      target: {id: operationId, contextId, operationId, purpose: notice ? "shell-composition" : "ordinary-process"},
+      invocation: {
+        id: assigned.plan.receipt, contextId, operationId, mode: notice ? "shell" : "argv", admission: "admitted",
+      },
+      result: {
+        id: retained.result.receipt, contextId, operationId: retained.operationId,
+        exitCode: 0, timedOut: false, truncated, hasStdout: true, hasStderr: notice,
+      },
+    }) &&
+    matchesValue(review?.inputs?.request, request) && matchesValue(live?.inputs?.request, request) &&
+    matchesValue(read?.inputs?.operationId, operationId) && matchesValue(read.output, observation) &&
+    effects.length === 1 && effect?.service === "terminalEvidenceRead" && effect.method === "inspect" &&
+    !effect.error && matchesValue(effect.args, [operationId]) && matchesValue(effect.result, observation),
+    "Terminal evidence review requires the actual retained invocation and result provenance"
+  );
+  const expected = {
+    status: assignment.status,
+    findings: [{
+      code: assignment.code,
+      evidenceIds: foreign ? [operationId, retained.result.receipt] : [retained.result.receipt],
+    }],
+  };
+  requireEvidence(
+    isDeepStrictEqual(exercise.report, expected) &&
+    matchesValue(review.output, exercise.report) && matchesValue(live.output, exercise.report) &&
+    matchesValue(inspect?.inputs?.input, observation) && matchesValue(inspect.output, exercise.report) &&
+    matchesValue(invocation?.inputs?.input, observation) && matchesValue(invocation.output, null) &&
+    matchesValue(result?.inputs?.input, observation) && matchesValue(result.output, exercise.report) &&
+    before(read, inspect) && before(invocation, result),
+    "Terminal evidence review must preserve the invocation check before the result decision"
+  );
+  return {
+    world: { context_id: contextId, operation_id: operationId, result_receipt: retained.result.receipt },
     checks,
     evidence: { workspace: { fixture } },
   };

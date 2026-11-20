@@ -133,6 +133,7 @@ test("authored template worlds flow into the collector without losing original s
       ["agentic-change-worlds", "managedAgenticChangeWorlds", []],
       ["gad-review-worlds", "managedGadReviewWorlds", []],
       ["terminal-check-worlds", "managedTerminalCheckWorlds", []],
+      ["terminal-evidence-worlds", "managedTerminalEvidenceWorlds", []],
       ["integration-readiness-worlds", "managedIntegrationReadinessWorlds", []],
       ["local-messaging/worlds", "localMessagingWorlds", [{ id: "audience-hold" }]],
       [
@@ -3173,6 +3174,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["agentic-change-worlds", "export const managedAgenticChangeWorlds = [];"],
       ["gad-review-worlds", "export const managedGadReviewWorlds = [];"],
       ["terminal-check-worlds", "export const managedTerminalCheckWorlds = [];"],
+      ["terminal-evidence-worlds", "export const managedTerminalEvidenceWorlds = [];"],
       ["integration-readiness-worlds", "export const managedIntegrationReadinessWorlds = [];"],
       [
         "owned-operations-worlds",
@@ -6741,6 +6743,91 @@ async function checkDeliveryReceiptExport(t, id, verdict, surface = "history") {
     exportLiveTeacherWorkflow({ ...options, cases }),
     /exact origin and consumer decisions/u
   );
+}
+
+for (const id of [
+  "notice-on-stderr-with-successful-exit", "zero-exit-with-incomplete-output",
+  "receipt-from-neighboring-operation",
+]) {
+  test(`Terminal evidence export requires actual receipt provenance for ${id}`, async (t) => {
+    const { options, diagnostics, entry, save } = await fixture(t);
+    const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+      path.resolve(import.meta.dirname, "..")
+    );
+    const cases = await loadLiveTeacherCases(checkouts);
+    const name = `terminal-evidence-live-${id}`;
+    const { assignment } = cases.get(name);
+    const pins = JSON.parse(await readFile(options.pins, "utf8"));
+    await writeFile(options.pins, JSON.stringify({ ...pins, workspace: "examples" }));
+    entry.test.name = name;
+    const { goal, mode, status, code } = assignment;
+    const operationId = "assigned-command";
+    const request = { kind: "terminal-receipt", goal, operationId };
+    const notice = mode === "notice";
+    const foreign = mode === "foreign";
+    const truncated = mode === "truncated";
+    const native = (origin, stdout, stderr = "") => ({
+      contextId: "ctx", operationId: origin, plan: {
+        receipt: `${origin}:plan`, checks: [{id:"evidence", mode: notice ? "script" : "argv"}],
+      },
+      result: {
+        status: "complete", id: "evidence", receipt: `${origin}:check:evidence`,
+        exitCode: 0, timedOut: false, stdout, stderr, truncated,
+      },
+    });
+    const assigned = native(operationId, notice ? "release-ready" : truncated
+      ? Array.from({ length: 500 }, (_, index) => `${index + 1}\n`).join("").slice(0, 1024)
+      : "assigned marker", notice ? "diagnostic notice" : "");
+    const retained = foreign ? native("neighbor-command", "neighbor marker") : assigned;
+    const observation = {
+      kind: "terminal", goal,
+      target: { id: operationId, contextId: "ctx", operationId, purpose: notice ? "shell-composition" : "ordinary-process" },
+      invocation: { id: assigned.plan.receipt, operationId, contextId: "ctx", admission: "admitted", mode: notice ? "shell" : "argv" },
+      result: {
+        id: retained.result.receipt, contextId: "ctx", operationId: retained.operationId,
+        exitCode: 0, timedOut: false, truncated, hasStdout: true, hasStderr: notice,
+      },
+    };
+    const report = { status, findings: [{ code, evidenceIds: foreign
+      ? [operationId, retained.result.receipt] : [retained.result.receipt] }] };
+    diagnostics.terminalEvidence = {
+      passed: true, caseId: id, contextId: "ctx", request, observation, assigned, retained,
+      checks: { processes: true, attribution: true, preserved: true, outcome: true },
+    };
+    const ref = (value) => {
+      const bytes = JSON.stringify(value);
+      return { complete: true, hash: createHash("sha256").update(bytes).digest("hex"), bytes: Buffer.byteLength(bytes) };
+    };
+    const prototype = diagnostics.natlangTeacher.calls[0];
+    const at = (second) => new Date(Date.UTC(2026, 0, 1, 0, 0, second)).toISOString();
+    const call = (name, parent, inputs, output, start, end, effects = []) => ({
+      callId: name, summary: { ...prototype.summary, call_id: name },
+      record: {
+        ...prototype.record, call_id: name, parent_call_id: parent, definition: { name }, outcome: "done",
+        inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+        output: ref(output), started_at: at(start), ended_at: at(end), effects,
+      },
+    });
+    const result = call("inspectExecution", "reviewTerminal", { input: observation }, report, 6, 6);
+    diagnostics.natlangTeacher = {
+      ...diagnostics.natlangTeacher, programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+      report, rootCallIds: ["runWorkflow"], calls: [
+        call("runWorkflow", null, {}, null, 0, 11),
+        call("reviewDeviceAndTerminal", "runWorkflow", { request }, report, 1, 10),
+        call("reviewLiveTerminal", "reviewDeviceAndTerminal", { request }, report, 2, 9),
+        call("readTerminalEvidence", "reviewLiveTerminal", { operationId }, observation, 3, 3,
+          [{ service: "terminalEvidenceRead", method: "inspect", args: ref([operationId]), result: ref(observation) }]),
+        call("reviewTerminal", "reviewLiveTerminal", { input: observation }, report, 4, 8),
+        call("inspectInvocation", "reviewTerminal", { input: observation }, null, 5, 5),
+        result,
+      ],
+    };
+    await save();
+    await exportLiveTeacherWorkflow({ ...options, cases });
+    result.record.inputs.input = ref({ ...observation, result: { ...observation.result, operationId: "wrong-origin" } });
+    await save();
+    await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /preserve the invocation check/u);
+  });
 }
 
 for (const id of [

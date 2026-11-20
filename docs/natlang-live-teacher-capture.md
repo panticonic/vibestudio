@@ -148,6 +148,13 @@ publication comparison. The cases cover a matching published manifest, a valid
 local lifecycle change, and an invalid local icon declaration. Use the matching
 `unit-design-oracle-<case-id>` for model-free verification.
 
+Terminal evidence cases call `deviceAndTerminal/reviewDeviceAndTerminal` in
+Examples. The caller supplies retained receipts from bounded shell-extension
+operations. The reviewer checks the assigned invocation first, then explains
+whether stderr, output truncation, or a result from another operation changes
+the finding. The model sees result metadata and has only the receipt read.
+Use the matching `terminal-evidence-oracle-<case-id>` for model-free verification.
+
 Assigned automation planning cases use the real Missions service. The shared
 program reads the assigned manual monitor and its ledger, calls the automation
 planner, then checks the same assignment again. The stale case edits the
