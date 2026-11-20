@@ -93,6 +93,14 @@ const domains = [
     identify: (world) => [world.id, world.sourceGroups],
   },
   {
+    domain: "capabilities",
+    template: "base",
+    source: "skills/approval-visibility-fixtures/transition-worlds.ts",
+    exported: "approvalTransitionWorlds",
+    operation: "reviewApprovalTransition",
+    identify: (world) => [world.id, [world.sourceGroup]],
+  },
+  {
     domain: "automation",
     template: "base",
     source: "skills/automation-workflow-fixtures/worlds.ts",

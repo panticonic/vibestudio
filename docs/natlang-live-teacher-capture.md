@@ -214,8 +214,13 @@ previous pending set. The verifier checks queue ownership and whether the
 assigned ID is located, absent, or unconfirmed.
 Run `node scripts/smoke-natlang-approval-visibility.mjs` to compare initial
 hub and workspace watch snapshots with the paired CLI's independent list
-readback. It stops the owned System instance, then passes the redacted
-receipts through the shared Natlang root with a scripted executor.
+readback. The smoke also opens a disposable child workspace from the local
+Examples checkpoint, captures its
+real pending creation review, cancels that review through the owner approval
+service, and rereads both surfaces. It stops the owned System instance before
+passing both redacted observations through the shared Natlang root with a
+scripted executor. The transition reports that the review left the pending
+list and preserves the evidence from each observation.
 
 Temporary notification cases call the native shell notification service in an
 isolated workspace. The workflow passes the accepted host ID to the dismissal

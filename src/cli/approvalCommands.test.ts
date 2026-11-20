@@ -4,7 +4,7 @@ import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { encodeEventWatchRecord, type EventWatchRecord } from "@vibestudio/shared/events";
 import { createApprovalQueue } from "../server/services/approvalQueue.js";
 import { createShellApprovalService } from "../server/services/shellApprovalService.js";
-import { approvalCommands } from "./approvalCommands.js";
+import { approvalCommands, readApprovalQueueSnapshot } from "./approvalCommands.js";
 import { parseInvocation } from "./commandTable.js";
 import { ConnectionError } from "./output.js";
 
@@ -281,6 +281,20 @@ describe("hub approvals for a paired device", () => {
         { ...hubReview, source: "hub" },
       ],
     ]);
+    expect(rpc.close).toHaveBeenCalledOnce();
+    expect(hub.close).toHaveBeenCalledOnce();
+  });
+
+  it("retains IDs and queue reachability in the Natlang snapshot", async () => {
+    rpc.call.mockResolvedValue([capability]);
+    hub.call.mockRejectedValue(new ConnectionError("hub disconnected"));
+    await expect(readApprovalQueueSnapshot(identity())).resolves.toEqual({
+      caller: "device-workspace",
+      receipts: [
+        { source: "workspace", kind: "snapshot", ids: [capability.approvalId] },
+        { source: "hub", kind: "unavailable", ids: [] },
+      ],
+    });
     expect(rpc.close).toHaveBeenCalledOnce();
     expect(hub.close).toHaveBeenCalledOnce();
   });

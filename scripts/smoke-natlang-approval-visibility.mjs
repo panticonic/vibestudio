@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { promisify } from "node:util";
+import { tsImport } from "tsx/esm/api";
 
 const exec = promisify(execFile);
 const sources = ["workspace", "hub"];
@@ -114,7 +115,9 @@ async function usePairedReceipts(scratch) {
   };
   const observation = path.join(scratch, "approval-readback.json");
   const bank = path.join(scratch, "bank.jsonl");
-  await writeFile(observation, JSON.stringify(input), { mode: 0o600 });
+  const { liveApprovalTransition } = await tsImport("./lib/approval-transition-observation.ts", import.meta.url);
+  const transition = await liveApprovalTransition(instance);
+  await writeFile(observation, JSON.stringify([input, transition]), { mode: 0o600 });
   const output = await open(bank, "wx", 0o600);
   try {
     await new Promise((resolve, reject) => {
@@ -166,7 +169,7 @@ try {
     }
   );
   console.log(result.stdout.trim());
-  console.log(JSON.stringify({ passed: true, queues: evidence.queueCounts }));
+  console.log(JSON.stringify({ passed: true, queues: evidence.queueCounts, transition: "no-longer-listed" }));
 } finally {
   await rm(scratch, { recursive: true, force: true });
 }

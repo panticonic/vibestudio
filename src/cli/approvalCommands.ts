@@ -11,7 +11,7 @@ import { readEventWatchRecords } from "@vibestudio/service-schemas/events";
 import type { EventPayloads } from "@vibestudio/shared/events";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
 import { JSON_FLAG, type ArgSpec, type CliCommand, type ParsedInvocation } from "./commandTable.js";
-import { loadCliIdentity, type CliCredentials } from "./credentialStore.js";
+import { loadCliIdentity, type CliCredentials, type CliIdentity } from "./credentialStore.js";
 import { openHubControlRpc } from "./remoteClient.js";
 import {
   AuthError,
@@ -72,8 +72,10 @@ interface Surface {
  * selected workspace's; an agent profile reaches only its workspace. Both
  * queues speak `shellApproval`, so one surface serves both, labelled by source.
  */
-async function openSurfaces(): Promise<SurfaceSet> {
-  const identity = loadCliIdentity();
+async function openSurfaces(
+  identity = loadCliIdentity(),
+  signal?: AbortSignal
+): Promise<SurfaceSet> {
   if (!identity) {
     throw new AuthError(NOT_PAIRED_GUIDANCE);
   }
@@ -83,19 +85,24 @@ async function openSurfaces(): Promise<SurfaceSet> {
       : undefined;
   const set: SurfaceSet = { surfaces: [], unavailable: [], incomplete: false };
   if (workspace) {
-    const rpc = new RpcClient(workspace);
+    const rpc = new RpcClient(workspace, { signal });
     set.surfaces.push({ source: "workspace", rpc, client: approvalClient(rpc) });
   }
   if (identity.kind === "device") {
     // One queue being unreachable must not discard the other's answers: it is
     // recorded against its source and reported with them.
     try {
-      const rpc = await openHubControlRpc(identity);
+      const rpc = await openHubControlRpc(identity, { signal });
       set.surfaces.push({ source: "hub", rpc, client: approvalClient(rpc) });
     } catch (error) {
       set.unavailable.push({ source: "hub", error });
     }
   }
+  return set;
+}
+
+async function openCommandSurfaces() {
+  const set = await openSurfaces();
   if (set.surfaces.length === 0 && set.unavailable[0]) throw set.unavailable[0].error;
   return set;
 }
@@ -107,7 +114,7 @@ async function closeSurfaces(surfaces: Surface[]): Promise<void> {
   if (errors.length > 1) throw new AggregateError(errors, "Failed to close approval connections");
 }
 
-async function listAll(set: SurfaceSet): Promise<LabelledApproval[]> {
+async function observePendingSurfaces(set: SurfaceSet) {
   const settled = await Promise.allSettled(
     set.surfaces.map(async (surface) =>
       (await surface.client.listPending()).map(
@@ -115,16 +122,46 @@ async function listAll(set: SurfaceSet): Promise<LabelledApproval[]> {
       )
     )
   );
-  const approvals: LabelledApproval[] = [];
-  let answered = 0;
-  settled.forEach((result, index) => {
-    if (result.status === "fulfilled") {
-      answered += 1;
-      approvals.push(...result.value);
-    } else set.unavailable.push({ source: set.surfaces[index]!.source, error: result.reason });
+  return settled.flatMap((result, index) => {
+    const source = set.surfaces[index]!.source;
+    if (result.status === "fulfilled") return [{ source, pending: result.value }];
+    set.unavailable.push({ source, error: result.reason });
+    return [];
   });
+}
+
+/** Read each native approval surface with the supplied CLI login and retain source-scoped snapshots. */
+export async function readApprovalQueueSnapshot(identity: CliIdentity, signal?: AbortSignal) {
+  const set = await openSurfaces(identity, signal);
+  try {
+    const snapshots = await observePendingSurfaces(set);
+    signal?.throwIfAborted();
+    const caller =
+      identity.kind === "agent"
+        ? "linked-agent"
+        : identity.phase === "account"
+          ? "device-account"
+          : "device-workspace";
+    return {
+      caller,
+      receipts: [
+        ...snapshots.map(({ source, pending }) => ({
+          source,
+          kind: "snapshot" as const,
+          ids: pending.map(({ approvalId }) => approvalId),
+        })),
+        ...set.unavailable.map(({ source }) => ({ source, kind: "unavailable" as const, ids: [] })),
+      ],
+    } as const;
+  } finally {
+    await closeSurfaces(set.surfaces);
+  }
+}
+
+async function listAll(set: SurfaceSet): Promise<LabelledApproval[]> {
+  const snapshots = await observePendingSurfaces(set);
   // No queue answered: an empty list would claim there is nothing pending.
-  if (answered === 0) {
+  if (snapshots.length === 0) {
     const [first, ...rest] = set.unavailable;
     if (first && rest.length === 0) throw unavailableError(first);
     if (first) {
@@ -133,7 +170,7 @@ async function listAll(set: SurfaceSet): Promise<LabelledApproval[]> {
   }
   // The list is what the reachable queues hold; the caller is told it is not everything.
   set.incomplete = set.unavailable.length > 0;
-  return approvals;
+  return snapshots.flatMap(({ pending }) => pending);
 }
 
 function positionals(inv: ParsedInvocation, count: number, usage: string): void {
@@ -228,7 +265,7 @@ function command(
       let set: SurfaceSet = { surfaces: [], unavailable: [], incomplete: false };
       let exitCode = 0;
       try {
-        set = await openSurfaces();
+        set = await openCommandSurfaces();
         const result = await action(inv, set);
         printResult(result, {
           json,
@@ -310,7 +347,7 @@ async function watch(inv: ParsedInvocation): Promise<number> {
   process.on("SIGTERM", stop);
   try {
     positionals(inv, 0, "watch");
-    const opened = await openSurfaces();
+    const opened = await openCommandSurfaces();
     surfaces = opened.surfaces;
     // Each queue is followed independently: one failing (at open or mid-stream)
     // is reported against its source and does not end its peers. The watch ends
