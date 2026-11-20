@@ -10,6 +10,14 @@ import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
 
 const sharedProgram = "skills/vibestudio-workflows/runWorkflow.nl";
 const templateGoalDomains = {
+  "program-run": {
+    namespace: "vibestudio:program-run",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-program-run-managed.ts" },
+    callable: "workOnProgramRunGoal",
+    skill: "programRun",
+    checks: ["discoveredRuntimePrograms", "inspectedCurrentCallable", "ranAuthorizedSamples", "verifiedNativeOutputReceipts",
+      "preservedRuntimeSource", "verifiedSignedOutput", "rejectedForeignRuntimeEvidence"],
+  },
   authoring: {
     namespace: "vibestudio:authoring",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-authoring-managed.ts" },
@@ -47,6 +55,14 @@ const templateGoalDomains = {
     skill: "diagnostics",
     checks: ["discoveredDiagnosticCheckpoints", "boundNativeDiagnosticReadback", "selectedExactDiagnosticWindows",
       "preservedDiagnosticBootCoverage", "reconciledDiagnosticFinding", "groundedDiagnosticCitations", "verifiedDiagnosticHandoff"],
+  },
+  "local-delivery": {
+    namespace: "vibestudio:local-delivery",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-local-delivery-managed.ts" },
+    callable: "workTowardLocalDelivery",
+    skill: "localDelivery",
+    checks: ["discoveredOwnedDeliveryRooms", "exactObservedDeliveryScope", "independentlyJoinedLocalDelivery",
+      "preservedOwnedLocalRosters", "verifiedOriginalLocalReceipts", "matchedLocalDeliveryDecision", "exactLocalRecipientAndReadback"],
   },
   "personal-history": {
     namespace: "vibestudio:personal-history",
@@ -1137,13 +1153,13 @@ export async function loadLiveTeacherCases(checkouts) {
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
-      openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [] } = imported.default ?? imported;
+      openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [] } = imported.default ?? imported;
     for (const assignment of [...openGoalWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
       ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
       ...openGoalCalendarWorlds, ...openPersonalArtifactWorlds, ...openPersonalHistoryWorlds,
-      ...openGoalAuthoringWorlds, ...openGoalGoogleHandoffWorlds, ...openPersonalAutomationWorlds, ...openGoalOwnedPreviewWorlds, ...openDiagnosticWorlds]) {
+      ...openGoalProgramRunWorlds, ...openGoalAuthoringWorlds, ...openGoalGoogleHandoffWorlds, ...openPersonalAutomationWorlds, ...openGoalOwnedPreviewWorlds, ...openDiagnosticWorlds, ...openLocalDeliveryWorlds]) {
       const split = assignment.split ?? "train";
       const sourceGroups = [assignment.sourceGroup, assignment.relatedSourceGroup].filter(Boolean);
       const scenario = `open-goal-${assignment.id}`;
@@ -6872,7 +6888,41 @@ function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
     "Expected a verified live goal and its actual installed Natlang skill call"
   );
   const evidence = { workspace: { proof } };
-  if (world.kind === "authoring") {
+  if (world.kind === "program-run") {
+    const outcome = exercise.report.outcome;
+    const effectsOf = (service, method) => effects.filter(effect =>
+      effect.service === service && effect.method === method && !effect.error);
+    const inspections = effectsOf("programRunCatalog", "inspect");
+    const runs = effectsOf("programExecution", "run");
+    const reads = effectsOf("programExecution", "read");
+    const signs = effectsOf("programReceiptSigner", "stage");
+    const nativeCount = world.expected.attempts.length;
+    const sources = proof.inspections;
+    const attempts = proof.attempts;
+    const observations = proof.observations;
+    const latest = sources?.at(-1)?.evidence;
+    const evidenceRequest = latest?.compiler === "failed" ? latest : observations?.at(-1)?.evidence ?? latest;
+    const reviewedActualEvidence = exercise.calls.some(({ record }) =>
+      record.definition?.name === "reviewRuntimeEvidence" && record.outcome === "done" &&
+        matchesValue(record.inputs?.request, evidenceRequest) && matchesValue(record.output, outcome.review));
+    requireEvidence(
+      effectsOf("programRunCatalog", "list").length === 1 && inspections.length === world.expected.inspected &&
+        sources?.length === inspections.length && inspections.every((effect, index) => matchesValue(effect.result, sources[index])) &&
+        runs.length === nativeCount && reads.length === nativeCount && attempts?.length === nativeCount && observations?.length === nativeCount &&
+        attempts.every((attempt, index) => matchesValue(runs[index].args, [attempt.projectId, attempt.revision, attempt.sampleId]) &&
+          matchesValue(runs[index].result, { id: attempt.id, status: attempt.status }) &&
+          matchesValue(reads[index].args, [attempt.id]) && matchesValue(reads[index].result, observations[index])) &&
+        (world.expected.project ? outcome.status === "reviewed" && reviewedActualEvidence &&
+          outcome.review?.next === world.expected.next && matchesValue(outcome.receipts, observations)
+          : outcome.status === "unresolved" && outcome.reason === "program-unavailable") &&
+        signs.length === Number(world.expected.signed) &&
+        (world.expected.signed ? matchesValue(signs[0].args, [attempts.at(-1)?.id]) &&
+          matchesValue(signs[0].result, proof.signed) && matchesValue(outcome.signed, proof.signed) &&
+          typeof proof.signedText === "string" && hash(proof.signedText) === proof.signed?.sha256
+          : proof.signed === null && proof.signedText === null),
+      "Expected actual native invocations, exact independently checked output, and any authorized signed receipt"
+    );
+  } else if (world.kind === "authoring") {
     const outcome = exercise.report.outcome;
     const effectsOf = (service, method) => effects.filter(effect =>
       effect.service === service && effect.method === method && !effect.error);
@@ -6999,6 +7049,31 @@ function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
           matchesValue(stages[0].args, [outcome.finding]) && matchesValue(stages[0].result, proof.handoff)
           : proof.handoff === null && proof.handoffReadback === null),
       "Expected observed native Host windows, exact report evidence and the authorized scratch result"
+    );
+  } else if (world.kind === "local-delivery") {
+    const outcome = exercise.report.outcome;
+    const calls = (service, method) => effects.filter(effect => effect.service === service && effect.method === method && !effect.error);
+    const discover = calls("localDeliveryCatalog", "discover");
+    const inspect = calls("localDeliveryHistory", "inspect");
+    const submit = calls("localDeliverySend", "submit");
+    const readback = calls("localDeliveryReadback", "read");
+    const roomCount = Object.keys(world.expected.reads).length;
+    requireEvidence(
+      discover.length > 0 && discover.every(({ args, result }) => matchesValue(args, []) && matchesValue(result, proof.catalog)) &&
+        proof.observations?.length === roomCount && inspect.length === roomCount &&
+        new Set(inspect.map(({ args }) => args?.[0])).size === roomCount &&
+        inspect.every(({ args, result }) => proof.observations.some(observation =>
+          matchesValue(args, [observation.room.id, observation.phrase]) && matchesValue(result, observation))) &&
+        proof.nativeProofs?.length === proof.catalog.length && proof.nativeProofs.every(({ passed }) => passed === true) &&
+        proof.boundaries?.length === proof.catalog.length && proof.boundaries.every(boundary => boundary.joined === true) &&
+        outcome?.status === world.expected.status && submit.length === Number(Boolean(world.expected.send)) &&
+        readback.length === submit.length && (world.expected.send ?
+          proof.readback?.acknowledged === true && matchesValue(outcome.delivery, { attempt: proof.attempt, readback: proof.readback }) &&
+          proof.observations.some(({ room, basis }) => room.id === proof.readback.roomId &&
+            matchesValue(submit[0].args, [basis, proof.readback.content])) && matchesValue(submit[0].result, proof.attempt) &&
+          matchesValue(readback[0].args, [proof.attempt.attemptId]) && matchesValue(readback[0].result, proof.readback) :
+          outcome.delivery === null && proof.attempt === null && proof.readback === null),
+      "Expected exact local room and recipient observations, original attempt and independently joined delivery evidence"
     );
   } else if (world.kind === "personal-history") {
     requireEvidence(
