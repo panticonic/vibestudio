@@ -81,7 +81,11 @@ export async function materializeImmutableTree(source: string, target: string): 
 /** Publish an independently owned Windows resource tree. Symlinks in an
  * installed dependency closure are resolved only within that closure; the
  * result contains ordinary files so ACL changes cannot affect shared inodes. */
-export async function materializePrivateTree(source: string, target: string): Promise<void> {
+export async function materializePrivateTree(
+  source: string,
+  target: string,
+  excludedNames: ReadonlySet<string> = new Set()
+): Promise<void> {
   const root = await fs.promises.realpath(source);
   const visit = async (
     input: string,
@@ -97,8 +101,10 @@ export async function materializePrivateTree(source: string, target: string): Pr
     if (metadata.isDirectory()) {
       const next = new Set(ancestors).add(resolved);
       await fs.promises.mkdir(output, { recursive: true, mode: metadata.mode });
-      for (const child of await fs.promises.readdir(resolved))
-        await visit(path.join(resolved, child), path.join(output, child), next);
+      for (const child of await fs.promises.readdir(resolved)) {
+        if (!excludedNames.has(child))
+          await visit(path.join(resolved, child), path.join(output, child), next);
+      }
     } else if (metadata.isFile()) {
       await fs.promises.copyFile(resolved, output, fs.constants.COPYFILE_EXCL);
       await fs.promises.chmod(output, metadata.mode);
@@ -107,9 +113,13 @@ export async function materializePrivateTree(source: string, target: string): Pr
   await visit(root, target, new Set());
 }
 
-/** Admit a workspace package's public source/declaration roots. Its
- * dependency links and package-manager workspace are never copied. */
-export async function materializePackageResources(source: string, target: string): Promise<void> {
+/** Admit complete semantic workspace source or just an installed SDK's public resources. */
+export async function materializePackageResources(
+  source: string,
+  target: string,
+  fullSource = false
+): Promise<void> {
+  if (fullSource) return materializePrivateTree(source, target, new Set(["node_modules", ".git"]));
   const root = await fs.promises.realpath(source);
   const manifest = JSON.parse(
     await fs.promises.readFile(path.join(root, "package.json"), "utf8")

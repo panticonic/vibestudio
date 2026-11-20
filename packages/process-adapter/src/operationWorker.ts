@@ -1,3 +1,5 @@
+import { decodeRpcJson, encodeRpcJson } from "@vibestudio/rpc/wireJson";
+
 /** Worker half of the owner-to-native operation protocol. It exposes only the
  * installed handler; no worker operation can cause an owner-side dispatch. */
 export function serveNativeOperations(
@@ -29,8 +31,19 @@ export function serveNativeOperations(
   };
   process.once("disconnect", disconnect);
   process.on("error", disconnect);
-  process.on("message", (frame: unknown) => {
+  process.on("message", (encoded: unknown) => {
     if (stopped) return;
+    if (typeof encoded !== "string" || Buffer.byteLength(encoded) > MAX_BYTES) {
+      disconnect();
+      return;
+    }
+    let frame: unknown;
+    try {
+      frame = decodeRpcJson(encoded);
+    } catch {
+      disconnect();
+      return;
+    }
     if (!frame || typeof frame !== "object") {
       disconnect();
       return;
@@ -38,8 +51,7 @@ export function serveNativeOperations(
     const input = frame as { type?: unknown; id?: unknown; method?: unknown; args?: unknown };
     if (
       typeof input.id !== "string" ||
-      input.id.length > 128 ||
-      Buffer.byteLength(JSON.stringify(frame)) > 32 * 1024 * 1024
+      input.id.length > 128
     ) {
       disconnect();
       return;
@@ -64,14 +76,15 @@ export function serveNativeOperations(
     active.set(id, controller);
     const send = (result: object) => {
       if (stopped || !process.connected) return;
-      let bytes = Buffer.byteLength(JSON.stringify(result));
+      let encoded = encodeRpcJson(result);
+      let bytes = Buffer.byteLength(encoded);
       if (bytes > MAX_BYTES) {
-        result = {
+        encoded = encodeRpcJson({
           type: "operation-result",
           id,
           error: { message: "Native result exceeds byte limit", code: "ELIMIT" },
-        };
-        bytes = Buffer.byteLength(JSON.stringify(result));
+        });
+        bytes = Buffer.byteLength(encoded);
       }
       if (queuedBytes + bytes > MAX_BYTES) {
         disconnect();
@@ -79,7 +92,7 @@ export function serveNativeOperations(
       }
       queuedBytes += bytes;
       try {
-        process.send!(result, (error) => {
+        process.send!(encoded, (error) => {
           queuedBytes -= bytes;
           if (error) disconnect();
         });

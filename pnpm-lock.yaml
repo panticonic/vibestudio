@@ -1046,6 +1046,10 @@ importers:
         version: 7.0.21
 
   packages/process-adapter:
+    dependencies:
+      '@vibestudio/rpc':
+        specifier: workspace:*
+        version: link:../rpc
     devDependencies:
       '@microsoft/mxc-sdk':
         specifier: 0.8.0

@@ -1070,6 +1070,50 @@ test("open suite goal export requires the recorded current suite receipt", async
   );
 });
 
+test("open Drive goal export requires the actual mounted skill and its read-only evidence", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(path.resolve(import.meta.dirname, ".."));
+  const cases = await loadLiveTeacherCases(checkouts);
+  entry.test.name = "open-goal-audit-onboarding-pack-direct-access";
+  const workflow = cases.get(entry.test.name);
+  assert.equal(workflow.workspace, "google-workspace");
+  const { id, goal } = workflow.assignment;
+  const pins = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(options.pins, JSON.stringify({ ...pins, workspace: workflow.workspace }));
+  const run = diagnostics.natlangTeacher;
+  run.programPath = workflow.program;
+  const [root, child] = run.calls;
+  const valueRef = (value) => {
+    const encoded = JSON.stringify(value);
+    return { complete: true, bytes: Buffer.byteLength(encoded), hash: createHash("sha256").update(encoded).digest("hex") };
+  };
+  const outcome = { status: "complete", directAccess: "reviewed" };
+  root.record.definition.name = "runUserGoal";
+  root.record.inputs = { goal: valueRef(goal) };
+  child.record.definition.name = "workOnDriveGoal";
+  child.record.outcome = "done";
+  child.record.inputs = { goal: valueRef(goal) };
+  child.record.output = valueRef(outcome);
+  child.record.effects = [
+    ["googleGoalDiscovery", "discover"], ...["readiness", "listFolder", "readPermissions"].map(method => ["googleWorkspaceRead", method]),
+  ].map(([service, method]) => ({ service, method }));
+  run.report = { status: "workspace-skill-reviewed", skill: "google", outcome };
+  diagnostics.openGoalVerification = {
+    passed: true, caseId: id, contextId: "ctx", goal, mode: "audit", gate: "audited",
+    requests: [{ kind: "permissions", resource: "pack_current" }], discovery: {}, observed: {},
+    checks: { discoveredDriveScope: true, exactProviderReads: true, boundDriveOutcome: true,
+      groundedDriveFindings: true, preservedReadOnlyScope: true },
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  child.record.output = valueRef({ ...outcome, directAccess: "blocked" });
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: path.join(path.dirname(options.out), "replaced") }),
+    /actual installed Natlang skill call/u
+  );
+});
+
 test("panel health export rejects an old console record cited after recovery", async (t) => {
   const { options, diagnostics, entry, save } = await fixture(t);
   const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(

@@ -28,11 +28,15 @@ export class ImmutableTreeWorkerClient {
     return this.project("tree", source, target);
   }
 
-  materializePackage(source: string, target: string): Promise<void> {
-    return this.project("package", source, target);
+  materializePackage(source: string, target: string, fullSource = false): Promise<void> {
+    return this.project(fullSource ? "workspace-package" : "package", source, target);
   }
 
-  private project(kind: "tree" | "package", source: string, target: string): Promise<void> {
+  private project(
+    kind: "tree" | "package" | "workspace-package",
+    source: string,
+    target: string
+  ): Promise<void> {
     const worker = this.ensureWorker();
     const id = this.nextId++;
     return new Promise((resolve, reject) => {

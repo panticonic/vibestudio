@@ -9,6 +9,175 @@ import { requireDevelopmentTemplateCheckouts } from "../src/dev/developmentTempl
 import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
 
 const sharedProgram = "skills/vibestudio-workflows/runWorkflow.nl";
+const templateGoalDomains = {
+  "eval-handoff": {
+    namespace: "vibestudio:eval-handoff",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-eval-handoff-managed.ts" },
+    callable: "workOnEvalHandoffGoal",
+    skill: "evalHandoff",
+    checks: ["discoveredOwnedEvalJobs", "keptOriginalEvalReceipts", "boundIndependentBlobReadback", "replayedSameNativeIdentity",
+      "authorizedExactEvalRetry", "reconciledEvalHandoff", "verifiedRetainedEvalScratch", "protectedOwnedEvalContext"],
+  },
+  browserMigration: {
+    namespace: "vibestudio:browser-migration",
+    validator: { template: "personal", path: "skills/browser-import-runtime/open-migration-managed.ts" },
+    callable: "workOnBrowserMigrationGoal",
+    checks: ["discoveredMigrationSources", "boundExactMigration", "preservedOtherProfiles",
+      "matchedMigrationDisposition", "verifiedRetainedHandoff", "preservedCollectionNeighbors"],
+  },
+  visualRecovery: {
+    namespace: "vibestudio:visual-panel-recovery",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-panel-recovery-managed.ts" },
+    callable: "recoverPanelGoal",
+    checks: ["exactOwnedDiscovery", "exactOrderedRecovery", "boundRendererReadback", "untouchedCompanions",
+      "exactHealthDisposition", "protectedHeads"],
+  },
+  "program-run": {
+    namespace: "vibestudio:program-run",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-program-run-managed.ts" },
+    callable: "workOnProgramRunGoal",
+    skill: "programRun",
+    checks: ["discoveredRuntimePrograms", "inspectedCurrentCallable", "ranAuthorizedSamples", "verifiedNativeOutputReceipts",
+      "preservedRuntimeSource", "verifiedSignedOutput", "rejectedForeignRuntimeEvidence"],
+  },
+  authoring: {
+    namespace: "vibestudio:authoring",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-authoring-managed.ts" },
+    callable: "workOnAuthoringGoal",
+    checks: ["discoveredAuthoringRecords", "selectedAuthorizedTrees", "observedCurrentCompiler",
+      "verifiedAuthoringFindings", "retainedAuthoringSources", "verifiedAuthoringHandoff", "rejectedStaleAuthoringReceipt"],
+  },
+  ownedPreview: {
+    namespace: "vibestudio:owned-preview-publication",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-owned-preview-managed.ts" },
+    callable: "publishOwnedPreviewGoal",
+    checks: ["exactOwnedLaunch", "exactApprovedArtifact", "exactHostJournal", "exactProviderEffects",
+      "correctDisposition", "protectedHeads"],
+  },
+  "personal-automation": {
+    namespace: "vibestudio:personal-automation",
+    validator: { template: "personal", path: "skills/open-personal-automation-runtime/managed.ts" },
+    callable: "coordinatePersonalAutomation",
+    skill: "personalAutomation",
+    checks: ["authorizedSchedulingState", "observedLiveDefinitions", "independentReadback", "matchedGoalReport",
+      "protectedWorkspaceMonitor", "noRunsDispatched", "expectedRecovery"],
+  },
+  "google-handoff": {
+    namespace: "vibestudio:google-decision-handoff",
+    validator: { template: "google-workspace", path: "skills/open-google-handoff-goal/managed.ts" },
+    callable: "reconcileGoogleHandoff",
+    skill: "googleHandoff",
+    checks: ["reconciledGoogleHandoffDecision", "verifiedGoogleHandoffProviderReads", "boundGoogleHandoffAssets",
+      "verifiedGoogleHandoffFreshness", "verifiedGoogleHandoffArtifact", "preservedGoogleHandoffAuthority"],
+  },
+  "system-diagnostics": {
+    namespace: "vibestudio:system-diagnostics",
+    validator: { template: "system", path: "skills/open-system-diagnostics-runtime/managed.ts" },
+    callable: "workTowardDiagnosticGoal",
+    skill: "diagnostics",
+    checks: ["discoveredDiagnosticCheckpoints", "boundNativeDiagnosticReadback", "selectedExactDiagnosticWindows",
+      "preservedDiagnosticBootCoverage", "reconciledDiagnosticFinding", "groundedDiagnosticCitations", "verifiedDiagnosticHandoff"],
+  },
+  "local-delivery": {
+    namespace: "vibestudio:local-delivery",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-local-delivery-managed.ts" },
+    callable: "workTowardLocalDelivery",
+    skill: "localDelivery",
+    checks: ["discoveredOwnedDeliveryRooms", "exactObservedDeliveryScope", "independentlyJoinedLocalDelivery",
+      "preservedOwnedLocalRosters", "verifiedOriginalLocalReceipts", "matchedLocalDeliveryDecision", "exactLocalRecipientAndReadback"],
+  },
+  "personal-history": {
+    namespace: "vibestudio:personal-history",
+    validator: { template: "personal", path: "skills/open-personal-history-runtime/managed.ts" },
+    callable: "reviewPersonalHistory",
+    skill: "personalHistory",
+    checks: ["protectedHistory", "observedArchiveDiscovery", "readExactMilestones", "joinedSourceEvidence", "matchedDecision"],
+  },
+  calendar: {
+    namespace: "vibestudio:calendar-coordination",
+    validator: { template: "google-workspace", path: "skills/open-calendar-goal/managed.ts" },
+    callable: "workOnCalendarGoal",
+    checks: ["discoveredCalendarSources", "exactCalendarWindows", "boundCalendarReadback",
+      "reconciledCalendarDecision", "verifiedCalendarHandoff", "preservedCalendarAuthority"],
+  },
+  "personal-artifacts": {
+    namespace: "vibestudio:personal-artifacts",
+    validator: { template: "personal", path: "skills/open-personal-artifacts-runtime/managed.ts" },
+    callable: "workOnPersonalArtifactsGoal",
+    skill: "personalArtifacts",
+    checks: ["observedOwnedArtifacts", "exactLibraryState", "protectedBrowserRecords", "exactCollectionState",
+      "verifiedBookmarkHandoff", "recoveredFreshBasis", "reportedArtifactEvidence"],
+  },
+  pdfVault: {
+    namespace: "vibestudio:pdf-vault-correction",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-pdf-vault-managed.ts" },
+    callable: "workOnPdfGoal",
+    checks: ["exactOriginalPdf", "verifiedHandoff", "exactWorkingVault", "concurrentRevision", "protectedHeads"],
+  },
+  gmail: {
+    namespace: "vibestudio:gmail-compose",
+    validator: { template: "google-workspace", path: "skills/open-gmail-goal/managed.ts" },
+    callable: "recoverGmailGoal",
+    checks: ["discoveredOwnedComposes", "verifiedComposeLineage", "exactGmailRequests",
+      "boundProviderReadback", "preservedGmailState", "reportedGmailContinuity"],
+  },
+  pdf: {
+    namespace: "vibestudio:pdf-accessibility",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-pdf-managed.ts" },
+    callable: "workOnPdfGoal",
+    checks: ["originalFiles", "exactSelection", "textEvidence", "layoutEvidence",
+      "renderedEvidence", "groundedRecommendation", "protectedHeads"],
+  },
+  publication: {
+    namespace: "vibestudio:website-publication",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-publication-managed.ts" },
+    callable: "workTowardPublicationGoal",
+    checks: ["discoveredLaunchRecord", "choseExactReview", "boundWebsiteReadback",
+      "rereadCurrentAndRetainedPackage", "exactPreflight", "exactRevision", "localJournalUnchanged", "protectedHeads"],
+  },
+  recovery: {
+    namespace: "vibestudio:session-recovery",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-recovery-managed.ts" },
+    callable: "recoverSessionGoal",
+    checks: ["discoveredRetainedSources", "exactReplayScope", "boundNativeReplay",
+      "preservedRetainedChannels", "groundedRecoveryDecision", "verifiedRecoveryHandoff"],
+  },
+  personal: {
+    namespace: "vibestudio:mission-control",
+    validator: { template: "personal", path: "skills/open-personal-goal/managed.ts" },
+    callable: "workOnMissionGoal",
+    checks: ["observedMissionBoard", "exactMissionEffects", "recoveredMissionRevision",
+      "preservedOtherMissions", "verifiedMissionHandoff", "reportedMissionEvidence"],
+  },
+  operator: {
+    namespace: "vibestudio:system-operations",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-operator-managed.ts" },
+    callable: "workOnSystemGoal",
+    checks: ["discoveredOwnedTarget", "observedCurrentHub", "respectedOperatorAuthority",
+      "verifiedServiceOutcome", "boundOperatorReport"],
+  },
+  news: {
+    namespace: "vibestudio:news",
+    validator: { template: "news", path: "packages/news-live-evidence/open-goal.ts" },
+    callable: "reviewUserNewsGoal",
+    checks: ["readCurrentNews", "verifiedCadence", "verifiedReaderViews", "groundedScheduleFindings",
+      "verifiedAuthorizedChanges", "reportedDisposition"],
+  },
+  spectrolite: {
+    namespace: "vibestudio:spectrolite",
+    validator: { template: "spectrolite", path: "skills/spectrolite-review-fixtures/open-goal.ts" },
+    callable: "workTowardVaultGoal",
+    checks: ["originalSpectroliteEditor", "exactObservedNavigation", "currentSpectroliteOutcome",
+      "canonicalReviewFindings", "exactVaultWrite", "protectedVaultHeads"],
+  },
+  google: {
+    namespace: "vibestudio:google-drive",
+    validator: { template: "google-workspace", path: "skills/google-drive/open-goal-drive.ts" },
+    callable: "workOnDriveGoal",
+    checks: ["discoveredDriveScope", "exactProviderReads", "boundDriveOutcome",
+      "groundedDriveFindings", "preservedReadOnlyScope"],
+  },
+};
 const panelWorkflow = {
   family: "workspace-panel-repair",
   namespace: "vibestudio:panel-repair",
@@ -1000,11 +1169,25 @@ export async function loadLiveTeacherCases(checkouts) {
   if (openGoalSource) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
-    const { openGoalWorlds, browserGoalWorlds = [], suiteGoalWorlds = [] } = imported.default ?? imported;
-    for (const assignment of [...openGoalWorlds, ...browserGoalWorlds, ...suiteGoalWorlds]) {
+    const distinctGoals = new Set();
+    const { openGoalWorlds, browserGoalWorlds = [], suiteGoalWorlds = [], newsGoalWorlds = [],
+      spectroliteGoalWorlds = [], openGoalGoogleWorlds = [], openGoalPersonalWorlds = [],
+      operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
+      openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
+      openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
+      openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
+    for (const assignment of [...openGoalWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
+      ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
+      ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
+      ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
+      ...openGoalCalendarWorlds, ...openPersonalArtifactWorlds, ...openPersonalHistoryWorlds,
+      ...openGoalEvalHandoffWorlds, ...openGoalProgramRunWorlds, ...openGoalAuthoringWorlds, ...openGoalGoogleHandoffWorlds, ...openPersonalAutomationWorlds, ...openGoalOwnedPreviewWorlds, ...openDiagnosticWorlds, ...openLocalDeliveryWorlds, ...openGoalPanelRecoveryWorlds, ...openBrowserMigrationWorlds]) {
       const split = assignment.split ?? "train";
       const sourceGroups = [assignment.sourceGroup, assignment.relatedSourceGroup].filter(Boolean);
       const scenario = `open-goal-${assignment.id}`;
+      const distinctGoal = assignment.goal.normalize("NFKC").trim().replace(/\s+/gu, " ").toLowerCase();
+      requireEvidence(distinctGoal && !distinctGoals.has(distinctGoal), `Duplicate or empty open goal for ${scenario}`);
+      distinctGoals.add(distinctGoal);
       requireEvidence(!cases.has(scenario) && sourceGroups.length &&
         ["train", "validation", "test"].includes(split), `Invalid open-goal declaration for ${scenario}`);
       for (const group of sourceGroups) {
@@ -1013,23 +1196,26 @@ export async function loadLiveTeacherCases(checkouts) {
           `Open-goal source group ${group} crosses ${prior} and ${split}`);
         splitByGroup.set(group, split);
       }
+      const domain = templateGoalDomains[assignment.kind];
       cases.set(scenario, {
         family: `workspace-open-user-goal-${assignment.kind}`,
-        workspace: "examples",
-        namespace: assignment.kind === "browser" ? "vibestudio:browser" :
+        workspace: assignment.workspace ?? "examples",
+        namespace: domain?.namespace ?? (assignment.kind === "browser" ? "vibestudio:browser" :
           assignment.kind === "suite" ? "vibestudio:workspace-verification" :
-          assignment.kind === "research" ? "vibestudio:web-research" : "vibestudio:workspace-edit",
+          assignment.kind === "research" ? "vibestudio:web-research" : "vibestudio:workspace-edit"),
         group: assignment.sourceGroup,
         sourceGroups,
         split,
         interaction: "open-user-goal",
         program: "skills/open-user-goal/runUserGoal.nl",
         root: "runUserGoal",
-        validator: { template: "system-testing", path: `skills/system-testing/open-goal${[
+        validator: domain?.validator ?? { template: "system-testing", path: `skills/system-testing/open-goal${[
           "browser", "suite",
         ].includes(assignment.kind) ? `-${assignment.kind}` : ""}-managed.ts` },
         assignment,
-        evidence: openGoalEvidence,
+        ...(assignment.devices ? { devices: assignment.devices } : {}),
+        ...(assignment.requiresDeploymentPackage ? { requiresDeploymentPackage: true } : {}),
+        evidence: domain ? openTemplateGoalEvidence : openGoalEvidence,
       });
     }
   }
@@ -6657,12 +6843,538 @@ function researchHandoffEvidence(execution, exercise, scenario, workflow) {
   return { world: { context_id: contextId, case_id: caseId }, checks, evidence: { workspace: { fixture } } };
 }
 
+function openPdfEffectsValid(effects, proof, report, expected) {
+  const actual = (service, method) => effects.filter(effect =>
+    effect.service === service && effect.method === method && !effect.error);
+  const document = proof.documents?.find(({ name }) => name === expected.document);
+  const bound = proof.binding;
+  const [discover, ...extraDiscoveries] = actual("pdfGoalDocuments", "discover");
+  const [bind, ...extraBindings] = actual("pdfGoalDocuments", "bind");
+  const probes = actual("pdfIntakeProbe", "probe");
+  const layouts = actual("pdfLayoutRead", "inspect");
+  const text = actual("pdfIntakeRead", "read");
+  const rendered = actual("pdfGoalVisual", "render");
+  return document && typeof proof.revision === "string" && bound && report?.status === "inspected" &&
+    !extraDiscoveries.length && !extraBindings.length &&
+    isDeepStrictEqual(report.document, document) && isDeepStrictEqual(bound.document, document) &&
+    isDeepStrictEqual(proof.selection, report.selection) &&
+    isDeepStrictEqual(report.selection.pages, expected.pages) &&
+    isDeepStrictEqual(bound.missingPages, expected.missing ?? []) &&
+    matchesValue(discover?.args, []) &&
+    matchesValue(discover?.result, { revision: proof.revision, documents: proof.documents }) &&
+    matchesValue(bind?.args, [proof.revision, proof.selection]) && matchesValue(bind?.result, bound) &&
+    probes.length === Number(Boolean(expected.text)) && probes.length === proof.observations?.textProbes?.length &&
+    probes.every(({ args, result }, index) => matchesValue(args, [bound.text.document]) &&
+      matchesValue(result, proof.observations.textProbes[index])) &&
+    text.length === proof.observations?.text?.length && (expected.text ? text.length > 0 : text.length === 0) &&
+    text.every(({ args, result }, index) => {
+      const receipt = proof.observations.text[index];
+      return matchesValue(args, [bound.text.document, receipt.pages.map(({ number }) => number), "embedded"]) &&
+        matchesValue(result, receipt);
+    }) &&
+    layouts.length === (expected.layouts?.length ?? 0) &&
+    layouts.every(({ args, result }, index) =>
+      matchesValue(args, [bound.layouts[index]?.operationId]) &&
+      matchesValue(result, proof.observations.layouts[index])) &&
+    rendered.length === expected.render.length &&
+    rendered.every(({ args, result }, index) => {
+      const retained = proof.observations?.rendered?.[index];
+      const image = report.rendered[index];
+      return image && retained && matchesValue(args, [bound.visual?.operationId, expected.render[index]]) &&
+        matchesValue(result, image) && retained.mimeType === "image/png" &&
+        retained.artifactId === image.artifactId && retained.pageNumber === image.pageNumber &&
+        retained.digest === image.imageDigest && retained.inkPixels === image.inkPixels &&
+        isDeepStrictEqual(retained.inkBounds, image.inkBounds);
+    });
+}
+
+function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
+  const proof = execution.diagnostics.openGoalVerification;
+  const world = workflow.assignment;
+  const { callable, checks, skill: skillName = world.kind } = templateGoalDomains[world.kind];
+  const rootId = exercise.rootCallIds[0];
+  const root = exercise.calls.find(({ callId }) => callId === rootId)?.record;
+  const skill = exercise.calls.map(({ record }) => record).find(record =>
+    record.parent_call_id === rootId && record.definition?.name === callable && record.outcome === "done");
+  const effects = exercise.calls.flatMap(({ record }) => record.effects ?? []);
+  const performed = (service, method) => effects.some(effect =>
+    effect.service === service && effect.method === method && !effect.error);
+  requireEvidence(
+    proof?.passed === true && proof.caseId === world.id && proof.goal === world.goal &&
+      typeof proof.contextId === "string" && proof.contextId === execution.provenance?.contextId &&
+      checks.every(key => proof.checks?.[key] === true) &&
+      Object.keys(root?.inputs ?? {}).length === 1 && matchesValue(root.inputs.goal, world.goal) &&
+      Object.keys(skill?.inputs ?? {}).length === 1 && matchesValue(skill.inputs.goal, world.goal) &&
+      exercise.report?.status === "workspace-skill-reviewed" && exercise.report.skill === skillName &&
+      matchesValue(skill.output, world.kind === "pdfVault" ? exercise.report.outcome?.pdf : exercise.report.outcome),
+    "Expected a verified live goal and its actual installed Natlang skill call"
+  );
+  const evidence = { workspace: { proof } };
+  if (world.kind === "eval-handoff") {
+    const outcome = exercise.report.outcome;
+    const observed = (service, method) => effects.filter(effect =>
+      effect.service === service && effect.method === method && !effect.error);
+    const opened = observed("openEvalCatalog", "open");
+    const journals = observed("evalRecoveryJournal", "observe");
+    const blobs = observed("evalRecoveryReadback", "read");
+    const retries = observed("openEvalReentry", "retry");
+    const handoffs = observed("openEvalHandoff", "stage");
+    const attempts = proof.attempts;
+    const prior = attempts?.filter(attempt => attempt.attempt.role !== "retry");
+    const originals = new Map(proof.originalRuns?.map(run => [run.card.runId, run]));
+    requireEvidence(
+      observed("openEvalCatalog", "discover").length === 1 && opened.length === prior?.length &&
+        opened.every((effect, index) => matchesValue(effect.args, [prior[index].jobId, prior[index].attempt.runId]) &&
+          matchesValue(effect.result, prior[index])) && attempts?.length === world.expected.observations.length &&
+        journals.length === attempts.length && proof.journals?.length === attempts.length &&
+        attempts.every((attempt, index) => {
+          const original = originals.get(attempt.attempt.runId);
+          return original?.runDigest === attempt.runDigest && original.resultDigest === attempt.resultDigest &&
+            matchesValue(journals[index].args, [attempt.request.operationId]) &&
+            proof.journals[index]?.[0] === attempt.attempt.runId && matchesValue(journals[index].result, proof.journals[index][1]);
+        }) && blobs.length === proof.readbacks?.length && blobs.every((effect, index) => {
+          const [runId, readback] = proof.readbacks[index];
+          const attempt = attempts.find(entry => entry.attempt.runId === runId);
+          return Boolean(attempt) && matchesValue(effect.args, [attempt.request.operationId, readback.digest]) && matchesValue(effect.result, readback);
+        }) && retries.length === Number(world.expected.use === "retry") &&
+        (retries.length ? proof.retry?.newRunId === attempts.at(-1)?.attempt.runId &&
+          typeof proof.retry.sourceDigest === "string" && originals.get(proof.retry.originalRunId)?.sourceDigest === proof.retry.sourceDigest &&
+          originals.get(proof.retry.newRunId)?.sourceDigest === proof.retry.sourceDigest && matchesValue(retries[0].args, [attempts.at(-1).jobId, proof.retry.originalRunId]) && matchesValue(retries[0].result, attempts.at(-1)) : proof.retry === null) &&
+        (world.expected.active ? outcome?.status === "reviewed" && outcome.trials?.length === attempts.length &&
+          outcome.trials.every((trial, index) => matchesValue(trial.observation, attempts[index]) && exercise.calls.some(({ record }) =>
+            record.definition?.name === "reviewEvalRecovery" && record.outcome === "done" &&
+            matchesValue(record.inputs?.request, trial.observation.request) && matchesValue(record.output, trial.review)))
+          : outcome?.status === "unresolved" && outcome.reason === "job-unavailable") &&
+        handoffs.length === Number(world.expected.stage) &&
+        (handoffs.length ? matchesValue(handoffs[0].args, [outcome.jobId, outcome.decision.runId]) &&
+          matchesValue(handoffs[0].result, proof.artifact) && matchesValue(outcome.artifact, proof.artifact) &&
+          typeof proof.artifactText === "string" && hash(proof.artifactText) === proof.artifact?.sha256
+          : proof.artifact === null && proof.artifactText === null),
+      "Expected original native EvalDO admissions and receipts, an authorized retry if any, and actual retained scratch bytes"
+    );
+  } else if (world.kind === "program-run") {
+    const outcome = exercise.report.outcome;
+    const effectsOf = (service, method) => effects.filter(effect =>
+      effect.service === service && effect.method === method && !effect.error);
+    const inspections = effectsOf("programRunCatalog", "inspect");
+    const runs = effectsOf("programExecution", "run");
+    const reads = effectsOf("programExecution", "read");
+    const signs = effectsOf("programReceiptSigner", "stage");
+    const nativeCount = world.expected.attempts.length;
+    const sources = proof.inspections;
+    const attempts = proof.attempts;
+    const observations = proof.observations;
+    const latest = sources?.at(-1)?.evidence;
+    const evidenceRequest = latest?.compiler === "failed" ? latest : observations?.at(-1)?.evidence ?? latest;
+    const reviewedActualEvidence = exercise.calls.some(({ record }) =>
+      record.definition?.name === "reviewRuntimeEvidence" && record.outcome === "done" &&
+        matchesValue(record.inputs?.request, evidenceRequest) && matchesValue(record.output, outcome.review));
+    requireEvidence(
+      effectsOf("programRunCatalog", "list").length === 1 && inspections.length === world.expected.inspected &&
+        sources?.length === inspections.length && inspections.every((effect, index) => matchesValue(effect.result, sources[index])) &&
+        runs.length === nativeCount && reads.length === nativeCount && attempts?.length === nativeCount && observations?.length === nativeCount &&
+        attempts.every((attempt, index) => matchesValue(runs[index].args, [attempt.projectId, attempt.revision, attempt.sampleId]) &&
+          matchesValue(runs[index].result, { id: attempt.id, status: attempt.status }) &&
+          matchesValue(reads[index].args, [attempt.id]) && matchesValue(reads[index].result, observations[index])) &&
+        (world.expected.project ? outcome.status === "reviewed" && reviewedActualEvidence &&
+          outcome.review?.next === world.expected.next && matchesValue(outcome.receipts, observations)
+          : outcome.status === "unresolved" && outcome.reason === "program-unavailable") &&
+        signs.length === Number(world.expected.signed) &&
+        (world.expected.signed ? matchesValue(signs[0].args, [attempts.at(-1)?.id]) &&
+          matchesValue(signs[0].result, proof.signed) && matchesValue(outcome.signed, proof.signed) &&
+          typeof proof.signedText === "string" && hash(proof.signedText) === proof.signed?.sha256
+          : proof.signed === null && proof.signedText === null),
+      "Expected actual native invocations, exact independently checked output, and any authorized signed receipt"
+    );
+  } else if (world.kind === "authoring") {
+    const outcome = exercise.report.outcome;
+    const effectsOf = (service, method) => effects.filter(effect =>
+      effect.service === service && effect.method === method && !effect.error);
+    const runs = world.expected.candidate === null ? 0 : world.edit ? 2 : 1;
+    const readsPerRun = world.expected.baseline === null ? 1 : 2;
+    const readbacks = effectsOf("authoringCompiler", "inspect");
+    const confirmations = effectsOf("authoringReviewControl", "confirm");
+    const stages = effectsOf("authoringReviewControl", "stage");
+    const expectedConfirmations = !runs ? [] : world.edit ? ["changed", "current"] : ["current"];
+    requireEvidence(
+      effectsOf("authoringDiscovery", "list").length === Math.max(1, runs) &&
+        effectsOf("authoringDiscovery", "open").filter(effect => effect.result !== null).length === runs &&
+        readbacks.length === runs * readsPerRun &&
+        confirmations.length === expectedConfirmations.length &&
+        expectedConfirmations.every((result, index) => matchesValue(confirmations[index]?.result, result)) &&
+        isDeepStrictEqual(proof.confirmations, expectedConfirmations) &&
+        (runs ? outcome?.status === "reviewed" && outcome.receipt?.review?.status === world.expected.status &&
+          matchesValue(confirmations.at(-1)?.args, [outcome.receipt]) &&
+          matchesValue(proof.receipt, outcome.receipt) && proof.readbacks?.length === readsPerRun &&
+          readbacks.slice(-readsPerRun).every((effect, index) => matchesValue(effect.result, proof.readbacks[index]))
+          : outcome?.status === "unresolved" && outcome.reason === world.expected.unresolvedReason &&
+            proof.receipt === null && proof.readbacks?.length === 0) &&
+        stages.length === Number(world.expected.stage) &&
+        (world.expected.stage ? matchesValue(stages[0]?.args, [outcome.receipt]) &&
+          matchesValue(stages[0]?.result, outcome.artifact) && matchesValue(outcome.artifact, proof.handoff) &&
+          typeof proof.handoffText === "string" && hash(proof.handoffText) === proof.handoff?.revision
+          : proof.handoff === null && proof.handoffText === null),
+      "Expected exact workspace compiler evidence, a current revision receipt and any authorized scratch handoff"
+    );
+  } else if (world.kind === "news") {
+    requireEvidence(
+      performed("newsGoal", "observeCadence") &&
+        (!world.readers.length || performed("newsGoal", "readReader")) &&
+        (!world.applied.length || performed("newsGoal", "apply")) &&
+        proof.initial && proof.latest && proof.observations?.length > 0 && Array.isArray(proof.attempts),
+      "Expected the run's actual News observations and schedule action records"
+    );
+  } else if (world.kind === "spectrolite") {
+    const generation = proof.final?.binding?.generation;
+    requireEvidence(
+      performed("spectroliteGoal", "inspect") && performed("spectroliteGoal", "evidence") &&
+        (!world.expected.route.length || performed("spectroliteGoal", "follow")) &&
+        (!world.writablePath || performed("spectroliteGoal", "revise")) &&
+        typeof proof.panelId === "string" && generation?.protocol === "panel-cdp-generation.v1" &&
+        generation.panelId === proof.panelId && proof.observations?.length > 0 &&
+        proof.observations.every(({ binding }) => isDeepStrictEqual(binding?.generation, generation)),
+      "Expected navigation and readback bound to the original Spectrolite renderer"
+    );
+    evidence.cdp = { panelId: proof.panelId, observations: proof.observations, final: proof.final };
+  } else if (world.kind === "recovery") {
+    requireEvidence(
+      performed("recoverySessions", "discover") && performed("recoveryReplay", "resume") &&
+        performed("recoveryHandoff", "stage") === world.expected.stage &&
+        Array.isArray(proof.catalog) && proof.catalog.length > 0 &&
+        Array.isArray(proof.observed) && proof.observed.length > 0 &&
+        Array.isArray(proof.durable) && proof.durable.length > 0 &&
+        (world.expected.stage ? Boolean(proof.artifact && proof.handoffText) : proof.artifact === null),
+      "Expected retained session discovery, exact replay and the authorized handoff outcome"
+    );
+  } else if (world.kind === "personal") {
+    const writes = world.expected.steps.some(step => step.kind !== "held" && step.kind !== "observed");
+    requireEvidence(
+      performed("missionGoalBoard", "observe") &&
+        (!(writes || world.concurrent) || performed("missionGoalChange", "apply")) &&
+        (world.expected.handoff.length === 0 || performed("missionGoalHandoff", "stage")) &&
+        proof.baseline && Array.isArray(proof.transitions) && Array.isArray(proof.final),
+      "Expected the observed mission board, scoped effects and final readback"
+    );
+  } else if (world.kind === "calendar") {
+    const outcome = exercise.report.outcome;
+    requireEvidence(
+      performed("calendarGoalCatalog", "discover") && performed("calendarGoalWindows", "open") &&
+        performed("calendarGoalWindows", "refresh") === world.expected.refresh &&
+        performed("calendarGoalReadback", "verify") === Boolean(world.expected.verify) &&
+        performed("calendarGoalHandoff", "stage") === world.expected.stage &&
+        Array.isArray(proof.providerRequests) && proof.providerRequests.some(({ method }) => method === "catalog") &&
+        proof.providerRequests.some(({ method }) => method === "window") &&
+        Array.isArray(proof.windows) && proof.windows.length === world.expected.scope.length &&
+        outcome?.decision?.status === world.expected.status && isDeepStrictEqual(outcome?.handoff, proof.handoff) &&
+        (world.expected.stage ? typeof proof.handoffText === "string" &&
+          hash(proof.handoffText) === proof.handoff?.sha256 : proof.handoffText === null),
+      "Expected fresh Calendar observations, scoped readback and any authorized handoff"
+    );
+  } else if (world.kind === "personal-artifacts") {
+    const calls = (service, method) => effects.filter(effect => effect.service === service && effect.method === method && !effect.error).length;
+    const links = world.expected.collection.filter(({ kind }) => kind === "link").length;
+    requireEvidence(
+      performed("artifactLibrary", "observe") && performed("artifactCollection", "observe") &&
+        calls("artifactLibrary", "apply") >= world.expected.library.length &&
+        calls("artifactCollection", "apply") >= world.expected.collection.length - links &&
+        calls("artifactCollection", "link") >= links && proof.links?.length === links &&
+        proof.libraryWrites?.length === world.expected.library.length &&
+        proof.collectionWrites?.length === world.expected.collection.length &&
+        proof.libraryFirst?.id && proof.collectionFirst?.rootId === proof.independentCollection?.rootId &&
+        proof.independentLibrary && Boolean(proof.refreshes?.length) === Boolean(world.concurrent),
+      "Expected observed library and collection state, exact changes and verified refresh evidence"
+    );
+  } else if (world.kind === "personal-automation") {
+    const expectedAttempts = world.expected.findings.filter(finding => finding.attempt).length;
+    requireEvidence(
+      performed("operatorQueue", "observe") &&
+        effects.filter(effect => effect.service === "operatorQueue" && effect.method === "apply" && !effect.error).length >= expectedAttempts &&
+        proof.attempts?.length === expectedAttempts && Array.isArray(proof.independent) &&
+        proof.initial && proof.latest && exercise.report.outcome?.disposition === world.expected.disposition,
+      "Expected scoped monitor scheduling, current revision readback and verified recovery"
+    );
+  } else if (world.kind === "system-diagnostics") {
+    const outcome = exercise.report.outcome;
+    const calls = (service, method) => effects.filter(effect => effect.service === service && effect.method === method && !effect.error);
+    const catalog = calls("diagnosticCatalog", "discover");
+    const reads = calls("diagnosticLog", "read");
+    const stages = calls("diagnosticHandoff", "stage");
+    const checkpointCount = Object.keys(world.expected.windows).length;
+    requireEvidence(
+      catalog.length > 0 && catalog.every(({ args, result }) => matchesValue(args, []) && matchesValue(result, proof.catalog)) &&
+        Array.isArray(proof.windows) && proof.windows.length === checkpointCount && reads.length === checkpointCount &&
+        new Set(reads.map(({ args }) => args?.[0])).size === checkpointCount &&
+        reads.every(({ args, result }) => proof.windows.some(window =>
+          matchesValue(args, [window.source.id]) && matchesValue(result, window))) &&
+        outcome?.finding?.status === world.expected.status && stages.length === Number(world.expected.stage) &&
+        isDeepStrictEqual(outcome?.artifact, proof.handoff) &&
+        (world.expected.stage ? typeof proof.handoffReadback === "string" &&
+          hash(proof.handoffReadback) === proof.handoff?.sha256 &&
+          matchesValue(stages[0].args, [outcome.finding]) && matchesValue(stages[0].result, proof.handoff)
+          : proof.handoff === null && proof.handoffReadback === null),
+      "Expected observed native Host windows, exact report evidence and the authorized scratch result"
+    );
+  } else if (world.kind === "local-delivery") {
+    const outcome = exercise.report.outcome;
+    const calls = (service, method) => effects.filter(effect => effect.service === service && effect.method === method && !effect.error);
+    const discover = calls("localDeliveryCatalog", "discover");
+    const inspect = calls("localDeliveryHistory", "inspect");
+    const submit = calls("localDeliverySend", "submit");
+    const readback = calls("localDeliveryReadback", "read");
+    const roomCount = Object.keys(world.expected.reads).length;
+    requireEvidence(
+      discover.length > 0 && discover.every(({ args, result }) => matchesValue(args, []) && matchesValue(result, proof.catalog)) &&
+        proof.observations?.length === roomCount && inspect.length === roomCount &&
+        new Set(inspect.map(({ args }) => args?.[0])).size === roomCount &&
+        inspect.every(({ args, result }) => proof.observations.some(observation =>
+          matchesValue(args, [observation.room.id, observation.phrase]) && matchesValue(result, observation))) &&
+        proof.nativeProofs?.length === proof.catalog.length && proof.nativeProofs.every(({ passed }) => passed === true) &&
+        proof.boundaries?.length === proof.catalog.length && proof.boundaries.every(boundary => boundary.joined === true) &&
+        outcome?.status === world.expected.status && submit.length === Number(Boolean(world.expected.send)) &&
+        readback.length === submit.length && (world.expected.send ?
+          proof.readback?.acknowledged === true && matchesValue(outcome.delivery, { attempt: proof.attempt, readback: proof.readback }) &&
+          proof.observations.some(({ room, basis }) => room.id === proof.readback.roomId &&
+            matchesValue(submit[0].args, [basis, proof.readback.content])) && matchesValue(submit[0].result, proof.attempt) &&
+          matchesValue(readback[0].args, [proof.attempt.attemptId]) && matchesValue(readback[0].result, proof.readback) :
+          outcome.delivery === null && proof.attempt === null && proof.readback === null),
+      "Expected exact local room and recipient observations, original attempt and independently joined delivery evidence"
+    );
+  } else if (world.kind === "browserMigration") {
+    const outcome = exercise.report.outcome;
+    const openEffects = effects.filter(({ service, error }) => service === "openBrowserMigration" && !error);
+    const methods = ["discover", "bind", "readOutcome",
+      ...(world.expected.handoff || world.expected.missingHandoff ? ["inspectHandoff"] : []),
+      ...(world.expected.handoff ? ["stageHandoff"] : [])];
+    const matchingOpenEffects = methods.every((method) => {
+      const entries = openEffects.filter(effect => effect.method === method);
+      const journal = proof.journal?.filter(row => row.method === method);
+      return journal?.length === 1 && entries.length === 1 &&
+        matchesValue(entries[0].args, journal[0].args) && matchesValue(entries[0].result, journal[0].result);
+    });
+    const importServices = {
+      source: ["browserImportSource", "observe"],
+      preview: ["browserImportPreview", "observe"],
+      start: ["browserImportStart", "start"],
+      history: ["browserImportHistory", "observe"],
+    };
+    const reads = proof.selected?.reads;
+    const exactReads = Array.isArray(reads) && Object.entries(importServices).every(([kind, [service, method]]) => {
+      const actual = effects.filter(effect => effect.service === service && effect.method === method && !effect.error);
+      const expected = reads.filter(read => read.kind === kind);
+      return actual.length === expected.length &&
+        actual.every((effect, index) => matchesValue(effect.result, expected[index].value));
+    });
+    const expectedPanel = world.expected.handoff;
+    const target = proof.after?.nodes.find(row => row.id === proof.delivery?.targetId);
+    const parent = proof.after?.nodes.find(row => row.id === target?.parentId);
+    requireEvidence(
+      openEffects.length === methods.length && matchingOpenEffects && exactReads &&
+        proof.selected?.passed === true && outcome.choice?.sourceId === world.expected.source &&
+        outcome.status === world.expected.status && proof.evidence?.sourceId === outcome.choice.sourceId &&
+        isDeepStrictEqual(outcome.delivery, proof.delivery) &&
+        (expectedPanel ? proof.delivery?.receiptId === proof.evidence.id &&
+          target?.contextId === proof.contextId && target.title === expectedPanel.title &&
+          parent?.title === expectedPanel.parent && target.note === proof.delivery.note &&
+          isDeepStrictEqual(proof.delivery.bookmark, expectedPanel.bookmark) &&
+          proof.evidence.bookmarks.some(bookmark => isDeepStrictEqual(bookmark, proof.delivery.bookmark))
+          : proof.delivery === null),
+      "Expected an exact migration decision, scoped import effects, and independently joined retained collection evidence"
+    );
+  } else if (world.kind === "personal-history") {
+    requireEvidence(
+      performed("archiveTimeline", "discover") && performed("archiveTimeline", "list") &&
+        performed("archiveTimeline", "read") && proof.catalogEvent && proof.repositoryId &&
+        Array.isArray(proof.milestones) && proof.milestones.length > 0 &&
+        Array.isArray(proof.operations) && proof.operations.some(({ kind }) => kind === "read") &&
+        exercise.report.outcome?.action === world.expected.action &&
+        exercise.report.outcome?.relation === world.expected.relation,
+      "Expected retained Personal archive coordinates and grounded comparative findings"
+    );
+  } else if (world.kind === "google-handoff") {
+    const outcome = exercise.report.outcome;
+    requireEvidence(
+      performed("googleHandoffMail", "discover") &&
+        performed("googleHandoffMail", "read") === Boolean(proof.threads?.length) &&
+        performed("googleHandoffDrive", "inspect") === Boolean(world.expected.reviews.length) &&
+        performed("googleHandoffFreshness", "verify") === Boolean(world.expected.verify) &&
+        performed("googleHandoffScratch", "stage") === world.expected.stage &&
+        Array.isArray(proof.providerRequests) && proof.providerRequests.length > 0 &&
+        proof.reviews?.length === world.expected.reviews.length &&
+        outcome?.decision?.status === world.expected.decision.status && isDeepStrictEqual(outcome?.handoff, proof.handoff) &&
+        (world.expected.stage ? typeof proof.handoffText === "string" &&
+          hash(proof.handoffText) === proof.handoff?.sha256 : proof.handoffText === null),
+      "Expected scoped Gmail decisions, linked Drive evidence and any authorized scratch handoff"
+    );
+  } else if (world.kind === "gmail") {
+    const providerMethods = { get: "getDraft", verify: "verifyDraft", find: "findDrafts", sent: "readSent" };
+    const provider = effects.filter(effect => effect.service === "gmailGoalProvider" && !effect.error);
+    requireEvidence(
+      performed("gmailGoalCatalog", "discover") &&
+        performed("gmailGoalCompose", "read") === Boolean(world.expected.compose) &&
+        isDeepStrictEqual(provider.map(effect => effect.method).sort(),
+          world.expected.operations.map(operation => providerMethods[operation.kind]).sort()) &&
+        isDeepStrictEqual(proof.operations, world.expected.operations) &&
+        isDeepStrictEqual(proof.requests, world.expected.requests) &&
+        Array.isArray(proof.catalog) && isDeepStrictEqual(proof.selected, proof.native) &&
+        proof.persisted?.blockedProviderCalls === 0 &&
+        exercise.report.outcome?.status === world.expected.status,
+      "Expected the retained compose lineage and the authorized Gmail readback sequence"
+    );
+  } else if (world.kind === "pdfVault") {
+    const outcome = exercise.report.outcome;
+    const records = exercise.calls.map(({ record }) => record);
+    const child = (name) => records.find(record =>
+      record.parent_call_id === rootId && record.definition?.name === name && record.outcome === "done");
+    const authorize = child("authorizePdfVaultHandoff");
+    const vault = child("workTowardVaultGoal");
+    const bridge = effects.filter(effect => effect.service === "pdfVaultBridge" && effect.method === "bind" && !effect.error);
+    const revisions = effects.filter(effect => effect.service === "spectroliteGoal" && effect.method === "revise" && !effect.error);
+    const pdf = proof.proof?.pdf;
+    const expected = world.pdf.expected;
+    const canCorrect = !!world.vault.writablePath;
+    requireEvidence(
+      authorize && matchesValue(authorize.inputs?.goal, world.goal) && matchesValue(authorize.inputs?.pdf, outcome.pdf) &&
+        matchesValue(authorize.output, outcome.handoff) &&
+        pdf?.passed && openPdfEffectsValid(effects, pdf, outcome.pdf, expected) &&
+        (canCorrect ? bridge.length === 1 && outcome.handoff?.status === "bound" && vault &&
+          matchesValue(bridge[0].args, [outcome.pdf, outcome.pdf.text.citations.map((_, index) => index)]) &&
+          matchesValue(bridge[0].result, outcome.handoff) && matchesValue(bridge[0].result, proof.proof.handoff) &&
+          matchesValue(vault.inputs?.goal, outcome.handoff.directive) && matchesValue(vault.output, outcome.vault) &&
+          performed("spectroliteGoal", "inspect") && performed("spectroliteGoal", "follow") &&
+          performed("spectroliteGoal", "evidence") &&
+          proof.proof.vault?.passed && proof.proof.vault.final?.binding?.generation?.panelId === proof.panelId &&
+          revisions.length === (world.concurrent ? 2 : 1) &&
+          revisions.every(({ result }, index) =>
+            matchesValue(result, proof.proof.vault.revisionAttempts[index]?.outcome)) &&
+          matchesValue(revisions.at(-1)?.args, [proof.proof.vault.revisionAttempts.at(-1)?.revision,
+            proof.proof.vault.workingFiles[world.vault.writablePath]]) &&
+          Boolean(proof.proof.concurrent) === Boolean(world.concurrent)
+          : !vault && outcome.handoff?.status === "hold" && outcome.vault === null &&
+            !effects.some(effect => effect.service === "spectroliteGoal")),
+      "Expected one open goal grounded in the original PDF, an exact handoff, and the authorized working-vault outcome"
+    );
+  } else if (world.kind === "pdf") {
+    requireEvidence(openPdfEffectsValid(effects, proof, exercise.report.outcome, world.expected),
+      "Expected exact original PDF discovery, scoped native reads and matching retained raster evidence");
+  } else if (world.kind === "visualRecovery") {
+    const { expected } = world;
+    const outcome = exercise.report.outcome;
+    const tools = method => effects.filter(effect => effect.service === "panelRecovery" && effect.method === method);
+    const [discover, ...extraDiscoveries] = tools("discover");
+    const [bind, ...extraBindings] = tools("bind");
+    const observations = tools("inspect");
+    const recovery = tools("apply");
+    const latest = proof.observations?.at(-1);
+    const target = proof.finalSurfaces?.find(surface => surface.id === expected.selected);
+    requireEvidence(
+      proof.binding?.surface?.id === expected.selected && outcome.surfaceId === expected.selected &&
+        !extraDiscoveries.length && !extraBindings.length && matchesValue(discover?.args, []) &&
+        matchesValue(discover?.result, proof.catalog) &&
+        matchesValue(bind?.args, [proof.catalog.revision, expected.selected]) && matchesValue(bind?.result, proof.binding) &&
+        observations.length === proof.observations?.length && observations.length >= 1 &&
+        observations.every(({ args, result }, index) =>
+          matchesValue(args, []) && matchesValue(result, proof.observations[index].view)) &&
+        recovery.length === expected.effects.length && recovery.length === proof.effects?.length &&
+        recovery.every(({ args, result }, index) => {
+          const receipt = proof.effects[index];
+          return matchesValue(args, [receipt.revision, receipt.action]) && matchesValue(result, receipt);
+        }) &&
+        target?.pane.generation.protocol === "panel-cdp-generation.v1" &&
+        target?.pane.generation.panelId === target?.snapshot.panelId &&
+        target?.pane.generation.runtimeEntityId === target?.snapshot.runtimeEntityId &&
+        target?.pane.revision === latest?.view.revision &&
+        outcome.status === expected.outcome && isDeepStrictEqual(outcome.effects, proof.effects),
+      "Expected exact scoped recovery steps and independent readback from the actual target renderer"
+    );
+  } else if (world.kind === "ownedPreview") {
+    const expected = world.expected;
+    const outcome = exercise.report.outcome;
+    const calls = (service, method) => effects.filter(effect => effect.service === service && effect.method === method && !effect.error);
+    const tools = method => calls("ownedPreviewPublication", method);
+    const [discover, ...extraDiscoveries] = tools("discover");
+    const [bind, ...extraBindings] = tools("bind");
+    const preflight = calls("websiteReadback", "observe");
+    const advances = tools("advance");
+    const reads = tools("readback");
+    const binding = proof.binding;
+    const operation = binding?.operationId;
+    requireEvidence(
+      proof.transport === "owned-file-backed-vercel-preview" && binding?.targetId === expected.targetId &&
+        !extraDiscoveries.length && !extraBindings.length && matchesValue(discover?.args, []) &&
+        matchesValue(discover?.result, proof.discovery) &&
+        matchesValue(bind?.args, [proof.discovery.revision, expected.targetId]) && matchesValue(bind?.result, binding) &&
+        preflight.length === Number(Boolean(binding.preflight)) && preflight.every(({ args, result }) =>
+          matchesValue(args, []) && matchesValue(result, proof.observation)) &&
+        advances.length === expected.advances.length && reads.length === expected.readbacks.length &&
+        advances.every(({ args, result }, index) =>
+          matchesValue(args, [operation]) && matchesValue(result, proof.advances[index])) &&
+        reads.every(({ args, result }, index) =>
+          matchesValue(args, [operation]) && matchesValue(result, proof.readbacks[index])) &&
+        (expected.hold ? outcome.status === "held" && outcome.reason === expected.hold &&
+          !proof.nativeReceipt && proof.store.length === 0
+          : outcome.status === "published" && proof.nativeReceipt?.operationId === operation &&
+            proof.nativeReceipt?.artifactDigest === proof.artifact?.current &&
+            proof.nativeReceipt?.environment === "preview" &&
+            typeof proof.nativeReceipt?.url === "string" &&
+            new URL(proof.nativeReceipt.url).hostname.endsWith(".vibestudio-preview.invalid") &&
+            proof.files.some(({ path }) => path === "vibestudio-build.json") &&
+            isDeepStrictEqual(outcome.hosted, proof.readbacks.at(-1))),
+      "Expected exact reviewed preview effects, native journal lineage, and owned hosted byte readback"
+    );
+  } else if (world.kind === "publication") {
+    const { choice } = world.expected;
+    const digest = /^sha256:[a-f0-9]{64}$/u;
+    requireEvidence(
+      performed("publicationGoal", "discover") && performed("publicationGoal", "bind") &&
+        isDeepStrictEqual(proof.selected, choice) &&
+        Boolean(choice.preflight) === performed("websiteReadback", "observe") &&
+        choice.compareRevision === performed("publicationRevision", "compare") &&
+        proof.reads?.preflight === Number(Boolean(choice.preflight)) &&
+        proof.reads?.revision === Number(choice.compareRevision) &&
+        digest.test(proof.artifact?.current) && digest.test(proof.artifact?.prior) &&
+        Boolean(proof.renderer?.buildKey) && proof.renderer.attemptId === proof.renderer.snapshotAttemptId &&
+        Array.isArray(proof.journal) && proof.journal.length === world.targets.filter(target => target.journal).length &&
+        proof.journal.every(({ id, seeded, current }) => world.targets.some(target => target.id === id && target.journal) &&
+          isDeepStrictEqual(seeded, current)) &&
+        exercise.report.outcome?.preflight?.status !== "verified",
+      "Expected an exact current website and scoped, unchanged publication journal"
+    );
+  } else if (world.kind === "operator") {
+    const profile = world.target.surface === "terminal-profile";
+    const deployed = ["deployed", "restarted"].includes(world.expected.status);
+    requireEvidence(
+      performed("operatorDiscovery", "list") && performed("operatorDiscovery", "observe") &&
+        (!profile || performed("operatorProfile", "inspect")) &&
+        (!deployed || (performed("operatorDeployment", "apply") && performed("operatorDeployment", "verify"))) &&
+        (world.expected.status !== "paired" || ["pair", "open", "verify"].every(method =>
+          performed("operatorProfile", method))) &&
+        proof.initial && proof.baseline && proof.final,
+      "Expected the owned operator's observed hub and verified service state"
+    );
+  } else {
+    const { mode, gate } = world.expected;
+    requireEvidence(
+      proof.mode === mode && proof.gate === (gate ?? null) &&
+        performed("googleWorkspaceRead", "readiness") && performed("googleGoalDiscovery", "discover") &&
+        performed("googleWorkspaceRead", mode === "changes" ? "readChanges" : "listFolder") &&
+        (gate === "audited") === performed("googleWorkspaceRead", "readPermissions") &&
+        proof.requests?.length > 0 && proof.discovery && proof.observed,
+      "Expected the authorized Drive scope and verified results from the observed provider pages"
+    );
+  }
+  return {
+    world: { context_id: proof.contextId, ...(proof.panelId ? { panel_id: proof.panelId } : {}) },
+    checks: Object.fromEntries(checks.map(check => [check, true])),
+    evidence,
+  };
+}
+
 function openGoalEvidence(execution, exercise, _scenario, workflow) {
   const proof = execution.diagnostics.openGoalVerification;
   const { id, goal, kind } = workflow.assignment;
   const root = exercise.calls.find(({ callId }) => callId === exercise.rootCallIds[0])?.record;
   const effects = exercise.calls.flatMap(({ record }) => record.effects ?? []);
-  const researchChecks = ["discoveredSources", "exactPageReadback", "answeredGoal", "groundedCitations", "requiredEvidence"];
+  const researchChecks = ["discoveredSources", "exactPageReadback", "answeredGoal", "groundedCitations", "requiredEvidence", "supportedConclusion"];
   const editChecks = ["discoveredWorkspace", "recoveredConcurrentEdit", "exactDocumentReadback", "preservedOtherDocuments", "reportedStoredRevision"];
   const browser = kind === "browser";
   const suite = kind === "suite";

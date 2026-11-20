@@ -2680,6 +2680,7 @@ export async function initBuildSystemV2(
         const packageEnvironments: Awaited<ReturnType<typeof acquireExternalDeps>>[] = [];
         try {
           const packages = Object.keys(workspacePackageSources).sort();
+          const workspaceSourcePackages = packages.filter((name) => graph.has(name));
           for (const name of packages) {
             const packageNode = compiler.graph.get(name);
             const requirements = await resolveExternalDependencyRequirements(
@@ -2703,12 +2704,13 @@ export async function initBuildSystemV2(
           const dependencyKey =
             environment.key || packages.length
               ? sha256Canonical({
-                  recipe: "native-typecheck-resources.v1",
+                  recipe: "native-typecheck-resources.v2",
                   stateHash: resolution.stateHash,
                   external: environment.key,
                   workspacePackageDependencies: workspacePackageDependencyKeys,
                   sdk: rootFingerprint.value,
                   packages,
+                  workspaceSourcePackages,
                 })
               : null;
           const resources = dependencyKey
@@ -2716,6 +2718,7 @@ export async function initBuildSystemV2(
                 key: dependencyKey,
                 nodeModulesDir: environment.nodeModulesDir,
                 workspacePackages: workspacePackageSources,
+                workspaceSourcePackages,
                 workspacePackageNodeModules,
               })
             : { nodeModulesPaths: [], workspacePackages: {} };

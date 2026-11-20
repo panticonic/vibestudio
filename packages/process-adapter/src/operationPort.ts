@@ -1,3 +1,4 @@
+import { decodeRpcJson, encodeRpcJson } from "@vibestudio/rpc/wireJson";
 import { randomUUID } from "node:crypto";
 import type { ProcessAdapter } from "./index.js";
 
@@ -24,9 +25,16 @@ export class NativeOperationPort {
     if (this.pending.size >= MAX_PENDING)
       return Promise.reject(new Error("Native operation limit reached"));
     const id = randomUUID();
-    const frame = { type: "operation", id, method, args };
+    // The supervisor and command IPC use ordinary JSON. Encode here so they
+    // only carry a string, preserving binary views until the worker decodes it.
+    let frame: string;
+    try {
+      frame = encodeRpcJson({ type: "operation", id, method, args });
+    } catch (error) {
+      return Promise.reject(error);
+    }
     if (
-      Buffer.byteLength(JSON.stringify(frame)) > MAX_BYTES ||
+      Buffer.byteLength(frame) > MAX_BYTES ||
       (this.process.bufferedAmount ?? 0) > MAX_BYTES
     )
       return Promise.reject(new Error("Native operation byte limit exceeded"));
@@ -38,7 +46,7 @@ export class NativeOperationPort {
         pending.dispose();
         reject(signal?.reason ?? new Error("Native operation cancelled"));
         try {
-          this.process.postMessage({ type: "cancel-operation", id });
+          this.process.postMessage(encodeRpcJson({ type: "cancel-operation", id }));
         } catch (error) {
           this.retire(error instanceof Error ? error : new Error(String(error)));
         }
@@ -60,18 +68,25 @@ export class NativeOperationPort {
     });
   }
 
-  private receive = (frame: unknown): void => {
+  private receive = (encoded: unknown): void => {
     if (this.retirementError) return;
+    if (typeof encoded !== "string" || Buffer.byteLength(encoded) > MAX_BYTES) {
+      this.retire();
+      return;
+    }
+    let frame: unknown;
+    try {
+      frame = decodeRpcJson(encoded);
+    } catch {
+      this.retire();
+      return;
+    }
     if (!frame || typeof frame !== "object") {
       this.retire();
       return;
     }
     const response = frame as Record<string, unknown>;
     if (response["type"] !== "operation-result" || typeof response["id"] !== "string") {
-      this.retire();
-      return;
-    }
-    if (Buffer.byteLength(JSON.stringify(frame)) > MAX_BYTES) {
       this.retire();
       return;
     }

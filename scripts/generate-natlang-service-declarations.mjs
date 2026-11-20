@@ -94,11 +94,31 @@ export async function renderServiceDeclarations(userlandRoot, checkouts) {
       exclude: ["**/node_modules/**"],
     })) {
       const manifest = JSON.parse(fs.readFileSync(path.join(checkout, relative), "utf8"));
-      for (const service of Object.keys(manifest.serviceScopes ?? {})) {
+      for (const [service, selectors] of Object.entries(manifest.serviceScopes ?? {})) {
         if (!names.has(service))
           throw new Error(
             `${template}/${relative} scopes service ${service}, which is missing from the Natlang service catalog`
           );
+        const directory = path.join(checkout, path.dirname(relative));
+        if (
+          !Array.isArray(selectors) ||
+          selectors.some((selector) => {
+            if (typeof selector !== "string") return true;
+            const file = selector.endsWith("/**") ? selector.slice(0, -3) : selector;
+            return (
+              !file.endsWith(".nl") ||
+              path.isAbsolute(file) ||
+              file.startsWith("../") ||
+              file.includes("\\") ||
+              path.posix.normalize(file) !== file ||
+              !fs.statSync(path.join(directory, file), { throwIfNoEntry: false })?.isFile()
+            );
+          })
+        ) {
+          throw new Error(
+            `${template}/${relative} scopes ${service} outside existing relative .nl files`
+          );
+        }
       }
     }
   }
