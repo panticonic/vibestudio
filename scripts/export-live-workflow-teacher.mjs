@@ -41,6 +41,14 @@ const templateGoalDomains = {
     checks: ["retainedExactMachineScope", "appliedInstalledReadiness", "boundActualProviderAndWidth",
       "exactEvidenceDisposition", "verifiedExactLocalHandoff", "preservedWorkspaceState"],
   },
+  "extension-dossier": {
+    namespace: "vibestudio:extension-dossier",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-extension-dossier-managed.ts" },
+    callable: "reviewExtensionDossier",
+    skill: "extensionDossier",
+    checks: ["boundOriginalOwnerScope", "usedExactInstalledReleaseReview", "verifiedPackageDifference",
+      "reconciledNativeReleaseHistory", "respectedLocalReleaseDecision", "verifiedExactDossier", "preservedProtectedSourceAndRuntime"],
+  },
   "adventure-journey": {
     namespace: "vibestudio:adventure-journey",
     validator: { template: "examples", path: "skills/open-adventure-journey-runtime/index.ts" },
@@ -1352,13 +1360,13 @@ export async function loadLiveTeacherCases(checkouts) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
     const distinctGoals = new Set();
-    const { openGoalWorlds, openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], newsGoalWorlds = [],
+    const { openGoalWorlds, openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], newsGoalWorlds = [],
       spectroliteGoalWorlds = [], openGoalGoogleWorlds = [], openGoalPersonalWorlds = [],
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
       openTerminalWorlds = [], openOwnedResearchWorlds = [], personalWelcomeWorlds = [], dictationHandoffWorlds = [], specialistHandoffWorlds = [], providerHandoffWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
-    for (const assignment of [...openGoalWorlds, ...openDeployedInterfaceWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
+    for (const assignment of [...openGoalWorlds, ...openExtensionDossierWorlds, ...openDeployedInterfaceWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
       ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
@@ -8061,6 +8069,27 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
         receipts.splice(index, 1);
         return true;
       }), "Expected exact interface evidence, installed ownership decisions and authorized local handoff effects");
+  } else if (world.kind === "extension-dossier") {
+    const outcome = exercise.report.outcome;
+    const names = new Set(["extensionReleaseRead", "extensionDossierRead", "extensionDossierWrite"]);
+    const observed = effects.filter(effect => names.has(effect.service));
+    const receipts = proof.effects?.slice();
+    const parent = exercise.calls.find(({ record }) => record === skill);
+    const review = exercise.calls.filter(({ record }) => record.parent_call_id === parent?.callId &&
+      record.definition?.name === "reviewExtensionRelease" && record.outcome === "done");
+    requireEvidence(isDeepStrictEqual(outcome.assignment, proof.assignment) && isDeepStrictEqual(outcome.review, proof.review) &&
+      isDeepStrictEqual(outcome.candidate, proof.candidate) && isDeepStrictEqual(outcome.history, proof.history) &&
+      outcome.finding?.decision === proof.decision && isDeepStrictEqual(outcome.dossier, proof.dossier) &&
+      review.length === 1 && matchesValue(review[0].record.inputs?.request, proof.assignment.request) &&
+      matchesValue(review[0].record.output, proof.review) &&
+      Array.isArray(receipts) && receipts.length === observed.length && observed.every(({ service, method, args, result, error }) => {
+        if (error) return false;
+        const index = receipts.findIndex(item => item.service === service && item.method === method &&
+          matchesValue(args, item.args) && matchesValue(result, item.result));
+        if (index < 0) return false;
+        receipts.splice(index, 1);
+        return true;
+      }), "Expected exact extension package and release evidence, original owner scope and private dossier effects");
   } else if (world.kind === "local-width") {
     const outcome = exercise.report.outcome;
     const { reason: _reason, ...finding } = outcome.finding;
