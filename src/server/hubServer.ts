@@ -31,6 +31,7 @@ import {
 } from "@vibestudio/workspace/loader";
 import {
   INITIAL_WORKSPACE_TEMPLATE_ENV,
+  DEFAULT_WORKSPACE_TEMPLATES_ENV,
   readDefaultWorkspaceTemplates,
 } from "@vibestudio/workspace/templateRelease";
 import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
@@ -3036,9 +3037,12 @@ export function applyWorkspaceHostRuntimeEnv(
   // may be live TypeScript and therefore cannot locate compiled artifacts.
   if (!launchSet.historical) return;
   env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = path.dirname(launchSet.serverEntry);
-  // The retained process owns its compiled bundle and build executable. The
-  // hub snapshot is deliberately preserved only for its own generation.
+  // The retained process owns its compiled bundle, build executable and
+  // prepared workspace resources. The hub's resources belong to its own generation.
   delete env[INTERNAL_DO_PROGRAMS_SNAPSHOT_ENV];
+  delete env["VIBESTUDIO_WORKSPACE_RELEASE_ROOT"];
+  delete env[DEFAULT_WORKSPACE_TEMPLATES_ENV];
+  delete env[INITIAL_WORKSPACE_TEMPLATE_ENV];
   const esbuildBinary = getEsbuildBinaryPath(launchSet.appRoot);
   if (esbuildBinary) env["ESBUILD_BINARY_PATH"] = esbuildBinary;
   else delete env["ESBUILD_BINARY_PATH"];

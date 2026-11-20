@@ -1129,6 +1129,9 @@ describe("historical workspace runtime environment", () => {
       const env: NodeJS.ProcessEnv = {
         VIBESTUDIO_HOST_ARTIFACT_ROOT: "/new/dist",
         VIBESTUDIO_RUNTIME_APP_PATH: "/new/hub-bundle",
+        VIBESTUDIO_WORKSPACE_RELEASE_ROOT: "/new/prepared-workspaces",
+        VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES: "new template pins",
+        VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE: "new initial template pin",
         ESBUILD_BINARY_PATH: "/new/esbuild",
       };
       applyWorkspaceHostRuntimeEnv(
@@ -1144,6 +1147,9 @@ describe("historical workspace runtime environment", () => {
       );
       expect(env["VIBESTUDIO_HOST_ARTIFACT_ROOT"]).toBe(path.join(root, "dist"));
       expect(env["VIBESTUDIO_RUNTIME_APP_PATH"]).toBeUndefined();
+      expect(env["VIBESTUDIO_WORKSPACE_RELEASE_ROOT"]).toBeUndefined();
+      expect(env["VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES"]).toBeUndefined();
+      expect(env["VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE"]).toBeUndefined();
       expect(env["ESBUILD_BINARY_PATH"]).toBe(binary);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
@@ -1184,7 +1190,10 @@ describe("historical workspace runtime environment", () => {
   });
 
   it("preserves the pinned artifact generation when launching a live TypeScript child", () => {
-    const env = { VIBESTUDIO_HOST_ARTIFACT_ROOT: "/host/generations/exact-source-build" };
+    const env = {
+      VIBESTUDIO_HOST_ARTIFACT_ROOT: "/host/generations/exact-source-build",
+      VIBESTUDIO_WORKSPACE_RELEASE_ROOT: "/host/prepared-workspaces",
+    };
     applyWorkspaceHostRuntimeEnv(
       env,
       {
@@ -1197,6 +1206,7 @@ describe("historical workspace runtime environment", () => {
       "2.0.0"
     );
     expect(env.VIBESTUDIO_HOST_ARTIFACT_ROOT).toBe("/host/generations/exact-source-build");
+    expect(env.VIBESTUDIO_WORKSPACE_RELEASE_ROOT).toBe("/host/prepared-workspaces");
   });
 
   it("preserves the current host runtime mode and binds its exact app version", () => {
