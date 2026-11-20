@@ -87,6 +87,15 @@ const templateGoalDomains = {
     checks: ["observedExactAssemblyScope", "verifiedNativePackageSources", "exactDependencyDecision", "verifiedPinnedBuildReadback",
       "groundedRolloutDisposition", "verifiedLocalDraft", "protectedManagedHeads", "rejectedUnownedAssembly"],
   },
+  "scheduled-recovery": {
+    namespace: "vibestudio:scheduled-recovery",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-scheduled-recovery-managed.ts" },
+    callable: "recoverScheduledAutomation",
+    skill: "scheduledRecovery",
+    checks: ["discoveredExactOwnedSchedule", "joinedRetainedOwnerDecision", "verifiedExactNativeSchedule",
+      "protectedPeersAndDefault", "neverAdmittedFixtureRuns", "honoredCurrentRevisionAndDependencies",
+      "independentlyRecoveredLocalHandoff", "exactScheduledRecoveryReport"],
+  },
   "eval-handoff": {
     namespace: "vibestudio:eval-handoff",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-eval-handoff-managed.ts" },
@@ -1247,13 +1256,13 @@ export async function loadLiveTeacherCases(checkouts) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
     const distinctGoals = new Set();
-    const { openGoalWorlds, openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], newsGoalWorlds = [],
+    const { openGoalWorlds, openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], newsGoalWorlds = [],
       spectroliteGoalWorlds = [], openGoalGoogleWorlds = [], openGoalPersonalWorlds = [],
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
       openTerminalWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
-    for (const assignment of [...openGoalWorlds, ...openAssemblyWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
+    for (const assignment of [...openGoalWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
       ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
@@ -7618,6 +7627,22 @@ function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
           outcome.handoff === null && proof.handoff === null),
       "Expected exact local Git, owner-specific preflight, and independently reread handoff evidence"
     );
+  } else if (world.kind === "scheduled-recovery") {
+    const outcome = exercise.report.outcome;
+    const methods = [["scheduledMission", "discover"], ["scheduledMission", "observe"], ["scheduledMission", "change"],
+      ["scheduledHistory", "discover"], ["scheduledHistory", "read"], ["scheduledHandoff", "submit"], ["scheduledHandoff", "read"]];
+    requireEvidence(Array.isArray(proof.effects) && methods.every(([service, method]) => {
+      const calls = effects.filter(effect => effect.service === service && effect.method === method && !effect.error);
+      const receipts = proof.effects.filter(receipt => receipt.service === service && receipt.method === method);
+      return calls.length === receipts.length && calls.every(({ args, result }) => {
+        const receipt = receipts.findIndex(item => matchesValue(args, item.args) && matchesValue(result, item.result));
+        if (receipt < 0) return false;
+        receipts.splice(receipt, 1);
+        return true;
+      });
+    }) && matchesValue(outcome?.schedule, proof.current) &&
+      matchesValue(outcome?.authorization, proof.authorization) && matchesValue(outcome?.delivery, proof.delivery),
+      "Expected the independently verified schedule, retained authorization, and exact owned local handoff");
   } else if (world.kind === "personal-history") {
     requireEvidence(
       performed("archiveTimeline", "discover") && performed("archiveTimeline", "list") &&
