@@ -858,7 +858,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedNativeSuiteWorlds },
     { managedGitBridgeReviewWorlds },
     { deliveryRepository, managedVcsDeliveryWorlds },
-    { managedWebBriefWorlds, managedResearchIntakeWorlds },
+    { managedWebBriefWorlds, managedResearchIntakeWorlds, managedResearchHandoffWorlds, researchHandoffWork },
     { managedArchitectureBoundaryWorlds },
     { managedReleaseReviewHandoffWorlds, releaseReviewHandoffWork },
     { managedExtensionReleaseWorlds },
@@ -1304,6 +1304,22 @@ export async function loadLiveTeacherCases(checkouts) {
       root: "reviewLiveResearchIntake",
       assignment,
       evidence: researchIntakeEvidence,
+    });
+  }
+  for (const assignment of managedResearchHandoffWorlds) {
+    const intake = managedResearchIntakeWorlds.find(({ id }) => id === assignment.intake);
+    if (!intake) throw new Error("Unknown research intake for handoff");
+    cases.set(`research-handoff-live-${assignment.id}`, {
+      ...webBriefWorkflow,
+      family: "workspace-live-research-handoff",
+      workspace: "system",
+      skills: researchHandoffWork.map(({ operation }) => operation),
+      validator: { template: "system-testing", path: "skills/system-testing/research-handoff-managed.ts" },
+      sourceGroups: [webBriefWorkflow, scratchHandoffWorkflow].flatMap(workflowSourceGroups),
+      assignment,
+      intake,
+      work: researchHandoffWork,
+      evidence: researchHandoffEvidence,
     });
   }
   for (const assignment of managedArchitectureBoundaryWorlds) {
@@ -6520,6 +6536,85 @@ function researchIntakeEvidence(execution, exercise, _scenario, { assignment }) 
     checks,
     evidence: { workspace: { fixture } },
   };
+}
+
+function researchHandoffEvidence(execution, exercise, scenario, workflow) {
+  const fixture = execution.diagnostics.managedResearchHandoff;
+  const { contextId, caseId, checks, request, research, handoff, sourceDigests, sources } = fixture ?? {};
+  const { assignment, intake, work } = workflow;
+  const results = exercise.report?.results;
+  const rootId = exercise.rootCallIds[0];
+  const root = exercise.calls.find(({ callId }) => callId === rootId);
+  const direct = (name) => exercise.calls.find(({ record }) =>
+    record.parent_call_id === rootId && record.definition.name === name
+  );
+  const stage = direct("assembleHandoff");
+  const review = direct("reviewLiveResearchIntake");
+  requireEvidence(
+    fixture?.passed === true && caseId === assignment.id &&
+      contextId === execution.provenance?.contextId &&
+      [ "research", "handoff", "transfer", "exactWriteCount" ].every((key) => checks?.[key] === true) &&
+      request?.goal.startsWith(assignment.goal + " ") &&
+      request.work?.length === work.length && results?.length === work.length &&
+      exercise.report.remaining?.length === 0 &&
+      work.every((item, index) =>
+        ["kind", "domain", "operation"].every((key) =>
+          item[key] === request.work[index]?.[key] && item[key] === results[index]?.[key]
+        )
+      ) &&
+      isDeepStrictEqual(request.work[0].input, research?.request) &&
+      isDeepStrictEqual(request.work[1].input?.questions, [assignment.question]) &&
+      matchesValue(root?.record.inputs?.request, request) && stage && review &&
+      matchesValue(stage.record.inputs?.request, request.work[1].input) &&
+      matchesValue(stage.record.output, results[1].report),
+    "The research and scratch work must use their issued assignments in one owned context"
+  );
+  researchIntakeEvidence(
+    { ...execution, diagnostics: { managedResearchIntake: research } },
+    exerciseSubtree(exercise, review, results[0].report),
+    scenario,
+    { assignment: intake },
+  );
+  const scratchReport = results[1].report;
+  scratchHandoffEvidence(
+    { ...execution, diagnostics: {
+      scratchHandoffWorld: { caseId, contextId }, scratchHandoffVerification: handoff,
+    } },
+    { ...exercise, report: scratchReport }, scenario,
+    { caseId, expectedStatus: assignment.status },
+  );
+  const normalize = (text) => text.replace(/\s+/gu, " ").trim();
+  const expectedSources = Object.fromEntries(research.projection.pages.map((page, index) => {
+    let excerpt = normalize(page.head).slice(0, 300);
+    if (index === 0 && intake.quotePattern) {
+      const text = normalize(page.head + (page.reads[0]?.text ?? ""));
+      const start = text.toLowerCase().indexOf(intake.quotePattern);
+      excerpt = text.slice(start, start + intake.quotePattern.length);
+    }
+    return [page.id, `${page.finalUrl} — ${excerpt}\nCached digest: ${page.digest}\n`];
+  }));
+  const effects = exerciseSubtree(exercise, stage, scratchReport).calls
+    .filter(({ callId }) => callId !== rootId).flatMap(({ record }) => record.effects ?? []);
+  const write = effects.find(({ service }) => service === "scratchHandoffWrite");
+  const staged = assignment.status === "staged";
+  requireEvidence(
+    isDeepStrictEqual(sources, expectedSources) &&
+      isDeepStrictEqual(sourceDigests, Object.entries(expectedSources).map(([id, text]) =>
+        ({ id, sha256: hash(text) })
+      )) &&
+      effects.length === sourceDigests.length + Number(staged) &&
+      Object.entries(expectedSources).every(([id, text]) => {
+        const read = effects.find((effect) =>
+          effect.service === "scratchHandoffRead" && matchesValue(effect.args, [id])
+        );
+        return read?.method === "read" && !read.error &&
+          matchesValue(read.result, { id, lines: text.trimEnd().split("\n") });
+      }) &&
+      (staged ? write?.method === "stage" && !write.error &&
+        matchesValue(write.result, scratchReport.artifact) : !write),
+    "The scratch handoff must use the exact verified excerpts and only write when supported"
+  );
+  return { world: { context_id: contextId, case_id: caseId }, checks, evidence: { workspace: { fixture } } };
 }
 
 function webBriefEvidence(execution, exercise, _scenario, workflow) {

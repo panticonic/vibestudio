@@ -731,6 +731,13 @@ existing research and comparison lambdas after checking their cached bytes.
 The cases distinguish a supported quotation from two sources that answer
 different questions. Run `research-intake-oracle-qualification` to check
 acquisition and reject a foreign operation ID without invoking a model.
+Research handoffs compose intake and scratch assembly under the shared
+workflow. The scratch service receives source URLs, exact excerpts, and
+cache digests only after acquisition is verified. One case stages the quoted
+evidence and the other leaves an incomparable claim unanswered with no
+artifact. The model-free selectors are
+`research-handoff-oracle-stage-source-grounded-purpose` and
+`research-handoff-oracle-hold-incomparable-registration-claim`.
 
 Architecture boundary cases trace the actual local RPC provider to its
 authored declaration at the assigned semantic revision. They cover semantic

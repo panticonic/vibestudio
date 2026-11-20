@@ -280,7 +280,7 @@ test("authored template worlds flow into the collector without losing original s
       writeFile(
         path.join(casesDir, `${file}.ts`),
         `export const ${name} = ${JSON.stringify(worlds)};
-         ${name === "managedWebBriefWorlds" ? "export const managedResearchIntakeWorlds = [];" : ""}
+         ${name === "managedWebBriefWorlds" ? "export const managedResearchIntakeWorlds = []; export const managedResearchHandoffWorlds = []; export const researchHandoffWork = [];" : ""}
          ${name === "managedAutomationWorlds" ? "export const managedAutomationPlanningWorlds = [];" : ""}
          ${name === "deliveryHistoryWorlds" ? "export const chatDeliveryWorlds = [];" : ""}
          ${name === "ownedOperationsWorlds" ? 'export const ownedOperationsComposedWorlds = [{ id: "release-readiness-dossier", sourceGroup: "vibestudio:owned-operations:release:pending" }, { id: "release-blocked-dossier", sourceGroup: "vibestudio:owned-operations:release:blocked", heldReason: "Release dossier held." }];' : ""}
@@ -3290,7 +3290,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["native-suite-worlds", "export const managedNativeSuiteWorlds = [];"],
       ["git-bridge-review-worlds", "export const managedGitBridgeReviewWorlds = [];"],
       ["vcs-delivery-worlds", "export const managedVcsDeliveryWorlds = [];"],
-      ["web-brief-worlds", "export const managedWebBriefWorlds = []; export const managedResearchIntakeWorlds = [];"],
+      ["web-brief-worlds", "export const managedWebBriefWorlds = []; export const managedResearchIntakeWorlds = []; export const managedResearchHandoffWorlds = []; export const researchHandoffWork = [];"],
       ["architecture-boundary-worlds", "export const managedArchitectureBoundaryWorlds = [];"],
       ["release-review-handoff-worlds", "export const managedReleaseReviewHandoffWorlds = [];"],
       ["extension-release-worlds", "export const managedExtensionReleaseWorlds = [];"],
@@ -9154,6 +9154,7 @@ test("research intake export binds the nested review to assigned public receipts
     return { complete: true, hash: createHash("sha256").update(json).digest("hex"), bytes: Buffer.byteLength(json) };
   };
   const call = (name, parent, input, output, effects = []) => ({
+    callId: name,
     record: {
       call_id: name, parent_call_id: parent, definition: { name },
       inputs: { request: ref(input) }, output: ref(output), effects,
@@ -9171,6 +9172,56 @@ test("research intake export binds the nested review to assigned public receipts
   };
   const verify = () => workflow.evidence(execution, exercise, id, workflow);
   assert.deepEqual(verify().world.source_digests, [page.digest]);
+  const handoffId = "research-handoff-live-stage-source-grounded-purpose";
+  const handoffWorkflow = cases.get(handoffId);
+  assert.ok(workflowSourceGroups(workflow).every((group) => workflowSourceGroups(handoffWorkflow).includes(group)));
+  const text = `${url} — documentation examples\nCached digest: ${page.digest}\n`;
+  const artifact = { path: "/.tmp/evidence-handoff-assigned/handoff.json", bytes: 350 };
+  const handoffReport = { status: "staged", artifact, missingSources: [], unanswered: [] };
+  const scratchRequest = {
+    goal: handoffWorkflow.assignment.goal, questions: [handoffWorkflow.assignment.question],
+    sources: [{ id: page.id, path: "/.tmp/input/source-1.txt" }],
+  };
+  const handoffRequest = {
+    goal: handoffWorkflow.assignment.goal + " First run the research intake, then assemble the evidence handoff.",
+    work: handoffWorkflow.work.map((item, index) => ({ ...item, input: [request, scratchRequest][index] })),
+  };
+  const combinedReport = {
+    results: handoffWorkflow.work.map((item, index) => ({ ...item, report: [report, handoffReport][index] })),
+    remaining: [],
+  };
+  const combinedExecution = {
+    provenance: execution.provenance,
+    diagnostics: { managedResearchHandoff: {
+      contextId: "owned", caseId: handoffWorkflow.assignment.id, passed: true, request: handoffRequest,
+      research: execution.diagnostics.managedResearchIntake,
+      checks: { research: true, handoff: true, transfer: true, exactWriteCount: true },
+      handoff: {
+        passed: true, artifact: { ...artifact, sha256: "a".repeat(64) }, expectedStatus: "staged",
+        checks: { protectedUnchanged: true, originalsUnchanged: true, disposition: true, exactReadback: true },
+        seedRevision: "before", sourceIds: [page.id],
+      },
+      sources: { [page.id]: text },
+      sourceDigests: [{ id: page.id, sha256: createHash("sha256").update(text).digest("hex") }],
+    } },
+  };
+  const scratchRead = {
+    service: "scratchHandoffRead", method: "read", args: ref([page.id]),
+    result: ref({ id: page.id, lines: text.trimEnd().split("\n") }),
+  };
+  const combinedExercise = {
+    ...exercise, report: combinedReport, calls: [
+      call("runWorkflow", null, handoffRequest, combinedReport),
+      ...exercise.calls,
+      call("assembleHandoff", "runWorkflow", scratchRequest, handoffReport, [
+        scratchRead, { service: "scratchHandoffWrite", method: "stage", result: ref(artifact) },
+      ]),
+    ],
+  };
+  const validateHandoff = () => handoffWorkflow.evidence(combinedExecution, combinedExercise, handoffId, handoffWorkflow);
+  assert.equal(validateHandoff().checks.transfer, true);
+  scratchRead.result = ref({ id: page.id, lines: ["Unrelated source"] });
+  assert.throws(validateHandoff, /exact verified excerpts/u);
   intake.record.inputs.request = ref({ ...projection, pages: [] });
   assert.throws(verify, /needs the exact acquired receipts/u);
   intake.record.inputs.request = ref(projection);
