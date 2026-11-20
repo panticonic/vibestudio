@@ -91,7 +91,6 @@ type SemanticWireMethodName =
   | "vcsListDirectory"
   | "vcsListFiles";
 export type WorkspaceSemanticPort = Pick<WorkspaceSemanticClient, SemanticWireMethodName> & HistoryCommitMemoryIndex & {
-  referencesReachable: WorkspaceSemanticClient["vcsReferencesReachable"];
   getChannelEnvelope(
     input: Parameters<WorkspaceSemanticClient["getChannelEnvelope"]>[0]
   ): Promise<{ contentClass: "internal" | "external" } | null>;
@@ -148,7 +147,6 @@ export function createWorkspaceSemanticPort(
     (_service, method, args) => dispatch.dispatch(provider, method, ...args)
   );
   return {
-    referencesReachable: (input) => client.vcsReferencesReachable(input),
     getChannelEnvelope: async (input) => {
       const envelope = await client.getChannelEnvelope(input);
       return envelope ? { contentClass: envelope.contentClass } : null;

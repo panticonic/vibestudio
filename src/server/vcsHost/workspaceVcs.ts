@@ -134,7 +134,6 @@ import {
   HistoryWalkPageSchema,
   HistoryWalkPlanSchema,
   type HistorySearchCause,
-  GadJsonValueSchema,
   type GadJsonRecord,
 } from "@vibestudio/service-schemas/workspaceSource";
 import { WorkspaceRepositories } from "./workspaceRepositories.js";
@@ -695,20 +694,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         ],
       };
     }
-  }
-
-  async referencesReachable(
-    contextIds: readonly string[],
-    references: readonly { kind: string; value: unknown }[]
-  ): Promise<boolean> {
-    await this.whenSemanticReady();
-    return this.gad().referencesReachable({
-      contextIds: [...contextIds],
-      references: references.map((reference) => ({
-        kind: reference.kind,
-        value: GadJsonValueSchema.parse(reference.value),
-      })),
-    });
   }
 
   async listSemanticContexts(prefix?: string): Promise<string[]> {

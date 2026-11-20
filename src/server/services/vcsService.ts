@@ -55,11 +55,7 @@ import { requireReviewedSourceConsumer } from "./workspaceTemplateSourceService.
 export interface VcsServiceDeps {
   workspaceVcs: Pick<
     WorkspaceVcs,
-    | "semanticCausalCall"
-    | "referencesReachable"
-  >;
-  participantWorkspace?: Pick<
-    WorkspaceVcs,
+    | "whenSemanticReady"
     | "participantHistoryAttached"
     | "readParticipantMain"
     | "openParticipantScope"
@@ -311,20 +307,31 @@ async function reachableContextAuthorities(
   ].sort();
 }
 
+function participantReadCaller(ctx: ServiceContext): VerifiedCaller {
+  const { caller } = ctx;
+  if (caller.runtime.kind === "extension" && !caller.nativeInvocation &&
+      !caller.taskAuthority && !caller.subject?.userId) {
+    return verifiedInitiator(ctx);
+  }
+  return caller;
+}
+
 export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
-  const participantWorkspace = () => {
-    const workspace = deps.participantWorkspace;
-    return workspace?.participantHistoryAttached ? workspace : undefined;
+  const workspace = deps.workspaceVcs;
+  const requireHistory = async (ctx: ServiceContext, method: VcsMethodName) => {
+    await workspace.whenSemanticReady(ctx.signal);
+    if (!workspace.participantHistoryAttached)
+      throw new ServiceError("vcs", method, "Workspace history is not ready", "ENOTREADY");
   };
 
   const participantScope = async (
-    workspace: NonNullable<VcsServiceDeps["participantWorkspace"]>,
     ctx: ServiceContext,
     explicitContextId: string | null,
-    caller = ctx.caller
+    caller = participantReadCaller(ctx)
   ) => {
     const ownerContextId =
-      callerContextId(ctx, deps) ?? (privileged(ctx, deps) ? explicitContextId : null);
+      caller.agentBinding?.contextId ?? callerContextId(ctx, deps) ??
+      (privileged(ctx, deps) ? explicitContextId : null);
     const contextId = explicitContextId ?? ownerContextId;
     if (!ownerContextId || !contextId)
       return unauthorizedBinding("The caller has no admitted workspace participant context");
@@ -339,14 +346,13 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
   };
 
   const participantOperationScope = async (
-    workspace: NonNullable<VcsServiceDeps["participantWorkspace"]>,
     ctx: ServiceContext,
     method: VcsMethodName,
     input: unknown,
-    caller = ctx.caller
+    caller = participantReadCaller(ctx)
   ) => {
     const explicitContext = vcsOperationContextId(method, input);
-    const scope = await participantScope(workspace, ctx, explicitContext, caller);
+    const scope = await participantScope(ctx, explicitContext, caller);
     if (explicitContext !== null || vcsOperationRegistry[method].accessClass !== "read") return scope;
     const reference = parseVcsSemanticRequest(method, input).references.find(
       ({ kind }) => kind === "state-node" || kind === "node" || kind === "event" || kind === "external-delta"
@@ -360,16 +366,15 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
     return { ...scope, contextId };
   };
 
-  const invokeParticipant = async (
-    workspace: NonNullable<VcsServiceDeps["participantWorkspace"]>,
+  const invoke = async (
     ctx: ServiceContext,
     method: VcsMethodName,
     input: unknown,
-    effectCaller: VerifiedCaller,
-    epochTransition: boolean
+    effectCaller: VerifiedCaller = participantReadCaller(ctx),
+    epochTransition = false
   ): Promise<unknown> => {
     if (method === "mainState") return workspace.readParticipantMain();
-    const scope = await participantOperationScope(workspace, ctx, method, input, effectCaller);
+    const scope = await participantOperationScope(ctx, method, input, effectCaller);
     const cause = { parent: ctx.causalParent ?? null };
     const common = { ...scope, head: scope.workingHead, cause };
     switch (method) {
@@ -530,115 +535,6 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
     }
   };
 
-  const invoke = async (
-    ctx: ServiceContext,
-    method: VcsMethodName,
-    input: unknown,
-    effectCaller: VerifiedCaller = ctx.caller,
-    epochTransition = false
-  ): Promise<unknown> => {
-    const workspace = participantWorkspace();
-    if (workspace)
-      return invokeParticipant(workspace, ctx, method, input, effectCaller, epochTransition);
-    const causalParent = ctx.causalParent ?? null;
-    switch (method) {
-      case "mainState":
-        return deps.workspaceVcs.semanticCausalCall("vcsMainState", undefined, causalParent);
-      case "status":
-        return deps.workspaceVcs.semanticCausalCall(
-          "vcsStatus",
-          vcsMethods.status.args.parse([input])[0],
-          causalParent
-        );
-      case "compare":
-        return deps.workspaceVcs.semanticCausalCall(
-          "vcsCompare",
-          vcsMethods.compare.args.parse([input])[0],
-          causalParent
-        );
-      case "inspect":
-        return deps.workspaceVcs.semanticCausalCall(
-          "vcsInspect",
-          vcsMethods.inspect.args.parse([input])[0],
-          causalParent
-        );
-      case "neighbors":
-        return deps.workspaceVcs.semanticCausalCall(
-          "vcsNeighbors",
-          vcsMethods.neighbors.args.parse([input])[0],
-          causalParent
-        );
-      case "history":
-        return deps.workspaceVcs.semanticCausalCall(
-          "vcsHistory",
-          vcsMethods.history.args.parse([input])[0],
-          causalParent
-        );
-      case "walk":
-        return deps.workspaceVcs.semanticCausalCall(
-          "vcsWalk",
-          vcsMethods.walk.args.parse([input])[0],
-          causalParent
-        );
-      case "query":
-        return deps.workspaceVcs.semanticCausalCall(
-          "vcsQuery",
-          vcsMethods.query.args.parse([input])[0],
-          causalParent
-        );
-      case "search":
-        return deps.workspaceVcs.semanticCausalCall(
-          "vcsSearch",
-          vcsMethods.search.args.parse([input])[0],
-          causalParent
-        );
-      case "blame":
-        return deps.workspaceVcs.semanticCausalCall(
-          "vcsBlame",
-          vcsMethods.blame.args.parse([input])[0],
-          causalParent
-        );
-      case "readMemory":
-        return deps.workspaceVcs.semanticCausalCall(
-          "vcsReadMemory",
-          vcsMethods.readMemory.args.parse([input])[0],
-          causalParent
-        );
-      case "resolveRepository":
-        return deps.workspaceVcs.semanticCausalCall(
-          "vcsResolveRepository",
-          vcsMethods.resolveRepository.args.parse([input])[0],
-          causalParent
-        );
-      case "readFile":
-        return deps.workspaceVcs.semanticCausalCall(
-          "vcsReadFile",
-          vcsMethods.readFile.args.parse([input])[0],
-          causalParent
-        );
-      case "readFiles":
-        return deps.workspaceVcs.semanticCausalCall(
-          "vcsReadFiles",
-          vcsMethods.readFiles.args.parse([input])[0],
-          causalParent
-        );
-      case "listDirectory":
-        return deps.workspaceVcs.semanticCausalCall(
-          "vcsListDirectory",
-          vcsMethods.listDirectory.args.parse([input])[0],
-          causalParent
-        );
-      case "listFiles":
-        return deps.workspaceVcs.semanticCausalCall(
-          "vcsListFiles",
-          vcsMethods.listFiles.args.parse([input])[0],
-          causalParent
-        );
-      default:
-        throw new ServiceError("vcs", method, "Workspace history is not ready", "ENOTREADY");
-    }
-  };
-
   const admitOperation = async (ctx: ServiceContext, method: VcsMethodName, input: unknown) => {
     if ((method === "push" || method === "commit") &&
         isRecord(input) && input["templateInstallation"] !== undefined)
@@ -659,9 +555,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
     if (primaryContextId !== null) {
       await authorizeContext(ctx, deps, primaryContextId, isMutation ? "write" : "read");
     }
-    if (isMutation && !participantWorkspace()) {
-      throw new ServiceError("vcs", method, "Workspace history is not ready", "ENOTREADY");
-    }
+    await requireHistory(ctx, method);
 
     const readableContexts = [
       ...new Set(
@@ -686,19 +580,17 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
     );
     if (guardedRoots.length > 0 && !privileged(ctx, deps)) {
       const contextIds = await reachableContextAuthorities(ctx, deps);
-      const workspace = participantWorkspace();
-      const scope = workspace ? await participantScope(workspace, ctx, primaryContextId) : null;
-      const reachable = scope
-        ? await workspaceParticipantReferencesReachable({
-            ...scope,
-            contextIds,
-            references: guardedRoots,
-          })
-        : await deps.workspaceVcs.referencesReachable(contextIds, guardedRoots);
+      const scope = await participantScope(
+        ctx, primaryContextId, isMutation ? ctx.caller : participantReadCaller(ctx)
+      );
+      const reachable = await workspaceParticipantReferencesReachable({
+        ...scope,
+        contextIds,
+        references: guardedRoots,
+      });
       if (
         !reachable &&
         !(
-          scope &&
           method === "discard" &&
           (await hasWorkspaceParticipantDiscardReceipt({
             ...scope,
@@ -737,6 +629,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
     input: unknown
   ): Promise<unknown> => {
     const prepared = ctx.preparedAuthority?.resolver === `vcs.files.${method}`;
+    if (prepared) await requireHistory(ctx, method);
     const admittedInput = prepared
       ? preparedAuthorityPayload<readonly unknown[]>(ctx, `vcs.files.${method}`)[0]
       : await admitOperation(ctx, method, input);
@@ -751,10 +644,13 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           )
         )
       : parsed.input;
+    const access = vcsOperationRegistry[method].accessClass;
     const effectCaller =
       method === "push" && primaryContextId !== null
         ? callerForContext(ctx, deps, primaryContextId)
-        : ctx.caller;
+        : access === "context-write" || access === "workspace-write"
+          ? ctx.caller
+          : participantReadCaller(ctx);
     const result = await invoke(ctx, method, semanticInput, effectCaller, epochTransition);
     if (epochTransition) deps.onEpochTransitionPublished?.();
     if (
@@ -802,11 +698,9 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
             const admittedArgs = admittedInput === undefined ? [] : [admittedInput];
             if (!websiteAuthorityIdentity(ctx.caller))
               return preparedAuthorityState([], admittedArgs);
-            const workspace = participantWorkspace();
-            const scope =
-              workspace && method !== "mainState"
-                ? await participantOperationScope(workspace, ctx, method as VcsMethodName, admittedInput)
-                : null;
+            const scope = method === "mainState"
+              ? null
+              : await participantOperationScope(ctx, method as VcsMethodName, admittedInput);
             const catalog = scope ? workspaceParticipantCatalog({
               ...scope,
               ...((method === "compare" || method === "merge" || method === "copy")
