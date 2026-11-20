@@ -640,6 +640,17 @@ describe("BuildSystemV2 — explicit build reports", () => {
     expect(reverse).not.toContain("@workspace/isolated");
   });
 
+  it("keeps metadata with unchanged service bindings out of the consumer closure", async () => {
+    env = await loadWithMocks({ blockingAuthorityConsumer: true });
+    const { buildSystem } = env;
+    await expect(buildSystem.listAffectedBuildUnits(CANDIDATE_VIEW, ["meta"], undefined, {
+      workspaceServiceBindingsChanged: false,
+    })).resolves.toEqual([]);
+    await expect(buildSystem.listAffectedBuildUnits(CANDIDATE_VIEW, ["meta", "workers/removed-notes"], undefined, {
+      workspaceServiceBindingsChanged: false,
+    })).resolves.toContain("@workspace-panels/app");
+  });
+
   it("keeps an unrelated broken sibling outside the protected-publication closure", async () => {
     shouldFail = (name) => name === "@workspace/isolated";
     typecheckDiagnostics = (unitRelativePath) =>

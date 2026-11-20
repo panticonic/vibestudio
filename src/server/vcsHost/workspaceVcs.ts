@@ -3382,6 +3382,18 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     };
   }
 
+  /** Read the published repository directly from the protected host refs.
+   * Publication validation must not re-enter the source owner awaiting it. */
+  async readProtectedRepositoryText(repoPath: string, relativePath: string): Promise<string | null> {
+    const root = this.deps.refs.readMain(repoPath)?.contentRoot;
+    if (!root || root === EMPTY_STATE_HASH) return null;
+    const file = await readFileAtTree(this.deps.blobsDir, root, relativePath);
+    if (!file) return null;
+    const bytes = await getBytes(this.deps.blobsDir, file.contentHash);
+    if (!bytes) throw new Error(`content blob ${file.contentHash} is missing`);
+    return UTF8_DECODER.decode(bytes);
+  }
+
   async listFiles(
     stateRef: string
   ): Promise<Array<{ path: string; contentHash: string; mode: number }>> {

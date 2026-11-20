@@ -92,6 +92,7 @@ describe("WorkspaceVcs protected publication notification", () => {
     await expect(vcs.initializeFreshHistory(source)).resolves.toBe(true);
     expect(refs.readMainSemanticState()?.eventId).toBe(eventId);
     expect(refs.readMain("meta")?.contentRoot).toBe(contentRoot);
+    await expect(vcs.readProtectedRepositoryText("meta", "workspace.yaml")).resolves.toBe(bytes.toString());
     await expect(vcs.initializeFreshHistory(source)).resolves.toBe(true);
     expect(prepareInitialization).toHaveBeenCalledOnce();
     expect(gate).toHaveBeenCalledOnce();

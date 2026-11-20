@@ -139,6 +139,7 @@ import {
 import {
   parseWorkspaceSystemEpochEnvelope,
   parseWorkspaceAppCompatibilityEnvelope,
+  readWorkspaceConfig,
   WORKSPACE_CONFIG_PATH,
 } from "@vibestudio/workspace/configParser";
 import { WorkspaceCreationDescriptorSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
@@ -3336,17 +3337,45 @@ async function main() {
         const buildSystem = assertPresent(buildSystemInstance);
         try {
           const classesBySource = workspaceWorkerClassReferences(candidateDecls);
+          const changesMetadata = changedPaths.some(
+            (changed) => changed === "meta" || changed.startsWith("meta/")
+          );
+          let workspaceServiceBindingsChanged = true;
+          let previousClasses: ReturnType<typeof workspaceWorkerClassReferences> | undefined;
+          if (changesMetadata) {
+            const previousText = await workspaceVcs.readProtectedRepositoryText(
+              "meta", WORKSPACE_CONFIG_PATH.slice("meta/".length)
+            ).catch(() => null);
+            if (previousText !== null) {
+              const previousConfig = await readWorkspaceConfig({
+                // Compare the declaration changes with both versions using the
+                // same provider manifests. Provider source changes are checked
+                // separately by the build graph.
+                readText: (file) => file === WORKSPACE_CONFIG_PATH
+                  ? Promise.resolve(previousText)
+                  : readWorkspaceFileAtState(stateHash, file),
+              }, workspaceId).catch(() => null);
+              if (previousConfig) {
+                const { exactWorkspaceServiceBindings } = await import("./buildV2/userlandAuthority.js");
+                previousClasses = workspaceWorkerClassReferences(buildWorkspaceDeclarations(previousConfig));
+                workspaceServiceBindingsChanged =
+                  sha256Canonical(exactWorkspaceServiceBindings(previousConfig)) !==
+                  sha256Canonical(exactWorkspaceServiceBindings(candidateConfig));
+              }
+            }
+          }
           const unitNames = await buildSystem.listAffectedBuildUnits(
             stateHash,
             changedPaths,
-            signal
+            signal,
+            { workspaceServiceBindingsChanged }
           );
           // A manifest-only change can expose a previously undeclared class
           // without changing its worker files. Check new source/class pairs;
           // unchanged references do not invalidate their published schema proof.
-          if (changedPaths.some((changed) => changed.startsWith("meta/"))) {
+          if (changesMetadata) {
             for (const source of newlyReferencedWorkerSources(
-              workspaceWorkerClassReferences(workspaceDecls),
+              previousClasses ?? new Map(),
               classesBySource
             )) {
               if (!unitNames.includes(source)) unitNames.push(source);

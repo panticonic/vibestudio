@@ -466,7 +466,8 @@ export interface BuildSystemV2 {
   listAffectedBuildUnits(
     stateHash: string,
     changedPaths: readonly string[],
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    options?: { workspaceServiceBindingsChanged?: boolean }
   ): Promise<string[]>;
 
   /** Stage the complete authority index for an exact candidate state. */
@@ -3186,7 +3187,8 @@ export async function initBuildSystemV2(
     async listAffectedBuildUnits(
       stateHash: string,
       changedPaths: readonly string[],
-      signal?: AbortSignal
+      signal?: AbortSignal,
+      options?: { workspaceServiceBindingsChanged?: boolean }
     ): Promise<string[]> {
       const ref = validateBuildRef(stateHash);
       if (!ref) throw new Error(`Missing exact state for affected-unit lookup`);
@@ -3234,13 +3236,11 @@ export async function initBuildSystemV2(
       // to prove: consulting the currently published state from inside the
       // protected-main host effect would re-enter the workspace source DO that
       // is awaiting this validation and deadlock a cold process.
-      const authorityRelevant = changedPaths.some(
-        (changed) =>
-          changed === "meta" ||
-          changed === "meta/vibestudio.yml" ||
-          changed.startsWith("meta/") ||
-          changed.startsWith("workers/")
-      );
+      const serviceConfigChanged =
+        options?.workspaceServiceBindingsChanged !== false &&
+        changedPaths.some((changed) => changed === "meta" || changed.startsWith("meta/"));
+      const authorityRelevant =
+        serviceConfigChanged || changedPaths.some((changed) => changed.startsWith("workers/"));
       if (authorityRelevant) {
         const candidateIndex = candidateAuthorityIndex!;
         const candidateProviderUnits = new Set(
@@ -3278,16 +3278,7 @@ export async function initBuildSystemV2(
         const removedProvider = [...publishedProviderUnits].some(
           (provider) => !candidateProviderUnits.has(provider)
         );
-        if (
-          !exactPublishedIndex &&
-          (removedProvider ||
-            changedPaths.some(
-              (changed) =>
-                changed === "meta" ||
-                changed === "meta/vibestudio.yml" ||
-                changed.startsWith("meta/")
-            ))
-        ) {
+        if (!exactPublishedIndex && (removedProvider || serviceConfigChanged)) {
           // A removed provider has no candidate provider mapping. Recheck all
           // surviving service consumers; this remains bounded by the exact
           // candidate authority index and avoids reconstructing old source.
