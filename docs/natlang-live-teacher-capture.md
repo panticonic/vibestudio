@@ -374,10 +374,11 @@ schedule records. The `news-managed-oracle-qualification` system test exercises 
 readback without a model.
 News handoff cases run `reviewNews` before `assembleHandoff` in the same workspace.
 The handoff reads the actual Missions settings after the News review has observed
-them. The scratch file cites the feed cadence, briefing time and timezone, and
-pause state. One case preserves an existing configuration that differs from the
-old expectation. The other verifies an authorized cadence change before staging
-the new settings. Run `news-managed-handoff-qualification` in the News workspace
+them. The scratch file cites the feed cadence, briefing interval or
+wall-clock slot, and pause state. Cases cover a stale expectation, an applied
+feed change, a switch from wall-clock to interval briefings, and a declined
+request for an unsupported cadence. The exporter recomputes the handoff
+source from the verified Missions readback. Run `news-managed-handoff-qualification` in the News workspace
 to check the readback, early access rejection and staged artifact without a model.
 Google Workspace setup cases join Drive readiness to the installed welcome panel. They verify the
 account and permission owner links, the Gmail launch gate across reload, and layout at the assigned widths.

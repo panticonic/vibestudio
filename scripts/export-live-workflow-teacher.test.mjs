@@ -2137,6 +2137,13 @@ test("News handoff export binds the verified Missions evidence to the staged art
   assert.deepEqual(world.skills, ["reviewNews", "assembleHandoff"]);
   assert.equal(world.workspace, "news");
   assert.equal(cases.get("news-live-reconcile-handoff-after-feed-change").repair.write, true);
+  const applied = cases.get("news-live-reconcile-handoff-after-switching-to-interval");
+  const declined = cases.get("news-live-reconcile-handoff-after-declining-unsupported-cadence");
+  assert.equal(applied.repair.write, true);
+  assert.match(applied.handoff.source, /Briefing interval: 180 minutes/u);
+  assert.equal(declined.repair.write, false);
+  assert.match(declined.handoff.source, /Briefing interval: 150 minutes/u);
+
   const artifact = { path: "/.tmp/evidence-handoff-verified/handoff.json", bytes: 456, sha256: "a".repeat(64) };
   const report = {
     status: "attention",
@@ -2187,6 +2194,10 @@ test("News handoff export binds the verified Missions evidence to the staged art
   report.findings[0].evidenceIds = ["unassigned-poll"];
   assert.throws(admit, /match the assigned channel observations/u);
   report.findings[0].evidenceIds = ["poll-mission"];
+  const after = verification.news.observed.at(-1);
+  after.briefing.at = "08:45";
+  assert.throws(admit, /cite the verified schedule settings/u);
+  after.briefing.at = "07:45";
   verification.sourceSha256 = "0".repeat(64);
   assert.throws(admit, /cite the verified schedule settings/u);
 });

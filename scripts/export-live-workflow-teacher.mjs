@@ -807,7 +807,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedChannelRosterWorlds },
     { managedGrimoireWorlds },
     { managedSpectroliteWorlds, spectroliteHandoffWork },
-    { managedNewsWorlds, newsHandoffWork },
+    { managedNewsWorlds, newsHandoffWork, newsHandoffSchedule, projectNewsCadenceSource },
     { managedGoogleSetupWorlds, gmailContinuationWork },
     { localModelComparisonWorlds },
     { managedLogAuditWorlds },
@@ -1347,6 +1347,8 @@ export async function loadLiveTeacherCases(checkouts) {
     cases.set(`news-live-${id}`, {
       ...(handoff ? {
         ...newsHandoffWorkflow,
+        newsHandoffSchedule,
+        projectNewsCadenceSource,
         skills: newsHandoffWork.map(({ operation }) => operation),
         sourceGroups: [newsHandoffWorkflow, newsWorkflow, scratchHandoffWorkflow].flatMap(workflowSourceGroups),
       } : newsWorkflow),
@@ -7991,6 +7993,13 @@ function newsHandoffEvidence(execution, exercise, scenario, workflow) {
   const results = exercise.report?.results;
   const handoff = results?.[1]?.report;
   const artifact = verification?.handoff?.artifact;
+  const observed = verification?.news?.observed;
+  const schedule = Array.isArray(observed)
+    ? workflow.newsHandoffSchedule(observed, workflow.repair)
+    : null;
+  const projected = schedule?.kind === "schedule"
+    ? workflow.projectNewsCadenceSource(schedule)
+    : null;
   requireEvidence(
     results?.length === 2 &&
       results[0].domain === "news" &&
@@ -8003,7 +8012,8 @@ function newsHandoffEvidence(execution, exercise, scenario, workflow) {
       ) &&
       verification.handoff?.passed === true &&
       isDeepStrictEqual(verification.handoff.sourceIds, ["news-missions"]) &&
-      verification.sourceSha256 === hash(workflow.handoff.source) &&
+      projected === workflow.handoff.source &&
+      verification.sourceSha256 === hash(projected) &&
       handoff?.status === "staged" &&
       artifact &&
       artifact.path === handoff.artifact?.path &&
