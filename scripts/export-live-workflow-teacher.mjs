@@ -18,6 +18,12 @@ const templateGoalDomains = {
     checks: ["exactNewsFrontiers", "exactNewsAuthority", "exactNewsReaderWindows", "independentlyReadNewsSources",
       "exactNewsCadence", "groundedNewsEdition", "verifiedPrivateNewsHandoff", "preservedNewsWorkspace", "rejectedNewsRetarget"],
   },
+  assetIntegrity: {
+    namespace: "vibestudio:asset-integrity",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-asset-integrity-managed.ts" },
+    callable: "reviewAssetIntegrity",
+    checks: ["boundAssetHistory", "joinedAssetIntegrityFinding", "preservedOwnedAssetBasis", "matchedAssetDisposition", "independentlyReadExactRecovery"],
+  },
   tendrilRoute: {
     namespace: "vibestudio:tendril-route",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-tendril-route-managed.ts" },
@@ -1375,13 +1381,13 @@ export async function loadLiveTeacherCases(checkouts) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
     const distinctGoals = new Set();
-    const { openGoalWorlds, openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
+    const { openGoalWorlds, openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
       spectroliteGoalWorlds = [], openGoalGoogleWorlds = [], openGoalPersonalWorlds = [],
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
       openTerminalWorlds = [], openOwnedResearchWorlds = [], personalWelcomeWorlds = [], dictationHandoffWorlds = [], specialistHandoffWorlds = [], providerHandoffWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
-    for (const assignment of [...openGoalWorlds, ...openTendrilRouteWorlds, ...openExtensionDossierWorlds, ...openDeployedInterfaceWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
+    for (const assignment of [...openGoalWorlds, ...openAssetIntegrityWorlds, ...openTendrilRouteWorlds, ...openExtensionDossierWorlds, ...openDeployedInterfaceWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
       ...openNewsEvidenceWorlds, ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
@@ -7856,6 +7862,52 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
           !stage && outcome.handoff === null && proof.handoff === null),
       "Expected exact owned client transitions, matching durable GAD records, and verified local handoff"
     );
+  } else if (world.kind === "assetIntegrity") {
+    const names = new Set(["assetHistory", "assetRecovery"]);
+    const traced = effects.filter(({ service, error }) => names.has(service) && !error);
+    const journal = proof.journal ?? [];
+    const bound = traced.length === journal.length && journal.every(row => {
+      const index = traced.findIndex(effect => effect.service === row.service && effect.method === row.method &&
+        matchesValue(effect.args, row.args) && matchesValue(effect.result, row.result));
+      if (index < 0) return false;
+      traced.splice(index, 1);
+      return true;
+    });
+    const originalReads = journal.every((row, index) => {
+      if (row.method !== "inspect") return true;
+      const [version, id] = row.args;
+      const inventory = journal.slice(0, index).findLast(entry => entry.method === "listFiles" && entry.args[0] === version);
+      const file = inventory?.result.find(candidate => candidate.id === id);
+      const { manifest: _manifest, ...observed } = row.result;
+      return isDeepStrictEqual(observed, file);
+    });
+    const versions = journal.findLast(row => row.method === "discover")?.result ?? [];
+    const admitted = versions.length === 3 && versions.some(card => card.edition === "approved" && card.id === proof.approved) &&
+      versions.some(card => card.edition === "working" && card.id === proof.working) &&
+      versions.every(card => {
+        const files = journal.findLast(row => row.method === "listFiles" && row.args[0] === card.id)?.result;
+        return files?.length && files.every(file => journal.some(row => row.method === "inspect" &&
+          row.args[0] === card.id && row.args[1] === file.id && row.result.id === file.id && row.result.digest === file.digest));
+      });
+    const attempts = journal.filter(row => row.method === "stage");
+    const output = exercise.report.outcome;
+    const selected = proof.receipt?.files;
+    const linkedFiles = selected?.every(file => journal.some(row => row.method === "inspect" &&
+      row.args[0] === proof.approved && row.args[1] === file.id && row.result.digest === file.digest));
+    requireEvidence(bound && originalReads && admitted && output.status === world.expected.status &&
+      output.approved === proof.approved && output.working === proof.working &&
+      isDeepStrictEqual(output.findings, proof.findings) &&
+      isDeepStrictEqual(proof.findings?.map(({ key, differences }) => ({ key, differences })), world.expected.findings) &&
+      (world.coedit ? attempts[0]?.result.status === "changed" && attempts[0].args[1] !== proof.working &&
+        attempts[0].result.working === proof.working : true) &&
+      (world.expected.copies.length ? linkedFiles && selected.length === world.expected.copies.length &&
+        attempts.length === (world.coedit ? 2 : 1) && isDeepStrictEqual(attempts.at(-1).args, [proof.approved, proof.working, selected]) &&
+        attempts.at(-1).result.status === "staged" && isDeepStrictEqual(attempts.at(-1).result.receipt, proof.receipt) &&
+        isDeepStrictEqual(output.receipt, proof.receipt) &&
+        proof.receiptBytes === JSON.stringify({ schema: "vibestudio.verified-assets/1", accepted: proof.approved,
+          working: proof.working, files: selected }) + "\n" && hash(proof.receiptBytes) === proof.receipt.manifestDigest :
+        attempts.length === (world.coedit ? 1 : 0) && output.receipt === null && proof.receipt === null && proof.receiptBytes === null),
+      "Expected exact asset history, stable binary identities and the authorized private recovery receipt");
   } else if (world.kind === "tendrilRoute") {
     const names = new Set(["tendrilRouteRead", "tendrilRouteRetention"]);
     const traced = effects.filter(({ service, error }) => names.has(service) && !error);
