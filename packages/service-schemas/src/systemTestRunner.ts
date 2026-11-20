@@ -5,6 +5,34 @@ import { z } from "zod";
 
 const thinkingLevelSchema = z.enum(["minimal", "low", "medium", "high", "xhigh", "max"]);
 
+export const approvalObservationCaseId = "cancelled-creation-review";
+export const approvalObservationRunNames = [
+  `approval-transition-live-${approvalObservationCaseId}`,
+  `approval-transition-oracle-qualification-${approvalObservationCaseId}`,
+] as const;
+export const approvalObservationEnvironmentKey = "VIBESTUDIO_SYSTEM_TEST_APPROVAL_OBSERVATION";
+
+const approvalSnapshot = <Surface extends "workspace" | "hub">(source: Surface) =>
+  z
+    .object({
+      source: z.literal(source),
+      kind: z.literal("snapshot"),
+      ids: z.array(z.string().uuid()).max(32),
+    })
+    .strict();
+const approvalObservationPair = z.tuple([approvalSnapshot("workspace"), approvalSnapshot("hub")]);
+
+export const systemTestApprovalObservationSchema = z
+  .object({
+    workspaceId: z.string().min(1).max(128),
+    caller: z.literal("device-workspace"),
+    approvalId: z.string().uuid(),
+    earlier: approvalObservationPair,
+    later: approvalObservationPair,
+  })
+  .strict();
+export type SystemTestApprovalObservation = z.infer<typeof systemTestApprovalObservationSchema>;
+
 export const systemTestRunConfigSchema = z
   .object({
     runId: z.string().min(1),
@@ -16,6 +44,7 @@ export const systemTestRunConfigSchema = z
     thinkingLevel: thinkingLevelSchema.optional(),
     concurrency: z.number().int().positive().optional(),
     testTimeoutMs: z.number().int().positive().optional(),
+    approvalObservation: systemTestApprovalObservationSchema.optional(),
   })
   .strict();
 export type SystemTestRunConfig = z.infer<typeof systemTestRunConfigSchema>;

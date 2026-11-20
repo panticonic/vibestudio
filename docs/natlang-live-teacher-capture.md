@@ -247,6 +247,16 @@ passing both redacted observations through the shared Natlang root with a
 scripted executor. The transition reports that the review left the pending
 list and preserves the evidence from each observation.
 
+The managed `approval-transition-live-cancelled-creation-review` case
+captures a fresh pair of observations for each run. The VibeStudio launcher
+cancels the one review it created and passes redacted observations to the
+workspace. The shared Natlang program reviews each pair of queues and
+interprets the transition. Export requires both nested reviews in order and
+checks for zero approval side effects in the call tree.
+`approval-transition-oracle-qualification-cancelled-creation-review` checks
+the live readbacks, confirms that the callable mounts, and rejects stale and
+reversed observations and an incorrect disposition without model calls.
+
 Temporary notification cases call the native shell notification service in an
 isolated workspace. The workflow passes the accepted host ID to the dismissal
 stage and reports the offered action labels and explicit cleanup. User

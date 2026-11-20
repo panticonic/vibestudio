@@ -23,7 +23,7 @@ function isCreationReview(approval: PendingApproval) {
   );
 }
 
-export async function liveApprovalTransition(instanceName: string) {
+export async function liveApprovalTransition(instanceName: string, outerSignal?: AbortSignal) {
   const root = path.resolve(import.meta.dirname, "../..");
   const instance = readDevInstanceRecord(root, instanceName);
   assert(isManagedSystemTestInstance(instance) && instance.lifecycle === "ephemeral");
@@ -31,7 +31,8 @@ export async function liveApprovalTransition(instanceName: string) {
   assert(
     identity?.kind === "device" && identity.transport === "local" && identity.phase === "workspace"
   );
-  const signal = AbortSignal.timeout(60_000);
+  const deadline = AbortSignal.timeout(60_000);
+  const signal = outerSignal ? AbortSignal.any([deadline, outerSignal]) : deadline;
   const template = requireDevelopmentTemplateCheckouts(root).sources.find(
     ({ id }) => id === "examples"
   );
@@ -67,17 +68,22 @@ export async function liveApprovalTransition(instanceName: string) {
     schemaRpcCaller({ streamReadable: rpc.streamReadable.bind(rpc) })
   );
   const approvals = typedClient("shellApproval", shellApprovalMethods, rpc);
-  const available = Promise.withResolvers<void>();
-  const aborted = () => available.reject(signal.reason);
-  void available.promise.catch(() => {});
+  let observed!: () => void;
+  let rejectObservation!: (reason: unknown) => void;
+  const available = new Promise<void>((resolve, reject) => {
+    observed = resolve;
+    rejectObservation = reject;
+  });
+  const aborted = () => rejectObservation(signal.reason);
+  void available.catch(() => {});
   signal.addEventListener("abort", aborted, { once: true });
-  signal.throwIfAborted();
   const unlisten = events.on("shell-approval:pending-changed", ({ pending }) => {
-    if (pending.some(isCreationReview)) available.resolve();
+    if (pending.some(isCreationReview)) observed();
   });
   try {
+    signal.throwIfAborted();
     await events.subscribeAll(["shell-approval:pending-changed"]);
-    if (!(await approvals.listPending()).some(isCreationReview)) await available.promise;
+    if (!(await approvals.listPending()).some(isCreationReview)) await available;
     const state = await approvals.getWorkspaceCreationReviewState();
     assert(state.status === "pending", "The assigned workspace creation review is pending");
     const { approvalId } = state;
@@ -128,6 +134,7 @@ export async function liveApprovalTransition(instanceName: string) {
     const later = redact(after, false);
     return {
       id: "approval-queue-live-cancelled-creation-review",
+      workspaceId: created.workspaceId,
       request: {
         goal: "Follow the assigned workspace review across both approval queue observations.",
         caller: before.caller,

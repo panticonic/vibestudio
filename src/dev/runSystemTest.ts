@@ -5,6 +5,12 @@ import * as fs from "node:fs";
 import type { StdioOptions } from "node:child_process";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
+import {
+  approvalObservationEnvironmentKey,
+  approvalObservationRunNames,
+  systemTestApprovalObservationSchema,
+} from "@vibestudio/service-schemas/systemTestRunner";
+import { liveApprovalTransition } from "../../scripts/lib/approval-transition-observation.js";
 import { getProfileDataPath } from "@vibestudio/env-paths";
 import { formatRpcFailure } from "@vibestudio/rpc";
 import { Ownership, awaitRetirement, readLedger, sweep } from "@vibestudio/shared/ownership";
@@ -94,11 +100,12 @@ async function spawnCli(
   instanceId: string,
   command: readonly string[],
   stdio: StdioOptions,
-  label: string
+  label: string,
+  env = process.env
 ): Promise<CliResult> {
   const owned = ownership.spawn(process.execPath, cliArgv(instanceId, command), {
     cwd: process.cwd(),
-    env: process.env,
+    env,
     stdio,
     kill: "immediate",
     label: `cli:${command[0] ?? "command"}`,
@@ -129,10 +136,18 @@ async function spawnCli(
 async function runCli(
   ownership: Ownership,
   instanceId: string,
-  command: readonly string[]
+  command: readonly string[],
+  env: NodeJS.ProcessEnv
 ): Promise<number> {
   return (
-    await spawnCli(ownership, instanceId, ["system-test", ...command], "inherit", "system-test CLI")
+    await spawnCli(
+      ownership,
+      instanceId,
+      ["system-test", ...command],
+      "inherit",
+      "system-test CLI",
+      env
+    )
   ).code;
 }
 
@@ -301,6 +316,18 @@ async function runCommand({
       ? [...command, "--session", session]
       : command;
   await seedIntegrationReadinessFixture(ensured.instance, scopedCommand, signal);
+  const cliEnv = { ...process.env };
+  delete cliEnv[approvalObservationEnvironmentKey];
+  if (
+    scopedCommand[0] === "run" &&
+    approvalObservationRunNames.some((name) => scopedCommand.includes(name))
+  ) {
+    const { request, workspaceId } = await liveApprovalTransition(ensured.instance.id, signal);
+    const { caller, approvalId, earlier, later } = request;
+    cliEnv[approvalObservationEnvironmentKey] = JSON.stringify(
+      systemTestApprovalObservationSchema.parse({ workspaceId, caller, approvalId, earlier, later })
+    );
+  }
   // Device drivers are scoped to the command: attached once the instance is
   // ready (so they pair into a prepared account), stopped on every exit path.
   const drivers = parsed.devices?.length
@@ -313,7 +340,7 @@ async function runCommand({
     : null;
   let commandFailure: unknown;
   try {
-    process.exitCode = await runCli(ownership, ensured.instance.id, scopedCommand);
+    process.exitCode = await runCli(ownership, ensured.instance.id, scopedCommand, cliEnv);
   } catch (error) {
     commandFailure = error;
   }

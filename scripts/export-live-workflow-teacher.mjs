@@ -714,6 +714,15 @@ const composedReleaseWorkflow = {
   requiresReview: true,
   evidence: composedReleaseEvidence,
 };
+const approvalTransitionWorkflow = {
+  family: "system-live-approval-transition",
+  namespace: "vibestudio:cli",
+  group: "approval-queue-visibility",
+  workspace: "system",
+  root: "reviewApprovalTransition",
+  validator: { template: "system-testing", path: "skills/system-testing/approval-transition-managed.ts" },
+  evidence: approvalTransitionEvidence,
+};
 const originalCases = new Map([
   ["owned-operations-incident-payment-and-ledger", ownedOperationsWorkflow],
   ["owned-operations-release-audit-continuation", ownedOperationsWorkflow],
@@ -725,6 +734,7 @@ const originalCases = new Map([
   ["panel-draft-stale-snapshot", panelWorkflow],
   ["workspace-integration-theme-locale", integrationWorkflow],
   ["workspace-integration-theme-locale-alias", integrationWorkflow],
+  ["approval-transition-live-cancelled-creation-review", approvalTransitionWorkflow],
 ]);
 
 export async function loadLiveTeacherCases(checkouts) {
@@ -3772,6 +3782,100 @@ function templateReleaseEvidence(execution, exercise, _scenario, { assignment, p
   );
   return {
     world: { context_id: fixture.contextId, seed_revision: actual.mainEventId },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function approvalTransitionEvidence(execution, exercise) {
+  const fixture = execution.diagnostics.managedApprovalTransition;
+  const { caseId, contextId, workspaceId, request, checks } = fixture ?? {};
+  const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u;
+  const snapshotPair = (observations) => Array.isArray(observations) &&
+    observations.length === 2 && observations.every((snapshot, index) =>
+      snapshot?.source === (index === 0 ? "workspace" : "hub") &&
+      snapshot.kind === "snapshot" && Array.isArray(snapshot.ids) &&
+      snapshot.ids.length <= 32 && snapshot.ids.every((id) => typeof id === "string" && uuid.test(id)),
+    );
+  requireEvidence(
+    fixture?.passed === true && caseId === "cancelled-creation-review" &&
+      typeof contextId === "string" && contextId.length > 0 &&
+      contextId === execution.provenance?.contextId &&
+      typeof workspaceId === "string" && workspaceId.length > 0 &&
+      request?.goal === "Follow the assigned workspace review across both approval queue observations." &&
+      request.caller === "device-workspace" &&
+      typeof request.approvalId === "string" && uuid.test(request.approvalId) &&
+      snapshotPair(request.earlier) && snapshotPair(request.later) &&
+      request.earlier[0].ids.includes(request.approvalId) &&
+      !request.later[0].ids.includes(request.approvalId) &&
+      !request.earlier[1].ids.includes(request.approvalId) &&
+      !request.later[1].ids.includes(request.approvalId) &&
+      ["workspaceReviewWasPending", "hubDidNotListAssignedReview", "workspaceReviewWasRemoved", "report"]
+        .every((check) => checks?.[check] === true),
+    "Approval transition requires the assigned cancelled review and its two exact live snapshots",
+  );
+  const visibility = (snapshots, pending) => ({
+    coverage: "complete",
+    surfaces: snapshots.map(({ source, ids }) => ({ source, state: "visible", ids })),
+    location: pending ? { status: "located", source: "workspace" } : { status: "absent", source: null },
+  });
+  const report = exercise.report;
+  requireEvidence(
+    isDeepStrictEqual(report, {
+      transition: "no-longer-listed",
+      earlier: visibility(request.earlier, true),
+      later: visibility(request.later, false),
+    }),
+    "Approval transition must report the assigned review disappearing from the workspace queue",
+  );
+
+  const records = exercise.calls.map(({ record }) => record);
+  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const children = (parent, name) => parent
+    ? records.filter((record) => record.parent_call_id === parent.call_id && record.definition.name === name)
+    : [];
+  const exactlyOne = (parent, name) => {
+    const matches = children(parent, name);
+    return matches.length === 1 ? matches[0] : undefined;
+  };
+  const transition = exactlyOne(root, "reviewApprovalTransition");
+  const queues = children(transition, "reviewApprovalQueues");
+  const [earlier, later] = [request.earlier, request.later].map((receipts, index) => {
+    const expected = index === 0 ? report.earlier : report.later;
+    const queueRequest = { goal: request.goal, caller: request.caller, approvalId: request.approvalId, receipts };
+    const queue = queues.find((call) => matchesValue(call.inputs?.request, queueRequest));
+    const select = exactlyOne(queue, "selectApprovalSurfaces");
+    const surfaces = children(queue, "reviewApprovalSurface");
+    const summarize = exactlyOne(queue, "summarizeApprovalVisibility");
+    const locate = exactlyOne(queue, "locatePendingApproval");
+    return queue && matchesValue(queue.output, expected) &&
+      matchesValue(select?.inputs?.caller, request.caller) &&
+      matchesValue(select.output, ["workspace", "hub"]) &&
+      surfaces.length === receipts.length && expected.surfaces.every((surface) =>
+        surfaces.some((call) => matchesValue(call.inputs?.source, surface.source) &&
+          matchesValue(call.inputs?.receipts, receipts) && matchesValue(call.output, surface)),
+      ) &&
+      matchesValue(summarize?.inputs?.surfaces, expected.surfaces) &&
+      matchesValue(summarize.output, expected.coverage) &&
+      matchesValue(locate?.inputs?.approvalId, request.approvalId) &&
+      matchesValue(locate?.inputs?.surfaces, expected.surfaces) &&
+      matchesValue(locate?.inputs?.coverage, expected.coverage) &&
+      matchesValue(locate.output, expected.location) ? queue : undefined;
+  });
+  const interpret = exactlyOne(transition, "interpretApprovalTransition");
+  requireEvidence(
+    matchesValue(transition?.inputs?.request, request) && matchesValue(transition.output, report) &&
+      queues.length === 2 && earlier && later &&
+      Date.parse(earlier.ended_at) <= Date.parse(later.started_at) &&
+      matchesValue(interpret?.inputs?.earlier, report.earlier) &&
+      matchesValue(interpret?.inputs?.later, report.later) &&
+      matchesValue(interpret.output, report.transition) &&
+      Date.parse(later.ended_at) <= Date.parse(interpret.started_at) &&
+      records.every((record) => !record.effects?.length),
+    "Approval transition requires two ordered nested queue reviews with no approval side effects",
+  );
+  return {
+    world: { context_id: contextId, workspace_id: workspaceId },
     checks,
     evidence: { workspace: { fixture } },
   };

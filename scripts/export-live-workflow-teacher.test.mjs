@@ -8496,3 +8496,109 @@ test("remote route export binds the routing diagnosis to a live gateway read", a
     /requires the verified gateway, selected context and caller-tier decision/u,
   );
 });
+
+test("approval transition export requires ordered live snapshots and both nested queue reviews", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  const name = "approval-transition-live-cancelled-creation-review";
+  assert.deepEqual(workflowSourceGroups(cases.get(name)), ["vibestudio:cli:approval-queue-visibility"]);
+  entry.test.name = name;
+
+  const approvalId = "11111111-1111-4111-8111-111111111111";
+  const unrelated = "22222222-2222-4222-8222-222222222222";
+  const request = {
+    goal: "Follow the assigned workspace review across both approval queue observations.",
+    caller: "device-workspace",
+    approvalId,
+    earlier: [
+      { source: "workspace", kind: "snapshot", ids: [approvalId] },
+      { source: "hub", kind: "snapshot", ids: [unrelated] },
+    ],
+    later: [
+      { source: "workspace", kind: "snapshot", ids: [] },
+      { source: "hub", kind: "snapshot", ids: [unrelated] },
+    ],
+  };
+  const visibility = (phase) => ({
+    coverage: "complete",
+    surfaces: request[phase].map(({ source, ids }) => ({ source, state: "visible", ids })),
+    location: phase === "earlier"
+      ? { status: "located", source: "workspace" }
+      : { status: "absent", source: null },
+  });
+  const report = {
+    transition: "no-longer-listed",
+    earlier: visibility("earlier"),
+    later: visibility("later"),
+  };
+  diagnostics.managedApprovalTransition = {
+    contextId: "ctx", workspaceId: "approval-workspace", caseId: "cancelled-creation-review",
+    request, passed: true,
+    checks: {
+      workspaceReviewWasPending: true, hubDidNotListAssignedReview: true,
+      workspaceReviewWasRemoved: true, report: true,
+    },
+  };
+  const ref = (value) => {
+    const json = JSON.stringify(value);
+    return { complete: true, hash: createHash("sha256").update(json).digest("hex"), bytes: Buffer.byteLength(json) };
+  };
+  const prototype = diagnostics.natlangTeacher.calls[0];
+  const call = (name, id, parent, inputs, output, second = 0) => ({
+    callId: id,
+    summary: { ...prototype.summary, call_id: id },
+    record: {
+      ...prototype.record, call_id: id, parent_call_id: parent, definition: { name }, outcome: "done",
+      inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+      output: ref(output), effects: [],
+      started_at: new Date(second * 1000).toISOString(),
+      ended_at: new Date((second + 1) * 1000).toISOString(),
+    },
+  });
+  const queues = ["earlier", "later"].flatMap((phase, index) => {
+    const { goal, caller } = request;
+    const receipts = request[phase];
+    const { surfaces, coverage, location } = report[phase];
+    return [
+      call("reviewApprovalQueues", phase, "transition", { request: { goal, caller, approvalId, receipts } }, report[phase], index + 1),
+      call("selectApprovalSurfaces", phase + "-select", phase, { caller }, ["workspace", "hub"]),
+      ...surfaces.map((surface) => call("reviewApprovalSurface", phase + "-" + surface.source, phase,
+        { source: surface.source, receipts }, surface)),
+      call("summarizeApprovalVisibility", phase + "-summarize", phase, { surfaces }, coverage),
+      call("locatePendingApproval", phase + "-locate", phase, { approvalId, surfaces, coverage }, location),
+    ];
+  });
+  diagnostics.natlangTeacher = {
+    ...diagnostics.natlangTeacher,
+    programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+    rootCallIds: ["root"],
+    report,
+    calls: [
+      call("runWorkflow", "root", null, {}, null),
+      call("reviewApprovalTransition", "transition", "root", { request }, report),
+      ...queues,
+      call("interpretApprovalTransition", "interpret", "transition", { earlier: report.earlier, later: report.later }, report.transition, 3),
+    ],
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+
+  const laterQueue = queues.find(({ callId }) => callId === "later");
+  const originalRequest = laterQueue.record.inputs.request;
+  laterQueue.record.inputs.request = queues[0].record.inputs.request;
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /two ordered nested queue reviews/u);
+  laterQueue.record.inputs.request = originalRequest;
+
+  laterQueue.record.effects.push({ service: "approval", method: "cancel" });
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /no approval side effects/u);
+  laterQueue.record.effects.pop();
+
+  request.later[0].ids.push(approvalId);
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /exact live snapshots/u);
+});

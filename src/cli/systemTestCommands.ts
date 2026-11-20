@@ -5,6 +5,10 @@ import { createHash, randomUUID } from "node:crypto";
 import * as path from "node:path";
 import type { RuntimeEntityHandle } from "@vibestudio/shared/runtime/entitySpec";
 import {
+  approvalObservationEnvironmentKey,
+  approvalObservationRunNames,
+  systemTestApprovalObservationSchema,
+  type SystemTestApprovalObservation,
   systemTestFailedRunSchema,
   systemTestDescriptorSchema,
   systemTestDoctorResultSchema,
@@ -329,7 +333,8 @@ async function startRun(
   scope: SessionScope,
   config: StoredSystemTestRun["config"],
   artifactRoot?: string,
-  onCreated?: (stored: StoredSystemTestRun) => void
+  onCreated?: (stored: StoredSystemTestRun) => void,
+  approvalObservation?: SystemTestApprovalObservation
 ): Promise<StoredSystemTestRun> {
   const runId = `st_${randomUUID().replaceAll("-", "")}`;
   const runner = await systemTestRunnerFor(
@@ -358,6 +363,7 @@ async function startRun(
     runId,
     ...config,
     contextId: scope.contextId,
+    ...(approvalObservation ? { approvalObservation } : {}),
   });
   return stored;
 }
@@ -616,6 +622,23 @@ async function run(inv: ParsedInvocation): Promise<number> {
     if (!all && names.length === 0 && !category) {
       throw new UsageError("select exact test names, --category CATEGORY, or --all");
     }
+    const observationJson = process.env[approvalObservationEnvironmentKey];
+    const approvalObservation =
+      observationJson === undefined
+        ? undefined
+        : (() => {
+            if (
+              observationJson.length > 12_000 ||
+              all ||
+              names.length !== 1 ||
+              !approvalObservationRunNames.some((name) => names[0] === name)
+            ) {
+              throw new UsageError(
+                "A managed approval observation requires one exact approval transition case"
+              );
+            }
+            return systemTestApprovalObservationSchema.parse(JSON.parse(observationJson));
+          })();
     const scope = await resolveSystemTestScope(inv);
     const testTimeoutMs = positiveInt(inv, "test-timeout-ms");
     const thinkingLevel = inv.flags["thinking-level"];
@@ -634,9 +657,15 @@ async function run(inv: ParsedInvocation): Promise<number> {
     let stored: StoredSystemTestRun | null = null;
     const signalCancellation = installSystemTestRunCancellation(scope, () => stored);
     try {
-      stored = await startRun(scope, config, outDir(inv), (created) => {
-        stored = created;
-      });
+      stored = await startRun(
+        scope,
+        config,
+        outDir(inv),
+        (created) => {
+          stored = created;
+        },
+        approvalObservation
+      );
       if (await signalCancellation.ensureCancellation()) return 130;
       if (inv.flags["detach"] === true) {
         const value = {
