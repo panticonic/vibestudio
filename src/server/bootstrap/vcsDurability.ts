@@ -4,7 +4,6 @@ import { assertPresent } from "../../lintHelpers";
 import type { DODispatch } from "../doDispatch.js";
 import {
   createWorkspaceSemanticPort,
-  createWorkspaceSourceProviderV1,
   type WorkspaceSourceProviderRef,
 } from "../workspaceSourceProvider.js";
 import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
@@ -13,15 +12,6 @@ import type { RuntimeManager } from "../runtimeManager.js";
 import type { GcEpochCoordinator } from "../services/gcEpochCoordinator.js";
 import type { BuildSystemV2 } from "../buildV2/index.js";
 import type { ExecutionPublicationJournal } from "../executionPublicationJournal.js";
-import {
-  migrateWorkspaceHistory,
-  readWorkspaceHistoryReplayFreeze,
-  readWorkspaceHistoryReplayState,
-  recordWorkspaceHistoryReplaySeal,
-  sealWorkspaceHistoryReplay,
-  workspaceHistoryReplayReceiptDigest,
-  WORKSPACE_PARTICIPANT_HISTORY_MIGRATION,
-} from "../vcsHost/workspaceHistoryMigration.js";
 import { canonicalWorkspaceObjectContextId } from "./workspaceObjectIdentity.js";
 
 export interface VcsDurabilityBootstrapDeps {
@@ -48,25 +38,30 @@ export interface VcsDurabilityBootstrapDeps {
     contextId: string;
   }): Promise<void>;
   readWorkspaceHistoryOwner(targetId: string): Promise<{ contextId: string } | null>;
-  listWorkspaceHistorySessionOwners(contextIds: readonly string[]): Promise<Array<{ contextId: string; userId: string }>>;
   readProtectedMainEventId(): string | null;
-  activateSemanticWorkspace(workspaceVcs: WorkspaceVcs, nativeHistoryReady?: true): Promise<void>;
+  activateSemanticWorkspace(workspaceVcs: WorkspaceVcs): Promise<void>;
 }
 
-/** Resume only the canonical history named by this workspace's durable runtime. */
-async function restoreParticipantHistory(
+/** Initialize or reopen the canonical history for the workspace's native runtime. */
+async function attachNativeWorkspaceHistory(
   deps: VcsDurabilityBootstrapDeps,
   dispatch: DODispatch,
   runtime: RuntimeManager,
-  reserve = false,
-  allowFresh = false,
-): Promise<"native" | "handled" | false> {
-  const legacy = deps.workspaceSourceProvider;
-  const canonical = { ...legacy, className: "GadHistoryDO", objectKey: "canonical" };
+): Promise<void> {
+  const canonical = {
+    source: deps.workspaceSourceProvider.source,
+    className: "GadHistoryDO",
+    objectKey: "canonical",
+  };
+  if (!runtime.declaresRemoteDoltClass(canonical.source, canonical.className)) {
+    throw new Error("Workspace startup requires the native Dolt history class");
+  }
   const target = { source: canonical.source, className: canonical.className, key: canonical.objectKey };
   const targetId = canonicalEntityId({ kind: "do", ...target });
   const owner = await deps.readWorkspaceHistoryOwner(targetId);
-  if (!owner && !reserve) return false;
+  if (!owner && deps.readProtectedMainEventId() !== null) {
+    throw new Error("Workspace has saved history in an older format. This release requires a native workspace.");
+  }
   const contextId = canonicalWorkspaceObjectContextId(deps.workspaceId, target);
   if (owner && owner.contextId !== contextId) {
     throw new Error("The canonical participant history has a different runtime lifetime");
@@ -81,6 +76,7 @@ async function restoreParticipantHistory(
   const attachment = {
     ...history,
     infrastructureContextId: contextId,
+    nativeOnly: true as const,
     destroyRetiredStorage: (owner: WorkspaceSourceProviderRef) => runtime.destroyRetiredDOStorage(owner),
   };
   if (deps.sharedHistorySeed) {
@@ -90,72 +86,12 @@ async function restoreParticipantHistory(
     }
     await deps.workspaceVcs.initializeSharedHistory({ ...deps.sharedHistorySeed, ...history });
     await deps.sharedHistorySeed.remember();
-    await deps.workspaceVcs.attachParticipantHistory(attachment);
-    await deps.exportSharedHistorySeed?.(history);
-    return "native";
+  } else if (!await deps.workspaceVcs.initializeFreshHistory(history)) {
+    throw new Error("Workspace startup requires a native root template and native workspace history");
   }
-  if (await deps.workspaceVcs.initializeFreshHistory(history, allowFresh)) {
-    await deps.workspaceVcs.attachParticipantHistory({ ...attachment, freshRoot: true });
-    await deps.exportSharedHistorySeed?.(history);
-    console.log("[Vcs] Attached native root workspace history");
-    return "native";
-  }
-  const replay = await readWorkspaceHistoryReplayState(dispatch, canonical);
-  const attachHistory = () => deps.workspaceVcs.attachParticipantHistory({
-    ...attachment,
-    listReplayedSessionOwners: deps.listWorkspaceHistorySessionOwners,
-  });
-  if (replay?.legacySeal) {
-    await attachHistory();
-    await deps.workspaceVcs.retainSealedLegacyHistory(replay.legacySeal.receiptDigest);
-    await deps.exportSharedHistorySeed?.(history);
-    console.log("[Vcs] Restored participant history using its canonical replay seal");
-    return "handled";
-  }
-  const receipt = replay?.receipt;
-  const held = await readWorkspaceHistoryReplayFreeze(dispatch, legacy, receipt ?? undefined);
-  const expectedMainEventId = receipt?.eventId ?? deps.readProtectedMainEventId();
-  if (!receipt && !held && !expectedMainEventId) return false;
-  if (!receipt && !held) {
-    const supportsReplay = await dispatch.dispatch(canonical, "supportsHistoryReplay");
-    if (supportsReplay !== true) {
-      console.warn("[Vcs] Participant history migration requires a runtime with scoped queries");
-      return "handled";
-    }
-  }
-  // The durable system-owned canonical lifetime is also the reservation
-  // for migration. Startup can resume a stop between that reservation and
-  // the source freeze using the exact protected event of this workspace.
-  const freeze = held
-    ? { operationId: held.operationId, expectedMainEventId: held.expectedMainEventId }
-    : !receipt && expectedMainEventId
-      ? { operationId: WORKSPACE_PARTICIPANT_HISTORY_MIGRATION, expectedMainEventId }
-      : null;
-  if (
-    freeze?.operationId !== WORKSPACE_PARTICIPANT_HISTORY_MIGRATION ||
-    freeze.expectedMainEventId !== expectedMainEventId
-  ) {
-    throw new Error("Participant history startup requires the original held migration");
-  }
-  const installed = held?.verification?.sealed
-    ? undefined
-    : (await migrateWorkspaceHistory({
-        dispatch, source: legacy, destination: canonical, freeze,
-      })).installedFreeze;
-  await attachHistory();
-  let seal: { receiptDigest: string; generation: string } | undefined;
-  if (installed && await sealWorkspaceHistoryReplay({ dispatch, source: legacy, freeze, installed })) {
-    seal = { receiptDigest: workspaceHistoryReplayReceiptDigest(installed.receipt), generation: installed.generation };
-  } else if (held?.verification?.sealed && receipt) {
-    seal = { receiptDigest: workspaceHistoryReplayReceiptDigest(receipt), generation: held.verification.generation };
-    console.log("[Vcs] Restored participant history from the sealed legacy freeze");
-  }
-  if (seal) {
-    await deps.workspaceVcs.retainSealedLegacyHistory(seal.receiptDigest);
-    await recordWorkspaceHistoryReplaySeal({ ...history, seal });
-  }
+  await deps.workspaceVcs.attachParticipantHistory(attachment);
   await deps.exportSharedHistorySeed?.(history);
-  return "handled";
+  if (!deps.sharedHistorySeed) console.log("[Vcs] Attached native root workspace history");
 }
 
 /** Attach the semantic state machine, then initialize its host materialization. */
@@ -194,37 +130,10 @@ export function wireVcsDurability(deps: VcsDurabilityBootstrapDeps): void {
       phaseComplete("entity publication");
       await deps.workspaceVcs.attachGad(createWorkspaceSemanticPort(doDispatch, gadRef));
       phaseComplete("semantic port attachment");
-      deps.workspaceVcs.attachWorkspaceSourceProvider(
-        createWorkspaceSourceProviderV1(doDispatch, gadRef)
-      );
-      phaseComplete("source-provider attachment");
-      console.log(
-        `[Vcs] Attached manifest-declared workspace source provider (${gadRef.source}:${gadRef.className})`
-      );
-      const historyChecked = !deps.sharedHistorySeed && await restoreParticipantHistory(deps, doDispatch, runtimeManager);
-      if (deps.workspaceVcs.participantHistoryAttached) phaseComplete("installed participant history");
       deps.workspaceVcs.startSemanticInitialization(async () => {
-        if (deps.sharedHistorySeed) {
-          if (!runtimeManager.declaresRemoteDoltClass(gadRef.source, "GadHistoryDO")) {
-            throw new Error("Initializing a shared history seed requires the native workspace history class");
-          }
-          await restoreParticipantHistory(deps, doDispatch, runtimeManager, true);
-          phaseComplete("installed shared participant history");
-          await deps.activateSemanticWorkspace(deps.workspaceVcs, true);
-          return;
-        }
-        const declaresNativeHistory = () => runtimeManager.declaresRemoteDoltClass(gadRef.source, "GadHistoryDO");
-        if (historyChecked === "native" ||
-            (!historyChecked && declaresNativeHistory() && deps.readProtectedMainEventId() === null &&
-              await restoreParticipantHistory(deps, doDispatch, runtimeManager, true, true) === "native")) {
-          await deps.activateSemanticWorkspace(deps.workspaceVcs, true);
-          return;
-        }
+        await attachNativeWorkspaceHistory(deps, doDispatch, runtimeManager);
+        phaseComplete("native participant history");
         await deps.activateSemanticWorkspace(deps.workspaceVcs);
-        if (!historyChecked && declaresNativeHistory()) {
-          await restoreParticipantHistory(deps, doDispatch, runtimeManager, true);
-          if (deps.workspaceVcs.participantHistoryAttached) phaseComplete("installed participant history");
-        }
       });
       return deps.workspaceVcs;
     },

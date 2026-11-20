@@ -7433,21 +7433,6 @@ async function main() {
       }
       return owner;
     },
-    listWorkspaceHistorySessionOwners: async (contextIds) => {
-      const store = getEntityStore();
-      const liveContexts = new Set((await store.listActive("session"))
-        .flatMap(({ contextId, ownerUserId }) => ownerUserId ? [contextId] : []));
-      const owners: Array<{ contextId: string; userId: string }> = [];
-      for (const contextId of contextIds) {
-        if (!liveContexts.has(contextId)) continue;
-        const records = await store.listByContext(contextId);
-        for (const record of records) {
-          if (record.ownerUserId && (record.kind === "session" || record.ownerUserId !== SYSTEM_SUBJECT.userId))
-            owners.push({ contextId, userId: record.ownerUserId });
-        }
-      }
-      return owners;
-    },
     readProtectedMainEventId: () => protectedRefStore.readMainSemanticState()?.eventId ?? null,
     publishWorkspaceSourceEntity: async ({
       targetId,
@@ -7482,13 +7467,9 @@ async function main() {
       if (existing) await store.advanceExecution(activation);
       else await store.activate(activation);
     },
-    activateSemanticWorkspace: async (vcs, nativeHistoryReady) => {
+    activateSemanticWorkspace: async (vcs) => {
       const activationStartedAt = performance.now();
-      let spanStartedAt = performance.now();
-      const recovered = nativeHistoryReady ? 0 : await vcs.recoverPendingSemanticEffects();
-      if (recovered > 0) console.log(`[Vcs] Recovered ${recovered} pending semantic host effects`);
-      const recoverPendingSemanticEffectsMs = performance.now() - spanStartedAt;
-      const activated = await vcs.activateWorkspaceFromSource(nativeHistoryReady);
+      const activated = await vcs.activateWorkspaceFromSource(true);
       // Activation either created the workspace (and its creation publication
       // recorded the review it owes) or restored one: only now is "nothing to
       // review" a fact rather than a guess.
@@ -7513,7 +7494,7 @@ async function main() {
         hostEpoch: WORKSPACE_SYSTEM_EPOCH,
       });
       await workspaceChildHub.completeWorkspaceCreation();
-      spanStartedAt = performance.now();
+      let spanStartedAt = performance.now();
       const config = await readWorkspaceConfigFromState(vcs, workspaceId, activated.stateHash);
       const configReadMs = performance.now() - spanStartedAt;
       spanStartedAt = performance.now();
@@ -7521,7 +7502,6 @@ async function main() {
       const configReloadMs = performance.now() - spanStartedAt;
       warnMissingWorkspaceTrust();
       console.log("[Vcs] semantic activation report", {
-        recoverPendingSemanticEffectsMs,
         ...activated.timings,
         configReadMs,
         configReloadMs,

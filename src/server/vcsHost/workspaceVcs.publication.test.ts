@@ -87,10 +87,10 @@ describe("WorkspaceVcs protected publication notification", () => {
       throw new Error(`Unexpected fresh history request ${method}`);
     });
     const source = { dispatch: { dispatch }, canonical };
-    await expect(vcs.initializeFreshHistory(source, true)).resolves.toBe(true);
+    await expect(vcs.initializeFreshHistory(source)).resolves.toBe(true);
     expect(refs.readMainSemanticState()?.eventId).toBe(eventId);
     expect(refs.readMain("meta")?.contentRoot).toBe(contentRoot);
-    await expect(vcs.initializeFreshHistory(source, false)).resolves.toBe(true);
+    await expect(vcs.initializeFreshHistory(source)).resolves.toBe(true);
     expect(prepareInitialization).toHaveBeenCalledOnce();
     expect(gate).toHaveBeenCalledOnce();
   });

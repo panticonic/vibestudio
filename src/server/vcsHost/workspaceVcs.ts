@@ -265,7 +265,7 @@ const SLOW_SEMANTIC_EFFECT_MS = 500;
 type ParticipantHistoryAttachment = WorkspaceHistorySource & {
   /** Physical allocations inherit this provider lifetime and cannot reenter their creating DO. */
   infrastructureContextId?: string;
-  freshRoot?: true;
+  nativeOnly?: true;
   replayedContextOwners?: ReadonlyMap<string, { caller: VerifiedCaller; ownerContextId: string }>;
   /** The runtime entity store supplies these durable user stamps at startup. */
   listReplayedSessionOwners?: (contextIds: readonly string[]) =>
@@ -554,7 +554,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   private participantHistorySource: (WorkspaceHistorySource & {
     replayedWorkingHeads: ReadonlyMap<string, { participantId: string; head: string }>;
     infrastructureContextId?: string;
-    freshRoot?: true;
+    nativeOnly?: true;
     destroyRetiredStorage?: ParticipantHistoryAttachment["destroyRetiredStorage"];
   }) | null = null;
   private retiredLegacyRetention: { file: string; receiptDigest: string } | undefined;
@@ -660,7 +660,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     executionSourceRoots: readonly ExecutionSourceContentRoot[]
   ): Promise<Set<string>> {
     const retained = this.retiredLegacyRetention;
-    const semantic = this.participantHistorySource?.freshRoot
+    const semantic = this.participantHistorySource?.nativeOnly
       ? { contentRoots: [], contentHashes: [] }
       : retained
       ? await readSealedLegacyHistoryRetention(retained.file, retained.receiptDigest)
@@ -879,7 +879,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           this.deps.refs.readHeadPublication()?.publicationId ?? null
         );
       }
-      const receipt = await readWorkspaceHistoryReplayReceipt(source.dispatch, source.canonical);
+      const receipt = source.nativeOnly
+        ? null
+        : await readWorkspaceHistoryReplayReceipt(source.dispatch, source.canonical);
       const replayedWorkingHeads = new Map<string, { participantId: string; head: string }>();
       const suppliedOwners = [...source.replayedContextOwners ?? []].map(
         ([contextId, { caller, ownerContextId }]) => ({
@@ -945,7 +947,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         dispatch: source.dispatch,
         canonical: source.canonical,
         replayedWorkingHeads,
-        ...(source.freshRoot ? { freshRoot: true } : {}),
+        ...(source.nativeOnly ? { nativeOnly: true } : {}),
         ...(source.infrastructureContextId ? { infrastructureContextId: source.infrastructureContextId } : {}),
         ...(source.destroyRetiredStorage ? { destroyRetiredStorage: source.destroyRetiredStorage } : {}),
       };
@@ -953,7 +955,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     });
   }
 
-  async initializeFreshHistory(source: WorkspaceHistorySource, allowCreate: boolean): Promise<boolean> {
+  async initializeFreshHistory(source: WorkspaceHistorySource): Promise<boolean> {
     const { dispatch, canonical } = source;
     const read = async () => freshHistoryRoot.nullable().parse(
       await dispatch.dispatch(canonical, "readFreshHistoryRoot"),
@@ -963,7 +965,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       const recorded = await read();
       const published = this.deps.refs.readMainSemanticState();
       if (published) return recorded?.installed === true;
-      if (!allowCreate || !rootTemplate) return false;
+      if (!rootTemplate) return false;
       const prepared = await rootTemplate.prepareInitialization();
       if (!prepared) return false;
       const [request] = gadWireMethods.workspaceSourceInitializeExactSnapshot.args.parse([

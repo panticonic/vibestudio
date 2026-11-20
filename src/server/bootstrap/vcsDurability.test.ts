@@ -1,5 +1,4 @@
 import { sha256HexSyncText } from "@vibestudio/content-addressing";
-import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import type { ManagedService } from "@vibestudio/shared/managedService";
 import { describe, expect, it, vi } from "vitest";
 import type { DODispatch } from "../doDispatch.js";
@@ -8,7 +7,6 @@ import type { WorkspaceSemanticPort } from "../workspaceSourceProvider.js";
 import type { RuntimeManager } from "../runtimeManager.js";
 import { wireVcsDurability, type VcsDurabilityBootstrapDeps } from "./vcsDurability.js";
 import { canonicalWorkspaceObjectContextId } from "./workspaceObjectIdentity.js";
-import { WORKSPACE_PARTICIPANT_HISTORY_MIGRATION } from "../vcsHost/workspaceHistoryMigration.js";
 import { readSharedHistorySeed } from "./sharedHistorySeed.js";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -37,7 +35,6 @@ function captureServices(overrides: Partial<VcsDurabilityBootstrapDeps> = {}): {
     bootstrapStateHash: `state:${"d".repeat(64)}`,
     publishWorkspaceSourceEntity: vi.fn(async () => undefined),
     readWorkspaceHistoryOwner: vi.fn(async () => null),
-    listWorkspaceHistorySessionOwners: vi.fn(async () => []),
     readProtectedMainEventId: vi.fn(() => null),
     activateSemanticWorkspace: vi.fn(async () => undefined),
     ...overrides,
@@ -68,7 +65,6 @@ describe("wireVcsDurability", () => {
     let initialize: (() => Promise<void>) | undefined;
     const workspaceVcs = {
       attachGad: vi.fn(async () => undefined),
-      attachWorkspaceSourceProvider: vi.fn(),
       initializeSharedHistory: vi.fn(async () => { sequence.push("seed"); }),
       attachParticipantHistory: vi.fn(async () => { sequence.push("participant"); }),
       startSemanticInitialization: (operation: () => Promise<void>) => { initialize = operation; },
@@ -96,7 +92,7 @@ describe("wireVcsDurability", () => {
     await services.find((service) => service.name === "vcsAttach")?.start?.(resolve);
     await initialize!();
     expect(sequence).toEqual(["seed", "participant", "active"]);
-    expect(activateSemanticWorkspace).toHaveBeenCalledWith(workspaceVcs, true);
+    expect(activateSemanticWorkspace).toHaveBeenCalledWith(workspaceVcs);
     expect(dispatch).not.toHaveBeenCalled();
     const [history] = vi.mocked(workspaceVcs.attachParticipantHistory).mock.calls[0]!;
     const retired = { ...history.canonical, objectKey: `work-${"a".repeat(64)}` };
@@ -109,9 +105,7 @@ describe("wireVcsDurability", () => {
     let initialize: (() => Promise<void>) | undefined;
     const workspaceVcs = {
       attachGad: vi.fn(async () => undefined),
-      attachWorkspaceSourceProvider: vi.fn(),
-      initializeFreshHistory: vi.fn(async (_source: Parameters<WorkspaceVcs["initializeFreshHistory"]>[0], allowCreate: boolean) => {
-        expect(allowCreate).toBe(mode === "fresh");
+      initializeFreshHistory: vi.fn(async () => {
         sequence.push("native");
         return true;
       }),
@@ -141,8 +135,8 @@ describe("wireVcsDurability", () => {
     await services.find((service) => service.name === "vcsAttach")?.start?.(resolve);
     await initialize!();
     expect(sequence).toEqual(["native", "participant", "active"]);
-    expect(workspaceVcs.attachParticipantHistory).toHaveBeenCalledWith(expect.objectContaining({ freshRoot: true }));
-    expect(activateSemanticWorkspace).toHaveBeenCalledExactlyOnceWith(workspaceVcs, true);
+    expect(workspaceVcs.attachParticipantHistory).toHaveBeenCalledWith(expect.objectContaining({ nativeOnly: true }));
+    expect(activateSemanticWorkspace).toHaveBeenCalledExactlyOnceWith(workspaceVcs);
     expect(dispatch).not.toHaveBeenCalled();
   });
 
@@ -194,16 +188,11 @@ describe("wireVcsDurability", () => {
       })),
     } as unknown as RuntimeManager;
     let gadClient: WorkspaceSemanticPort | undefined;
-    let semanticReady = Promise.resolve();
     const workspaceVcs = {
-      startSemanticInitialization: vi.fn(
-        (operation: () => Promise<void>) => (semanticReady = Promise.resolve().then(operation))
-      ),
-      whenSemanticReady: vi.fn(() => semanticReady),
+      startSemanticInitialization: vi.fn(),
       attachGad: vi.fn(async (client) => {
         gadClient = client;
       }),
-      attachWorkspaceSourceProvider: vi.fn(),
     } as unknown as WorkspaceVcs;
     const publishWorkspaceSourceEntity = vi.fn(async () => undefined);
     const { services } = captureServices({
@@ -245,7 +234,6 @@ describe("wireVcsDurability", () => {
       contextId,
     });
     expect(workspaceVcs.attachGad).toHaveBeenCalledOnce();
-    expect(workspaceVcs.attachWorkspaceSourceProvider).toHaveBeenCalledOnce();
 
     await expect(gadClient?.listContexts({ prefix: "a" })).resolves.toEqual(["direct-result"]);
     expect(dispatch.dispatch).toHaveBeenCalledWith(gadRef, "vcsListContexts", { prefix: "a" });
@@ -259,12 +247,13 @@ describe("wireVcsDurability", () => {
       ),
       whenSemanticReady: vi.fn(() => semanticReady),
       attachGad: vi.fn(async () => undefined),
-      attachWorkspaceSourceProvider: vi.fn(),
+      initializeFreshHistory: vi.fn(async () => true),
+      attachParticipantHistory: vi.fn(async () => undefined),
     } as unknown as WorkspaceVcs;
     const manager = {
-      declaresRemoteDoltClass: vi.fn(() => false),
-      ensureDurableObjectEntity: vi.fn(async () => ({
-        targetId: "do:workers/workspace-source:GadWorkspaceDO:workspace",
+      declaresRemoteDoltClass: vi.fn(() => true),
+      ensureDurableObjectEntity: vi.fn(async ({ source, className, key }) => ({
+        targetId: `do:${source}:${className}:${key}`,
         effectiveVersion: "a".repeat(64),
         buildKey: "c".repeat(64),
         executionDigest: "e".repeat(64),
@@ -315,165 +304,33 @@ describe("wireVcsDurability", () => {
     await attachmentStop;
     expect(attachmentRetired).toBe(true);
     expect(activateSemanticWorkspace).toHaveBeenCalledWith(workspaceVcs);
-    expect(manager.ensureDurableObjectEntity).toHaveBeenCalledOnce();
-    expect(publishWorkspaceSourceEntity).toHaveBeenCalledOnce();
+    expect(manager.ensureDurableObjectEntity).toHaveBeenCalledTimes(2);
+    expect(publishWorkspaceSourceEntity).toHaveBeenCalledTimes(2);
   });
-  it.each(["canonical-sealed", "sealed", "installed", "before-freeze", "older-runtime", "new"] as const)(
-    "handles %s participant history in workspace activation order",
-    async (resumeAt) => {
-    const workspaceId = "workspace-1";
-    const source = { source: "workers/workspace-source", className: "GadWorkspaceDO", objectKey: "workspace" };
-    const canonical = { ...source, className: "GadHistoryDO", objectKey: "canonical" };
-    const contextId = canonicalWorkspaceObjectContextId(workspaceId, {
-      source: canonical.source, className: canonical.className, key: canonical.objectKey,
-    });
-    const targetId = `do:${canonical.source}:${canonical.className}:${canonical.objectKey}`;
-    const main = { kind: "event", eventId: "installed-event" };
-    const plan = { main, contexts: [], steps: [main] };
-    const generation = "b882b7f0-0e3a-4ec3-9f6d-30ea541b14e1";
-    const freeze = {
-      operationId: WORKSPACE_PARTICIPANT_HISTORY_MIGRATION,
-      expectedMainEventId: main.eventId,
-    };
-    const receipt = {
-      head: "installed-head", eventId: main.eventId, contexts: [],
-      frozenPlanDigest: sha256HexSyncText(canonicalJson({ source, freeze, plan, generation })),
-    };
-    const supportsSeal = resumeAt === "sealed" || resumeAt === "canonical-sealed" || resumeAt === "new";
-    let installed = resumeAt === "installed" || resumeAt === "sealed" || resumeAt === "canonical-sealed";
-    let frozen = installed;
-    let sealed = resumeAt === "sealed" || resumeAt === "canonical-sealed";
-    const receiptDigest = sha256HexSyncText(canonicalJson(receipt));
-    const seal = { receiptDigest, generation };
-    let canonicalSeal = resumeAt === "canonical-sealed" ? seal : null;
-    const retainSealedLegacyHistory = vi.fn(async () => {
-      expect(sealed).toBe(true);
-      expect(sequence.at(-1)).toBe("participant");
-    });
-    const dispatch = vi.fn(async (_target: typeof source, method: string, input: unknown) => {
-      switch (method) {
-        case "readHistoryReplayReceipt":
-          return installed
-            ? supportsSeal && input ? { ...receipt, legacySeal: canonicalSeal } : receipt
-            : null;
-        case "recordHistoryReplaySeal":
-          expect(retainSealedLegacyHistory).toHaveBeenCalledExactlyOnceWith(receiptDigest);
-          expect(input).toEqual(seal);
-          canonicalSeal = seal;
-          return seal;
-        case "readHistoryReplayFreeze":
-          if (!frozen) return null;
-          if (resumeAt === "installed" || input === undefined) return freeze;
-          expect(input).toEqual({ receiptDigest });
-          return { ...freeze, verification: { generation, sealed } };
-        case "sealHistoryReplayFreeze":
-          expect(sequence.at(-1)).toBe("participant");
-          expect(input).toEqual({ freeze, generation, receiptDigest });
-          sealed = true;
-          return undefined;
-        case "supportsHistoryReplay":
-          return resumeAt !== "older-runtime";
-        case "beginHistoryReplayFreeze":
-          expect(input).toEqual(freeze);
-          frozen = true;
-          return { ...plan, generation };
-        case "exportHistoryReplayStep":
-          expect(input).toEqual(main);
-          return { step: { kind: "event", record: { eventId: main.eventId } } };
-        case "stageHistoryReplayStep":
-          return { head: receipt.head };
-        case "exportHistoryReplayPlan":
-          return plan;
-        case "finishHistoryReplay":
-          expect(input).toEqual(receipt);
-          installed = true;
-          return { head: receipt.head };
-        default:
-          throw new Error(`Bootstrap unexpectedly tried ${method}`);
-      }
-    });
-    const sequence: string[] = [];
+  it("refuses an older workspace before reserving native history", async () => {
     let initialize: (() => Promise<void>) | undefined;
     const workspaceVcs = {
       attachGad: vi.fn(async () => undefined),
-      attachWorkspaceSourceProvider: vi.fn(),
-      initializeFreshHistory: vi.fn(async () => false),
-      attachParticipantHistory: vi.fn(async () => { sequence.push("participant"); }),
-      retainSealedLegacyHistory,
-      startSemanticInitialization: vi.fn((operation: () => Promise<void>) => {
-        sequence.push("initialization");
-        initialize = operation;
-      }),
+      initializeFreshHistory: vi.fn(),
+      startSemanticInitialization: (operation: () => Promise<void>) => { initialize = operation; },
     } as unknown as WorkspaceVcs;
+    const { services } = captureServices({
+      workspaceVcs,
+      readProtectedMainEventId: () => "previously-saved-work",
+    });
     const runtimeManager = {
-      declaresRemoteDoltClass: vi.fn(() => resumeAt === "new"),
-      ensureDurableObjectEntity: vi.fn(async ({ source, className, key }) => ({
-        targetId: `do:${source}:${className}:${key}`, effectiveVersion: "a".repeat(64),
-        buildKey: "b".repeat(64), executionDigest: "c".repeat(64),
-        authority: { provides: [], requests: [] },
+      declaresRemoteDoltClass: vi.fn(() => true),
+      ensureDurableObjectEntity: vi.fn(async () => ({
+        targetId: "do:workers/workspace-source:GadWorkspaceDO:workspace",
       })),
     } as unknown as RuntimeManager;
-    const readWorkspaceHistoryOwner = vi.fn(async () => resumeAt === "new" ? null : { contextId });
-    const readProtectedMainEventId = vi.fn(() => installed ? "since-published" : main.eventId);
-    const listWorkspaceHistorySessionOwners = vi.fn(async () => []);
-    const { services } = captureServices({
-      workspaceVcs, workspaceId, workspaceSourceProvider: source,
-      readWorkspaceHistoryOwner, readProtectedMainEventId, listWorkspaceHistorySessionOwners,
-      activateSemanticWorkspace: async () => { sequence.push("root active"); },
-    });
+    const dispatch = vi.fn();
     const resolve = <D>(name: string): D | undefined =>
       ({ doDispatch: { dispatch }, runtimeManager })[name as "doDispatch" | "runtimeManager"] as D | undefined;
     await services.find((service) => service.name === "vcsAttach")?.start?.(resolve);
-    if (resumeAt === "new") {
-      expect(runtimeManager.ensureDurableObjectEntity).toHaveBeenCalledOnce();
-      expect(dispatch).not.toHaveBeenCalled();
-      await initialize!();
-      expect(runtimeManager.declaresRemoteDoltClass).toHaveBeenCalledWith(source.source, canonical.className);
-      expect(dispatch).toHaveBeenCalledWith(source, "beginHistoryReplayFreeze", freeze);
-      expect(dispatch).toHaveBeenCalledWith(source, "sealHistoryReplayFreeze", { freeze, generation, receiptDigest });
-      expect(retainSealedLegacyHistory).toHaveBeenCalledExactlyOnceWith(receiptDigest);
-      expect(canonicalSeal).toEqual(seal);
-      expect(sequence).toEqual(["initialization", "root active", "participant"]);
-      return;
-    }
-    expect(readWorkspaceHistoryOwner).toHaveBeenCalledWith(targetId);
-    expect(readProtectedMainEventId).toHaveBeenCalledTimes(
-      resumeAt === "canonical-sealed" || resumeAt === "sealed" || resumeAt === "installed" ? 0 : 1
-    );
-    if (resumeAt !== "installed" && resumeAt !== "sealed" && resumeAt !== "canonical-sealed") {
-      expect(dispatch).toHaveBeenCalledWith(canonical, "supportsHistoryReplay");
-    }
-    if (resumeAt === "older-runtime") {
-      expect(dispatch.mock.calls.some(([, method]) => method === "beginHistoryReplayFreeze")).toBe(false);
-      expect(workspaceVcs.attachParticipantHistory).not.toHaveBeenCalled();
-      expect(sequence).toEqual(["initialization"]);
-      return;
-    }
-    if (resumeAt === "canonical-sealed") {
-      expect(dispatch.mock.calls).toEqual([
-        [canonical, "readHistoryReplayReceipt", { includeLegacySeal: true }],
-      ]);
-    } else if (resumeAt === "sealed") {
-      expect(dispatch.mock.calls.map(([, method]) => method)).toEqual([
-        "readHistoryReplayReceipt", "readHistoryReplayFreeze", "readHistoryReplayReceipt", "recordHistoryReplaySeal",
-      ]);
-      expect(canonicalSeal).toEqual(seal);
-    } else {
-      expect(dispatch).toHaveBeenCalledWith(source, "beginHistoryReplayFreeze", freeze);
-    }
-    if (resumeAt === "installed") {
-      expect(retainSealedLegacyHistory).not.toHaveBeenCalled();
-    } else {
-      expect(retainSealedLegacyHistory).toHaveBeenCalledExactlyOnceWith(receiptDigest);
-    }
-    expect(dispatch.mock.calls.some(([, method]) => method === "stageHistoryReplayStep"))
-      .toBe(resumeAt === "before-freeze");
-    expect(workspaceVcs.attachParticipantHistory).toHaveBeenCalledWith({
-      dispatch: { dispatch }, canonical, infrastructureContextId: contextId,
-      listReplayedSessionOwners: listWorkspaceHistorySessionOwners,
-      destroyRetiredStorage: expect.any(Function),
-    });
-    expect(sequence).toEqual(["participant", "initialization"]);
+    await expect(initialize!()).rejects.toThrow("saved history in an older format");
+    expect(runtimeManager.ensureDurableObjectEntity).toHaveBeenCalledOnce();
+    expect(workspaceVcs.initializeFreshHistory).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
   });
-
 });
