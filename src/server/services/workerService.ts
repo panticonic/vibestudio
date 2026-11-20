@@ -265,10 +265,13 @@ export function createWorkerService(deps: {
     handler: defineServiceHandler("workers", methods, {
       listSources: async (ctx) => {
         const contextId = deps.getCallerContextId?.(ctx.caller);
-        const buildRef = contextId
-          ? (await deps.loadContextSource?.(contextId, ctx))?.buildRef ?? `ctx:${contextId}`
-          : undefined;
-        const units = await buildSystem.listBuildUnits(buildRef, ["worker"]);
+        const source = contextId ? await deps.loadContextSource?.(contextId, ctx) : null;
+        if (contextId && !source) {
+          throw Object.assign(new Error("Worker discovery requires a verified workspace revision"), {
+            code: "EACCES",
+          });
+        }
+        const units = await buildSystem.listBuildUnits(source?.buildRef, ["worker"]);
         return units.map((n) => ({
           name: n.unitName,
           source: n.unitPath,

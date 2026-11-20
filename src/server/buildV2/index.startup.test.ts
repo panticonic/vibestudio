@@ -55,9 +55,6 @@ function fakeWorkspaceSource(workspaceRoot: string): WorkspaceStateSource & Buil
     async unitHashes(_stateHash, relPaths) {
       return Object.fromEntries(relPaths.map((relPath) => [relPath, `h:${relPath}`]));
     },
-    async resolveContextState() {
-      return TEST_STATE;
-    },
     async readFile() {
       return null;
     },
@@ -1053,15 +1050,18 @@ describe("BuildSystemV2 startup", () => {
     );
 
     const source = fakeWorkspaceSource(workspaceRoot);
-    source.resolveContextState = async () => "state:context";
     const discoverGraph = vi.spyOn(source, "discoverGraph");
     const unitHashes = vi.spyOn(source, "unitHashes");
     const { initBuildSystemV2 } = await import("./index.js");
     buildSystem = await initBuildSystemV2(workspaceRoot, source, buildRoots(workspaceRoot));
 
+    await expect(buildSystem.resolveBuildUnit("panels/context", "ctx:first")).rejects.toMatchObject({
+      code: "invalid_build_ref",
+    });
+
     const [first, second] = await Promise.all([
-      buildSystem.resolveBuildUnit("panels/context", "ctx:first"),
-      buildSystem.resolveBuildUnitIdentity("panels/context", "ctx:second"),
+      buildSystem.resolveBuildUnit("panels/context", "state:context"),
+      buildSystem.resolveBuildUnitIdentity("panels/context", "state:context"),
     ]);
 
     expect(first?.stateHash).toBe("state:context");

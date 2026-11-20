@@ -98,7 +98,6 @@ export type WorkspaceSemanticPort = Pick<WorkspaceSemanticClient, SemanticWireMe
   semanticHostReadAck: WorkspaceSemanticClient["vcsSemanticHostReadAck"];
   semanticContentAck: WorkspaceSemanticClient["vcsSemanticContentAck"];
   pendingSemanticEffects: WorkspaceSemanticClient["vcsPendingSemanticEffects"];
-  contextMaterializationCommand: WorkspaceSemanticClient["vcsContextMaterializationCommand"];
   appendLogEvent: WorkspaceSemanticClient["appendLogEvent"];
   getLogEvent: WorkspaceSemanticClient["getLogEvent"];
   inspectInvocationState: WorkspaceSemanticClient["inspectInvocationState"];
@@ -183,7 +182,6 @@ export function createWorkspaceSemanticPort(
     semanticHostReadAck: (input) => client.vcsSemanticHostReadAck(input),
     semanticContentAck: (input) => client.vcsSemanticContentAck(input),
     pendingSemanticEffects: () => client.vcsPendingSemanticEffects(),
-    contextMaterializationCommand: (input) => client.vcsContextMaterializationCommand(input),
     appendLogEvent: (input) => client.appendLogEvent(input),
     getLogEvent: (input) => client.getLogEvent(input),
     inspectInvocationState: (input) => client.inspectInvocationState(input),

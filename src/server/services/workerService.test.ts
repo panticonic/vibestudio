@@ -447,6 +447,10 @@ describe("workerService workspace service resolution", () => {
         ...(deps as object),
         buildSystem: { ...deps.buildSystem, listBuildUnits },
         getCallerContextId: () => "ctx-local",
+        loadContextSource: async () => ({
+          buildRef: "state:context",
+          readDeclarations: async () => deps.workspaceDecls,
+        }),
       } as never)
     );
     dispatcher.markInitialized();
@@ -457,7 +461,7 @@ describe("workerService workspace service resolution", () => {
         classes: [{ className: "ContextOnlyDO" }],
       }),
     ]);
-    expect(listBuildUnits).toHaveBeenCalledWith("ctx:ctx-local", ["worker"]);
+    expect(listBuildUnits).toHaveBeenCalledWith("state:context", ["worker"]);
   });
 
   it("lists and resolves manifest-declared services", async () => {
@@ -761,7 +765,7 @@ describe("workerService workspace service resolution", () => {
         createWorkerService({
           ...deps,
           getCallerContextId: () => "ctx-http",
-          loadContextSource: async () => ({ readDeclarations: async () => contextDecls, buildRef: "ctx:ctx-http" }),
+          loadContextSource: async () => ({ readDeclarations: async () => contextDecls, buildRef: "state:http" }),
           activateDurableObject,
           prepareRuntimeImage,
         } as never)
@@ -806,7 +810,7 @@ describe("workerService workspace service resolution", () => {
       routes: [],
     };
     const sourceState = { kind: "application", applicationId: "application:private-poems" } as const;
-    const buildRef = participant ? `state:${"a".repeat(64)}` : "ctx:ctx-poems";
+    const buildRef = participant ? `state:${"a".repeat(64)}` : "state:poems";
     const loadContextSource = vi.fn(async (contextId: string, _ctx: ServiceContext) =>
       contextId === "ctx-poems"
         ? { readDeclarations: async () => contextDecls, buildRef, ...(participant ? { sourceState } : {}) }
@@ -887,7 +891,7 @@ describe("workerService workspace service resolution", () => {
       createWorkerService({
         ...(deps as object),
         getCallerContextId: () => "ctx-agent",
-        loadContextSource: async () => ({ readDeclarations: async () => contextDecls, buildRef: "ctx:ctx-agent" }),
+        loadContextSource: async () => ({ readDeclarations: async () => contextDecls, buildRef: "state:agent" }),
       } as never)
     );
     dispatcher.markInitialized();
@@ -1012,7 +1016,7 @@ describe("workerService workspace service resolution", () => {
         buildSystem: {
           ...deps.buildSystem,
           listBuildUnits: async (ref?: string) =>
-            ref === "ctx:ctx-poems"
+            ref === "state:poems"
               ? [
                   {
                     unitPath: "workers/poem-collection-store",
@@ -1029,7 +1033,7 @@ describe("workerService workspace service resolution", () => {
         },
         getCallerContextId: (caller: VerifiedCaller) => (caller.runtime.id === "panel-test" ? "ctx-poems" : null),
         loadContextSource: async (contextId: string) =>
-          contextId === "ctx-poems" ? { readDeclarations: async () => contextDecls, buildRef: "ctx:ctx-poems" } : null,
+          contextId === "ctx-poems" ? { readDeclarations: async () => contextDecls, buildRef: "state:poems" } : null,
         activateDurableObject,
       } as never)
     );
@@ -1053,7 +1057,7 @@ describe("workerService workspace service resolution", () => {
       className: "PoemStore",
       objectKey: "mother-poems",
       contextId: "ctx-poems",
-      buildRef: "ctx:ctx-poems",
+      buildRef: "state:poems",
     });
   });
 
@@ -1080,7 +1084,7 @@ describe("workerService workspace service resolution", () => {
       createWorkerService({
         ...(deps as object),
         getCallerContextId: () => "ctx-agent",
-        loadContextSource: async () => ({ readDeclarations: async () => contextDecls, buildRef: "ctx:ctx-agent" }),
+        loadContextSource: async () => ({ readDeclarations: async () => contextDecls, buildRef: "state:agent" }),
       } as never)
     );
     dispatcher.markInitialized();

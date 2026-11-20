@@ -2510,48 +2510,12 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     });
   }
 
-  async resolveWorkingState(contextId: string): Promise<VcsStateNodeRef> {
-    await this.whenSemanticReady();
-    return this.locked(`context-lifecycle:${contextId}`, async () => {
-      const head = this.contextHeads.get(contextId);
-      if (head === null) throw new Error(`Semantic context ${contextId} was deleted`);
-      if (head) return { ...head };
-      const command = await this.contextContentCommand(contextId);
-      this.publishContextHead(contextId, command.targetState);
-      return { ...command.targetState };
-    });
-  }
-
-  private async contextContentCommand(
-    contextId: string
-  ): Promise<ContextMaterializationCommand> {
-    await this.whenSemanticReady();
-    return this.gad().contextMaterializationCommand({ contextId, materializedState: null });
-  }
-
   /** One semantic snapshot owns both the working head and its exact content.
    * CAS trees are build inputs; editable context checkouts are a separate consumer. */
   private readonly contextContentSnapshots = new Map<
     string,
     { semanticState: VcsStateNodeRef; repositories: Array<{ repoPath: string; stateHash: string }> }
   >();
-
-  private async exactContextContent(contextId: string) {
-    await this.whenSemanticReady();
-    return this.locked(`context-lifecycle:${contextId}`, () =>
-      this.readFencedContextContent(contextId)
-    );
-  }
-
-  private async readFencedContextContent(contextId: string) {
-    const head = this.contextHeads.get(contextId);
-    if (head === null) throw new Error(`Semantic context ${contextId} was deleted`);
-    const cached = head ? await this.cachedContextContent(canonicalJson(head)) : undefined;
-    if (cached) return cached;
-    const snapshot = await this.readExactContextContent(contextId);
-    this.rememberContextContent(snapshot);
-    return snapshot;
-  }
 
   private async cachedContextContent(key: string) {
     const cached = this.contextContentSnapshots.get(key);
@@ -2572,28 +2536,21 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   private rememberContextContent(snapshot: {
     semanticState: VcsStateNodeRef;
     repositories: Array<{ repoPath: string; stateHash: string }>;
-  }, key = canonicalJson(snapshot.semanticState)): void {
+  }, key: string): void {
     if (this.contextContentSnapshots.size >= 128) {
       this.contextContentSnapshots.delete(this.contextContentSnapshots.keys().next().value!);
     }
     this.contextContentSnapshots.set(key, snapshot);
   }
 
-  private async readExactContextContent(contextId: string) {
-    const command = await this.contextContentCommand(contextId);
-    this.publishContextHead(contextId, command.targetState);
-    return this.realizeContextContent(command);
-  }
-
   private async realizeContextContent(
-    command: Pick<ContextMaterializationCommand, "targetState" | "repositories" | "blobs">,
-    placement?: VcsStateNodeRef,
+    state: VcsStateNodeRef,
+    repositories: readonly WorkspaceMaterializationRepository[]
   ) {
-    const roots = await this.materializer.planContentRoots(command.repositories);
+    const roots = await this.materializer.planContentRoots(repositories);
     const realized = await Promise.allSettled(
       roots.map(async (root) => {
-        if (!placement && await hasTreeObject(this.deps.blobsDir, root.contentRoot)) return;
-        const source = command.repositories.find(
+        const source = repositories.find(
           (
             repository
           ): repository is Extract<WorkspaceMaterializationRepository, { presence: "present" }> =>
@@ -2601,7 +2558,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         );
         if (!source)
           throw new Error(`Exact context content has no source for ${root.repositoryId}`);
-        await this.materializer.realizePlannedRepository(source, command.blobs, root.contentRoot, placement);
+        await this.materializer.realizePlannedRepository(source, [], root.contentRoot, state);
       })
     );
     const failures = realized.flatMap((result) =>
@@ -2611,7 +2568,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     if (failures.length)
       throw new AggregateError(failures, "Exact context content realization failed");
     return {
-      semanticState: command.targetState,
+      semanticState: state,
       repositories: roots.map(({ repoPath, contentRoot }) => ({
         repoPath,
         stateHash: contentRoot,
@@ -2638,9 +2595,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     const cached = await this.cachedContextContent(key(scope.workingHead));
     if (cached) return cached;
     const projection = await readWorkspaceParticipantProjection(scope);
-    const snapshot = await this.realizeContextContent({
-      targetState: projection.state, repositories: projection.repositories, blobs: [],
-    }, projection.state);
+    const snapshot = await this.realizeContextContent(projection.state, projection.repositories);
     this.rememberContextContent(snapshot, key(projection.head));
     return snapshot;
   }
@@ -2918,19 +2873,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     return view;
   }
 
-  private async resolveContentSelector(selector: string): Promise<string | null> {
-    if (selector === "main") return (await this.ensureFresh()).stateHash;
-    if (selector.startsWith("ctx:")) return this.resolveContextState(selector.slice(4));
-    return null;
-  }
-
-  async resolveContextState(contextId: string): Promise<string> {
-    const { semanticState, repositories } = await this.exactContextContent(contextId);
-    const stateHash = (await this.repositories.contentView(repositories)).stateHash;
-    this.semanticStateByContent.set(stateHash, semanticState);
-    return stateHash;
-  }
-
   /** Keep exact content and semantic identity together even when two revisions have identical bytes. */
   async resolveCallerContextState(
     contextId: string,
@@ -2950,7 +2892,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   ) {
     const scope = await this.requireParticipantContentScope(contextId, caller, undefined, ownerContextId);
     const repositories = await readWorkspaceParticipantRevision({ ...scope, state });
-    const snapshot = await this.realizeContextContent({ targetState: state, repositories, blobs: [] }, state);
+    const snapshot = await this.realizeContextContent(state, repositories);
     const { stateHash } = await this.repositories.contentView(snapshot.repositories, state);
     await rememberWorkspaceParticipantContentSource({ ...scope, stateHash, state });
     return { stateHash, semanticState: state };
@@ -2983,9 +2925,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       if (scope) {
         const retained = await readWorkspaceParticipantContentSource({ ...scope, stateHash, readableContextIds });
         if (retained) {
-          const snapshot = await this.realizeContextContent({
-            targetState: retained.state, repositories: retained.repositories, blobs: [],
-          }, retained.state);
+          const snapshot = await this.realizeContextContent(retained.state, retained.repositories);
           const content = await this.repositories.contentView(snapshot.repositories, retained.state);
           if (content.stateHash !== stateHash) throw new Error("Workspace build source proof has different content");
           return { stateHash, semanticState: retained.state };
@@ -3181,9 +3121,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       }
       return ref;
     }
-    const resolved = await this.resolveContentSelector(ref);
-    if (!resolved) throw new Error(`Unknown content revision ${JSON.stringify(ref)}`);
-    return resolved;
+    if (ref === "main") return (await this.ensureFresh()).stateHash;
+    throw new Error(`Unknown content revision ${JSON.stringify(ref)}`);
   }
 
   async readFile(stateRef: string, filePath: string): Promise<ContentFile | null> {

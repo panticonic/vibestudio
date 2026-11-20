@@ -1769,71 +1769,6 @@ const genericSemanticResultSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("host-read"), request: semanticHostReadSchema }).strict(),
   z.object({ kind: z.literal("host-content"), request: semanticContentRequestSchema }).strict(),
 ]);
-const materializationFileStateSchema = z
-  .object({ contentHash: nonemptyText, mode: z.number().int().nonnegative() })
-  .strict();
-const materializationRepositorySchema = z.discriminatedUnion("presence", [
-  z
-    .object({
-      repositoryId: nonemptyText,
-      repoPath: z.string(),
-      presence: z.literal("deleted"),
-    })
-    .strict(),
-  z
-    .object({
-      repositoryId: nonemptyText,
-      repoPath: z.string(),
-      presence: z.literal("present"),
-      fileManifestId: nonemptyText,
-      source: z.discriminatedUnion("kind", [
-        z.object({ kind: z.literal("content-root"), contentRoot: nonemptyText }).strict(),
-        z
-          .object({
-            kind: z.literal("delta"),
-            basisContentRoot: nonemptyText,
-            changes: z.array(
-              z
-                .object({
-                  path: z.string(),
-                  expected: materializationFileStateSchema.nullable(),
-                  result: materializationFileStateSchema.nullable(),
-                })
-                .strict()
-            ),
-          })
-          .strict(),
-        z
-          .object({
-            kind: z.literal("snapshot"),
-            files: z.array(
-              z
-                .object({
-                  path: z.string(),
-                  contentHash: nonemptyText,
-                  mode: z.number().int().nonnegative(),
-                })
-                .strict()
-            ),
-          })
-          .strict(),
-      ]),
-    })
-    .strict(),
-]);
-const materializationCommandSchema = z
-  .object({
-    materializationId: nonemptyText,
-    contextId: nonemptyText,
-    commandId: nonemptyText,
-    mode: z.enum(["initialize", "patch", "replace"]),
-    previousState: stateRefSchema.nullable(),
-    targetState: stateRefSchema,
-    repositories: z.array(materializationRepositorySchema),
-    blobs: z.array(z.object({ contentHash: nonemptyText, base64: z.string() }).strict()),
-    payloadDigest: nonemptyText,
-  })
-  .strict();
 const refRecordSchema = z
   .object({
     refName: nonemptyText,
@@ -1969,19 +1904,6 @@ const gadInternalWireMethods = defineServiceMethods({
     description: "List durable pending semantic effects.",
     args: z.tuple([]),
     returns: z.array(semanticEffectSchema),
-    agentFacing: false,
-  },
-  vcsContextMaterializationCommand: {
-    website: {
-      kind: "closed",
-      reason:
-        "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
-    } as const,
-    description: "Derive the exact repair command for one context projection.",
-    args: z.tuple([
-      z.object({ contextId: nonemptyText, materializedState: stateRefSchema.nullable() }).strict(),
-    ]),
-    returns: materializationCommandSchema,
     agentFacing: false,
   },
   resolveRef: {
@@ -2529,7 +2451,6 @@ const GAD_AUTHORITY_GROUPS: readonly GadAuthorityGroup[] = [
       "vcsSemanticEffectAck",
       "vcsSemanticHostReadAck",
       "vcsSemanticContentAck",
-      "vcsContextMaterializationCommand",
     ],
     capability: "workspace.source.write",
     principals: ["host"],

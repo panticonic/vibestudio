@@ -69,7 +69,6 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
       ensureFresh: async () => ({ stateHash: "state:0" }),
       discoverGraph: vi.fn(async () => graph),
       unitHashes: vi.fn(async () => ({})),
-      resolveContextState: async () => "state:0",
       readFile: async () => null,
       executionStateForContent: (stateHash) => ({ kind: "event", eventId: `event:${stateHash}` }),
       materializeForBuild: async () => ({ sourceRoot: workspaceRoot }),
@@ -118,7 +117,6 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
       // New hashes per state so the touched unit registers as changed.
       unitHashes: async (stateHash, relPaths) =>
         Object.fromEntries(relPaths.map((relPath) => [relPath, `h:${relPath}:${stateHash}`])),
-      resolveContextState: async () => "state:0",
       readFile: async () => null,
       executionStateForContent: (stateHash) => ({
         kind: "event",
@@ -175,7 +173,6 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
       ensureFresh: async () => ({ stateHash: "state:0" }),
       discoverGraph: vi.fn().mockRejectedValueOnce(publicationFailure),
       unitHashes: vi.fn(),
-      resolveContextState: async () => "state:0",
       readFile: async () => null,
       executionStateForContent: (stateHash) => ({ kind: "event", eventId: `event:${stateHash}` }),
       materializeForBuild: async () => ({ sourceRoot: workspaceRoot }),
@@ -258,7 +255,6 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
       ensureFresh: async () => ({ stateHash: "state:X" }),
       unitHashes: async (stateHash, relPaths) =>
         Object.fromEntries(relPaths.map((relPath) => [relPath, `h:${relPath}:${stateHash}`])),
-      resolveContextState: async () => "state:X",
       readFile: async () => null,
       executionStateForContent: (stateHash) => ({
         kind: "event",

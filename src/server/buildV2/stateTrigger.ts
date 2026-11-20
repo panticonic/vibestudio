@@ -72,7 +72,6 @@ export interface WorkspaceStateSource {
   /** Batch manifest subtree hashes for unit-relative paths at a state. */
   unitHashes(stateHash: string, relPaths: string[]): Promise<Record<string, string | null>>;
   /** Resolve a semantic context's exact working frontier to workspace content. */
-  resolveContextState(contextId: string): Promise<string>;
   /** Read one file without materializing or building its owning unit. */
   readFile(stateHash: string, filePath: string): Promise<WorkspaceStateFile | null>;
   /** Exact semantic coordinate paired with a previously resolved content view. */
