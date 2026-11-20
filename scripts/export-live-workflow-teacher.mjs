@@ -49,6 +49,29 @@ const templateGoalDomains = {
     checks: ["boundOwnedSetupView", "exactReversibleViewActions", "preservedOwnedSetupHistory",
       "matchedSetupRoute", "verifiedStagedSetupHandoff"],
   },
+  "capability-plan": {
+    namespace: "vibestudio:capability-plan",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-capability-plan-managed.ts" },
+    callable: "workOnCapabilityGoal",
+    skill: "capabilityPlan",
+    checks: ["observedLiveCatalog", "boundExactMethodSchemas", "loadedInstalledKnowledge", "reconciledPlanningEvidence",
+      "respectedNegativeScope", "verifiedCapabilityHandoff", "protectedCapabilityWorkspace", "exactCapabilitySourceRevision"],
+  },
+  "owned-task": {
+    namespace: "vibestudio:owned-task-recovery",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-owned-task-managed.ts" },
+    callable: "recoverOwnedTask",
+    skill: "ownedTaskRecovery",
+    checks: ["discoveredActualOwnedTask", "exactCurrentAttemptEvidence", "verifiedNativeTaskRecovery",
+      "preservedOtherCardsAndDependencies", "honoredObservedTaskRace", "independentlyJoinedOwnerHandoff", "exactTaskRecoveryReport"],
+  },
+  clientDiagnostics: {
+    namespace: "vibestudio:client-diagnostics",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-client-diagnostics-managed.ts" },
+    callable: "workOnClientDiagnostics",
+    checks: ["exactOwnedClientOrder", "joinedCurrentRendererFields", "exactOwnedGadEvidence",
+      "resolvedClientGoal", "verifiedLocalClientHandoff", "protectedClientSource"],
+  },
   "eval-handoff": {
     namespace: "vibestudio:eval-handoff",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-eval-handoff-managed.ts" },
@@ -1209,13 +1232,13 @@ export async function loadLiveTeacherCases(checkouts) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
     const distinctGoals = new Set();
-    const { openGoalWorlds, openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], newsGoalWorlds = [],
+    const { openGoalWorlds, openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], newsGoalWorlds = [],
       spectroliteGoalWorlds = [], openGoalGoogleWorlds = [], openGoalPersonalWorlds = [],
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
       openTerminalWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
-    for (const assignment of [...openGoalWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
+    for (const assignment of [...openGoalWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
       ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
@@ -7001,6 +7024,46 @@ function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
           typeof proof.stagedText === "string" && hash(proof.stagedText) === outcome.handoff?.sha256 : outcome.handoff === null),
       "Expected actual open terminal and interaction calls, observed PTY continuity, bounded native checks, and a verified authorized handoff"
     );
+  } else if (world.kind === "capability-plan") {
+    const { plan, handoff } = exercise.report.outcome;
+    const live = proof.observed;
+    const performedBy = (lambda, service, method) => exercise.calls.flatMap(({ record }) =>
+      record.definition?.name === lambda ? (record.effects ?? []).filter(effect =>
+        effect.service === service && effect.method === method && !effect.error) : []);
+    const descriptions = performedBy("collectCapabilityEvidence", "docPlanCatalog", "describe");
+    const searches = performedBy("collectCapabilityEvidence", "docPlanCatalog", "search");
+    const checks = performedBy("synthesizeCapabilityPlan", "docPlanCatalog", "availableMethod");
+    const knowledge = performedBy("synthesizeCapabilityPlan", "docPlanSkills", "load");
+    const writes = performedBy("stageCapabilityPlan", "docPlanHandoff", "stage");
+    const expectedMissing = [world.obsoleteMethod, world.missing?.kind === "method" ? world.missing.name : null].filter(Boolean);
+    requireEvidence(
+      performedBy("readPlanningState", "docPlanContext", "observe").length === 1 &&
+        matchesValue(plan.sourceRevision, live.sourceRevision) &&
+        matchesValue(performedBy("readPlanningState", "docPlanContext", "observe")[0].result?.sourceRevision, live.sourceRevision) &&
+        exercise.calls.some(({ record }) => record.definition?.name === "synthesizeCapabilityPlan" &&
+          record.outcome === "done" && matchesValue(record.output, plan)) &&
+        searches.length <= 6 && descriptions.length <= 6 &&
+        plan.steps.length === world.steps.length && plan.steps.every((step, index) => {
+          const entry = live?.described?.find(candidate => candidate.id === step.id);
+          return step.id === (world.steps[index].includes(":") ? world.steps[index] : `service:${world.steps[index]}`) && typeof entry?.sha256 === "string" &&
+            step.sha256 === entry.sha256 && step.signature === entry.signature && matchesValue(step.argumentNames, entry.argumentNames) &&
+            searches.some(effect => Array.isArray(effect.result) && effect.result.some(hit => hit.id === step.id)) &&
+            descriptions.some(effect => matchesValue(effect.args, [step.id]) && matchesValue(effect.result, entry));
+        }) && expectedMissing.every(name => live?.unavailable?.includes(name) && checks.some(effect =>
+          matchesValue(effect.args, [name]) && matchesValue(effect.result, false))) &&
+        plan.knowledge.length === (world.knowledge?.length ?? 0) && plan.knowledge.every(citation => {
+          const source = live?.loaded?.find(candidate => candidate.skillPath === citation.skillPath);
+          return source?.sha256 === citation.sha256 && matchesValue(source.revision, citation.revision) &&
+            matchesValue(citation.revision?.state, live.sourceRevision) && source.excerpts.some(excerpt => excerpt.text.includes(citation.quote)) &&
+            knowledge.some(effect => matchesValue(effect.result, source));
+        }) && (world.inventory ? matchesValue(plan.overview, live.overview) &&
+          performedBy("collectCapabilityEvidence", "docPlanCatalog", "overview").some(effect => matchesValue(effect.result, live.overview))
+          : plan.overview === null) &&
+        writes.length === Number(world.stageAuthorized === true) &&
+        (writes.length ? matchesValue(writes[0].args, [plan]) && matchesValue(writes[0].result, handoff) &&
+          matchesValue(handoff, live.staged) && typeof handoff?.sha256 === "string" : handoff === null),
+      "Expected live searchable method schemas, installed skill knowledge within plan synthesis, and an independently verified authorized handoff"
+    );
   } else if (world.kind === "eval-handoff") {
     const outcome = exercise.report.outcome;
     const observed = (service, method) => effects.filter(effect =>
@@ -7150,6 +7213,50 @@ function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
           isDeepStrictEqual(journal.at(-1).result, proof.handoff) &&
           isDeepStrictEqual(outcome.handoff, proof.handoff) : outcome.handoff === null && proof.handoff === null),
       "Expected the owned welcome gate and exact scope, profile history, and staged operator handoff"
+    );
+  } else if (world.kind === "clientDiagnostics") {
+    const outcome = exercise.report.outcome;
+    const journal = proof.journal;
+    const relevant = ["clientDiagnostics", "gadHealth", "gadConversation", "gadFollowUp"];
+    const remaining = effects.filter(({service, error}) => relevant.includes(service) && !error);
+    const exact = Array.isArray(journal) && remaining.length === journal.length && journal.every(row => {
+      const i = remaining.findIndex(effect => effect.service === row.service && effect.method === row.method &&
+        matchesValue(effect.args, row.args) && matchesValue(effect.result, row.result));
+      if (i < 0) return false;
+      remaining.splice(i, 1);
+      return true;
+    });
+    const applied = journal?.filter(row => row.service === "clientDiagnostics" && row.method === "apply");
+    const observed = journal?.filter(row => row.service === "clientDiagnostics" && row.method === "observe");
+    const channel = journal?.find(row => row.service === "clientDiagnostics" && row.method === "channel");
+    const stage = journal?.find(row => row.service === "clientDiagnostics" && row.method === "stage");
+    const expectedChannel = world.expected.steps.find(row => row.kind === "channel");
+    const stored = proof.durable?.at(-1);
+    const typedTail = outcome.channel?.conversation?.evidence;
+    const typedHealth = outcome.channel?.health?.evidence;
+    const typedFollow = outcome.channel?.followUp;
+    requireEvidence(
+      exact && isDeepStrictEqual(journal[0]?.result, proof.catalog) &&
+        isDeepStrictEqual(applied.map(row => row.result), outcome.effects) &&
+        isDeepStrictEqual(observed.map(row => row.result), outcome.views) &&
+        world.expected.steps.length === proof.trace.length &&
+        world.expected.steps.every((step, i) => Object.keys(step).every(key => isDeepStrictEqual(step[key], proof.trace[i][key]))) &&
+        outcome.decision?.outcome === world.expected.outcome && world.expected.citations.every(text => outcome.decision.answer.includes(text)) &&
+        isDeepStrictEqual(outcome.decision.evidenceIds, [...outcome.views.map(view => view.id),
+          ...[typedTail?.receipt, typedHealth?.receipt, typedFollow?.receipt].filter(Boolean)]) &&
+        (expectedChannel?.view === "recap" ? channel?.args[0] === "recap" &&
+          isDeepStrictEqual(journal.find(row => row.service === "gadConversation")?.args, [channel.result.operationId]) &&
+          isDeepStrictEqual(journal.find(row => row.service === "gadConversation")?.result, typedTail) &&
+          stored.text === typedTail.latest.text && stored.seq === typedTail.latest.seq
+          : expectedChannel?.view === "triage" ? channel?.args[0] === "triage" &&
+          isDeepStrictEqual(journal.find(row => row.service === "gadHealth")?.result, typedHealth) &&
+          isDeepStrictEqual(journal.find(row => row.service === "gadFollowUp")?.result, typedFollow) &&
+          typedFollow.inspector === "inspectChannelRoster"
+          : !channel && outcome.channel === null) &&
+        (world.handoff ? stage?.args[0] === world.handoff && outcome.handoff.decision.outcome === world.expected.preHandoff &&
+          isDeepStrictEqual(stage.result, proof.handoff) && isDeepStrictEqual(outcome.handoff, proof.handoff) :
+          !stage && outcome.handoff === null && proof.handoff === null),
+      "Expected exact owned client transitions, matching durable GAD records, and verified local handoff"
     );
   } else if (world.kind === "vaultWork") {
     const outcome = exercise.report.outcome;
@@ -7406,6 +7513,24 @@ function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
           : outcome.release === null),
       "Expected exact live build, source, native test and local commit effects"
     );
+  } else if (world.kind === "owned-task") {
+    const outcome = exercise.report.outcome;
+    const methods = [["ownedTaskBoard", "discover"], ["ownedTaskBoard", "observe"], ["ownedTaskBoard", "transition"],
+      ["ownedTaskAttempts", "discover"], ["ownedTaskAttempts", "inspect"], ["ownedTaskHandoff", "submit"], ["ownedTaskHandoff", "read"]];
+    requireEvidence(Array.isArray(proof.effects) && methods.every(([service, method]) => {
+      const calls = effects.filter(effect => effect.service === service && effect.method === method && !effect.error);
+      const receipts = proof.effects.filter(receipt => receipt.service === service && receipt.method === method);
+      return calls.length === receipts.length && calls.every(({ args, result }) => {
+        const receipt = receipts.findIndex(item => matchesValue(args, item.args) && matchesValue(result, item.result));
+        if (receipt < 0) return false;
+        receipts.splice(receipt, 1);
+        return true;
+      });
+    }) && outcome?.task === proof.current?.task?.id && outcome.revision === proof.current.revision &&
+      outcome.status === proof.current.status && matchesValue(outcome.original, proof.original) &&
+      (proof.expectedHandoff ? outcome.delivery?.readback?.acknowledged === true &&
+        matchesValue(outcome.delivery.readback, proof.delivery) : outcome.delivery === null && proof.delivery === null),
+      "Expected the exact current native task, original retained outcome and owned handoff readback");
   } else if (world.kind === "personal-history") {
     requireEvidence(
       performed("archiveTimeline", "discover") && performed("archiveTimeline", "list") &&
