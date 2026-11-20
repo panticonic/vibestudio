@@ -194,6 +194,32 @@ afterEach(async () => {
 });
 
 describe("WorkspaceVcs semantic host orchestration", () => {
+  it("rebuilds commit recall from the exact protected event when native history attaches", async () => {
+    const { vcs, refs } = await harness();
+    const eventId = "native-main";
+    const head = "a".repeat(40);
+    const canonical = { ...TEST_PROVIDER, objectKey: "canonical" };
+    const document = { eventId, revision: head, text: "Keep the published configuration", createdAt: "2026-08-14T00:00:00Z" };
+    vi.spyOn(refs, "readMainSemanticState").mockReturnValue({ kind: "event", eventId });
+    const recordHistoryCommitMemory = vi.fn();
+    await vcs.attachGad({ recordHistoryCommitMemory } as never);
+    const dispatch = vi.fn(async (_target: typeof TEST_PROVIDER, method: string, input?: unknown) => {
+      switch (method) {
+        case "readHistoryMain":
+          return input === undefined ? { head, eventId } : { head, eventId, commitMemory: document };
+        case "readHistoryReplayReceipt":
+          return null;
+        case "listHistoryAppliedPublications":
+          return [];
+        default:
+          throw new Error(`Unexpected native history call ${method}`);
+      }
+    });
+    await vcs.attachParticipantHistory({ canonical, dispatch: { dispatch } });
+    expect(dispatch).toHaveBeenCalledWith(canonical, "readHistoryMain", { commitMemoryEventId: eventId });
+    expect(recordHistoryCommitMemory).toHaveBeenCalledExactlyOnceWith(document);
+  });
+
   it("recovers only unambiguous durable session owners for unassigned replay contexts", async () => {
     const { vcs, refs } = await harness();
     vi.spyOn(refs, "readMainSemanticState").mockReturnValue({ kind: "event", eventId: "main-event" });

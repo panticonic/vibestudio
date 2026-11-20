@@ -34,6 +34,7 @@ import {
   nativeInvocationIdentitySchema,
 } from "@vibestudio/service-schemas/nativeInvocation";
 import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
+import type { HistoryCommitMemory } from "./vcsHost/workspaceHistoryHost.js";
 
 export interface WorkspaceSourceProviderRef {
   source: string;
@@ -136,6 +137,7 @@ export type WorkspaceSemanticPort = Pick<WorkspaceSemanticClient, SemanticWireMe
   readHistoryWalkInvocation(input: HistoryWalkInvocation): Promise<HistoryWalkPage>;
   readHistoryWalkCohortInvocations(input: HistoryWalkCohort): Promise<HistoryWalkInvocation[]>;
   readHistoryQueryTrajectory(causes: readonly HistorySearchCause[]): Promise<HistoryQueryTrajectory>;
+  recordHistoryCommitMemory?(document: HistoryCommitMemory): Promise<void>;
   searchHistoryTrajectory(input: HistoryTrajectorySearchInput):
     Promise<import("@vibestudio/service-schemas/vcs").VcsSearchHit[]>;
 };
@@ -235,6 +237,10 @@ export function createWorkspaceSemanticPort(
     readHistoryQueryTrajectory: async (causes) => HistoryQueryTrajectorySchema.parse(
       await dispatch.dispatch(provider, "readHistoryQueryTrajectory", HistoryQueryCausesSchema.parse(causes)),
     ),
+    recordHistoryCommitMemory: async (document) => {
+      if (await dispatch.dispatch(provider, "recordHistoryCommitMemory", document) !== true)
+        throw new Error("Workspace recall did not record the published event");
+    },
     searchHistoryTrajectory: async (input) => HistoryTrajectorySearchMatchesSchema.parse(
       await dispatch.dispatch(provider, "searchHistoryTrajectory", HistoryTrajectorySearchInputSchema.parse(input)),
     ),

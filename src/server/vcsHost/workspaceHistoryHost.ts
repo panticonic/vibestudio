@@ -370,6 +370,27 @@ export async function readWorkspaceCanonicalMain(input: {
     .parse(await input.dispatch.dispatch(input.canonical, "readHistoryMain"));
 }
 
+const historyCommitMemorySchema = z.object({
+  eventId: z.string().min(1),
+  revision: z.string().regex(/^[0-9a-f]{40}$/u),
+  text: z.string().min(1).max(64_000),
+  createdAt: z.string().min(1),
+}).strict();
+export type HistoryCommitMemory = z.infer<typeof historyCommitMemorySchema>;
+
+export async function readWorkspaceHistoryCommitMemory(input: WorkspaceHistorySource & { eventId: string }) {
+  const response = z.object({
+    head, eventId: z.string().min(1), commitMemory: historyCommitMemorySchema.nullable().optional(),
+  }).strict().parse(await input.dispatch.dispatch(input.canonical, "readHistoryMain", {
+    commitMemoryEventId: input.eventId,
+  }));
+  if (response.commitMemory &&
+      (response.commitMemory.eventId !== input.eventId ||
+        (response.eventId === input.eventId && response.commitMemory.revision !== response.head)))
+    throw new Error("Workspace history returned commit memory for a different event");
+  return response.commitMemory ?? null;
+}
+
 export interface WorkspaceHistorySource {
   dispatch: Pick<DODispatch, "dispatch">;
   canonical: WorkspaceSourceProviderRef;

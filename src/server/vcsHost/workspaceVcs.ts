@@ -156,6 +156,7 @@ import {
   workspaceParticipantIdentity,
   putPreparedWorkspaceContent,
   readWorkspaceCanonicalMain,
+  readWorkspaceHistoryCommitMemory,
   readWorkspaceHistoryTemplateInstallation,
   readWorkspaceParticipantContentSource,
   readWorkspaceParticipantFileDescriptors,
@@ -894,6 +895,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         ...(source.infrastructureContextId ? { infrastructureContextId: source.infrastructureContextId } : {}),
         ...(source.destroyRetiredStorage ? { destroyRetiredStorage: source.destroyRetiredStorage } : {}),
       };
+      await this.indexPublishedCommitMemory(main.eventId);
     });
   }
 
@@ -3983,6 +3985,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         for (const listener of this.protectedPublicationListeners) {
           await listener(event);
         }
+        await this.indexPublishedCommitMemory(publication.publishedEventId);
       } finally {
         profile.listenersMs = performance.now() - phaseStartedAt;
       }
@@ -4013,6 +4016,20 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       if (totalMs >= 100) {
         console.info("[VcsProfile] protected refs observer", { ...profile, totalMs });
       }
+    }
+  }
+
+  private async indexPublishedCommitMemory(eventId: string): Promise<void> {
+    const source = this.participantHistorySource;
+    const recorder = this.gadCaller?.recordHistoryCommitMemory;
+    if (!source || !recorder) return;
+    try {
+      const document = await readWorkspaceHistoryCommitMemory({ ...source, eventId });
+      if (document) await recorder(document);
+    } catch (error) {
+      // Recall is a disposable projection. Reopening retries the latest
+      // protected revision without making a committed publication fail.
+      console.warn("[Vcs] Could not index published commit memory", error);
     }
   }
 
