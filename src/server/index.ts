@@ -142,7 +142,7 @@ import {
   WORKSPACE_CONFIG_PATH,
 } from "@vibestudio/workspace/configParser";
 import { WorkspaceCreationDescriptorSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
-import { getCentralDataPath } from "@vibestudio/env-paths";
+import { getCentralDataPath, getWorkspaceDir } from "@vibestudio/env-paths";
 import {
   declaresEvalKernel,
   entityHostRef,
@@ -458,14 +458,43 @@ async function main() {
   if (creationIntent && creationIntent.workspaceId !== workspaceId) {
     throw new Error("Workspace creation intent does not match the hub-assigned identity");
   }
+  const { readWorkspaceConfig } = await import("@vibestudio/workspace/configParser");
+  const { readFileAtTree, getBytes } = await import("./services/blobstoreService.js");
+  const readPublishedConfig = (blobsDir: string, stateHash: string) =>
+    readWorkspaceConfig(
+      {
+        readText: async (filePath) => {
+          const file = await readFileAtTree(blobsDir, stateHash, filePath);
+          if (!file) return null;
+          const bytes = await getBytes(blobsDir, file.contentHash);
+          if (!bytes) throw new Error(`Workspace source content is unavailable: ${filePath}`);
+          return bytes.toString("utf8");
+        },
+      },
+      workspaceId
+    );
   let workspace: import("@vibestudio/workspace-contracts/types").Workspace;
   let workspaceName: string;
+  let restoredLaunch: ReturnType<typeof readWorkspaceHostLaunchRecord> = null;
   try {
+    const managedDir = wsDir || (wsName ? getWorkspaceDir(wsName) : undefined);
+    const managedLayout = managedDir ? stateLayout(path.join(managedDir, "state")) : null;
+    restoredLaunch = managedLayout ? readWorkspaceHostLaunchRecord(managedLayout.root) : null;
+    if (restoredLaunch && restoredLaunch.workspaceId !== workspaceId) {
+      throw new Error("Workspace launch record has the wrong identity");
+    }
+    // The scaffold stays at its original version when protected main moves.
+    // An installed host must read the published tree before resolving config.
+    const publishedConfig =
+      managedLayout && restoredLaunch
+        ? await readPublishedConfig(managedLayout.blobsDir, restoredLaunch.stateHash)
+        : undefined;
     const resolved = resolveOrCreateWorkspace({
       appRoot,
       wsDir,
       name: wsName,
       workspaceId,
+      ...(publishedConfig ? { publishedConfig } : {}),
       ...(creationIntent
         ? { rootTemplate: creationIntent.rootTemplate, purpose: creationIntent.purpose }
         : {}),
@@ -1802,27 +1831,14 @@ async function main() {
   // Unit manifests in the materialized semantic source own userland
   // dependencies. The workspace root itself is not a Node package.
   const buildDependencyWorkspaceRoot = workspacePath;
-  const { readWorkspaceConfig } = await import("@vibestudio/workspace/configParser");
-  const restoredLaunch = readWorkspaceHostLaunchRecord(statePath);
   const bootstrapStateHash =
     restoredLaunch?.stateHash ?? (await rootTemplateBootstrap.prepareBootstrapState());
   if (restoredLaunch && !protectedRefStore.readMainSemanticState()) {
     throw new Error("Workspace launch has no protected semantic main");
   }
-  const { readFileAtTree, getBytes } = await import("./services/blobstoreService.js");
-  const materializedWorkspaceConfig = await readWorkspaceConfig(
-    {
-      readText: async (filePath) => {
-        const file = await readFileAtTree(layout.blobsDir, bootstrapStateHash, filePath);
-        if (!file) return null;
-        const bytes = await getBytes(layout.blobsDir, file.contentHash);
-        if (!bytes) throw new Error(`Workspace source content is unavailable: ${filePath}`);
-        return Buffer.from(bytes).toString("utf8");
-      },
-    },
-    workspaceId
-  );
-  replaceWorkspaceConfig(workspaceConfig, materializedWorkspaceConfig);
+  if (!restoredLaunch) {
+    replaceWorkspaceConfig(workspaceConfig, await readPublishedConfig(layout.blobsDir, bootstrapStateHash));
+  }
   capabilityServiceCatalog = [
     ...productBuiltinCapabilityServices,
     ...(workspaceConfig.services ?? []),
