@@ -1315,6 +1315,10 @@ export async function loadLiveTeacherCases(checkouts) {
         splitByGroup.set(group, split);
       }
       const domain = templateGoalDomains[assignment.kind];
+      const graph = assignment.kind === "vaultWork" && assignment.expected?.graph
+        ? (await import(pathToFileURL(path.join(checkouts.spectrolite,
+            "skills/spectrolite-review-fixtures/knowledge-graph.ts")).href)).verifiesKnowledgeGraph
+        : undefined;
       const ownedResearch = assignment.kind === "owned-research" || assignment.kind === "owned-research-and-edit";
       cases.set(scenario, {
         family: `workspace-open-user-goal-${assignment.kind}`,
@@ -1334,6 +1338,7 @@ export async function loadLiveTeacherCases(checkouts) {
           "browser", "suite",
         ].includes(assignment.kind) ? `-${assignment.kind}` : ""}-managed.ts` }),
         assignment,
+        ...(graph ? { verifiesKnowledgeGraph: graph } : {}),
         ...(assignment.devices ? { devices: assignment.devices } : {}),
         ...(assignment.requiresDeploymentPackage ? { requiresDeploymentPackage: true } : {}),
         evidence: domain ? openTemplateGoalEvidence : ownedResearch ? openOwnedResearchEvidence : openGoalEvidence,
@@ -7511,11 +7516,47 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
     const writes = journal?.filter(row => row.service === "spectroliteGoal" && row.method === "revise");
     const handoff = journal?.find(row => row.service === "vaultKnowledgeHandoff" && row.method === "stage");
     const plan = journal?.find(row => row.service === "spectroliteHandoffRead" && row.method === "evidence");
+    let exactRoute = isDeepStrictEqual(proof.events, expected.steps);
+    if (expected.graph && exactEffects) {
+      const replay = [];
+      let view;
+      let readIndex = 0;
+      let handoffAt;
+      let valid = true;
+      for (const row of journal) {
+        if (row === handoff) handoffAt = replay.length;
+        if (row.service !== "spectroliteGoal") continue;
+        if (row.method === "inspect") view = row.result;
+        if (row.method === "follow" && row.result === "followed") {
+          const target = row.args[0];
+          const link = view?.links?.find(item => item.target === target);
+          if (!link?.path || row.args[1] !== view.revision) { valid = false; break; }
+          replay.push({ kind: "follow", from: view.path, target, to: link.path });
+        }
+        if (row.method === "revise" && row.result === "written") {
+          if (!view || row.args[0] !== view.revision) { valid = false; break; }
+          replay.push({ kind: "write", path: view.path, source: row.args[1] });
+        }
+        if (row.method === "evidence") {
+          const read = outcome.reads?.[readIndex++];
+          if (!view || !isDeepStrictEqual(read?.view, view) ||
+              !isDeepStrictEqual(read?.review.findings.map(finding => finding.check), row.args[0])) {
+            valid = false;
+            break;
+          }
+          replay.push({ kind: "read", path: view.path,
+            findings: read.review.findings.map(({ check, code }) => [check, code]) });
+        }
+      }
+      exactRoute = valid && isDeepStrictEqual(proof.events, replay) &&
+        workflow.verifiesKnowledgeGraph?.(expected.graph, expected.steps, replay, handoffAt) === true;
+    }
     requireEvidence(
       exactEffects && journal[0]?.method === "inspect" && journal[0].result.path === world.openPath &&
-        isDeepStrictEqual(proof.events, expected.steps) && isDeepStrictEqual(latest, proof.final) &&
+        exactRoute && isDeepStrictEqual(latest, proof.final) &&
         outcome.path === expected.path && outcome.revision === latest.revision && outcome.outcome === expected.outcome &&
-        outcome.authorityPath === (expected.outcome === "authority-confirmed" ? expected.path : null) &&
+        outcome.authorityPath === (expected.outcome === "authority-confirmed"
+          ? (expected.graph?.authorityPath ?? expected.path) : null) &&
         expected.citations.every(text => outcome.answer.includes(text)) &&
         isDeepStrictEqual(proof.committedFiles, world.files) &&
         isDeepStrictEqual(proof.workingFiles, {...world.files,...world.draft,
