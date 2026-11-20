@@ -84,6 +84,7 @@ export function createPanelRuntimeService(deps: {
         deps.coordinator.registerClient({
           ...client,
           ownerCallerId: ctx.caller.runtime.id,
+          ownerConnectionId: ctx.connectionId,
         });
         return undefined;
       },

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
+import { EventService } from "@vibestudio/shared/eventsService";
 import {
   ATTEMPT_STALL_PROBE_MS,
   ATTEMPT_STALL_ROUNDS,
@@ -87,6 +88,89 @@ it("retires only the closed caller's registrations, leases, and pending attempts
     attempt: { phase: "stopped" },
   });
 });
+
+it.each(["headless", "mobile", "desktop"] as const)(
+  "publishes committed state args only on the current %s route",
+  (platform) => {
+    const eventService = new EventService();
+    const coordinator = new PanelRuntimeCoordinator({ eventService });
+    const slotId = "panel:tree/a";
+    const runtimeEntityId = "panel:nav-a";
+    coordinator.registerClient({
+      clientSessionId: "host-seat",
+      ownerCallerId: "shell:presenter",
+      ownerConnectionId: "control-route",
+      label: "Presenter",
+      platform,
+    });
+    coordinator.acquire(runtimeEntityId, {
+      slotId,
+      clientSessionId: "host-seat",
+      connectionId: "lease-route",
+    });
+
+    const renderer = vi.fn();
+    const staleRenderer = vi.fn();
+    const presentingHost = vi.fn();
+    const otherHost = vi.fn();
+    const stopPresentingHost = eventService.registerTransportSession({
+      callerId: "shell:presenter",
+      callerKind: "shell",
+      connectionId: "control-route",
+      send: presentingHost,
+    });
+    eventService.registerTransportSession({
+      callerId: "shell:presenter",
+      callerKind: "shell",
+      connectionId: "other-control-route",
+      send: otherHost,
+    });
+    const stopRenderer = eventService.registerTransportSession({
+      callerId: runtimeEntityId,
+      callerKind: "panel",
+      connectionId: "lease-route",
+      send: renderer,
+    });
+    eventService.registerTransportSession({
+      callerId: runtimeEntityId,
+      callerKind: "panel",
+      connectionId: "retired-lease-route",
+      send: staleRenderer,
+    });
+
+    const snapshot = { ownerStage: "changed" };
+    coordinator.publishStateArgsChange("panel:tree/other", runtimeEntityId, snapshot);
+    coordinator.publishStateArgsChange(slotId, "panel:nav-previous", snapshot);
+    coordinator.publishStateArgsChange(slotId, runtimeEntityId, snapshot);
+
+    if (platform === "desktop") {
+      expect(presentingHost).toHaveBeenCalledExactlyOnceWith("panel:stateArgsChanged", {
+        panelId: slotId,
+        runtimeEntityId,
+        connectionId: "lease-route",
+        stateArgs: snapshot,
+      });
+      expect(renderer).not.toHaveBeenCalled();
+    } else {
+      expect(renderer).toHaveBeenCalledExactlyOnceWith("runtime:stateArgsChanged", snapshot);
+      expect(presentingHost).not.toHaveBeenCalled();
+    }
+    expect(staleRenderer).not.toHaveBeenCalled();
+    expect(otherHost).not.toHaveBeenCalled();
+
+    stopRenderer();
+    stopPresentingHost();
+    renderer.mockClear();
+    presentingHost.mockClear();
+    coordinator.publishStateArgsChange(slotId, runtimeEntityId, { ownerStage: "offline" });
+    coordinator.release(runtimeEntityId, "lease-route", "retired");
+    coordinator.publishStateArgsChange(slotId, runtimeEntityId, { ownerStage: "retired" });
+    expect(renderer).not.toHaveBeenCalled();
+    expect(presentingHost).not.toHaveBeenCalled();
+    expect(otherHost).not.toHaveBeenCalled();
+    expect(staleRenderer).not.toHaveBeenCalled();
+  }
+);
 
 describe("PanelRuntimeCoordinator attempt state machine", () => {
   it.each([

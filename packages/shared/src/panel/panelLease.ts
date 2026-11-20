@@ -29,6 +29,8 @@ export function createPanelHostRegistration(
 }
 
 export interface ClientSession extends PanelHostRegistration {
+  /** Authenticated RPC transport that registered this presenting host. */
+  ownerConnectionId?: string;
   connectedAt: number;
   lastSeenAt: number;
 }

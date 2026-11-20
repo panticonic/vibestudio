@@ -377,7 +377,7 @@ export class PanelRuntimeCoordinator {
     }
   }
 
-  registerClient(input: PanelHostRegistration): void {
+  registerClient(input: PanelHostRegistration & { ownerConnectionId?: string }): void {
     const now = Date.now();
     const existing = this.clients.get(input.clientSessionId);
     this.clients.set(input.clientSessionId, {
@@ -385,6 +385,7 @@ export class PanelRuntimeCoordinator {
       hostConnectionId:
         input.hostConnectionId ?? existing?.hostConnectionId ?? input.clientSessionId,
       ownerCallerId: input.ownerCallerId ?? existing?.ownerCallerId,
+      ownerConnectionId: input.ownerConnectionId ?? existing?.ownerConnectionId,
       label: input.label,
       platform: input.platform,
       supportsCdp: input.supportsCdp ?? input.platform !== "mobile",
@@ -715,6 +716,39 @@ export class PanelRuntimeCoordinator {
       return this.clientForHostConnection(lease.hostConnectionId)?.ownerCallerId ?? null;
     }
     return null;
+  }
+
+  /** Project a successful slot transaction onto the renderer that still owns its entity. */
+  publishStateArgsChange(
+    slotId: string,
+    runtimeEntityId: string,
+    stateArgs: Record<string, unknown>
+  ): void {
+    const lease = this.getLease(runtimeEntityId);
+    if (!lease || lease.slotId !== slotId) return;
+    if (lease.platform === "desktop") {
+      const host = this.clients.get(lease.clientSessionId);
+      if (host?.ownerCallerId && host.ownerConnectionId) {
+        this.deps.eventService?.emitToConnection(
+          host.ownerCallerId,
+          host.ownerConnectionId,
+          "panel:stateArgsChanged",
+          {
+            panelId: slotId,
+            runtimeEntityId,
+            connectionId: lease.connectionId,
+            stateArgs,
+          }
+        );
+      }
+      return;
+    }
+    this.deps.eventService?.emitToConnection(
+      runtimeEntityId,
+      lease.connectionId,
+      "runtime:stateArgsChanged",
+      stateArgs
+    );
   }
 
   resolvePresentationCallerForRuntime(runtimeEntityId: string): string | null {

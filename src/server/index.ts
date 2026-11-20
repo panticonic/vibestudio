@@ -5384,6 +5384,13 @@ async function main() {
   slotStateListeners.add((change) => {
     panelExecutionReconciler.observe(change);
     convergePanelPresentation(change);
+    if (change?.kind === "state-args") {
+      panelRuntimeCoordinator.publishStateArgsChange(
+        change.slotId,
+        change.runtimeEntityId,
+        change.stateArgs
+      );
+    }
   });
   panelRuntimeCoordinatorForCleanup = panelRuntimeCoordinator;
   const { wireDevelopmentNative } = await import("./bootstrap/developmentNative.js");

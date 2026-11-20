@@ -1115,10 +1115,16 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     await this.runtime.syncLeaseSnapshot();
   }
 
-  applyServerPanelStateArgsUpdate(update: {
-    panelId: string;
-    stateArgs: Record<string, unknown>;
-  }): void {
+  applyServerPanelStateArgsUpdate(
+    update: import("@vibestudio/shared/events").EventPayloads["panel:stateArgsChanged"]
+  ): void {
+    const connection = this.runtime.getConnection(update.panelId);
+    if (
+      connection?.runtimeEntityId !== update.runtimeEntityId ||
+      connection.connectionId !== update.connectionId
+    ) {
+      return;
+    }
     this.shellCore.applyStateArgsProjection(asPanelSlotId(update.panelId), update.stateArgs);
   }
 

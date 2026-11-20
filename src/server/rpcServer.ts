@@ -3991,6 +3991,12 @@ export class RpcServer {
     kind: "method" | "stream" = "method",
     authenticatedCaller?: VerifiedCaller
   ): RelayAuthCheck {
+    if (
+      callerKind !== "server" &&
+      (method === "__event:panel:stateArgsChanged" || method === "__event:runtime:stateArgsChanged")
+    ) {
+      return { ok: false, reason: "Only the committing server can publish panel state arguments" };
+    }
     const website = authenticatedCaller?.website ?? this.deps.websiteDocuments?.fact(callerId);
     const scopedWebsite =
       authenticatedCaller?.executionAuthority ??

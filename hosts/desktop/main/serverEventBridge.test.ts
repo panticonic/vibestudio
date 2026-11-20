@@ -92,6 +92,8 @@ describe("createServerEventBridge", () => {
     });
     listeners.get("panel:stateArgsChanged")?.({
       panelId: "panel:tree/slot-a",
+      runtimeEntityId: "panel:entity/slot-a",
+      connectionId: "panel-seat-a",
       stateArgs: { channelName: "chat-1234" },
     });
 
@@ -114,6 +116,8 @@ describe("createServerEventBridge", () => {
     expect(listeners.has("panel:executionFailed")).toBe(false);
     expect(handle).toHaveBeenNthCalledWith(5, "panel:stateArgsChanged", {
       panelId: "panel:tree/slot-a",
+      runtimeEntityId: "panel:entity/slot-a",
+      connectionId: "panel-seat-a",
       stateArgs: { channelName: "chat-1234" },
     });
 
@@ -162,6 +166,8 @@ describe("createServerEventBridge", () => {
     const { handle, eventService, panelOrchestrator } = createHarness();
     const update = {
       panelId: "panel:tree/slot-a",
+      runtimeEntityId: "panel:entity/slot-a",
+      connectionId: "panel-seat-a",
       stateArgs: { channelName: "chat-1234" },
     };
 
