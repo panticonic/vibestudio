@@ -169,6 +169,7 @@ function projectCheckoutSource(
         filter: (file) => !["node_modules", ".cache", ".git", "dist"].includes(path.basename(file)),
       });
   }
+  projectNatlangWorkspaceModules(projectedWorkspace);
   // Checkout validation is a host development concern, not workspace source.
   for (const name of fs.readdirSync(path.join(appRoot, "scripts/config/userland"))) {
     const target = path.join(projectedWorkspace, name);
@@ -189,6 +190,41 @@ function projectCheckoutSource(
   }
   for (const entry of ["hosts", "packages", "scripts", "services", "src", "tests"]) {
     linkDirectory(path.join(appRoot, entry), path.join(targetRoot, entry));
+  }
+}
+
+/** Resolve relative type imports through the same skill mounts as the Natlang program. */
+function projectNatlangWorkspaceModules(workspace: string): void {
+  for (const manifest of fs.globSync("skills/**/natlang.json", { cwd: workspace })) {
+    const file = path.join(workspace, manifest);
+    const { workspaceModules } = JSON.parse(fs.readFileSync(file, "utf8")) as {
+      workspaceModules?: Record<string, string>;
+    };
+    const owner = path.posix.dirname(manifest.replaceAll(path.sep, "/"));
+    const mounts = Object.entries(workspaceModules ?? {});
+    for (const [mount, skill] of mounts) {
+      if (
+        !/^[A-Za-z_][A-Za-z0-9_]*(?:\/[A-Za-z_][A-Za-z0-9_]*)+$/u.test(mount) ||
+        typeof skill !== "string" ||
+        !/^skills(?:\/[A-Za-z0-9_-]+)+$/u.test(skill)
+      ) {
+        throw new Error(`Invalid workspace module ${mount} in ${manifest}`);
+      }
+      const source = path.join(workspace, skill);
+      if (!fs.existsSync(source)) continue;
+      const target = path.join(path.dirname(file), mount);
+      if (
+        skill === owner ||
+        skill.startsWith(`${owner}/`) ||
+        owner.startsWith(`${skill}/`) ||
+        mounts.some(([other]) => other !== mount && mount.startsWith(`${other}/`)) ||
+        [target, `${target}.nl`, `${target}.ts`].some((candidate) => fs.existsSync(candidate))
+      ) {
+        throw new Error(`Overlapping workspace module ${mount} in ${manifest}`);
+      }
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      linkDirectory(source, target);
+    }
   }
 }
 
