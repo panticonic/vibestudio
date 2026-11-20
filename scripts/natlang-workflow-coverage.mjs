@@ -36,12 +36,73 @@ function linkedPrograms(markdown, source, template, templateByRepository) {
 async function trackedSources(checkout) {
   const { stdout } = await git(
     "git",
-    ["-C", checkout, "ls-files", "-z", "--", "*.nl", "*SKILL.md"],
+    ["-C", checkout, "ls-files", "-z", "--", "*.nl", "*SKILL.md",
+      ":(glob)**/natlang.json", ":(glob)**/package.json"],
     {
       maxBuffer: 8 * 1024 * 1024,
     }
   );
   return stdout.split("\0").filter(Boolean);
+}
+
+function declaredUses(text) {
+  const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/u.exec(text)?.[1];
+  if (!frontmatter) return [];
+  const uses = /^uses:[^\r\n]*(?:\r?\n(?:[ \t]+|- +)[^\r\n]*)*/mu.exec(frontmatter)?.[0];
+  if (!uses) return [];
+  const items = parseYaml(uses).uses;
+  return Array.isArray(items)
+    ? items.filter((item) => typeof item === "string" &&
+        /^[A-Za-z_$][\w$]*(?:\/[A-Za-z_$][\w$]*)*$/u.test(item))
+    : [];
+}
+
+/** Follow authored callable visibility, before any model chooses which calls to make. */
+async function indexMountedScopes(checkout, files, mount) {
+  const root = mount.packageRoot ?? mount.directory;
+  const manifestPath = root + "/natlang.json";
+  const tracked = new Set(files);
+  const manifest = tracked.has(manifestPath)
+    ? JSON.parse(await readFile(path.join(checkout, manifestPath), "utf8"))
+    : {};
+  const include = mount.packageRoot ? null : manifest.include;
+  const programFiles = files.filter((file) => {
+    if (!file.endsWith(".nl") || !file.startsWith(root + "/")) return false;
+    const local = file.slice(root.length + 1);
+    return !local.split("/").some((segment) => segment.startsWith(".") || segment === "node_modules") &&
+      (!Array.isArray(include) || include.some((prefix) => local === prefix || local.startsWith(prefix + "/")));
+  });
+  const installed = new Set(programFiles);
+  const edges = new Map();
+  for (const file of programFiles) {
+    const companion = file.slice(0, -3) + "/";
+    const nested = programFiles.filter((candidate) => candidate.startsWith(companion));
+    let packageRoot = path.posix.dirname(file);
+    while (packageRoot !== root &&
+      !tracked.has(packageRoot + "/natlang.json") &&
+      !tracked.has(packageRoot + "/package.json")) {
+      packageRoot = path.posix.dirname(packageRoot);
+    }
+    const text = await readFile(path.join(checkout, file), "utf8");
+    const imports = declaredUses(text).map((item) => path.posix.join(packageRoot, item + ".nl"));
+    edges.set(file, [...nested, ...imports.filter((item) => installed.has(item))]);
+  }
+  return { programFiles, edges };
+}
+
+function reachableFiles(source, edges) {
+  const seen = new Set([source]);
+  const pending = [source];
+  while (pending.length) {
+    const file = pending.pop();
+    for (const next of edges.get(file) ?? []) {
+      if (seen.has(next)) continue;
+      seen.add(next);
+      pending.push(next);
+    }
+  }
+  seen.delete(source);
+  return seen;
 }
 
 async function originRepository(checkout) {
@@ -106,7 +167,7 @@ export async function inspectWorkflowCoverage(checkouts, cases, sources) {
     templateByRepository.set(repository, templateByRepository.has(repository) ? null : template);
   }
   const mounts = [
-    { domain: "", directory: shared + "/runWorkflow" },
+    { domain: "", directory: shared + "/runWorkflow", packageRoot: shared },
     ...Object.entries(manifest.workspaceModules ?? {})
       .filter(([selector]) => selector.startsWith("runWorkflow/domains/"))
       .map(([selector, directory]) => ({
@@ -115,26 +176,37 @@ export async function inspectWorkflowCoverage(checkouts, cases, sources) {
       })),
   ];
   const callables = [];
+  const nestedByCallable = new Map();
   const skillDocs = [];
   for (const { template, files } of filesByTemplate) {
-    for (const source of files) {
-      if (path.posix.basename(source) === "SKILL.md") {
-        skillDocs.push({ template, source });
-      } else if (source.endsWith(".nl")) {
-        for (const { domain, directory } of mounts) {
-          if (path.posix.dirname(source) !== directory) continue;
-          const name = operationName(source);
-          callables.push({
-            template,
-            source,
-            name,
-            callable: domain ? domain + "/" + name : name,
-            managedCases: 0,
-            scopedCases: 0,
-          });
-        }
+    skillDocs.push(...files.filter((source) => path.posix.basename(source) === "SKILL.md")
+      .map((source) => ({ template, source })));
+    const mounted = [];
+    const sourceOrder = new Map(files.map((source, index) => [source, index]));
+    for (const mount of mounts) {
+      const direct = files.filter((file) =>
+        file.endsWith(".nl") && path.posix.dirname(file) === mount.directory
+      );
+      if (direct.length === 0) continue;
+      const { programFiles, edges } = await indexMountedScopes(checkouts[template], files, mount);
+      const entries = new Map();
+      for (const source of direct) {
+        if (!programFiles.includes(source)) continue;
+        const name = operationName(source);
+        entries.set(source, {
+          template, source, name,
+          callable: mount.domain ? mount.domain + "/" + name : name,
+          managedCases: 0, scopedCases: 0, nestedManagedCases: 0, nestedScopedCases: 0,
+        });
+      }
+      for (const [source, entry] of entries) {
+        mounted.push(entry);
+        nestedByCallable.set(entry, [...reachableFiles(source, edges)]
+          .flatMap((target) => entries.has(target) ? [entries.get(target)] : []));
       }
     }
+    // Preserve template source order even when several namespaces are mounted.
+    callables.push(...mounted.sort((left, right) => sourceOrder.get(left.source) - sourceOrder.get(right.source)));
   }
 
   const unresolved = new Map();
@@ -157,6 +229,7 @@ export async function inspectWorkflowCoverage(checkouts, cases, sources) {
       });
       continue;
     }
+    const directEntries = new Set();
     for (const selector of new Set(requested)) {
       // A managed declaration records the captured operation's name. Require
       // a unique source before attributing its cases to a mounted callable.
@@ -165,7 +238,7 @@ export async function inspectWorkflowCoverage(checkouts, cases, sources) {
           installed?.has(entry.template) && entry.name === selector
       );
       if (matches.length === 1) {
-        matches[0][scoped ? "scopedCases" : "managedCases"]++;
+        directEntries.add(matches[0]);
       } else {
         const key = JSON.stringify([scenario.execution, workspace, selector]);
         const previous = unresolved.get(key);
@@ -183,6 +256,14 @@ export async function inspectWorkflowCoverage(checkouts, cases, sources) {
             })),
           });
       }
+    }
+    const nestedEntries = new Set([...directEntries].flatMap((entry) => nestedByCallable.get(entry)));
+    for (const entry of directEntries) {
+      entry[scoped ? "scopedCases" : "managedCases"]++;
+      nestedEntries.delete(entry);
+    }
+    for (const entry of nestedEntries) {
+      entry[scoped ? "nestedScopedCases" : "nestedManagedCases"]++;
     }
   }
   const skills = await Promise.all(skillDocs.map(async ({ template, source }) => {
@@ -215,6 +296,7 @@ export async function inspectWorkflowCoverage(checkouts, cases, sources) {
     ),
     skills,
     callables,
+    nestedScope: "Mounted Natlang callables reachable through tracked companion folders or uses declarations. Counts exclude direct assignments and do not attest execution.",
     unresolved: [...unresolved.values()],
   };
 }

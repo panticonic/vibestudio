@@ -36,7 +36,12 @@ test("workflow coverage lists mounted entry points and leaves ambiguous cases un
       "template:\n  dependencies:\n    - url: git+https://github.com/example/base.git\n"),
     write("base", "skills/api/SKILL.md"),
     write("base", "skills/api/natlang/review.nl"),
-    write("base", "skills/api/natlang/review/lookup.nl"),
+    write("base", "skills/api/natlang/natlang.json",
+      JSON.stringify({ include: ["review.nl", "review", "summarize.nl", "tail.nl"] })),
+    write("base", "skills/api/natlang/review/lookup.nl", "---\nuses: [summarize]\n---\nLook up a record."),
+    write("base", "skills/api/natlang/summarize.nl", "---\nuses:\n- tail\n---\nSummarize the record."),
+    write("base", "skills/api/natlang/tail.nl", "Read the final entry."),
+    write("base", "skills/api/natlang/unmounted.nl", "This source is outside the include list."),
     write("base", "skills/vibestudio-workflows/runWorkflow/operate.nl"),
     write("system", "skills/system/SKILL.md", "`[Example only](natlang/review.nl)`"),
     write("system", "skills/system/natlang/review.nl"),
@@ -66,6 +71,7 @@ test("workflow coverage lists mounted entry points and leaves ambiguous cases un
   const coverage = await inspectWorkflowCoverage(checkouts, [
     { id: "managed-direct", workspace: "system", execution: "managed-workspace", operations: ["operate"] },
     { id: "managed-unambiguous", workspace: "base", execution: "managed-workspace", operations: ["review"] },
+    { id: "managed-overlap", workspace: "base", execution: "managed-workspace", operations: ["review", "summarize"] },
     { id: "managed-ambiguous", workspace: "system", execution: "managed-workspace", operations: ["review"] },
     { id: "managed-missing", workspace: "system", execution: "managed-workspace", operations: ["lookup"] },
     { id: "managed-harness", workspace: "system", execution: "managed-workspace", operations: ["inspectCase"] },
@@ -86,16 +92,20 @@ test("workflow coverage lists mounted entry points and leaves ambiguous cases un
     harness: ["harness"],
   });
   assert.deepEqual(
-    coverage.callables.map(({ callable, managedCases, scopedCases }) => [
+    coverage.callables.map(({ callable, managedCases, scopedCases, nestedManagedCases, nestedScopedCases }) => [
       callable,
       managedCases,
       scopedCases,
+      nestedManagedCases,
+      nestedScopedCases,
     ]),
     [
-      ["api/review", 1, 1],
-      ["operate", 1, 0],
-      ["system/review", 0, 0],
-      ["harness/inspectCase", 1, 0],
+      ["api/review", 2, 1, 0, 0],
+      ["api/summarize", 1, 0, 1, 1],
+      ["api/tail", 0, 0, 2, 1],
+      ["operate", 1, 0, 0, 0],
+      ["system/review", 0, 0, 0, 0],
+      ["harness/inspectCase", 1, 0, 0, 0],
     ]
   );
   assert.deepEqual(
@@ -103,8 +113,8 @@ test("workflow coverage lists mounted entry points and leaves ambiguous cases un
     {
       template: "base",
       source: "skills/api/SKILL.md",
-      localProgramFiles: 2,
-      mountedCallables: ["api/review"],
+      localProgramFiles: 5,
+      mountedCallables: ["api/review", "api/summarize", "api/tail"],
       linkedCallables: [],
     }
   );

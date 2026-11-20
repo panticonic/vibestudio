@@ -18,6 +18,10 @@ Cross-template links identify a tracked callable on the repository's main branch
 For managed cases, the report resolves operation names against the assigned workspace's
 template dependencies, including the development harness. It lists each composition
 under `workspaceSources` and groups ambiguous or unresolved assignments by workspace.
+The `nestedManagedCases` and `nestedScopedCases` counts show which mounted callables
+are reachable through a task's assigned entry points, following companion folders
+and `uses` declarations. Each case counts once per callable, with direct assignments
+counted separately. An execution trace is needed to confirm which calls ran.
 The report shows source relationships. A co-located program or case
 does not establish that every procedure in a skill is implemented or tested.
 
