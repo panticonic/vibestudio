@@ -2357,6 +2357,54 @@ test("Spectrolite export binds the browser, committed baseline and nested revisi
     exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-stale-draft-browser` }),
     /Spectrolite findings must match the assigned canonical revision/u
   );
+  entry.test.name = "spectrolite-live-review-handoff-uncommitted-brief";
+  const handoff = cases.get(entry.test.name);
+  assert.deepEqual(handoff.skills, ["reviewSpectrolite", "planVaultHandoff"]);
+  const vaultReport = { findings: handoff.checks.map((check, index) => ({
+    ...run.report.findings.find((finding) => finding.check === check),
+    code: handoff.expected[index],
+    detail: handoff.documentPath,
+  })) };
+  verification.caseId = handoff.caseId;
+  verification.browser = { path: handoff.documentPath, text: handoff.heading, rendered: [handoff.previewText] };
+  const { vault, document, committedDocument } = verification.observed;
+  document.path = committedDocument.path = preview.documentPath = handoff.documentPath;
+  committedDocument.title = handoff.draft.committedTitle;
+  const transferred = { vault, document, committedDocument, preview };
+  const plan = {
+    disposition: "draft-only", ref: workingDraft, contentHash: document.contentHash,
+    evidenceIds: [vault.id, document.id, committedDocument.id, preview.id],
+  };
+  run.report = { results: [
+    { domain: "spectrolite", operation: "reviewSpectrolite", report: vaultReport },
+    { domain: "spectrolite", operation: "planVaultHandoff", report: plan },
+  ] };
+  const ref = (value) => {
+    const serialized = JSON.stringify(value);
+    return { complete: true, hash: createHash("sha256").update(serialized).digest("hex"), bytes: Buffer.byteLength(serialized) };
+  };
+  capture("planVaultHandoff", run.rootCallIds[0]);
+  capture("chooseHandoff", "planVaultHandoff");
+  const [, choiceCall] = run.calls.slice(-2);
+  const handoffCall = run.calls.at(-2);
+  skill.record.ended_at = new Date(1).toISOString();
+  handoffCall.record.started_at = new Date(2).toISOString();
+  handoffCall.record.effects = [{
+    service: "spectroliteHandoffRead", method: "evidence", args: ref([]), result: ref(transferred),
+  }];
+  choiceCall.record.inputs = { path: ref(handoff.documentPath), evidence: ref(transferred) };
+  handoffCall.record.output = choiceCall.record.output = ref(plan);
+  diagnostics.managedSpectrolite.verification = {
+    passed: true, checks: { verifiedVault: true, exactHandoff: true }, vault: verification, transferred,
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-draft-handoff` });
+  plan.ref = working;
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-handoff-wrong-revision` }),
+    /Spectrolite handoff must use the verified editor and vault revision receipts/u
+  );
 });
 
 test("channel roster export rejects a participant from the other channel", async (t) => {

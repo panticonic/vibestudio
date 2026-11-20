@@ -279,6 +279,11 @@ and any preview finding refers to that same editor and revision. Draft reviews c
 editor's working document against the same file at the committed vault reference. The checks
 distinguish changed notes from unchanged notes in a dirty vault. The exporter requires the
 nested revision-review calls and rejects stale editor text or a different committed reference.
+Spectrolite handoff tasks compose the live vault review with a second Natlang
+operation that selects the exact revision for peer review. The plan carries
+either the committed event or the working draft and cites the matching browser
+preview. `spectrolite-managed-handoff-qualification` verifies both paths in
+VibeStudio and rejects premature reads and a different revision.
 Personal memory comparisons call the existing verified recall skill once for each assigned
 revision. They retain both original quotations and independently observed endpoint outcomes,
 including when one revision has no recall lead or no source. The exporter requires both nested

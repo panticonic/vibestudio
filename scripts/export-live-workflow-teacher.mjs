@@ -604,6 +604,13 @@ const spectroliteWorkflow = {
   root: "reviewSpectrolite",
   evidence: spectroliteEvidence,
 };
+const spectroliteHandoffWorkflow = {
+  ...spectroliteWorkflow,
+  family: "spectrolite-live-revision-handoff",
+  namespace: "vibestudio:spectrolite-handoff",
+  group: "verified-vault-to-review-plan",
+  evidence: spectroliteHandoffEvidence,
+};
 const grimoireWorkflow = {
   family: "examples-live-grimoire",
   workspace: "examples",
@@ -775,7 +782,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedMissionPlanningWorlds },
     { managedChannelRosterWorlds },
     { managedGrimoireWorlds },
-    { managedSpectroliteWorlds },
+    { managedSpectroliteWorlds, spectroliteHandoffWork },
     { managedNewsWorlds, newsHandoffWork },
     { managedGoogleSetupWorlds, gmailContinuationWork },
     { localModelComparisonWorlds },
@@ -1148,9 +1155,15 @@ export async function loadLiveTeacherCases(checkouts) {
     previewText,
     draft,
     follow,
+    handoff,
   } of managedSpectroliteWorlds) {
     cases.set(`spectrolite-live-${id}`, {
-      ...spectroliteWorkflow,
+      ...(handoff ? {
+        ...spectroliteHandoffWorkflow,
+        handoff,
+        skills: spectroliteHandoffWork.map(({ operation }) => operation),
+        sourceGroups: [spectroliteHandoffWorkflow, spectroliteWorkflow].flatMap(workflowSourceGroups),
+      } : spectroliteWorkflow),
       caseId: id,
       documentPath,
       checks,
@@ -6905,6 +6918,56 @@ function spectroliteEvidence(execution, exercise, _scenario, workflow) {
       ...(committedDocument ? { committed_hash: committedDocument.contentHash } : {}),
     },
     checks: { ...verification.checks, ...(workflow.draft ? { revisionReviewTree: true } : {}) },
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function spectroliteHandoffEvidence(execution, exercise, scenario, workflow) {
+  const fixture = execution.diagnostics.managedSpectrolite;
+  const verification = fixture?.verification;
+  const results = exercise.report?.results;
+  const report = results?.[1]?.report;
+  const { vault, document, committedDocument, preview } = verification?.vault?.observed ?? {};
+  const receipt = { vault, document, committedDocument, preview };
+  const skill = exercise.calls.find(({ record }) =>
+    record.parent_call_id === exercise.rootCallIds[0] &&
+    record.definition.name === "planVaultHandoff"
+  );
+  const choice = exercise.calls.find(({ record }) =>
+    skill && record.parent_call_id === skill.callId &&
+    record.definition.name === "chooseHandoff"
+  );
+  const [read] = skill?.record.effects ?? [];
+  requireEvidence(
+    results?.length === 2 &&
+      results[0]?.domain === "spectrolite" && results[0].operation === "reviewSpectrolite" &&
+      results[1]?.domain === "spectrolite" && results[1].operation === "planVaultHandoff" &&
+      verification?.passed === true && verification.checks?.verifiedVault === true &&
+      verification.checks?.exactHandoff === true &&
+      vault && document && committedDocument && preview?.phase === "rendered" &&
+      isDeepStrictEqual(verification.transferred, receipt) &&
+      isDeepStrictEqual(report, {
+        disposition: workflow.handoff,
+        ref: document.ref,
+        contentHash: document.contentHash,
+        evidenceIds: [vault.id, document.id, committedDocument.id, preview.id],
+      }) &&
+      skill?.record.effects?.length === 1 &&
+      read?.service === "spectroliteHandoffRead" && read.method === "evidence" &&
+      !read.error && matchesValue(read.args, []) && matchesValue(read.result, receipt) &&
+      matchesValue(choice?.record.inputs?.path, workflow.documentPath) &&
+      matchesValue(choice?.record.inputs?.evidence, receipt) &&
+      matchesValue(choice.record.output, report) &&
+      matchesValue(skill.record.output, report),
+    "Spectrolite handoff must use the verified editor and vault revision receipts"
+  );
+  const review = spectroliteEvidence({
+    ...execution,
+    diagnostics: { managedSpectrolite: { contextId: fixture.contextId, verification: verification.vault } },
+  }, { ...exercise, report: results[0].report }, scenario, workflow);
+  return {
+    world: review.world,
+    checks: { ...review.checks, ...verification.checks },
     evidence: { workspace: { fixture } },
   };
 }
