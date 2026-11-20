@@ -126,6 +126,14 @@ The other requires tracing an absent receipt before any browser service call.
 Use the matching `conversation-handoff-oracle-<case-id>` check to qualify either
 case with real VibeStudio services.
 
+Personal repository resumption cases call `personal/runPersonalWorkflow` in a
+live Personal workspace. The workflow combines the assigned semantic VCS state,
+the local GitHub credential inventory, and the installed onboarding route. A
+clean pull with missing access hands off to the GitHub owner. A pending local
+edit takes precedence before a push, and that case skips the owner read. The
+oracle checks that the original edit and protected main are preserved. Run an
+individual `personal-resume-oracle-<case-id>` check for model-free verification.
+
 Assigned automation planning cases use the real Missions service. The shared
 program reads the assigned manual monitor and its ledger, calls the automation
 planner, then checks the same assignment again. The stale case edits the

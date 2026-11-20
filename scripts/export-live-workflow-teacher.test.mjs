@@ -109,6 +109,7 @@ test("authored template worlds flow into the collector without losing original s
       ["notification-worlds", "notificationWorlds", []],
       ["retained-triage-worlds", "retainedTriageWorlds", []],
       ["github-setup-worlds", "githubSetupWorlds", []],
+      ["personal-resume-worlds", "personalResumeWorlds", []],
       ["template-release-worlds", "templateReleaseWorlds", []],
       ["delivery-history-worlds", "deliveryHistoryWorlds", []],
       ["android-audit-worlds", "androidAuditWorlds", []],
@@ -3201,6 +3202,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["panel-health-worlds", "export const managedPanelHealthWorlds = [];"],
       ["google-setup-worlds", "export const managedGoogleSetupWorlds = [];"],
       ["provenance-history-worlds", "export const managedProvenanceHistoryWorlds = [];"],
+      ["personal-resume-worlds", "export const personalResumeWorlds = [];"],
       ["runtime-program-worlds", "export const managedRuntimeProgramWorlds = [];"],
       ["incident-continuation-worlds", "export const incidentContinuationWorlds = [];"],
       ["log-audit-worlds", "export const managedLogAuditWorlds = [];"],
@@ -6735,6 +6737,115 @@ async function checkDeliveryReceiptExport(t, id, verdict, surface = "history") {
     exportLiveTeacherWorkflow({ ...options, cases }),
     /exact origin and consumer decisions/u
   );
+}
+
+for (const id of ["resume-pull-without-github-connection", "review-local-edit-before-push"]) {
+  test(`Personal repository export joins the assigned worktree and owner decision for ${id}`, async (t) => {
+    const { options, diagnostics, entry, save } = await fixture(t);
+    const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+      path.resolve(import.meta.dirname, "..")
+    );
+    const cases = await loadLiveTeacherCases(checkouts);
+    const name = `personal-resume-live-${id}`;
+    const { assignment } = cases.get(name);
+    const pins = JSON.parse(await readFile(options.pins, "utf8"));
+    await writeFile(options.pins, JSON.stringify({ ...pins, workspace: "personal" }));
+    entry.test.name = name;
+    const { goal, dirty, operation, access, decision, ownerAction } = assignment;
+    const operationId = "repo-reentry";
+    const repository = `projects/personal-resume-${operationId}`;
+    const work = { goal, operationId };
+    const request = { goal, work: [{ kind: "resumeRepositoryWork", input: work }] };
+    const observation = {
+      goal, repository, workingTree: dirty ? "dirty" : "clean",
+      availableAccess: [], remoteVerified: null, upstream: "unknown",
+    };
+    const hasOwner = ownerAction !== "skip";
+    const ownerInput = hasOwner ? {
+      goal, origin: "selection",
+      selection: {
+        id: `connection.github/${ownerAction}`, capabilityId: "connection.github",
+        action: ownerAction, via: "owner-skill", ownerSkillPath: "skills/github/SKILL.md",
+      },
+      capabilities: [{ id: "connection.github", label: "GitHub", owner: "skills/github/SKILL.md", state: "not-configured" }],
+    } : null;
+    const plan = { repository, operation, access, decision, facts: [], next: ["Resolve the prerequisite."] };
+    const owner = hasOwner ? {
+      action: "follow-owner-route", routeId: ownerInput.selection.id,
+      workspaceScope: "current", capabilityIds: ["connection.github"], unknownIds: [], brief: "Use setup.",
+    } : null;
+    const resume = { repository: plan, owner };
+    const report = { results: [{ kind: "resumeRepositoryWork", report: resume }], unresolved: [] };
+    const head = { kind: "event", eventId: "owned-head" };
+    diagnostics.personalResume = {
+      passed: true, caseId: id, contextId: "ctx", request, observedRepo: observation, observedOwner: ownerInput,
+      ownerAction: hasOwner ? ownerAction : null,
+      checks: { observedRepository: true, repositoryPlan: true, ownerHandoff: true, worktreePreserved: true },
+      state: {
+        main: "protected-main", finalMain: "protected-main", startingHead: head, finalHead: head,
+        startClean: !dirty, finalClean: !dirty, finalFileHash: "owned-hash", expectedFileHash: "owned-hash",
+      },
+    };
+    const ref = (value) => {
+      const bytes = JSON.stringify(value);
+      return { complete: true, hash: createHash("sha256").update(bytes).digest("hex"), bytes: Buffer.byteLength(bytes) };
+    };
+    const prototype = diagnostics.natlangTeacher.calls[0];
+    const phases = {
+      runWorkflow: [0, 13], runPersonalWorkflow: [1, 12], resumeRepositoryWork: [2, 11],
+      readRepository: [3, 3], planRepositoryWork: [4, 7], chooseAccess: [5, 5], assessRepo: [6, 6],
+      chooseOwnerAction: [8, 8], readOwnerRoute: [9, 9], routeSetup: [10, 10],
+    };
+    const timestamp = (second) =>
+      new Date(Date.parse("2026-01-01T00:00:00Z") + second * 1000).toISOString();
+    const call = (name, parent, inputs, output, effects = []) => ({
+      callId: name, summary: { ...prototype.summary, call_id: name },
+      record: {
+        ...prototype.record, call_id: name, parent_call_id: parent, definition: { name }, outcome: "done",
+        started_at: timestamp(phases[name][0]), ended_at: timestamp(phases[name][1]),
+        inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+        output: ref(output), effects,
+      },
+    });
+    const effect = (service, method, args, result) => ({ service, method, args: ref(args), result: ref(result) });
+    const choice = call("chooseOwnerAction", "resumeRepositoryWork", { repository: plan }, ownerAction);
+    diagnostics.natlangTeacher = {
+      ...diagnostics.natlangTeacher, programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+      report, rootCallIds: ["runWorkflow"], calls: [
+        call("runWorkflow", null, {}, null),
+        call("runPersonalWorkflow", "runWorkflow", { request }, report),
+        call("resumeRepositoryWork", "runPersonalWorkflow", { request: work }, resume),
+        call("readRepository", "resumeRepositoryWork", { operationId }, observation,
+          [effect("repositoryResumeRead", "inspect", [operationId], observation)]),
+        call("planRepositoryWork", "resumeRepositoryWork", { request: observation }, plan),
+        call("chooseAccess", "planRepositoryWork", { goal, operation }, access),
+        call("assessRepo", "planRepositoryWork", { request: observation, operation, access, ambiguous: false }, decision),
+        choice,
+        ...(hasOwner ? [
+          call("readOwnerRoute", "resumeRepositoryWork", { operationId, action: ownerAction }, ownerInput,
+            [effect("repositoryOwnerRead", "resolve", [operationId, ownerAction], ownerInput)]),
+          call("routeSetup", "resumeRepositoryWork", { request: ownerInput }, owner),
+        ] : []),
+      ],
+    };
+    await save();
+    await exportLiveTeacherWorkflow({ ...options, cases });
+    if (hasOwner) {
+      const route = diagnostics.natlangTeacher.calls.find(({ callId }) => callId === "readOwnerRoute").record;
+      route.started_at = timestamp(7);
+      await save();
+      await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /exact installed owner route/u);
+      route.started_at = timestamp(9);
+      route.effects[0].args = ref(["unassigned-operation", ownerAction]);
+    } else {
+      choice.record.output = ref("setup");
+    }
+    await save();
+    await assert.rejects(
+      exportLiveTeacherWorkflow({ ...options, cases }),
+      hasOwner ? /exact installed owner route/u : /nested live-state decision/u,
+    );
+  });
 }
 
 test("delivery history export rejects a same-text message from a different channel", (t) =>

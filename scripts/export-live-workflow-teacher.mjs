@@ -791,6 +791,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { incidentContinuationWorlds },
     { managedRuntimeProgramWorlds },
     { managedProvenanceHistoryWorlds },
+    { personalResumeWorlds },
   ] = await Promise.all(
     [
       "content-project-worlds.ts",
@@ -863,12 +864,33 @@ export async function loadLiveTeacherCases(checkouts) {
       "incident-continuation-worlds.ts",
       "runtime-program-worlds.ts",
       "provenance-history-worlds.ts",
+      "personal-resume-worlds.ts",
     ].map(async (file) => {
       const imported = await import(pathToFileURL(path.join(directory, file)).href);
       return imported.default ?? imported;
     })
   );
   const cases = new Map(originalCases);
+  for (const assignment of personalResumeWorlds) {
+    cases.set(`personal-resume-live-${assignment.id}`, {
+      family: "personal-live-repository-resume",
+      workspace: "personal",
+      namespace: "vibestudio:personal",
+      group: "live-repository-owner-handoff",
+      sourceGroups: [
+        "vibestudio:personal:live-repository-owner-handoff",
+        "vibestudio:github:local-credential-setup-route",
+        ...workflowSourceGroups(onboardingWorkflow),
+      ],
+      validator: {
+        template: "system-testing",
+        path: "skills/system-testing/personal-resume-managed.ts",
+      },
+      root: "runPersonalWorkflow",
+      assignment,
+      evidence: personalResumeEvidence,
+    });
+  }
   for (const assignment of notificationWorlds) {
     cases.set(`notification-lifecycle-live-${assignment.id}`, {
       family: "workspace-live-notification-lifecycle",
@@ -3352,6 +3374,100 @@ function retainedTriageEvidence(execution, exercise, _scenario, { assignment }) 
   );
   return {
     world: { context_id: fixture.contextId, source_run_id: request.runId, test_name: request.testName },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function personalResumeEvidence(execution, exercise, _scenario, { assignment }) {
+  const fixture = execution.diagnostics.personalResume;
+  const { contextId, request, observedRepo, observedOwner, ownerAction, state, checks } = fixture ?? {};
+  const records = exercise.calls.map(({ record }) => record);
+  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const child = (parent, name) => parent && records.find(
+    (record) => record.parent_call_id === parent.call_id && record.definition.name === name
+  );
+  const work = request?.work?.[0];
+  const result = exercise.report?.results?.[0];
+  const review = child(root, "runPersonalWorkflow");
+  const resume = child(review, "resumeRepositoryWork");
+  const read = child(resume, "readRepository");
+  const plan = child(resume, "planRepositoryWork");
+  const assessment = child(plan, "assessRepo");
+  const choice = child(resume, "chooseOwnerAction");
+  const access = child(plan, "chooseAccess");
+  const routeRead = child(resume, "readOwnerRoute");
+  const owner = child(resume, "routeSetup");
+  const reports = result?.report;
+  const bound = assignment.ownerAction !== "skip";
+  const operationId = work?.input?.operationId;
+  const effects = records.flatMap(({ effects }) => effects ?? []);
+  const before = (earlier, later) =>
+    Date.parse(earlier?.ended_at) <= Date.parse(later?.started_at);
+  const effectMatches = (call, service, method, args, value) => {
+    const [effect] = call?.effects ?? [];
+    return call?.effects?.length === 1 && effect?.service === service && effect.method === method &&
+      !effect.error && matchesValue(effect.args, args) && matchesValue(effect.result, value) &&
+      matchesValue(call.output, value);
+  };
+  requireEvidence(
+    fixture?.passed === true && fixture.caseId === assignment.id &&
+    ["observedRepository", "repositoryPlan", "ownerHandoff", "worktreePreserved"].every(key => checks?.[key] === true) &&
+    typeof contextId === "string" && contextId === execution.provenance?.contextId &&
+    request.goal === assignment.goal && request.work.length === 1 && work.kind === "resumeRepositoryWork" &&
+    work.input.goal === assignment.goal && typeof operationId === "string" && !!operationId &&
+    exercise.report?.results?.length === 1 && result.kind === work.kind &&
+    observedRepo?.goal === assignment.goal && observedRepo.repository === `projects/personal-resume-${operationId}` &&
+    observedRepo.workingTree === (assignment.dirty ? "dirty" : "clean") &&
+    observedRepo.upstream === "unknown" && observedRepo.remoteVerified === null &&
+    isDeepStrictEqual(observedRepo.availableAccess, []) &&
+    state?.startClean === !assignment.dirty && state.finalClean === state.startClean &&
+    typeof state.main === "string" && state.main === state.finalMain &&
+    state.startingHead && isDeepStrictEqual(state.startingHead, state.finalHead) &&
+    typeof state.finalFileHash === "string" && state.finalFileHash === state.expectedFileHash &&
+    matchesValue(review?.inputs?.request, request) && matchesValue(review.output, exercise.report) &&
+    matchesValue(resume?.inputs?.request, work.input) && matchesValue(resume.output, reports) &&
+    matchesValue(read?.inputs?.operationId, operationId) &&
+    effectMatches(read, "repositoryResumeRead", "inspect", [operationId], observedRepo),
+    "Personal repository resumption requires the assigned live worktree and preserved file"
+  );
+  requireEvidence(
+    reports.repository?.repository === observedRepo.repository &&
+    reports.repository.operation === assignment.operation &&
+    reports.repository.access === assignment.access && reports.repository.decision === assignment.decision &&
+    matchesValue(plan?.inputs?.request, observedRepo) && matchesValue(plan.output, reports.repository) &&
+    matchesValue(access?.output, assignment.access) &&
+    matchesValue(assessment?.inputs?.request, observedRepo) &&
+    matchesValue(assessment.inputs.operation, assignment.operation) &&
+    matchesValue(assessment.inputs.access, assignment.access) &&
+    matchesValue(assessment.inputs.ambiguous, false) && matchesValue(assessment.output, assignment.decision) &&
+    matchesValue(choice?.inputs?.repository, reports.repository) &&
+    matchesValue(choice.output, assignment.ownerAction) && effects.length === (bound ? 2 : 1) &&
+    before(read, plan) && before(plan, choice),
+    "Personal repository resumption needs the nested live-state decision and least access"
+  );
+  const selection = observedOwner?.selection;
+  requireEvidence(
+    bound ? ownerAction === assignment.ownerAction &&
+      observedOwner.origin === "selection" &&
+      selection?.id === `connection.github/${ownerAction}` && selection.capabilityId === "connection.github" &&
+      selection.action === ownerAction && selection.via === "owner-skill" &&
+      selection.ownerSkillPath === "skills/github/SKILL.md" &&
+      observedOwner.capabilities.length === 1 && observedOwner.capabilities[0].id === selection.capabilityId &&
+      observedOwner.capabilities[0].state === "not-configured" &&
+      reports.owner?.routeId === selection.id && reports.owner.action === "follow-owner-route" &&
+      reports.owner.workspaceScope === "current" &&
+      isDeepStrictEqual(reports.owner.capabilityIds, ["connection.github"]) &&
+      matchesValue(routeRead?.inputs?.operationId, operationId) &&
+      matchesValue(routeRead.inputs.action, ownerAction) &&
+      effectMatches(routeRead, "repositoryOwnerRead", "resolve", [operationId, ownerAction], observedOwner) &&
+      matchesValue(owner?.inputs?.request, observedOwner) && matchesValue(owner.output, reports.owner) &&
+      before(choice, routeRead) && before(routeRead, owner)
+      : ownerAction === null && observedOwner === null && reports.owner === null && !routeRead && !owner,
+    "Personal repository resumption must use the exact installed owner route only if needed"
+  );
+  return {
+    world: { context_id: contextId, repository: observedRepo.repository, working_head: state.finalHead },
     checks,
     evidence: { workspace: { fixture } },
   };
