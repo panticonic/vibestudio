@@ -7995,7 +7995,7 @@ function driveSharingEvidence(execution, exercise, _scenario, { assignment }) {
       ["exactTransport", "inventoryGate", "exactReport"].every((key) => verification.checks?.[key] === true) &&
       isDeepStrictEqual(verification.request, request) &&
       isDeepStrictEqual(verification.requests, [...folderReads, ...permissionReads]) &&
-      isDeepStrictEqual(verification.inventoryIds, expected.inventoryIds) &&
+      isDeepStrictEqual(verification.eligibleIds, expected.eligibleIds) &&
       report?.status === (audited ? "complete" : "partial") && report.action === "none" &&
       report.checkpoint === null && isDeepStrictEqual(report.ids, expected.ids) &&
       isDeepStrictEqual(report.inventoryAudit, { gate: expected.gate, inventoryIds: expected.inventoryIds }),
@@ -8061,12 +8061,11 @@ function driveSharingEvidence(execution, exercise, _scenario, { assignment }) {
     }
   }
   const permissionRows = permissionResults.flatMap((result) => result?.rows ?? []);
-  const listingReport = listing?.record.output;
-  const decisionInput = decide?.record.inputs?.inventory;
+  const listingStatus = folderResults.some((page) => !page || page.incomplete) || folderResults.at(-1)?.next !== null
+    ? "partial"
+    : "complete";
   requireEvidence(
-    listingReport?.complete && decisionInput?.complete &&
-      listingReport.hash === decisionInput.hash && listingReport.bytes === decisionInput.bytes &&
-      matchesValue(guide?.record.inputs?.request, request) &&
+    matchesValue(guide?.record.inputs?.request, request) &&
       matchesValue(review?.record.inputs?.request, request) &&
       matchesValue(guide?.record.output, report) && matchesValue(review?.record.output, report) &&
       readiness?.service === "googleWorkspaceRead" && readiness.method === "readiness" &&
@@ -8077,6 +8076,8 @@ function driveSharingEvidence(execution, exercise, _scenario, { assignment }) {
       matchesValue(select?.record.inputs?.rows, [...eligible.values()]) &&
       matchesValue(select?.record.output, expected.inventoryIds) &&
       before(listing, decide) &&
+      matchesValue(decide?.record.inputs?.status, listingStatus) &&
+      matchesValue(decide?.record.inputs?.selectedIds, expected.inventoryIds) &&
       matchesValue(decide?.record.inputs?.fileId, sharing.fileId) &&
       matchesValue(decide?.record.output, expected.gate) &&
       effects.length === 1 + folderPages.length + permissionPages.length &&

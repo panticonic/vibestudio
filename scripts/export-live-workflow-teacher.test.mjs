@@ -4976,7 +4976,12 @@ test("Drive sharing export binds permission reads to completed inventory and the
     const json = JSON.stringify(value);
     return { complete: true, hash: createHash("sha256").update(json).digest("hex"), bytes: Buffer.byteLength(json) };
   };
-  for (const id of ["confirmed-roster-direct-sharing", "shortcut-does-not-confirm-roster", "roster-confirmation-with-unavailable-tail"]) {
+  for (const id of [
+    "confirmed-roster-direct-sharing",
+    "shortcut-does-not-confirm-roster",
+    "roster-confirmation-with-unavailable-tail",
+    "roster-with-incomplete-search-flag",
+  ]) {
     const name = `drive-sharing-live-${id}`;
     const workflow = cases.get(name);
     const { goal, inventory, sharing, folderPages, permissionPages, expected } = workflow.assignment;
@@ -4986,7 +4991,9 @@ test("Drive sharing export binds permission reads to completed inventory and the
       status: audited ? "complete" : "partial", action: "none", checkpoint: null,
       ids: expected.ids, inventoryAudit: { gate: expected.gate, inventoryIds: expected.inventoryIds },
     };
-    const listingReport = { ids: expected.inventoryIds, status: folderPages.at(-1).response ? "complete" : "partial" };
+    const listingReport = {
+      ids: expected.inventoryIds, status: expected.gate === "inventory-partial" ? "partial" : "complete",
+    };
     const eligible = [];
     const permissions = [];
     const requests = [];
@@ -4998,8 +5005,10 @@ test("Drive sharing export binds permission reads to completed inventory and the
         id: file.id, name: file.name, mimeType: file.mimeType, modifiedAt: file.modifiedTime ?? null,
         shortcut: Boolean(file.shortcutDetails),
       }));
-      eligible.push(...rows.filter((row) => row.id === sharing.fileId));
-      return { ...effect, result: ref({ next: response.nextPageToken ?? null, incomplete: false, rows }) };
+      eligible.push(...rows.filter((row) => expected.eligibleIds.includes(row.id)));
+      return { ...effect, result: ref({
+        next: response.nextPageToken ?? null, incomplete: response.incompleteSearch === true, rows,
+      }) };
     });
     const readPermissions = permissionPages.map(({ cursor, response }) => {
       requests.push({ kind: "permissions", cursor, status: 200 });
@@ -5015,7 +5024,7 @@ test("Drive sharing export binds permission reads to completed inventory and the
     });
     const contextId = "scoped-drive-sharing";
     const verification = {
-      caseId: id, passed: true, request, requests, permissions, inventoryIds: expected.inventoryIds,
+      caseId: id, passed: true, request, requests, permissions, eligibleIds: expected.eligibleIds,
       checks: { exactTransport: true, inventoryGate: true, exactReport: true },
     };
     const execution = {
@@ -5032,13 +5041,17 @@ test("Drive sharing export binds permission reads to completed inventory and the
     const guide = call("guide", "root", "guideGoogleWorkspace", { request }, report, [
       { service: "googleWorkspaceRead", method: "readiness", result: ref({ state: "ready" }) },
     ]);
+    const select = call("select", "listing", "selectRows", { request: inventory, rows: eligible }, expected.inventoryIds);
+    const decide = call("decide", "review", "decideSharingGate", {
+      status: listingReport.status, selectedIds: listingReport.ids, fileId: sharing.fileId,
+    }, expected.gate, [], [35, 40]);
     const exercise = { report, rootCallIds: ["root"], calls: [
       call("root", null, "runWorkflow", {}, report),
       guide,
       call("review", "guide", "reviewInventorySharing", { request }, report),
       call("listing", "review", "inspectFolder", { request: inventory }, listingReport, readFolders, [10, 30]),
-      call("select", "listing", "selectRows", { request: inventory, rows: eligible }, expected.inventoryIds),
-      call("decide", "review", "decideSharingGate", { inventory: listingReport, fileId: sharing.fileId }, expected.gate, [], [35, 40]),
+      select,
+      decide,
     ] };
     const audit = call("audit", "review", "reviewSharing", { request: sharing }, report, readPermissions, [45, 90]);
     if (audited) {
@@ -5046,6 +5059,20 @@ test("Drive sharing export binds permission reads to completed inventory and the
         call("classify", "audit", "classifyAccess", { request: sharing, permissions }, expected.ids));
     }
     assert.ok(workflow.evidence(execution, exercise, name, workflow));
+    select.record.output = ref(expected.eligibleIds);
+    assert.throws(() => workflow.evidence(execution, exercise, name, workflow), /before any permission reads/);
+    select.record.output = ref(expected.inventoryIds);
+    if (expected.gate === "inventory-partial") {
+      decide.record.inputs.status = ref("complete");
+      assert.throws(() => workflow.evidence(execution, exercise, name, workflow), /before any permission reads/);
+      decide.record.inputs.status = ref("partial");
+    }
+    if (id === "roster-with-incomplete-search-flag") {
+      const result = readFolders[0].result;
+      readFolders[0].result = ref({ next: "folder-tail", incomplete: false, rows: eligible.slice(0, 1) });
+      assert.throws(() => workflow.evidence(execution, exercise, name, workflow), /before any permission reads/);
+      readFolders[0].result = result;
+    }
     if (audited) {
       audit.record.started_at = new Date(20).toISOString();
     } else {

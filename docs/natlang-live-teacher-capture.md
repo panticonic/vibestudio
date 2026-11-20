@@ -421,8 +421,10 @@ check both outcomes and the gates on access to scratch evidence.
 
 Drive sharing cases run the inventory and direct-access review as nested calls
 in the Google Workspace program. The permission audit opens after a complete
-folder listing confirms the exact current file. The two hold cases cover a
-look-alike shortcut and a failed tail page after the exact file was observed.
+folder listing confirms the exact current file. The selection lambda receives
+both delivery and planning spreadsheets that pass the same file type and date
+filters. The hold cases cover a look-alike shortcut, a failed tail page, and
+a completed page sequence that Drive flagged as an incomplete search.
 The audit follows the real Drive client's pagination against a local fixture
 and checks public links, unauthorized editor roles and exact domain matches.
 Run `drive-sharing-oracle-qualification` in Google Workspace to verify the
