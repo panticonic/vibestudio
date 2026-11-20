@@ -1365,7 +1365,8 @@ relay method that serves the canonical facet's remote requests.
 - The size gate of §5.1 is measured and recorded.
 
 Existing interrupted-fork and lost-reply results are retained as evidence.
-Further deliberate process-loss scenarios are outside this release gate.
+The P5 release gate covers normal restart and ordinary participant work.
+Further forced server crashes and lost replies are optional follow-up coverage.
 
 ---
 
@@ -2642,7 +2643,10 @@ chronolog.subscribe({ group, sql, bindings })     // live query results
 
 ## 9. Data migration and ordering with the cutover
 
-### 9.1 Ordering
+### 9.1 Historical cutover ordering
+
+The release starts fresh workspaces directly in Dolt. The ordering below
+records the previous plan and the history of the cutover.
 
 1. **The runtime cutover** (`feat/celld-runtime`, another agent) moves every
    class to celld with **SQLite** cells and facets, and migrates workerd

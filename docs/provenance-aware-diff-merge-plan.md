@@ -27,6 +27,11 @@ The product goal is small:
    publication authority, and runtime activation keeps the previous runnable
    artifact when a new projection fails.
 
+The November 20 release starts fresh workspaces on Dolt. The release gate
+exercises normal saves, restarts, reviewed publication and integration with
+independent participants. Existing crash and lost-reply results remain useful
+as regression evidence.
+
 There is no compatibility reader, legacy schema, migration, parallel merge
 engine, mutable merge session, merge-state marker, pending merge tree, authorship
 credential, VCS authority service, source-basis capability, merge certificate,
@@ -1956,13 +1961,13 @@ ID, loading a whole graph, or allocating server traversal state.
    independent subscribers. Ensure runtime activation fails closed and retains
    the previous runnable artifact on build, validation, approval, or startup
    failure.
-9. Failure-inject semantic-write/effect/ack crash windows, including lost delta
-   receipts and a missing host basis after restart. Separately verify that a
-   missing or stale temporary checkout is repaired from a newly derived exact
-   command without an effect row or acknowledgement.
+9. Verify that a normal restart reopens the saved working copy and that an
+   approved push makes the committed changes visible in shared history.
 
-Exit criterion: lost replies and process restarts converge exactly once without
-an in-memory registry or second semantic owner.
+Exit criterion: each participant can save privately, reopen the saved work after
+a normal restart and publish through the protected history with approval.
+Additional forced server failures and lost replies are optional follow-up
+coverage.
 
 ### Phase G — Public surface, Git, and skills
 
@@ -1989,7 +1994,7 @@ Run, in order:
 4. semantic workspace/store tests;
 5. RPC/runtime/tool contract parity tests;
 6. context edit/move/copy/commit/discard/integrate integration tests;
-7. publication crash/replay tests;
+7. reviewed publication and integration with two independent participants;
 8. package type checks and repository architecture guards;
 9. headless infrastructure doctor;
 10. smallest exact vague agentic fixtures;
