@@ -1261,13 +1261,13 @@ export async function loadLiveTeacherCases(checkouts) {
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
-      openTerminalWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
+      openTerminalWorlds = [], openOwnedResearchWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
     for (const assignment of [...openGoalWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
       ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
       ...openGoalCalendarWorlds, ...openPersonalArtifactWorlds, ...openPersonalHistoryWorlds,
-      ...openTerminalWorlds, ...openGoalEvalHandoffWorlds, ...openGoalProgramRunWorlds, ...openGoalAuthoringWorlds, ...openGoalGoogleHandoffWorlds, ...openPersonalAutomationWorlds, ...openGoalOwnedPreviewWorlds, ...openDiagnosticWorlds, ...openLocalDeliveryWorlds, ...openGoalPanelRecoveryWorlds, ...openBrowserMigrationWorlds]) {
+      ...openTerminalWorlds, ...openOwnedResearchWorlds, ...openGoalEvalHandoffWorlds, ...openGoalProgramRunWorlds, ...openGoalAuthoringWorlds, ...openGoalGoogleHandoffWorlds, ...openPersonalAutomationWorlds, ...openGoalOwnedPreviewWorlds, ...openDiagnosticWorlds, ...openLocalDeliveryWorlds, ...openGoalPanelRecoveryWorlds, ...openBrowserMigrationWorlds]) {
       const split = assignment.split ?? "train";
       const sourceGroups = [assignment.sourceGroup, assignment.relatedSourceGroup].filter(Boolean);
       const scenario = `open-goal-${assignment.id}`;
@@ -1283,10 +1283,11 @@ export async function loadLiveTeacherCases(checkouts) {
         splitByGroup.set(group, split);
       }
       const domain = templateGoalDomains[assignment.kind];
+      const ownedResearch = assignment.kind === "owned-research" || assignment.kind === "owned-research-and-edit";
       cases.set(scenario, {
         family: `workspace-open-user-goal-${assignment.kind}`,
         workspace: assignment.workspace ?? "examples",
-        namespace: domain?.namespace ?? (assignment.kind === "browser" ? "vibestudio:browser" :
+        namespace: domain?.namespace ?? (ownedResearch ? "vibestudio:owned-research-held" : assignment.kind === "browser" ? "vibestudio:browser" :
           assignment.kind === "suite" ? "vibestudio:workspace-verification" :
           assignment.kind === "research" ? "vibestudio:web-research" : "vibestudio:workspace-edit"),
         group: assignment.sourceGroup,
@@ -1295,13 +1296,15 @@ export async function loadLiveTeacherCases(checkouts) {
         interaction: "open-user-goal",
         program: "skills/open-user-goal/runUserGoal.nl",
         root: "runUserGoal",
-        validator: domain?.validator ?? { template: "system-testing", path: `skills/system-testing/open-goal${[
+        validator: domain?.validator ?? (ownedResearch
+          ? { template: "system-testing", path: "skills/system-testing/open-goal-owned-research-managed.ts" }
+          : { template: "system-testing", path: `skills/system-testing/open-goal${[
           "browser", "suite",
-        ].includes(assignment.kind) ? `-${assignment.kind}` : ""}-managed.ts` },
+        ].includes(assignment.kind) ? `-${assignment.kind}` : ""}-managed.ts` }),
         assignment,
         ...(assignment.devices ? { devices: assignment.devices } : {}),
         ...(assignment.requiresDeploymentPackage ? { requiresDeploymentPackage: true } : {}),
-        evidence: domain ? openTemplateGoalEvidence : openGoalEvidence,
+        evidence: domain ? openTemplateGoalEvidence : ownedResearch ? openOwnedResearchEvidence : openGoalEvidence,
       });
     }
   }
@@ -7829,6 +7832,55 @@ function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
     world: { context_id: proof.contextId, ...(proof.panelId ? { panel_id: proof.panelId } : {}) },
     checks: Object.fromEntries(checks.map(check => [check, true])),
     evidence,
+  };
+}
+
+function openOwnedResearchEvidence(execution, exercise, _scenario, workflow) {
+  const proof = execution.diagnostics.openGoalVerification;
+  const world = workflow.assignment;
+  const root = exercise.calls.find(({ callId }) => callId === exercise.rootCallIds[0])?.record;
+  const research = exercise.calls.map(({ record }) => record).find(record =>
+    record.parent_call_id === root?.call_id && record.definition?.name === "investigatePublicQuestion");
+  const revisions = exercise.calls.map(({ record }) => record).filter(record =>
+    record.parent_call_id === root?.call_id && record.definition?.name === "reviseWorkspaceDocument");
+  const effects = exercise.calls.flatMap(({ record }) => record.effects ?? []);
+  const searches = effects.filter(effect => effect.service === "goalDiscovery" && effect.method === "search" && !effect.error);
+  const fetches = effects.filter(effect => effect.service === "web" && effect.method === "fetch" && !effect.error);
+  const cacheReads = effects.filter(effect => effect.service === "web" && effect.method === "read" && !effect.error);
+  const changes = effects.filter(effect => effect.service === "goalWorkspace" && effect.method === "revise" && !effect.error);
+  const checks = ["discoveredOwnedSources", "exactOwnedPageReadback", "groundedOwnedCitations",
+    "readOwnedCacheContinuation", "answeredOwnedGoal", "protectedOwnedResearchScope",
+    ...(world.edit ? ["discoveredWorkspace", "recoveredConcurrentEdit", "exactDocumentReadback",
+      "preservedOtherDocuments", "reportedStoredRevision"] : [])];
+  requireEvidence(
+    proof?.passed === true && proof.caseId === world.id && proof.goal === world.goal &&
+      proof.contextId === execution.provenance?.contextId &&
+      checks.every(check => proof.checks?.[check] === true) &&
+      root?.definition?.name === "runUserGoal" && Object.keys(root.inputs ?? {}).length === 1 &&
+      matchesValue(root.inputs.goal, world.goal) && research?.outcome === "done" &&
+      matchesValue(research.inputs?.goal, world.goal) && matchesValue(research.output, exercise.report?.research) &&
+      searches.length > 0 && fetches.length > 0 &&
+      proof.fetched.every(page => fetches.some(effect => effect.result?.url === page.url &&
+        effect.result.digest === page.digest && effect.result.session === "public" &&
+        searches.some(search => Array.isArray(search.result) && search.result.some(row =>
+          row.sources?.some(source => source.url === page.url))))) &&
+      proof.readback.every(page => page.exact === true && hash(page.text) === page.digest) &&
+      (!world.tail || cacheReads.some(effect => proof.fetched.some(page =>
+        new URL(page.url).pathname.endsWith("/" + world.tail) && effect.result?.digest === page.digest &&
+          effect.result.offset === page.headBytes && effect.result.bytes > 0))) &&
+      (world.edit ? revisions.length === 1 && revisions[0].outcome === "done" && changes.length === 2 &&
+        matchesValue(revisions[0].inputs?.research, research.output) &&
+        Date.parse(research.ended_at) <= Date.parse(revisions[0].started_at) &&
+        changes[0].result?.status === "changed" && changes[1].result?.status === "written" &&
+        changes[1].result.version === exercise.report.version &&
+        proof.document?.contents?.[world.edit.destination] === world.edit.expected
+        : revisions.length === 0 && changes.length === 0 && exercise.report?.status === "answered"),
+    "Expected the original user goal, exact owned HTTP and citation evidence, and separately observed revision recovery"
+  );
+  return {
+    world: { context_id: proof.contextId },
+    checks: Object.fromEntries(checks.map(check => [check, true])),
+    evidence: { workspace: { proof } },
   };
 }
 
