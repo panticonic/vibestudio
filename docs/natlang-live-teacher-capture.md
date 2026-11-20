@@ -366,8 +366,9 @@ calls. The cases distinguish a zero-count category from missing coverage, a
 source disappearing before preview, an interrupted import whose source is
 ready or blocked, and a cancelled import with stored batches. The managed
 tests use a local host fixture for preview and a context-owned Browser Data
-worker for the retained receipts. Run `browser-import-oracle-qualification`
-without making model calls or reading a local browser profile.
+worker for the retained receipts. Each case has a model-free system test
+named `browser-import-oracle-qualification-CASE`. These tests read no local
+browser profiles.
 
 Personal Browser handoffs compose Browser library and Collection conductor in one shared
 workflow. Collection writes require a live readback of the retained bookmark. The exporter
