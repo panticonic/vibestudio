@@ -2416,6 +2416,37 @@ test("Spectrolite export binds the browser, committed baseline and nested revisi
     exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-handoff-wrong-revision` }),
     /Spectrolite handoff must use the verified editor and vault revision receipts/u
   );
+  entry.test.name = "spectrolite-live-review-handoff-hold-after-preview-removal";
+  const held = cases.get(entry.test.name);
+  verification.caseId = held.caseId;
+  verification.browser = { path: held.documentPath, text: held.heading, rendered: [] };
+  document.path = committedDocument.path = held.documentPath;
+  committedDocument.title = held.draft.committedTitle;
+  verification.observed.preview = transferred.preview = null;
+  vaultReport.findings = held.checks.map((check, index) => ({
+    check, code: held.expected[index], detail: held.documentPath,
+    evidenceIds: [
+      vault.id, ...(check === "publication" ? [] : [document.id]),
+      ...(check === "revision" ? [committedDocument.id] : []),
+    ],
+  }));
+  Object.assign(plan, {
+    disposition: "hold", ref: null, contentHash: null, evidenceIds: [vault.id, document.id],
+  });
+  handoffCall.record.effects[0].result = ref(transferred);
+  choiceCall.record.inputs = { path: ref(held.documentPath), evidence: ref(transferred) };
+  handoffCall.record.output = choiceCall.record.output = ref(plan);
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-missing-preview-handoff` });
+
+  plan.evidenceIds.push(committedDocument.id);
+  handoffCall.record.output = choiceCall.record.output = ref(plan);
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-held-handoff-cites-unchecked-baseline` }),
+    /Spectrolite handoff must use the verified editor and vault revision receipts/u
+  );
+
 });
 
 test("channel roster export rejects a participant from the other channel", async (t) => {

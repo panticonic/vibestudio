@@ -423,8 +423,10 @@ distinguish changed notes from unchanged notes in a dirty vault. The exporter re
 nested revision-review calls and rejects stale editor text or a different committed reference.
 Spectrolite handoff tasks compose the live vault review with a second Natlang
 operation that selects the exact revision for peer review. The plan carries
-either the committed event or the working draft and cites the matching browser
-preview. `spectrolite-managed-handoff-qualification` verifies both paths in
+the committed event or working draft when its browser preview is verified.
+It holds the handoff when the checked document has no rendered component,
+including after a draft removes the preview from its committed predecessor.
+`spectrolite-managed-handoff-qualification` verifies these paths in
 VibeStudio and rejects premature reads and a different revision.
 Personal memory comparisons call the existing verified recall skill once for each assigned
 revision. They retain both original quotations and independently observed endpoint outcomes,

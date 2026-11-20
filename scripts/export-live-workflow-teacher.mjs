@@ -8162,6 +8162,17 @@ function spectroliteHandoffEvidence(execution, exercise, scenario, workflow) {
   const report = results?.[1]?.report;
   const { vault, document, committedDocument, preview } = verification?.vault?.observed ?? {};
   const receipt = { vault, document, committedDocument, preview };
+  const previewMatches = preview?.phase === "rendered" &&
+    preview.documentPath === document?.path && preview.contentHash === document?.contentHash;
+  const expected = vault && document && (workflow.handoff === "hold"
+    ? !previewMatches && {
+        disposition: "hold", ref: null, contentHash: null,
+        evidenceIds: [vault.id, document.id, ...(preview ? [preview.id] : [])],
+      }
+    : committedDocument && previewMatches && {
+        disposition: workflow.handoff, ref: document.ref, contentHash: document.contentHash,
+        evidenceIds: [vault.id, document.id, committedDocument.id, preview.id],
+      });
   const skill = exercise.calls.find(({ record }) =>
     record.parent_call_id === exercise.rootCallIds[0] &&
     record.definition.name === "planVaultHandoff"
@@ -8177,14 +8188,8 @@ function spectroliteHandoffEvidence(execution, exercise, scenario, workflow) {
       results[1]?.domain === "spectrolite" && results[1].operation === "planVaultHandoff" &&
       verification?.passed === true && verification.checks?.verifiedVault === true &&
       verification.checks?.exactHandoff === true &&
-      vault && document && committedDocument && preview?.phase === "rendered" &&
-      isDeepStrictEqual(verification.transferred, receipt) &&
-      isDeepStrictEqual(report, {
-        disposition: workflow.handoff,
-        ref: document.ref,
-        contentHash: document.contentHash,
-        evidenceIds: [vault.id, document.id, committedDocument.id, preview.id],
-      }) &&
+      expected && isDeepStrictEqual(verification.transferred, receipt) &&
+      isDeepStrictEqual(report, expected) &&
       skill?.record.effects?.length === 1 &&
       read?.service === "spectroliteHandoffRead" && read.method === "evidence" &&
       !read.error && matchesValue(read.args, []) && matchesValue(read.result, receipt) &&
