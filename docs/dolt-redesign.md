@@ -54,7 +54,8 @@ is proposal):
     into a shared `main` across users and workspaces (§8).
 - **Q1** (Dolt merge adopts non-conflicting changes, with provenance from the
   commit graph): yes.
-- **Q2** (replay GAD's full history into Dolt commits): yes, replay.
+- **Q2** originally selected full history replay. On November 20 the owner
+  removed migration and backward compatibility from release scope.
 - **Q3** (eval kernel residency): hold until an explicit end, bounded by the
   node's memory budget. No idle timer.
 - **Q4** (Chronolog writes): agents write through their user's key after
@@ -885,6 +886,11 @@ without a new protocol.
 
 ### 5.1 Topology: one canonical database, many work cells
 
+Create fresh workspaces directly in native Dolt history. Use Dolt for
+branching, saving revisions, comparison and merging. Vibestudio owns
+participant identity, access to working copies, publication approval and
+semantic conflict choices. Existing workspace data stays where it is.
+
 ```text
                   ┌──────────────────────────┐
                   │ canonical GAD            │   main (protected)
@@ -928,7 +934,7 @@ without a new protocol.
 - **Size gate.** The canonical database holds placements, hashes and
   coordinates, never file bytes (§5.10), so it is small compared with the
   workspace. A work cell is a whole-file copy, so spawning one costs the file
-  size once. P5 measures the replayed database of a real workspace and the
+  size once. P5 measures a representative fresh workspace database and the
   fork latency at that size. If a participant fork exceeds its budget, the
   fallback is to shard the canonical database by repository group (one Dolt
   database per group, a work cell holding one facet per group). It is a
@@ -1344,19 +1350,24 @@ relay method that serves the canonical facet's remote requests.
 
 ### 5.13 Gates for P5 specific to decentralization
 
+- A fresh installed workspace on the current runtime survives a normal
+  restart with saved work intact. An independent participant can read
+  published changes and cannot read work held in another participant's copy.
 - Two work cells, one conflicting and one clean change each, publish
   concurrently: both land, the loser's resolver runs once, `main` is a
   fast-forward chain, the commit graph has no lost write.
 - A push after approval succeeds; a push without a grant, with an expired
   one, or from a fork that was not given one fails with
   `ERR_DOLT_REMOTE_FORBIDDEN`.
-- Create a work cell twice with the same id (and once with the first call
-  killed mid-fork): one cell results.
+- Repeat creation with the same id and verify that one work cell results.
 - Retire a work cell: its committed events are on `retired/…`, its grants are
   gone, the object is deleted.
-- The canonical learns that `main` moved after a push (follow-up RPC, and again
-  with the RPC dropped: reconciliation from `hashOf("main")`).
+- Normal publication advances the canonical `main` and updates the protected
+  workspace view.
 - The size gate of §5.1 is measured and recorded.
+
+Existing interrupted-fork and lost-reply results are retained as evidence.
+Further deliberate process-loss scenarios are outside this release gate.
 
 ---
 
@@ -2656,6 +2667,9 @@ chronolog.subscribe({ group, sql, bindings })     // live query results
 
 ### 9.2 The importer
 
+This section records earlier implementation decisions and evidence.
+Migration and backward compatibility are outside the current release scope.
+
 - **Facet classes.** The UniversalDO root sees a legacy SQLite facet (`do`)
   and no Dolt facet. It starts the new class in a Dolt facet and streams the
   legacy rows through a generic paged reader, the class's
@@ -2714,7 +2728,7 @@ is **done**: F1 to F7 ship in `fcc7268`, and `9440c29` (pinned) fixes the hard r
 | **P2 Eval kernels**                  | **P2a (done):** `ctx.residency.hold()` for the heap until an explicit end (Q3, no idle timer), revocation through `onrevoked`, the host lease and its three methods deleted. **P2b (open, §7.12):** general dynamic code. The hosting helper (`hostCode`, any entity, Dolt facet with `codegen` and `residency` from the manifest), session entities for panels, the CLI and the runner, one admission function (`admitDynamicCode`, built), pull delivery, the kernel class in Base with no special identity; delete `EvalDO`, `evalService`, the push machinery and the `evalEngine` host schemas | cutover, P0                                             | `pnpm test` for eval packages; system tests `eval-*` (heap retained across turns, cancel, restart report, large return) compared with the cutover numbers; a confinement probe (a userland object's `eval` throws, the kernel's works); a cross-owner probe (owner A cannot address B's kernel); `rg 'EvalDO\|evalService' src packages` is empty (`UNSAFE_EVAL` already is)                                                                                                                                                                                                                            | 8 (P2a about 1) |
 | **P3 Durable services (done, §4.6)** | `WorkspaceDO` on Dolt; panel undo by reverse patch; backup, restore, reset and clone via Dolt; delete the maintenance journal, `cloneDO`, `durableObjectStorageClone.ts` and `computeWorkerdObjectIdHash`, and the lifecycle tables and driver if the cutover kept them                                                                                                                                                                                                                                                                                                                             | P2 (facet machinery proven)                             | `WorkspaceDO.test.ts` against `FakeDoltStorage`; system tests for panel close and reopen, `workers.resetStorage`, and a restore round trip; a fork-idempotency test (the same target id twice gives one object); `rg cloneDO\|do_maintenance` is empty                                                                                                                                                                                                                                                                                                                                                  | 6               |
 | **P4 Agent system**                  | Channel and agent cells on Dolt with local tables; Pi local document tables; native conversation fork; delete the hash chain, knowledge export and import, and the clone paths                                                                                                                                                                                                                                                                                                                                                                                                                      | P0                                                      | Fork-and-subagents acceptance (§E3): edit-and-fork, a multi-agent fork, a subagent `mode: "fork"`, crash-resume of a fork op (kill between phases); hibernation tests (evict between turns, redelivery deduplicated); a fork at sequence N equals the parent's state at N (ledger, participants, agent anchors)                                                                                                                                                                                                                                                                                         | 12              |
-| **P5 GAD, decentralized**            | Canonical Dolt database and participant work cells (§5.1); the state model, contexts as branches; integration by F1 merge, `pull` and `push` (§5.5); grants and approval as grant issuance (§5.6); work-cell create, retire (§5.7); a derived `commit_index`, `content_roots`; replay migration (Q2); delete the fact-map, radix and frontier machinery                                                                                                                                                                                                                                             | P0, P4 (agent forks), the two _to verify_ items         | The provenance plan's acceptance matrix (§14), re-expressed over commit hashes and passing in full; the decentralization gates of §5.13; replay equivalence: for each real workspace snapshot available, every legacy event's materialized tree hash equals the replayed commit's, and blame answers match on a sampled set; the **size gate** (a replayed workspace database and the fork latency at that size, recorded); checkout and merge benchmarks: checkout **p95 within 20 ms with `fsync` and 10k local rows** (the fork measured 14 to 16 ms), a context switch batched per participant turn | 20              |
+| **P5 GAD, decentralized** | Direct native creation of fresh workspaces (§5.1), separate participant work cells and Dolt context branches, fetch and merge with reviewed fast-forward publication (§5.5–§5.7), derived indexes, and removal of the fact-map, radix and frontier machinery. | P0, P4 (agent forks), the two _to verify_ items | The provenance acceptance matrix (§14) over native commit hashes. Fresh installation, normal restart, independent working copies, normal creation and retirement, and reviewed publication and merge (§5.13). Record a representative database size and fork latency. Checkout p95 within 20 ms with disk syncs and 10,000 local rows. | 20 |
 | **P6 Chronolog capability**          | Chronolog node deployed per workspace node; the `chronolog` host service; key custody; invite and join; agent writes through approval; Chronolog authority for pushes into a shared GAD `main` (§8.4); the cross-workspace P2P carrier for Dolt remotes                                                                                                                                                                                                                                                                                                                                             | Chronolog fork phase 4, P0, the P2P cross-workspace run | Two workspace instances on two nodes: create a group, invite, write from both sides, see an owner-row rejection, run a replay flip (Chronolog's demo as a system test); a GAD push between workspaces authorised by group membership                                                                                                                                                                                                                                                                                                                                                                    | 8               |
 
 **Critical path:** P0 → P2 → P4 → P5. Two pieces can run in parallel: P3
@@ -2752,9 +2766,9 @@ after P2, and P6 after P0 plus the cross-workspace carrier.
   rises until an explicit end. _Mitigation_: the node budget refuses
   explicitly (§7.4), and every end condition (dispose, reset, archive,
   revocation) releases.
-- **R5. GAD replay cost.** Large workspaces may take minutes to replay.
-  _Mitigation_: replay runs as a resumable import (commits are its
-  checkpoints). Q2 chose replay.
+- **R5. Historical GAD replay cost.** Large workspaces may take minutes to
+  replay. Prior replay work used commits as checkpoints. The current
+  release creates fresh native history.
 - **R6. History is retention (L7).** A user who wants content gone must
   rewrite history. CAS bytes can be swept only after no retained commit
   references them. F7 has no force push, so a purge cannot be pushed:
@@ -2794,9 +2808,9 @@ The user answered Q1 to Q5 on 2026-11-13. The record:
 - **Q1. GAD integration semantics: adopt by merge.** Non-conflicting source
   changes are adopted by the Dolt merge itself. Their provenance is the
   merge's second parent, and decisions are recorded only for conflicts (§5.5.1).
-- **Q2. GAD history at migration: replay.** The full history is replayed into
-  Dolt commits on the canonical database (lossless, slower first activation),
-  not "import heads, keep the legacy store as an archive" (§9.2).
+- **Q2. Historical migration decision.** The November 13 decision selected
+  full replay into Dolt commits (§9.2). On November 20 the owner removed
+  migration and backward compatibility from the release scope.
 - **Q3. Eval heap retention: hold until an explicit end.** `ctx.residency.hold()`
   until dispose, reset, the owner's release, a drain or a revocation, bounded
   by the node budget's explicit refusal. There is no idle timer, and the

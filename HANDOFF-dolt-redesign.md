@@ -1,5 +1,12 @@
 # Handoff: Vibestudio Dolt redesign, P0, P2a, P3, the cuts of P2b and P4
 
+The November 20 release scope is fresh workspaces on the current runtime,
+normal restart, independent working copies and reviewed publication.
+Additional migration and backward compatibility are outside scope. Treat the
+migration and process-loss results below as historical evidence. Prioritize
+normal operation over more crash or lost-reply scenarios. The active work and
+gates are in `docs/dolt-redesign.md` and celld's `docs/fork/HANDOVER.md`.
+
 Branch `feat/dolt-p0` (worktree `/home/werg/vibestudio-worktrees/dolt-p0`), cut from
 `feat/celld-runtime` `db8e365fd`. Not pushed. Base template branch `feat/dolt-p2`
 (worktree `/home/werg/vibestudio-templates-worktrees/base-dolt-p2`, **rebased onto Base `main` `d79b61f`

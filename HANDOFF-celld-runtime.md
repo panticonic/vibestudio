@@ -1,5 +1,10 @@
 # Handoff: Vibestudio runtime cutover to the celld fork
 
+This handoff records the original runtime cutover. The current release
+targets fresh workspaces on celld. Additional migration, backward
+compatibility and deliberate crash tests are outside the current scope.
+See `docs/dolt-redesign.md` for the active release gates.
+
 Branch `feat/celld-runtime` (worktree `/home/werg/vibestudio-worktrees/celld-cutover`),
 rebased onto `origin/main` `73e5ba525`. Not pushed.
 
