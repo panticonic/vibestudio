@@ -3,6 +3,7 @@ import { GAD_RUNTIME_METHOD_NAMES } from "@vibestudio/shared/gadRuntimeMethods";
 import {
   AgentHealthInspectionSchema,
   gadMethods,
+  gadWireMethods,
   semanticFileHostReadSchema,
   workspaceHistoryInitializationInputSchema,
   InspectAgentHealthInputSchema,
@@ -25,6 +26,26 @@ describe("GAD runtime schema", () => {
   });
   it("exactly implements the portable runtime method manifest", () => {
     expect(Object.keys(gadMethods)).toEqual([...GAD_RUNTIME_METHOD_NAMES]);
+  });
+
+  it("admits append preconditions and fork results by exact sequence and envelope identity", () => {
+    const input = {
+      logId: "log:one", head: "main", logKind: "generic",
+      expectedHead: { seq: 0, envelopeId: null },
+      events: [{ envelopeId: "event:one", actor: { kind: "agent", id: "agent:one" },
+        payloadKind: "fixture", payload: {} }],
+    };
+    expect(gadWireMethods.appendLogEvent.args.parse([input])).toEqual([input]);
+    expect(gadWireMethods.appendLogEvent.args.safeParse([
+      { ...input, expectedHeadHash: "old-hash" },
+    ]).success).toBe(false);
+    expect(gadWireMethods.forkLog.returns.parse({
+      fromLogId: "log:one", fromHead: "main", toLogId: "log:two", toHead: "main",
+      forkSeq: 0, forkEnvelopeId: null, inherited: 0,
+    })).toMatchObject({ forkEnvelopeId: null });
+    expect(gadWireMethods.checkLogIntegrity.returns.parse({
+      ok: false, errors: [{ type: "log-fork-boundary", message: "bad anchor", logId: "log:two", head: "main" }],
+    }).ok).toBe(false);
   });
 
   it("documents typed args, returns, and sensitivity for every method", () => {

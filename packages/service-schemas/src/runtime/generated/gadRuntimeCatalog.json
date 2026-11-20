@@ -412,11 +412,8 @@
           "type": "string",
           "nullable": true
         },
-        "head_event_hash": {
-          "$ref": "#/properties/owner_json"
-        },
         "head_event_id": {
-          "$ref": "#/properties/trajectory_id"
+          "$ref": "#/properties/owner_json"
         },
         "parent_branch_id": {
           "$ref": "#/properties/owner_json"
@@ -435,7 +432,6 @@
         "trajectory_id",
         "branch_id",
         "owner_json",
-        "head_event_hash",
         "head_event_id",
         "parent_branch_id",
         "created_at",
@@ -495,11 +491,8 @@
             "type": "integer",
             "minimum": 0
           },
-          "head_event_hash": {
-            "$ref": "#/items/properties/trajectory_id"
-          },
           "head_event_id": {
-            "$ref": "#/items/properties/trajectory_id"
+            "$ref": "#/items/properties/owner_json"
           },
           "parent_branch_id": {
             "$ref": "#/items/properties/owner_json"
@@ -516,7 +509,6 @@
           "branch_id",
           "owner_json",
           "seq",
-          "head_event_hash",
           "head_event_id",
           "parent_branch_id",
           "created_at",
@@ -850,14 +842,6 @@
             "type": "integer",
             "minimum": 0
           },
-          "prevEventHash": {
-            "type": "string",
-            "minLength": 1
-          },
-          "eventHash": {
-            "type": "string",
-            "minLength": 1
-          },
           "kind": {
             "type": "string",
             "minLength": 1
@@ -989,8 +973,6 @@
           "trajectoryId",
           "branchId",
           "seq",
-          "prevEventHash",
-          "eventHash",
           "kind",
           "actor",
           "payload",
@@ -2176,14 +2158,6 @@
               "type": "integer",
               "minimum": 0
             },
-            "prevEventHash": {
-              "type": "string",
-              "minLength": 1
-            },
-            "eventHash": {
-              "type": "string",
-              "minLength": 1
-            },
             "kind": {
               "type": "string",
               "minLength": 1
@@ -2247,8 +2221,6 @@
             "trajectoryId",
             "branchId",
             "seq",
-            "prevEventHash",
-            "eventHash",
             "kind",
             "actor",
             "payload",
@@ -2615,14 +2587,6 @@
                 "type": "integer",
                 "minimum": 0
               },
-              "prevEventHash": {
-                "type": "string",
-                "minLength": 1
-              },
-              "eventHash": {
-                "type": "string",
-                "minLength": 1
-              },
               "kind": {
                 "type": "string",
                 "minLength": 1
@@ -2686,8 +2650,6 @@
               "trajectoryId",
               "branchId",
               "seq",
-              "prevEventHash",
-              "eventHash",
               "kind",
               "actor",
               "payload",
@@ -3003,14 +2965,6 @@
                 "type": "integer",
                 "minimum": 0
               },
-              "prevEventHash": {
-                "type": "string",
-                "minLength": 1
-              },
-              "eventHash": {
-                "type": "string",
-                "minLength": 1
-              },
               "kind": {
                 "type": "string",
                 "minLength": 1
@@ -3074,8 +3028,6 @@
               "trajectoryId",
               "branchId",
               "seq",
-              "prevEventHash",
-              "eventHash",
               "kind",
               "actor",
               "payload",
@@ -3391,14 +3343,6 @@
                     "type": "integer",
                     "minimum": 0
                   },
-                  "prevEventHash": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "eventHash": {
-                    "type": "string",
-                    "minLength": 1
-                  },
                   "kind": {
                     "type": "string",
                     "minLength": 1
@@ -3462,8 +3406,6 @@
                   "trajectoryId",
                   "branchId",
                   "seq",
-                  "prevEventHash",
-                  "eventHash",
                   "kind",
                   "actor",
                   "payload",
@@ -3771,14 +3713,6 @@
                   "type": "integer",
                   "minimum": 0
                 },
-                "prevEventHash": {
-                  "type": "string",
-                  "minLength": 1
-                },
-                "eventHash": {
-                  "type": "string",
-                  "minLength": 1
-                },
                 "kind": {
                   "type": "string",
                   "minLength": 1
@@ -3842,8 +3776,6 @@
                 "trajectoryId",
                 "branchId",
                 "seq",
-                "prevEventHash",
-                "eventHash",
                 "kind",
                 "actor",
                 "payload",
@@ -3923,14 +3855,6 @@
           "seq": {
             "type": "integer",
             "minimum": 0
-          },
-          "prevEventHash": {
-            "type": "string",
-            "minLength": 1
-          },
-          "eventHash": {
-            "type": "string",
-            "minLength": 1
           },
           "kind": {
             "type": "string",
@@ -4063,8 +3987,6 @@
           "trajectoryId",
           "branchId",
           "seq",
-          "prevEventHash",
-          "eventHash",
           "kind",
           "actor",
           "payload",
@@ -7221,8 +7143,8 @@
       }
     }
   },
-  "validateGadHashes": {
-    "description": "Validate content, manifest, and state hashes without mutating durable state.",
+  "validateGadIntegrity": {
+    "description": "Validate stored log coordinates and publication and storage records.",
     "access": {
       "sensitivity": "read"
     },
@@ -7266,7 +7188,7 @@
     }
   },
   "clearDirtyAfterValidation": {
-    "description": "Clear the dirty marker only after durable hash validation succeeds.",
+    "description": "Check stored log coordinates and publication and storage records.",
     "access": {
       "sensitivity": "write"
     },
@@ -7349,8 +7271,8 @@
                   "type": {
                     "type": "string",
                     "enum": [
-                      "log-chain",
-                      "log-hash",
+                      "log-sequence",
+                      "log-fork-boundary",
                       "log-head-pointer"
                     ]
                   },
@@ -7372,59 +7294,6 @@
                   "message",
                   "logId",
                   "head"
-                ],
-                "additionalProperties": false
-              },
-              {
-                "type": "object",
-                "properties": {
-                  "type": {
-                    "type": "string",
-                    "enum": [
-                      "semantic-vcs"
-                    ]
-                  },
-                  "message": {
-                    "type": "string"
-                  },
-                  "code": {
-                    "type": "string"
-                  },
-                  "detail": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "number"
-                      },
-                      {
-                        "type": "boolean"
-                      },
-                      {
-                        "enum": [
-                          "null"
-                        ],
-                        "nullable": true
-                      },
-                      {
-                        "type": "array",
-                        "items": {
-                          "$ref": "#/properties/errors/items/anyOf/1/properties/detail"
-                        }
-                      },
-                      {
-                        "type": "object",
-                        "additionalProperties": {
-                          "$ref": "#/properties/errors/items/anyOf/1/properties/detail"
-                        }
-                      }
-                    ]
-                  }
-                },
-                "required": [
-                  "type",
-                  "message"
                 ],
                 "additionalProperties": false
               },

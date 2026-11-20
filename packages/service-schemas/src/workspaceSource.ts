@@ -275,15 +275,13 @@ const TrajectoryBranchSchema = z
     branch_id: SqlTextSchema,
     owner_json: SqlNullableTextSchema,
     seq: SqlCountSchema,
-    head_event_hash: SqlTextSchema,
-    head_event_id: SqlTextSchema,
+    head_event_id: SqlNullableTextSchema,
     parent_branch_id: SqlNullableTextSchema,
     created_at: SqlTextSchema,
     updated_at: SqlTextSchema,
   })
   .strict();
 const TrajectoryBranchHeadSchema = TrajectoryBranchSchema.omit({ seq: true }).extend({
-  head_event_hash: SqlNullableTextSchema,
   fork_event_id: SqlNullableTextSchema,
 });
 const TrajectoryInvocationSchema = z
@@ -352,7 +350,7 @@ const StorageDiagnosticSchema = z
   .strict();
 const logIntegrityErrorSchema = z
   .object({
-    type: z.enum(["log-chain", "log-hash", "log-head-pointer"]),
+    type: z.enum(["log-sequence", "log-fork-boundary", "log-head-pointer"]),
     message: z.string(),
     logId: SqlTextSchema,
     head: SqlTextSchema,
@@ -361,14 +359,6 @@ const logIntegrityErrorSchema = z
   .strict();
 const gadIntegrityErrorSchema = z.discriminatedUnion("type", [
   logIntegrityErrorSchema,
-  z
-    .object({
-      type: z.literal("semantic-vcs"),
-      message: z.string(),
-      code: z.string().optional(),
-      detail: GadJsonValueSchema.optional(),
-    })
-    .strict(),
   z
     .object({
       type: z.literal("publication"),
@@ -489,8 +479,6 @@ const TrajectoryEventWireSchema = z
     trajectoryId: z.string().min(1),
     branchId: z.string().min(1),
     seq: z.number().int().nonnegative(),
-    prevEventHash: z.string().min(1),
-    eventHash: z.string().min(1),
     kind: z.string().min(1),
     actor: ActorRefWireSchema,
     turnId: z.string().min(1).optional(),
@@ -1436,13 +1424,13 @@ export const gadMethods = defineServiceMethods({
     returns: z.array(ChannelDescriptionSchema),
     access: readAccess,
   },
-  validateGadHashes: {
+  validateGadIntegrity: {
     website: {
       kind: "closed",
       reason:
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
-    description: "Validate content, manifest, and state hashes without mutating durable state.",
+    description: "Validate stored log coordinates and publication and storage records.",
     args: z.tuple([z.object({}).strict().optional()]),
     returns: z.object({ ok: z.boolean(), errors: z.array(z.string()) }).strict(),
     access: readAccess,
@@ -1453,7 +1441,7 @@ export const gadMethods = defineServiceMethods({
       reason:
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
-    description: "Clear the dirty marker only after durable hash validation succeeds.",
+    description: "Check stored log coordinates and publication and storage records.",
     args: z.tuple([z.object({}).strict().optional()]),
     returns: z.object({ ok: z.boolean(), errors: z.array(z.string()) }).strict(),
     access: writeAccess,
@@ -1567,10 +1555,9 @@ const logHeadSchema = z
     head: nonemptyText,
     logKind: nonemptyText,
     seq: z.number().int().nonnegative(),
-    hash: nonemptyText,
     envelopeId: nonemptyText.nullable(),
     forkSeq: z.number().int().nonnegative().nullable(),
-    forkHash: nonemptyText.nullable(),
+    forkEnvelopeId: nonemptyText.nullable(),
     parentLogId: nonemptyText.nullable(),
     parentHead: nonemptyText.nullable(),
   })
@@ -1600,7 +1587,7 @@ const appendLogResultSchema = z
     logId: nonemptyText,
     head: nonemptyText,
     headSeq: z.number().int().nonnegative(),
-    headHash: nonemptyText,
+    headEnvelopeId: nonemptyText,
     envelopes: z.array(logEnvelopeSchema),
     published: z.array(
       z
@@ -1630,7 +1617,7 @@ const forkLogResultSchema = z
     toLogId: nonemptyText,
     toHead: nonemptyText,
     forkSeq: z.number().int().nonnegative(),
-    forkHash: nonemptyText,
+    forkEnvelopeId: nonemptyText.nullable(),
     inherited: z.number().int().nonnegative(),
   })
   .strict();
@@ -1739,7 +1726,7 @@ const gadInternalWireMethods = defineServiceMethods({
       .object({
         parentLogId: nonemptyText.nullable(),
         forkSeq: z.number().int().nonnegative().nullable(),
-        forkHash: nonemptyText.nullable(),
+        forkEnvelopeId: nonemptyText.nullable(),
       })
       .strict(),
     agentFacing: false,
@@ -1807,7 +1794,7 @@ const gadInternalWireMethods = defineServiceMethods({
     args: z.tuple([
       z.object({ logId: nonemptyText, head: nonemptyText, logKind: nonemptyText }).strict(),
     ]),
-    returns: z.object({ seq: z.literal(0), hash: z.string() }).strict(),
+    returns: z.object({ seq: z.literal(0), envelopeId: z.null() }).strict(),
     agentFacing: false,
   },
   appendLogEvent: {
@@ -1824,7 +1811,10 @@ const gadInternalWireMethods = defineServiceMethods({
           head: nonemptyText,
           logKind: nonemptyText,
           owner: LogOwnerWireSchema.nullish(),
-          expectedHeadHash: z.string().nullish(),
+          expectedHead: z.object({
+            seq: z.number().int().nonnegative(),
+            envelopeId: nonemptyText.nullable(),
+          }).strict().optional(),
           idempotency: z.enum(["exact", "idempotent-by-id"]).nullish(),
           events: z.array(logAppendEventSchema).min(1),
         })
@@ -1850,7 +1840,7 @@ const gadInternalWireMethods = defineServiceMethods({
       reason:
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
-    description: "Validate durable log chains and head pointers.",
+    description: "Validate durable log sequences, fork boundaries, and head pointers.",
     args: z.tuple([
       z.object({ logId: z.string().nullish(), head: z.string().nullish() }).strict().optional(),
     ]),
@@ -1966,7 +1956,7 @@ const gadInternalWireMethods = defineServiceMethods({
           toTrajectoryId: nonemptyText,
           toBranchId: nonemptyText,
           throughSeq: z.number().int().nonnegative().nullish(),
-          throughEventHash: z.string().nullish(),
+          throughEventId: nonemptyText.nullish(),
           throughPublishedChannelId: z.string().nullish(),
           throughPublishedChannelSeq: z.number().int().nonnegative().nullish(),
           toPublishedChannelId: z.string().nullish(),
@@ -1985,7 +1975,7 @@ const gadInternalWireMethods = defineServiceMethods({
         toBranchId: nonemptyText,
         copied: z.number().int().nonnegative(),
         headEventId: z.string().nullable(),
-        headEventHash: z.string().nullable(),
+        headSeq: z.number().int().nonnegative(),
         lineage: z.array(
           z
             .object({
@@ -1993,8 +1983,6 @@ const gadInternalWireMethods = defineServiceMethods({
               forkEventId: nonemptyText,
               sourceSeq: z.number().int().nonnegative(),
               forkSeq: z.number().int().nonnegative(),
-              sourceEventHash: nonemptyText,
-              forkEventHash: nonemptyText,
             })
             .strict()
         ),
@@ -2103,8 +2091,8 @@ const gadInternalWireMethods = defineServiceMethods({
     ),
     agentFacing: false,
   },
-  validateGadHashes: {
-    ...gadMethods.validateGadHashes,
+  validateGadIntegrity: {
+    ...gadMethods.validateGadIntegrity,
     agentFacing: false,
   },
   clearDirtyAfterValidation: {
@@ -2226,7 +2214,7 @@ const GAD_AUTHORITY_GROUPS: readonly GadAuthorityGroup[] = [
       "listStoredValueRefs",
       "getStatus",
       "listChannelLogs",
-      "validateGadHashes",
+      "validateGadIntegrity",
       "checkGadIntegrity",
     ],
     capability: "workspace.graph.read",
