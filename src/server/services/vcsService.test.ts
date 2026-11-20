@@ -266,6 +266,7 @@ describe("canonical vcsService", () => {
       whenSemanticReady: vi.fn(async () => {}),
       openParticipantScope: vi.fn().mockResolvedValue(scope),
       readParticipantMain: vi.fn().mockResolvedValue(EVENT),
+      readTrajectoryProvenance: vi.fn(),
       editParticipantContext: vi.fn(),
       transferParticipantContext: vi.fn(),
       revertParticipantContext: vi.fn(),
