@@ -277,7 +277,7 @@ test("authored template worlds flow into the collector without losing original s
          ${name === "managedWebBriefWorlds" ? "export const managedResearchIntakeWorlds = [];" : ""}
          ${name === "managedAutomationWorlds" ? "export const managedAutomationPlanningWorlds = [];" : ""}
          ${name === "deliveryHistoryWorlds" ? "export const chatDeliveryWorlds = [];" : ""}
-         ${name === "ownedOperationsWorlds" ? 'export const ownedOperationsComposedWorlds = [{ id: "release-readiness-dossier", sourceGroup: "vibestudio:owned-operations:release:pending" }];' : ""}
+         ${name === "ownedOperationsWorlds" ? 'export const ownedOperationsComposedWorlds = [{ id: "release-readiness-dossier", sourceGroup: "vibestudio:owned-operations:release:pending" }, { id: "release-blocked-dossier", sourceGroup: "vibestudio:owned-operations:release:blocked", heldReason: "Release dossier held." }];' : ""}
          ${
            name === "managedPdfWorlds"
              ? `export const managedPdfExpectation = ({ id }) => ({
@@ -754,6 +754,39 @@ test("authored template worlds flow into the collector without losing original s
     "vibestudio:owned-operations:durable-worker-handoff",
     "vibestudio:content-project:grounded-project-delivery",
   ]);
+  const holdId = "owned-operations-release-blocked-dossier";
+  const hold = cases.get(holdId);
+  assert.deepEqual(hold.skills, ["operate"]);
+  assert.deepEqual(hold.assignedSkills, composed.skills);
+  assert.equal(hold.requiresReview, false);
+  const contextId = "owned-context";
+  const repoPath = "projects/owned-dossier";
+  const fixture = { contextId, caseId: "release-blocked-dossier" };
+  const operationsChecks = Object.fromEntries([
+    "reportedHandles", "reportedCleanup", "programRequestedCleanup",
+    "actualNoOwnedWorkersRemain", "actualNoOwnedContextsRemain",
+  ].map((key) => [key, true]));
+  const heldExecution = {
+    provenance: { contextId },
+    diagnostics: {
+      composedWorkflowWorld: { ...fixture, kind: "owned-operations-content", repoPath, before: "seed" },
+      composedWorkflowVerification: { passed: true, checks: { operations: true, content: true, dependency: true, cleanup: true } },
+      dependencyAudit: { passed: true, events: [{ kind: "operationOutcomeRead" }, { kind: "operationCleanup" }] },
+      contentProjectWorld: { contextId, kind: "content-project", repoPath, before: "seed", after: "seed", repositoryId: null, clean: true },
+      contentProjectVerification: { passed: true },
+      ownedOperationsWorld: { ...fixture, kind: "owned-operations", request: { kind: "release-continuation" } },
+      ownedOperationsVerification: { passed: true, checks: operationsChecks },
+      ownedOperationsAudit: { opened: [{}], snapshots: [{}], remainingEntityIds: [], remainingContextIds: [] },
+      ownedOperationsCleanupErrors: [],
+    },
+  };
+  const heldExercise = { report: {
+    results: [{ kind: "operate", report: { kind: "release-continuation", handoff: { decision: "blocked" } } }],
+    remaining: [hold.heldReason],
+  } };
+  assert.equal(hold.evidence(heldExecution, heldExercise, holdId, hold).checks.dossierHeld, true);
+  heldExecution.diagnostics.contentProjectWorld.after = "changed";
+  assert.throws(() => hold.evidence(heldExecution, heldExercise, holdId, hold), /workspace unchanged/);
 });
 
 async function fixture(t) {

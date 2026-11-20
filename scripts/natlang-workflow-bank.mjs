@@ -357,7 +357,7 @@ async function loadAuthoredWorkflowBank(checkouts) {
         family: workflow.family,
         execution: "managed-workspace",
         workspace: workflow.workspace ?? "system",
-        operations: workflow.skills ?? [workflow.root],
+        operations: workflow.assignedSkills ?? workflow.skills ?? [workflow.root],
         sourceGroups: workflowSourceGroups(workflow),
         program,
       },

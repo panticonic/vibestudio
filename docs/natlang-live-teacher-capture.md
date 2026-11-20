@@ -40,6 +40,14 @@ The common program automatically mounts installed workflow packages under `runWo
 workflow modules from different installed templates. The module lexically owns its types and internal calls. Each
 authoritative service is both scoped to the module's exact stages and supplied by the caller for that case.
 
+The release-dossier cases assign both the durable release continuation and a
+local content project to that shared root. The ready case requires a verified
+restart, cleanup, and local commit in that order. The revoked security signoff
+and rejected recovery drill cases require the root to report the hold while
+leaving the project absent. Their model-free checks are
+`owned-operations-oracle-release-security-approval-revoked-dossier` and
+`owned-operations-oracle-release-partial-progress-hard-block-dossier`.
+
 `pnpm natlang:tasks --summary` also reports `scopedRunnable`, the number of cases with a runner adapter.
 The trusted harness can call `runScopedNatlangWorkflow(checkouts, caseId, natlang)` from
 `scripts/run-scoped-natlang-workflow.mjs` with the `load`, `calls`, and `trace` APIs for an isolated Natlang run.

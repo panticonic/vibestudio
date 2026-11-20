@@ -1791,9 +1791,15 @@ export async function loadLiveTeacherCases(checkouts) {
       group: sourceGroup.slice(ownedOperationsWorkflow.namespace.length + 1),
     });
   }
-  for (const { id, sourceGroup } of ownedOperationsComposedWorlds) {
+  for (const { id, sourceGroup, heldReason } of ownedOperationsComposedWorlds) {
     cases.set(`owned-operations-${id}`, {
       ...composedReleaseWorkflow,
+      ...(heldReason ? {
+        skills: ["operate"],
+        assignedSkills: composedReleaseWorkflow.skills,
+        heldReason,
+        requiresReview: false,
+      } : {}),
       sourceGroups: [
         sourceGroup,
         ...workflowSourceGroups(ownedOperationsWorkflow),
@@ -10333,11 +10339,12 @@ function localMessagingEvidence(execution, exercise, scenario) {
   };
 }
 
-function composedReleaseEvidence(execution, exercise, scenario) {
+function composedReleaseEvidence(execution, exercise, scenario, workflow) {
   const fixture = execution.diagnostics.composedWorkflowWorld;
   const verification = execution.diagnostics.composedWorkflowVerification;
   const dependency = execution.diagnostics.dependencyAudit;
   const results = exercise.report?.results;
+  const held = workflow.heldReason;
   requireEvidence(
     fixture?.kind === "owned-operations-content" &&
       fixture.contextId === execution.provenance?.contextId &&
@@ -10347,18 +10354,39 @@ function composedReleaseEvidence(execution, exercise, scenario) {
         (key) => verification.checks?.[key] === true
       ) &&
       dependency?.passed === true &&
-      dependency.events?.length >= 5 &&
-      exercise.report?.remaining?.length === 0 &&
-      results?.length === 2 &&
+      results?.length === (held ? 1 : 2) &&
       results[0]?.kind === "operate" &&
-      results[1]?.kind === "deliverProject",
-    "Missing the independently verified operations prerequisite and committed dossier"
+      (held
+        ? isDeepStrictEqual(exercise.report.remaining, [held]) &&
+          results[0].report?.handoff?.decision === "blocked" &&
+          dependency.events?.some(({ kind }) => kind === "operationCleanup") &&
+          dependency.events.every(({ kind }) => !kind.startsWith("project"))
+        : exercise.report.remaining?.length === 0 &&
+          dependency.events?.length >= 5 &&
+          results[1]?.kind === "deliverProject"),
+    "Missing the independently verified release outcome and dossier disposition"
   );
   const operations = ownedOperationsEvidence(
     execution,
     { ...exercise, report: results[0].report },
     scenario
   );
+  if (held) {
+    const project = execution.diagnostics.contentProjectWorld;
+    requireEvidence(
+      project?.kind === "content-project" &&
+        project.contextId === fixture.contextId && project.repoPath === fixture.repoPath &&
+        project.before === fixture.before && project.before === project.after &&
+        project.repositoryId === null && project.clean === true &&
+        execution.diagnostics.contentProjectVerification?.passed === true,
+      "The blocked release must leave the assigned dossier project absent and the workspace unchanged"
+    );
+    return {
+      world: operations.world,
+      checks: { ...operations.checks, independentlyVerifiedSkillDependency: true, dossierHeld: true },
+      evidence: { workspace: { fixture, verification, dependency, project, operations: operations.evidence.workspace } },
+    };
+  }
   const content = contentProjectEvidence(execution, { ...exercise, report: results[1].report });
   return {
     world: { ...content.world, case_id: fixture.caseId },
