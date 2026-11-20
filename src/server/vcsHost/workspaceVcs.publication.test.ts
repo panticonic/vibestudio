@@ -32,7 +32,7 @@ describe("WorkspaceVcs protected publication notification", () => {
     root = undefined;
   });
 
-  it("projects shared main only after the gated participant push is confirmed", async () => {
+  it.each([false, true])("projects shared main only after the gated participant push is confirmed (template: %s)", async (template) => {
     root = await fsp.mkdtemp(path.join(os.tmpdir(), "participant-publication-"));
     const blobsDir = path.join(root, "blobs");
     ensureLayout(blobsDir);
@@ -67,11 +67,18 @@ describe("WorkspaceVcs protected publication notification", () => {
       source: "workers/workspace-source", className: "GadHistoryDO", objectKey: "canonical",
     };
     const owner = { ...canonical, objectKey: `work-${sha256HexSyncText(participantId)}` };
+    const installation = {
+      sources: [{
+        pin: { url: "https://github.com/example/template", ref: "v1", commit: "a".repeat(40) },
+        manifest: "systemEpoch: 0\n",
+      }],
+    };
     let approval: Record<string, unknown> | null = null;
     let applied = false;
     const dispatch = vi.fn(async (target: typeof canonical, method: string, args?: unknown) => {
       expect(target).toEqual(
-        method === "readHistoryProjection" || method === "publishApprovedHistory" ? owner : canonical
+        ["readHistoryProjection", "verifyHistoryTemplatePublication", "publishApprovedHistory"].includes(method)
+          ? owner : canonical
       );
       switch (method) {
         case "readHistoryPublicationApproval":
@@ -90,6 +97,13 @@ describe("WorkspaceVcs protected publication notification", () => {
           };
         case "readHistoryMain":
           return { head: "initial-head", eventId: "initial-event" };
+        case "verifyHistoryTemplatePublication":
+          expect(gate).not.toHaveBeenCalled();
+          expect(args).toEqual({
+            contextId: "context", previousHead: "initial-head", proposedHead: "saved-head",
+            eventId: "saved-event", installation,
+          });
+          return null;
         case "authorizeHistoryPublication":
           expect(prepare).toHaveBeenCalledOnce();
           approval = args as Record<string, unknown>;
@@ -104,7 +118,10 @@ describe("WorkspaceVcs protected publication notification", () => {
           return { kind: "grant", id: "grant", origin: { ref: "GadHistoryDO:canonical", token: "token" } };
         case "publishApprovedHistory":
           expect(refs.readMainSemanticState()?.eventId).toBe("initial-event");
-          expect(args).toMatchObject({ contextId: "context", proposedEventId: "saved-event" });
+          expect(args).toMatchObject({
+            contextId: "context", proposedEventId: "saved-event", ...(template ? { installation } : {}),
+          });
+          if (!template) expect(args).not.toHaveProperty("installation");
           applied = true;
           throw new Error("The native push reply was lost");
         case "releaseHistoryGrant":
@@ -124,6 +141,7 @@ describe("WorkspaceVcs protected publication notification", () => {
       push: {
         commandId: "publish-command", contextId: "context",
         expectedMainEventId: "initial-event", expectedCommittedEventId: "saved-event",
+        ...(template ? { templateInstallation: installation } : {}),
       },
     });
     const result = await publish();
@@ -132,6 +150,8 @@ describe("WorkspaceVcs protected publication notification", () => {
     expect(gate).toHaveBeenCalledOnce();
     expect(completed).toHaveBeenCalledOnce();
     expect(dispatch.mock.calls.filter(([, method]) => method === "publishApprovedHistory")).toHaveLength(1);
+    expect(dispatch.mock.calls.filter(([, method]) => method === "verifyHistoryTemplatePublication"))
+      .toHaveLength(template ? 1 : 0);
     expect(refs.readMain("packages/a")?.contentRoot).toMatch(/^state:[0-9a-f]{64}$/);
   });
 

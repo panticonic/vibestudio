@@ -892,6 +892,7 @@ export const vcsCommitInputSchema = z
   .object({
     ...mutationEnvelope,
     message: nonEmptyText.optional(),
+    templateInstallation: WorkspaceTemplateInstallationSchema.optional(),
     concludes: vcsMergeSourceSchema
       .describe(
         "A source whose comparison is complete but not concluded (convergent or net-zero). Commit atomically records its decision-only application and refuses with IntegrationIncomplete if it is incomplete."

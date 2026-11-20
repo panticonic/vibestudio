@@ -1029,6 +1029,7 @@ export function observeAppliedWorkspacePublication(input: {
 /** The protected gate authorizes this exact native transition before it can publish. */
 export function bindWorkspaceParticipantPublication(input: WorkspaceHistoryParticipant & {
   contextId: string;
+  installation?: z.infer<typeof WorkspaceTemplateInstallationSchema>;
   target: Omit<z.infer<typeof publicationApproval>, "participantId">;
 }): CanonicalRefPublication {
   const { dispatch, canonical, owner, contextId } = input;
@@ -1061,6 +1062,7 @@ export function bindWorkspaceParticipantPublication(input: WorkspaceHistoryParti
           publication: approval.publication,
           proposedEventId: approval.proposedEventId,
           origin: permit.origin,
+          ...(input.installation ? { installation: input.installation } : {}),
         });
       } catch (error) {
         if (!(await readApproval())?.applied) throw error;

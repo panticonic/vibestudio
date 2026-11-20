@@ -1646,12 +1646,13 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     const { push, gateContext, dispatch, canonical, owner, ownerContextId } = input;
     const caller = gateContext.caller;
     requireWorkspaceParticipantOwner({ canonical, owner, caller, ownerContextId });
-    if (push.epochTransition || push.templateInstallation) {
+    if (push.epochTransition) {
       throw new Error("This publication requires the workspace installation lifecycle");
     }
     const publicationId = `participant-publication:${sha256HexSyncText(
       canonicalJson({ owner, contextId: push.contextId, commandId: push.commandId,
         ...(gateContext.epochTransition ? { epochTransition: true } : {}),
+        ...(push.templateInstallation ? { templateInstallation: push.templateInstallation } : {}),
       })
     )}`;
     return this.mutateProtectedMain(async () => {
@@ -1664,6 +1665,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           caller,
           ownerContextId,
           contextId: push.contextId,
+          ...(push.templateInstallation ? { installation: push.templateInstallation } : {}),
           target: {
             publicationId,
             previousEventId: push.expectedMainEventId,
@@ -1710,6 +1712,15 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         : await readWorkspaceCanonicalMain({ dispatch, canonical });
       if (main.eventId !== push.expectedMainEventId) {
         throw new RefEventConflictError(push.expectedMainEventId, main.eventId, null);
+      }
+      if (!recorded?.applied && push.templateInstallation) {
+        await dispatch.dispatch(owner, "verifyHistoryTemplatePublication", {
+          contextId: push.contextId,
+          previousHead: main.head,
+          proposedHead: candidate.head,
+          eventId: push.expectedCommittedEventId,
+          installation: push.templateInstallation,
+        });
       }
       await this.publishMain({
         effectId: publicationId,

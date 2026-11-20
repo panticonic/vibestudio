@@ -715,7 +715,8 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
   };
 
   const admitOperation = async (ctx: ServiceContext, method: VcsMethodName, input: unknown) => {
-    if (method === "push" && isRecord(input) && input["templateInstallation"] !== undefined)
+    if ((method === "push" || method === "commit") &&
+        isRecord(input) && input["templateInstallation"] !== undefined)
       requireReviewedSourceConsumer(ctx.caller);
     const parsed = parseVcsSemanticRequest(method, input);
     const operation = vcsOperationRegistry[method];
