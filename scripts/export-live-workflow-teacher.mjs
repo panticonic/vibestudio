@@ -586,6 +586,13 @@ const driveCheckpointWorkflow = {
   validator: { template: "google-workspace", path: "skills/google-drive/live-drive-checkpoint.ts" },
   evidence: driveCheckpointEvidence,
 };
+const driveSharingWorkflow = {
+  ...googleSetupWorkflow,
+  family: "google-live-drive-inventory-sharing",
+  group: "drive-inventory-before-direct-sharing",
+  validator: { template: "google-workspace", path: "skills/google-drive/live-drive-sharing.ts" },
+  evidence: driveSharingEvidence,
+};
 const driveHandoffWorkflow = {
   ...driveCheckpointWorkflow,
   family: "google-live-drive-checkpoint-handoff",
@@ -866,6 +873,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedNewsWorlds, newsHandoffWork, newsHandoffSchedule, projectNewsCadenceSource },
     { managedGoogleSetupWorlds, gmailContinuationWork },
     { managedDriveCheckpointWorlds, driveCheckpointHandoffWork, projectDriveCheckpointSource },
+    { managedDriveSharingWorlds },
     { localModelComparisonWorlds },
     { managedLogAuditWorlds },
     { incidentContinuationWorlds },
@@ -952,6 +960,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "news-worlds.ts",
       "google-setup-worlds.ts",
       "drive-checkpoint-worlds.ts",
+      "drive-sharing-worlds.ts",
       "local-model-comparison-worlds.ts",
       "log-audit-worlds.ts",
       "incident-continuation-worlds.ts",
@@ -1408,6 +1417,9 @@ export async function loadLiveTeacherCases(checkouts) {
     } else {
       cases.set(`google-setup-live-${id}`, setup);
     }
+  }
+  for (const assignment of managedDriveSharingWorlds) {
+    cases.set(`drive-sharing-live-${assignment.id}`, { ...driveSharingWorkflow, assignment });
   }
   for (const assignment of managedDriveCheckpointWorlds) {
     cases.set(`drive-checkpoint-live-${assignment.id}`, {
@@ -7959,6 +7971,129 @@ function driveCheckpointEvidence(execution, exercise, _scenario, { assignment })
   return {
     world: { context_id: fixture.contextId, case_id: assignment.id, drive_id: driveId },
     checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function driveSharingEvidence(execution, exercise, _scenario, { assignment }) {
+  const fixture = execution.diagnostics.managedDriveSharing;
+  const verification = fixture?.verification;
+  const { id, goal, driveId, inventory, sharing, folderPages, permissionPages, expected } = assignment;
+  const { report } = exercise;
+  const audited = expected.gate === "audited";
+  const request = { kind: "inventory-sharing", goal, inventory, sharing };
+  const folderReads = folderPages.map(({ cursor, response }) => ({
+    kind: "folder", cursor, status: response ? 200 : 503,
+  }));
+  const permissionReads = permissionPages.map(({ cursor, response }) => ({
+    kind: "permissions", cursor, status: response ? 200 : 503,
+  }));
+  requireEvidence(
+    typeof fixture?.contextId === "string" &&
+      fixture.contextId === execution.provenance?.contextId &&
+      verification?.caseId === id && verification.passed === true &&
+      ["exactTransport", "inventoryGate", "exactReport"].every((key) => verification.checks?.[key] === true) &&
+      isDeepStrictEqual(verification.request, request) &&
+      isDeepStrictEqual(verification.requests, [...folderReads, ...permissionReads]) &&
+      isDeepStrictEqual(verification.inventoryIds, expected.inventoryIds) &&
+      report?.status === (audited ? "complete" : "partial") && report.action === "none" &&
+      report.checkpoint === null && isDeepStrictEqual(report.ids, expected.ids) &&
+      isDeepStrictEqual(report.inventoryAudit, { gate: expected.gate, inventoryIds: expected.inventoryIds }),
+    "Drive sharing must preserve the assigned inventory, permission reads, and hold or audit outcome"
+  );
+
+  const root = exercise.calls.find(({ callId }) => callId === exercise.rootCallIds[0]);
+  const child = (parent, name) => exercise.calls.find(({ record }) =>
+    parent && record.parent_call_id === parent.callId &&
+      record.definition?.name === name && record.outcome === "done"
+  );
+  const guide = child(root, "guideGoogleWorkspace");
+  const review = child(guide, "reviewInventorySharing");
+  const listing = child(review, "inspectFolder");
+  const select = child(listing, "selectRows");
+  const decide = child(review, "decideSharingGate");
+  const audit = child(review, "reviewSharing");
+  const classify = child(audit, "classifyAccess");
+  const before = (earlier, later) =>
+    Date.parse(earlier?.record.ended_at) <= Date.parse(later?.record.started_at);
+  const [readiness] = guide?.record.effects ?? [];
+  const effects = exercise.calls.flatMap(({ record }) => record.effects ?? []);
+  const folderEffects = listing?.record.effects ?? [];
+  const sharingEffects = audit?.record.effects ?? [];
+
+  const folderResults = folderPages.map(({ response }) => response && ({
+    next: response.nextPageToken ?? null,
+    incomplete: response.incompleteSearch === true,
+    rows: (response.files ?? []).filter(({ id }) => Boolean(id)).map((file) => ({
+      id: file.id,
+      name: file.name ?? "",
+      mimeType: file.mimeType ?? "",
+      modifiedAt: file.modifiedTime ?? null,
+      shortcut: file.mimeType === "application/vnd.google-apps.shortcut" || file.shortcutDetails !== undefined,
+    })),
+  }));
+  const permissionResults = permissionPages.map(({ response }) => response && ({
+    next: response.nextPageToken ?? null,
+    rows: (response.permissions ?? []).filter(({ id }) => Boolean(id)).map((row) => ({
+      id: row.id,
+      principalKind: row.type,
+      principal: row.emailAddress ?? row.domain ?? null,
+      role: row.role,
+      discovery: row.allowFileDiscovery === true,
+      deleted: row.deleted === true,
+    })),
+  }));
+  const matchesPages = (reads, pages, results, method, resource) =>
+    reads.length === pages.length && pages.every(({ cursor }, index) => {
+      const effect = reads[index];
+      return effect.service === "googleWorkspaceRead" && effect.method === method &&
+        matchesValue(effect.args, [resource, cursor]) &&
+        (results[index] ? !effect.error && matchesValue(effect.result, results[index]) : Boolean(effect.error));
+    });
+  const eligible = new Map();
+  for (const result of folderResults) {
+    for (const row of result?.rows ?? []) {
+      if (eligible.has(row.id) || row.shortcut) continue;
+      if (inventory.media.length && !inventory.media.includes(row.mimeType)) continue;
+      if (inventory.modifiedSince !== null &&
+          !(row.modifiedAt !== null && Date.parse(row.modifiedAt) >= Date.parse(inventory.modifiedSince))) continue;
+      eligible.set(row.id, row);
+    }
+  }
+  const permissionRows = permissionResults.flatMap((result) => result?.rows ?? []);
+  const listingReport = listing?.record.output;
+  const decisionInput = decide?.record.inputs?.inventory;
+  requireEvidence(
+    listingReport?.complete && decisionInput?.complete &&
+      listingReport.hash === decisionInput.hash && listingReport.bytes === decisionInput.bytes &&
+      matchesValue(guide?.record.inputs?.request, request) &&
+      matchesValue(review?.record.inputs?.request, request) &&
+      matchesValue(guide?.record.output, report) && matchesValue(review?.record.output, report) &&
+      readiness?.service === "googleWorkspaceRead" && readiness.method === "readiness" &&
+      !readiness.error && matchesValue(readiness.result, { state: "ready" }) &&
+      matchesValue(listing?.record.inputs?.request, inventory) &&
+      matchesPages(folderEffects, folderPages, folderResults, "listFolder", inventory.folderId) &&
+      matchesValue(select?.record.inputs?.request, inventory) &&
+      matchesValue(select?.record.inputs?.rows, [...eligible.values()]) &&
+      matchesValue(select?.record.output, expected.inventoryIds) &&
+      before(listing, decide) &&
+      matchesValue(decide?.record.inputs?.fileId, sharing.fileId) &&
+      matchesValue(decide?.record.output, expected.gate) &&
+      effects.length === 1 + folderPages.length + permissionPages.length &&
+      matchesPages(sharingEffects, permissionPages, permissionResults, "readPermissions", sharing.fileId) &&
+      isDeepStrictEqual(verification.permissions, permissionRows) &&
+      (audited
+        ? before(decide, audit) &&
+          matchesValue(audit.record.inputs?.request, sharing) &&
+          matchesValue(classify?.record.inputs?.request, sharing) &&
+          matchesValue(classify?.record.inputs?.permissions, permissionRows) &&
+          matchesValue(classify?.record.output, expected.ids)
+        : !audit),
+    "Drive sharing trace must confirm the exact file in the completed listing before any permission reads"
+  );
+  return {
+    world: { context_id: fixture.contextId, case_id: id, drive_id: driveId },
+    checks: verification.checks,
     evidence: { workspace: { fixture } },
   };
 }

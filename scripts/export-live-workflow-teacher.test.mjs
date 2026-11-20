@@ -116,6 +116,7 @@ test("authored template worlds flow into the collector without losing original s
       ["adventure-review-worlds", "managedAdventureWorlds", []],
       ["adventure-transition-world", "programmedAdventureWorld", null],
       ["drive-checkpoint-worlds", "managedDriveCheckpointWorlds", []],
+      ["drive-sharing-worlds", "managedDriveSharingWorlds", []],
       ["regency-review-worlds", "managedRegencyWorlds", []],
       ["examples-portfolio-worlds", "managedExamplesPortfolioWorlds", []],
       ["personal-resume-worlds", "personalResumeWorlds", []],
@@ -3210,6 +3211,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["adventure-review-worlds", "export const managedAdventureWorlds = [];"],
       ["adventure-transition-world", "export const programmedAdventureWorld = null;"],
       ["drive-checkpoint-worlds", "export const managedDriveCheckpointWorlds = [];"],
+      ["drive-sharing-worlds", "export const managedDriveSharingWorlds = [];"],
       ["regency-review-worlds", "export const managedRegencyWorlds = [];"],
       ["examples-portfolio-worlds", "export const managedExamplesPortfolioWorlds = [];"],
       ["template-release-worlds", "export const templateReleaseWorlds = [];"],
@@ -4964,6 +4966,92 @@ test("Drive checkpoint export binds full, partial and stale outcomes to their ac
       exercise.calls.push(call("commit", "sync", "commitCheckpoint", {}, receipt, [write]));
       assert.throws(() => workflow.evidence(execution, exercise, name, workflow), /guarded terminal write/);
     }
+  }
+});
+
+test("Drive sharing export binds permission reads to completed inventory and the exact file", async () => {
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(path.resolve(import.meta.dirname, ".."));
+  const cases = await loadLiveTeacherCases(checkouts);
+  const ref = (value) => {
+    const json = JSON.stringify(value);
+    return { complete: true, hash: createHash("sha256").update(json).digest("hex"), bytes: Buffer.byteLength(json) };
+  };
+  for (const id of ["confirmed-roster-direct-sharing", "shortcut-does-not-confirm-roster", "roster-confirmation-with-unavailable-tail"]) {
+    const name = `drive-sharing-live-${id}`;
+    const workflow = cases.get(name);
+    const { goal, inventory, sharing, folderPages, permissionPages, expected } = workflow.assignment;
+    const request = { kind: "inventory-sharing", goal, inventory, sharing };
+    const audited = expected.gate === "audited";
+    const report = {
+      status: audited ? "complete" : "partial", action: "none", checkpoint: null,
+      ids: expected.ids, inventoryAudit: { gate: expected.gate, inventoryIds: expected.inventoryIds },
+    };
+    const listingReport = { ids: expected.inventoryIds, status: folderPages.at(-1).response ? "complete" : "partial" };
+    const eligible = [];
+    const permissions = [];
+    const requests = [];
+    const readFolders = folderPages.map(({ cursor, response }) => {
+      requests.push({ kind: "folder", cursor, status: response ? 200 : 503 });
+      const effect = { service: "googleWorkspaceRead", method: "listFolder", args: ref([inventory.folderId, cursor]) };
+      if (!response) return { ...effect, error: "Page unavailable" };
+      const rows = response.files.map((file) => ({
+        id: file.id, name: file.name, mimeType: file.mimeType, modifiedAt: file.modifiedTime ?? null,
+        shortcut: Boolean(file.shortcutDetails),
+      }));
+      eligible.push(...rows.filter((row) => row.id === sharing.fileId));
+      return { ...effect, result: ref({ next: response.nextPageToken ?? null, incomplete: false, rows }) };
+    });
+    const readPermissions = permissionPages.map(({ cursor, response }) => {
+      requests.push({ kind: "permissions", cursor, status: 200 });
+      const rows = response.permissions.map((row) => ({
+        id: row.id, principalKind: row.type, principal: row.emailAddress ?? null,
+        role: row.role, discovery: false, deleted: row.deleted ?? false,
+      }));
+      permissions.push(...rows);
+      return {
+        service: "googleWorkspaceRead", method: "readPermissions", args: ref([sharing.fileId, cursor]),
+        result: ref({ next: response.nextPageToken ?? null, rows }),
+      };
+    });
+    const contextId = "scoped-drive-sharing";
+    const verification = {
+      caseId: id, passed: true, request, requests, permissions, inventoryIds: expected.inventoryIds,
+      checks: { exactTransport: true, inventoryGate: true, exactReport: true },
+    };
+    const execution = {
+      provenance: { contextId }, diagnostics: { managedDriveSharing: { contextId, verification } },
+    };
+    const call = (callId, parent, label, inputs, output, effects = [], interval = [0, 100]) => ({
+      callId, record: {
+        parent_call_id: parent, outcome: "done", definition: { name: label },
+        started_at: new Date(interval[0]).toISOString(), ended_at: new Date(interval[1]).toISOString(),
+        inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+        output: ref(output), effects,
+      },
+    });
+    const guide = call("guide", "root", "guideGoogleWorkspace", { request }, report, [
+      { service: "googleWorkspaceRead", method: "readiness", result: ref({ state: "ready" }) },
+    ]);
+    const exercise = { report, rootCallIds: ["root"], calls: [
+      call("root", null, "runWorkflow", {}, report),
+      guide,
+      call("review", "guide", "reviewInventorySharing", { request }, report),
+      call("listing", "review", "inspectFolder", { request: inventory }, listingReport, readFolders, [10, 30]),
+      call("select", "listing", "selectRows", { request: inventory, rows: eligible }, expected.inventoryIds),
+      call("decide", "review", "decideSharingGate", { inventory: listingReport, fileId: sharing.fileId }, expected.gate, [], [35, 40]),
+    ] };
+    const audit = call("audit", "review", "reviewSharing", { request: sharing }, report, readPermissions, [45, 90]);
+    if (audited) {
+      exercise.calls.push(audit,
+        call("classify", "audit", "classifyAccess", { request: sharing, permissions }, expected.ids));
+    }
+    assert.ok(workflow.evidence(execution, exercise, name, workflow));
+    if (audited) {
+      audit.record.started_at = new Date(20).toISOString();
+    } else {
+      guide.record.effects.push({ service: "googleWorkspaceRead", method: "readPermissions", error: "Gate closed" });
+    }
+    assert.throws(() => workflow.evidence(execution, exercise, name, workflow), /before any permission reads/);
   }
 });
 

@@ -419,6 +419,15 @@ the write outcome. If another writer advanced the cursor, the handoff quotes
 that writer's saved value. Run `drive-checkpoint-handoff-qualification` to
 check both outcomes and the gates on access to scratch evidence.
 
+Drive sharing cases run the inventory and direct-access review as nested calls
+in the Google Workspace program. The permission audit opens after a complete
+folder listing confirms the exact current file. The two hold cases cover a
+look-alike shortcut and a failed tail page after the exact file was observed.
+The audit follows the real Drive client's pagination against a local fixture
+and checks public links, unauthorized editor roles and exact domain matches.
+Run `drive-sharing-oracle-qualification` in Google Workspace to verify the
+reads and rejection paths without a model or a Google account.
+
 Local model comparison cases query the installed local-model extension twice. The workflow assesses the
 assigned candidates against tool and context requirements and offers a fresh or fork handoff only for a
 qualifying local model. The comparison has only inventory access.
