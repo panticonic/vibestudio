@@ -37,12 +37,17 @@ test("workflow coverage lists mounted entry points and leaves ambiguous cases un
     write("base", "skills/api/SKILL.md"),
     write("base", "skills/api/natlang/review.nl"),
     write("base", "skills/api/natlang/natlang.json",
-      JSON.stringify({ include: ["review.nl", "review", "summarize.nl", "tail.nl"] })),
-    write("base", "skills/api/natlang/review/lookup.nl", "---\nuses: [summarize]\n---\nLook up a record."),
+      JSON.stringify({ include: ["review.nl", "review", "summarize.nl", "tail.nl", "support"] })),
+    write("base", "skills/api/natlang/review/lookup.nl", "---\nuses: [summarize, support/checksum, missing]\n---\nLook up a record."),
+    write("base", "skills/api/natlang/review/lookup/confirm.nl", "Confirm the lookup."),
+    write("base", "skills/api/natlang/support/checksum.ts", "export const checksum: string = 'address';"),
+    write("base", "skills/api/natlang/review/types.ts", "export type RecordId = string;"),
+    write("base", "skills/api/natlang/review/lookup.d.nl.ts", "export {};"),
     write("base", "skills/api/natlang/summarize.nl", "---\nuses:\n- tail\n---\nSummarize the record."),
     write("base", "skills/api/natlang/tail.nl", "Read the final entry."),
     write("base", "skills/api/natlang/unmounted.nl", "This source is outside the include list."),
     write("base", "skills/vibestudio-workflows/runWorkflow/operate.nl"),
+    write("base", "skills/vibestudio-workflows/runWorkflow.nl", "Run the assigned operation."),
     write("system", "skills/system/SKILL.md", "`[Example only](natlang/review.nl)`"),
     write("system", "skills/system/natlang/review.nl"),
     write(
@@ -69,7 +74,8 @@ test("workflow coverage lists mounted entry points and leaves ambiguous cases un
     cwd: checkouts.base,
   });
   const coverage = await inspectWorkflowCoverage(checkouts, [
-    { id: "managed-direct", workspace: "system", execution: "managed-workspace", operations: ["operate"] },
+    { id: "managed-direct", workspace: "system", execution: "managed-workspace", operations: ["operate"],
+      program: "skills/vibestudio-workflows/runWorkflow.nl" },
     { id: "managed-unambiguous", workspace: "base", execution: "managed-workspace", operations: ["review"] },
     { id: "managed-overlap", workspace: "base", execution: "managed-workspace", operations: ["review", "summarize"] },
     { id: "managed-ambiguous", workspace: "system", execution: "managed-workspace", operations: ["review"] },
@@ -79,6 +85,7 @@ test("workflow coverage lists mounted entry points and leaves ambiguous cases un
     {
       id: "scoped-api",
       execution: "scoped-fixture",
+      program: "skills/vibestudio-workflows/runWorkflow.nl",
       request: { work: [{ kind: "domain", domain: "api", operation: "review" }] },
     },
   ], [
@@ -91,6 +98,33 @@ test("workflow coverage lists mounted entry points and leaves ambiguous cases un
     system: ["base", "harness", "system"],
     harness: ["harness"],
   });
+  assert.deepEqual(
+    coverage.callables.find(({ callable }) => callable === "api/review").programShape,
+    { naturalLanguageFiles: 5, typeScriptModules: 1, maxCallableDepth: 4 },
+  );
+  const nodes = new Map(coverage.programSources.map((entry) => [entry.source, entry]));
+  assert.deepEqual(nodes.get("skills/api/natlang/review.nl").children, [
+    "skills/api/natlang/review/lookup.nl",
+  ]);
+  assert.deepEqual(nodes.get("skills/api/natlang/review/lookup.nl").children, [
+    "skills/api/natlang/review/lookup/confirm.nl",
+    "skills/api/natlang/summarize.nl",
+    "skills/api/natlang/support/checksum.ts",
+  ]);
+  assert.deepEqual(nodes.get("skills/api/natlang/support/checksum.ts"), {
+    template: "base", source: "skills/api/natlang/support/checksum.ts",
+    kind: "typescript", children: [], managedReachableCases: 2, scopedReachableCases: 1,
+  });
+  assert.equal(nodes.get("skills/api/natlang/tail.nl").managedReachableCases, 2);
+  assert.equal(nodes.has("skills/api/natlang/review/types.ts"), false);
+  assert.equal(nodes.has("skills/api/natlang/review/lookup.d.nl.ts"), false);
+  assert.equal(nodes.has("skills/api/natlang/unmounted.nl"), false);
+  assert.equal(nodes.get("skills/vibestudio-workflows/runWorkflow.nl").managedReachableCases, 1);
+  assert.equal(nodes.get("skills/vibestudio-workflows/runWorkflow.nl").scopedReachableCases, 1);
+  assert.equal(nodes.get("skills/vibestudio-workflows/runWorkflow/operate.nl").scopedReachableCases, 0);
+  assert.deepEqual(coverage.unresolvedUses, [
+    { template: "base", source: "skills/api/natlang/review/lookup.nl", item: "missing" },
+  ]);
   assert.deepEqual(
     coverage.callables.map(({ callable, managedCases, scopedCases, nestedManagedCases, nestedScopedCases }) => [
       callable,
@@ -113,7 +147,7 @@ test("workflow coverage lists mounted entry points and leaves ambiguous cases un
     {
       template: "base",
       source: "skills/api/SKILL.md",
-      localProgramFiles: 5,
+      localProgramFiles: 6,
       mountedCallables: ["api/review", "api/summarize", "api/tail"],
       linkedCallables: [],
     }

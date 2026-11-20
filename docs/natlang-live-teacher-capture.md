@@ -22,8 +22,15 @@ The `nestedManagedCases` and `nestedScopedCases` counts show which mounted calla
 are reachable through a task's assigned entry points, following companion folders
 and `uses` declarations. Each case counts once per callable, with direct assignments
 counted separately. An execution trace is needed to confirm which calls ran.
-The report shows source relationships. A co-located program or case
-does not establish that every procedure in a skill is implemented or tested.
+The `programShape` on each mounted entry counts reachable natural-language
+files and TypeScript modules and gives the longest declared callable path.
+`programSources` shows direct companion and `uses` relationships for
+tracked files in the mounted source roots, including supporting TypeScript
+files that may sit outside the callable graph. Counts cover the declared
+orchestrator and files visible from each task's assigned operations.
+`unresolvedUses` lists declared paths that could not be resolved in the
+mounted source. Verifying a skill's individual procedures requires inspecting
+the task requirements and their outcome checks.
 
 The scale target uses the baseline of 316 entries in the managed system-test catalog at System-testing revision
 `eb8cc7f`. The resulting target is at least 632 independently authored cases. The baseline includes explicit-only and

@@ -8,6 +8,11 @@ import { parse as parseYaml } from "yaml";
 const git = promisify(execFile);
 const shared = "skills/vibestudio-workflows";
 const operationName = (source) => path.posix.basename(source, ".nl");
+const sourceKey = (template, source) => JSON.stringify([template, source]);
+const callableFile = (file) =>
+  file.endsWith(".nl") || (file.endsWith(".ts") &&
+    !file.endsWith(".d.ts") && !file.endsWith(".d.nl.ts") &&
+    path.posix.basename(file) !== "types.ts");
 
 function githubRepository(remote) {
   return /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/iu.exec(remote?.replace(/^git\+/u, ""))?.[1].toLowerCase();
@@ -36,7 +41,7 @@ function linkedPrograms(markdown, source, template, templateByRepository) {
 async function trackedSources(checkout) {
   const { stdout } = await git(
     "git",
-    ["-C", checkout, "ls-files", "-z", "--", "*.nl", "*SKILL.md",
+    ["-C", checkout, "ls-files", "-z", "--", "*.nl", "*.ts", "*SKILL.md",
       ":(glob)**/natlang.json", ":(glob)**/package.json"],
     {
       maxBuffer: 8 * 1024 * 1024,
@@ -67,16 +72,30 @@ async function indexMountedScopes(checkout, files, mount) {
     : {};
   const include = mount.packageRoot ? null : manifest.include;
   const programFiles = files.filter((file) => {
-    if (!file.endsWith(".nl") || !file.startsWith(root + "/")) return false;
+    if (!callableFile(file) || !file.startsWith(root + "/")) return false;
     const local = file.slice(root.length + 1);
     return !local.split("/").some((segment) => segment.startsWith(".") || segment === "node_modules") &&
       (!Array.isArray(include) || include.some((prefix) => local === prefix || local.startsWith(prefix + "/")));
   });
   const installed = new Set(programFiles);
-  const edges = new Map();
+  const resolve = (stem) => [stem + ".nl", stem + ".ts"]
+    .find((file) => installed.has(file));
+  const edges = new Map(programFiles.map((file) => [file, new Set()]));
   for (const file of programFiles) {
-    const companion = file.slice(0, -3) + "/";
-    const nested = programFiles.filter((candidate) => candidate.startsWith(companion));
+    // Namespace folders introduce no executable level. A sibling callable with
+    // a companion folder owns its children and their descendants.
+    let folder = path.posix.dirname(file);
+    while (folder !== root) {
+      const parent = resolve(folder);
+      if (parent) {
+        edges.get(parent).add(file);
+        break;
+      }
+      folder = path.posix.dirname(folder);
+    }
+  }
+  const unresolvedUses = [];
+  await Promise.all(programFiles.filter((file) => file.endsWith(".nl")).map(async (file) => {
     let packageRoot = path.posix.dirname(file);
     while (packageRoot !== root &&
       !tracked.has(packageRoot + "/natlang.json") &&
@@ -84,10 +103,13 @@ async function indexMountedScopes(checkout, files, mount) {
       packageRoot = path.posix.dirname(packageRoot);
     }
     const text = await readFile(path.join(checkout, file), "utf8");
-    const imports = declaredUses(text).map((item) => path.posix.join(packageRoot, item + ".nl"));
-    edges.set(file, [...nested, ...imports.filter((item) => installed.has(item))]);
-  }
-  return { programFiles, edges };
+    for (const item of declaredUses(text)) {
+      const target = resolve(path.posix.join(packageRoot, item));
+      if (target) edges.get(file).add(target);
+      else unresolvedUses.push({ source: file, item });
+    }
+  }));
+  return { programFiles, edges, unresolvedUses };
 }
 
 function reachableFiles(source, edges) {
@@ -103,6 +125,25 @@ function reachableFiles(source, edges) {
   }
   seen.delete(source);
   return seen;
+}
+
+/** Longest declared path, including the entry. A cycle has no finite depth. */
+function callableDepth(source, edges, depths, visiting = new Set()) {
+  if (depths.has(source)) return depths.get(source);
+  if (visiting.has(source)) return null;
+  visiting.add(source);
+  let depth = 1;
+  for (const target of edges.get(source) ?? []) {
+    const child = callableDepth(target, edges, depths, visiting);
+    if (child === null) {
+      depth = null;
+      break;
+    }
+    depth = Math.max(depth, child + 1);
+  }
+  visiting.delete(source);
+  depths.set(source, depth);
+  return depth;
 }
 
 async function originRepository(checkout) {
@@ -177,6 +218,9 @@ export async function inspectWorkflowCoverage(checkouts, cases, sources) {
   ];
   const callables = [];
   const nestedByCallable = new Map();
+  const filesByCallable = new Map();
+  const programSources = new Map();
+  const unresolvedUses = new Map();
   const skillDocs = [];
   for (const { template, files } of filesByTemplate) {
     skillDocs.push(...files.filter((source) => path.posix.basename(source) === "SKILL.md")
@@ -188,8 +232,22 @@ export async function inspectWorkflowCoverage(checkouts, cases, sources) {
         file.endsWith(".nl") && path.posix.dirname(file) === mount.directory
       );
       if (direct.length === 0) continue;
-      const { programFiles, edges } = await indexMountedScopes(checkouts[template], files, mount);
+      const { programFiles, edges, unresolvedUses: missing } =
+        await indexMountedScopes(checkouts[template], files, mount);
+      for (const { source, item } of missing) {
+        unresolvedUses.set(JSON.stringify([template, source, item]), { template, source, item });
+      }
+      for (const source of programFiles) {
+        const key = sourceKey(template, source);
+        const entry = programSources.get(key) ?? {
+          template, source, kind: source.endsWith(".nl") ? "natlang" : "typescript",
+          children: new Set(), managedReachableCases: 0, scopedReachableCases: 0,
+        };
+        for (const target of edges.get(source)) entry.children.add(target);
+        programSources.set(key, entry);
+      }
       const entries = new Map();
+      const depths = new Map();
       for (const source of direct) {
         if (!programFiles.includes(source)) continue;
         const name = operationName(source);
@@ -200,8 +258,16 @@ export async function inspectWorkflowCoverage(checkouts, cases, sources) {
         });
       }
       for (const [source, entry] of entries) {
+        const reachable = [...reachableFiles(source, edges)];
+        const naturalLanguageFiles = 1 + reachable.filter((target) => target.endsWith(".nl")).length;
+        entry.programShape = {
+          naturalLanguageFiles,
+          typeScriptModules: reachable.length + 1 - naturalLanguageFiles,
+          maxCallableDepth: callableDepth(source, edges, depths),
+        };
         mounted.push(entry);
-        nestedByCallable.set(entry, [...reachableFiles(source, edges)]
+        filesByCallable.set(entry, [source, ...reachable].map((file) => sourceKey(template, file)));
+        nestedByCallable.set(entry, reachable
           .flatMap((target) => entries.has(target) ? [entries.get(target)] : []));
       }
     }
@@ -258,6 +324,13 @@ export async function inspectWorkflowCoverage(checkouts, cases, sources) {
       }
     }
     const nestedEntries = new Set([...directEntries].flatMap((entry) => nestedByCallable.get(entry)));
+    const visibleSources = new Set([...directEntries].flatMap((entry) => filesByCallable.get(entry)));
+    const orchestrator = sourceKey("base", shared + "/runWorkflow.nl");
+    if (scenario.program === shared + "/runWorkflow.nl" && programSources.has(orchestrator))
+      visibleSources.add(orchestrator);
+    for (const key of visibleSources) {
+      programSources.get(key)[scoped ? "scopedReachableCases" : "managedReachableCases"]++;
+    }
     for (const entry of directEntries) {
       entry[scoped ? "scopedCases" : "managedCases"]++;
       nestedEntries.delete(entry);
@@ -296,6 +369,14 @@ export async function inspectWorkflowCoverage(checkouts, cases, sources) {
     ),
     skills,
     callables,
+    programSources: [...programSources.values()]
+      .sort((left, right) => left.template.localeCompare(right.template) || left.source.localeCompare(right.source))
+      .map((entry) => ({ ...entry, children: [...entry.children].sort() })),
+    programSourceScope: "Tracked candidates inside the mounted source roots. Case counts include the declared shared program and source files reachable from the assigned operations, without expanding the shared program's other operations.",
+    unresolvedUses: [...unresolvedUses.values()].sort((left, right) =>
+      left.template.localeCompare(right.template) ||
+      left.source.localeCompare(right.source) || left.item.localeCompare(right.item)
+    ),
     nestedScope: "Mounted Natlang callables reachable through tracked companion folders or uses declarations. Counts exclude direct assignments and do not attest execution.",
     unresolved: [...unresolved.values()],
   };
