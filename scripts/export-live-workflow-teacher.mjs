@@ -579,6 +579,14 @@ const newsWorkflow = {
   root: "reviewNews",
   evidence: newsEvidence,
 };
+const newsHandoffWorkflow = {
+  ...newsWorkflow,
+  family: "news-live-cadence-handoff",
+  namespace: "vibestudio:news-handoff",
+  group: "verified-missions-to-scratch",
+  validator: { template: "system-testing", path: "skills/system-testing/news-handoff-managed.ts" },
+  evidence: newsHandoffEvidence,
+};
 const spectroliteWorkflow = {
   family: "spectrolite-live-vault",
   workspace: "spectrolite",
@@ -760,7 +768,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedChannelRosterWorlds },
     { managedGrimoireWorlds },
     { managedSpectroliteWorlds },
-    { managedNewsWorlds },
+    { managedNewsWorlds, newsHandoffWork },
     { managedGoogleSetupWorlds },
     { localModelComparisonWorlds },
     { managedLogAuditWorlds },
@@ -1098,8 +1106,15 @@ export async function loadLiveTeacherCases(checkouts) {
   for (const { id, checks, codes } of managedGoogleSetupWorlds) {
     cases.set(`google-setup-live-${id}`, { ...googleSetupWorkflow, caseId: id, checks, codes });
   }
-  for (const { id, checks, expected, repair } of managedNewsWorlds) {
-    cases.set(`news-live-${id}`, { ...newsWorkflow, caseId: id, checks, expected, repair });
+  for (const { id, checks, expected, repair, handoff } of managedNewsWorlds) {
+    cases.set(`news-live-${id}`, {
+      ...(handoff ? {
+        ...newsHandoffWorkflow,
+        skills: newsHandoffWork.map(({ operation }) => operation),
+        sourceGroups: [newsHandoffWorkflow, newsWorkflow, scratchHandoffWorkflow].flatMap(workflowSourceGroups),
+      } : newsWorkflow),
+      caseId: id, checks, expected, repair, handoff,
+    });
   }
   for (const {
     id,
@@ -6632,6 +6647,43 @@ function newsEvidence(execution, exercise, _scenario, workflow) {
       participant_id: assignment.participantId,
     },
     checks: verification.checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function newsHandoffEvidence(execution, exercise, scenario, workflow) {
+  const fixture = execution.diagnostics.managedNews;
+  const verification = fixture?.verification;
+  const results = exercise.report?.results;
+  const handoff = results?.[1]?.report;
+  const artifact = verification?.handoff?.artifact;
+  requireEvidence(
+    results?.length === 2 &&
+      results[0].domain === "news" &&
+      results[0].operation === "reviewNews" &&
+      results[1].domain === "scratchHandoff" &&
+      results[1].operation === "assembleHandoff" &&
+      verification?.passed === true &&
+      ["exactNews", "exactHandoff", "verifiedTransfer"].every(
+        (key) => verification.checks?.[key] === true
+      ) &&
+      verification.handoff?.passed === true &&
+      isDeepStrictEqual(verification.handoff.sourceIds, ["news-missions"]) &&
+      verification.sourceSha256 === hash(workflow.handoff.source) &&
+      handoff?.status === "staged" &&
+      artifact &&
+      artifact.path === handoff.artifact?.path &&
+      artifact.bytes === handoff.artifact?.bytes &&
+      /^[a-f0-9]{64}$/u.test(artifact.sha256),
+    "The News handoff must cite the verified schedule settings and match the staged scratch artifact"
+  );
+  const news = newsEvidence({
+    ...execution,
+    diagnostics: { managedNews: { contextId: fixture.contextId, verification: verification.news } },
+  }, { ...exercise, report: results[0].report }, scenario, workflow);
+  return {
+    world: { ...news.world, seed_revision: verification.handoff.seedRevision },
+    checks: { ...news.checks, ...verification.checks },
     evidence: { workspace: { fixture } },
   };
 }

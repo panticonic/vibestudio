@@ -2117,6 +2117,69 @@ test("News export rejects findings that cite a different schedule owner", async 
   );
 });
 
+test("News handoff export binds the verified Missions evidence to the staged artifact", async () => {
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  const world = cases.get("news-live-handoff-stale-feed-cadence");
+  assert.deepEqual(world.skills, ["reviewNews", "assembleHandoff"]);
+  assert.equal(world.workspace, "news");
+  assert.equal(cases.get("news-live-reconcile-handoff-after-feed-change").repair.write, true);
+  const artifact = { path: "/.tmp/evidence-handoff-verified/handoff.json", bytes: 456, sha256: "a".repeat(64) };
+  const report = {
+    status: "attention",
+    findings: world.expected.map(({ code }, index) => ({
+      code,
+      evidenceIds: [["poll-mission", "daily-mission", "preferences"][index]],
+    })),
+  };
+  const verification = {
+    passed: true,
+    checks: { exactNews: true, exactHandoff: true, verifiedTransfer: true },
+    news: {
+      caseId: world.caseId,
+      passed: true,
+      checks: { matchesReport: true, matchesState: true },
+      assignment: { contextId: "ctx", channelId: "reader", agentKey: "reader", participantId: "curator" },
+      observed: world.checks.map(({ intent }) => ({
+        kind: "schedule",
+        intent,
+        owner: { id: "preferences", paused: true },
+        poll: { id: "poll-mission", intervalMs: 5_400_000 },
+        briefing: { id: "daily-mission", kind: "daily", at: "07:45", timezone: "Europe/Berlin" },
+      })),
+    },
+    handoff: { passed: true, artifact, sourceIds: ["news-missions"], seedRevision: "seed" },
+    sourceSha256: createHash("sha256").update(world.handoff.source).digest("hex"),
+  };
+  const execution = {
+    provenance: { contextId: "ctx" },
+    diagnostics: { managedNews: { contextId: "ctx", verification } },
+  };
+  const exercise = {
+    report: {
+      results: [
+        { domain: "news", operation: "reviewNews", report },
+        {
+          domain: "scratchHandoff", operation: "assembleHandoff",
+          report: { status: "staged", artifact: { path: artifact.path, bytes: artifact.bytes } },
+        },
+      ],
+    },
+  };
+  const admit = () => world.evidence(execution, exercise, {}, world);
+  assert.equal(admit().checks.verifiedTransfer, true);
+  exercise.report.results[1].report.artifact.path = "/.tmp/unassigned.json";
+  assert.throws(admit, /match the staged scratch artifact/u);
+  exercise.report.results[1].report.artifact.path = artifact.path;
+  report.findings[0].evidenceIds = ["unassigned-poll"];
+  assert.throws(admit, /match the assigned channel observations/u);
+  report.findings[0].evidenceIds = ["poll-mission"];
+  verification.sourceSha256 = "0".repeat(64);
+  assert.throws(admit, /cite the verified schedule settings/u);
+});
+
 test("Spectrolite export binds the browser, committed baseline and nested revision checks", async (t) => {
   const { options, diagnostics, entry, save } = await fixture(t);
   const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(

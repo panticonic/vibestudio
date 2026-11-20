@@ -231,6 +231,13 @@ The oracle and exporter check the write receipt, owner identities, and untouched
 Each case joins the installed News worker on its own channel and checks its readback against the exact Missions
 schedule records. The `news-managed-oracle-qualification` system test exercises the installed worker and
 readback without a model.
+News handoff cases run `reviewNews` before `assembleHandoff` in the same workspace.
+The handoff reads the actual Missions settings after the News review has observed
+them. The scratch file cites the feed cadence, briefing time and timezone, and
+pause state. One case preserves an existing configuration that differs from the
+old expectation. The other verifies an authorized cadence change before staging
+the new settings. Run `news-managed-handoff-qualification` in the News workspace
+to check the readback, early access rejection and staged artifact without a model.
 Google Workspace setup cases join Drive readiness to the installed welcome panel. They verify the
 account and permission owner links, the Gmail launch gate across reload, and layout at the assigned widths.
 The smoke runs in a fresh workspace before external Google account setup. The choice journeys use
