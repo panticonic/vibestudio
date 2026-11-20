@@ -413,6 +413,11 @@ Natlang program follows the feed and attempts a write only after a terminal
 page. Run `drive-checkpoint-oracle-qualification` in Google Workspace to
 verify the saved, partial and concurrent-writer outcomes without a model.
 The transport supplies test pages locally and requires no Google account.
+The shift handoff cases combine that review with Base's scratch-handoff skill.
+They stage the actual saved cursor and record the terminal candidate alongside
+the write outcome. If another writer advanced the cursor, the handoff quotes
+that writer's saved value. Run `drive-checkpoint-handoff-qualification` to
+check both outcomes and the gates on access to scratch evidence.
 
 Local model comparison cases query the installed local-model extension twice. The workflow assesses the
 assigned candidates against tool and context requirements and offers a fresh or fork handoff only for a

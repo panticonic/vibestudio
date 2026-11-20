@@ -4865,7 +4865,7 @@ test("Drive checkpoint export binds full, partial and stale outcomes to their ac
     const json = JSON.stringify(value);
     return { complete: true, hash: createHash("sha256").update(json).digest("hex"), bytes: Buffer.byteLength(json) };
   };
-  for (const world of ["terminal-shared-drive-page", "missing-terminal-shared-drive-page", "checkpoint-moved-during-paging"]) {
+  for (const world of ["terminal-shared-drive-page", "missing-terminal-shared-drive-page", "checkpoint-moved-during-paging", "superseded-checkpoint-shift-handoff"]) {
     const name = "drive-checkpoint-live-" + world;
     const workflow = cases.get(name);
     const { assignment } = workflow;
@@ -4913,6 +4913,49 @@ test("Drive checkpoint export binds full, partial and stale outcomes to their ac
       call("summary", "continue", "summarizeDelta", { changes: [...latest.values()] }),
       ...(expected.attempts ? [call("commit", "sync", "commitCheckpoint", {}, receipt, [write])] : []),
     ] };
+    if (assignment.handoff) {
+      const handoffInput = {
+        goal: "Stage the assigned cursor evidence",
+        questions: ["Which cursor is saved?", "What happened to the candidate?"],
+        sources: [{ id: "checkpoint", path: "/.tmp/input" }],
+      };
+      const composed = {
+        goal: assignment.goal + " Stage the handoff.",
+        work: workflow.work.map((item, index) => ({ ...item, input: [request, handoffInput][index] })),
+      };
+      const artifact = { path: "/.tmp/checkpoint/handoff.json", bytes: 40 };
+      const staged = { status: "staged", artifact, missingSources: [], unanswered: [] };
+      const sha = (text) => createHash("sha256").update(text).digest("hex");
+      const source = workflow.projectDriveCheckpointSource(verification);
+      const transfer = { service: "scratchHandoffRead", method: "read", args: ref(["checkpoint"]),
+        result: ref({ id: "checkpoint", lines: source.trimEnd().split("\n") }) };
+      const handoffVerification = {
+        passed: true, expectedStatus: "staged", sourceIds: ["checkpoint"], seedRevision: "saved-revision",
+        artifact: { ...artifact, sha256: sha("artifact") },
+        checks: Object.fromEntries(["protectedUnchanged", "originalsUnchanged", "disposition", "exactReadback"].map((key) => [key, true])),
+      };
+      const joined = {
+        passed: true, caseId: assignment.id, request: composed, checkpoint: verification, handoff: handoffVerification,
+        checks: { exactCheckpoint: true, exactHandoff: true, verifiedTransfer: true },
+        sourceSha256: sha(source),
+      };
+      execution.diagnostics.managedDriveCheckpoint.verification = joined;
+      exercise.report = { remaining: [], results: workflow.work.map((item, index) => ({ ...item, report: [report, staged][index] })) };
+      exercise.calls[0].record.inputs.request = ref(composed);
+      exercise.calls[1].record.ended_at = "2026-11-20T10:00:01Z";
+      const assemble = call("scratch", "root", "assembleHandoff", { request: handoffInput }, staged);
+      assemble.record.started_at = "2026-11-20T10:00:02Z";
+      exercise.calls.push(assemble, call("scratch-read", "scratch", "readSource", {}, undefined, [transfer]),
+        call("scratch-write", "scratch", "commitHandoff", {}, undefined, [
+          { service: "scratchHandoffWrite", method: "stage", result: ref(artifact) },
+        ]));
+      assert.ok(workflow.evidence(execution, exercise, name, workflow));
+      const losingCursor = source.replace(`Saved cursor: ${expected.cursor}`, `Saved cursor: ${terminal}`);
+      joined.sourceSha256 = sha(losingCursor);
+      transfer.result = ref({ id: "checkpoint", lines: losingCursor.trimEnd().split("\n") });
+      assert.throws(() => workflow.evidence(execution, exercise, name, workflow), /quote the persisted cursor/);
+      continue;
+    }
     assert.ok(workflow.evidence(execution, exercise, name, workflow));
     if (expected.attempts) {
       write.args = ref([initial, "ignore-intermediate-checkpoint"]);

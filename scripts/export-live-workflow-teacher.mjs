@@ -586,6 +586,13 @@ const driveCheckpointWorkflow = {
   validator: { template: "google-workspace", path: "skills/google-drive/live-drive-checkpoint.ts" },
   evidence: driveCheckpointEvidence,
 };
+const driveHandoffWorkflow = {
+  ...driveCheckpointWorkflow,
+  family: "google-live-drive-checkpoint-handoff",
+  group: "drive-verified-checkpoint-to-shift-handoff",
+  validator: { template: "system-testing", path: "skills/system-testing/drive-checkpoint-handoff-managed.ts" },
+  evidence: driveCheckpointHandoffEvidence,
+};
 const gmailContinuationWorkflow = {
   ...googleSetupWorkflow,
   family: "google-live-compose-continuation",
@@ -858,7 +865,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedSpectroliteWorlds, spectroliteHandoffWork },
     { managedNewsWorlds, newsHandoffWork, newsHandoffSchedule, projectNewsCadenceSource },
     { managedGoogleSetupWorlds, gmailContinuationWork },
-    { managedDriveCheckpointWorlds },
+    { managedDriveCheckpointWorlds, driveCheckpointHandoffWork, projectDriveCheckpointSource },
     { localModelComparisonWorlds },
     { managedLogAuditWorlds },
     { incidentContinuationWorlds },
@@ -1403,7 +1410,18 @@ export async function loadLiveTeacherCases(checkouts) {
     }
   }
   for (const assignment of managedDriveCheckpointWorlds) {
-    cases.set(`drive-checkpoint-live-${assignment.id}`, { ...driveCheckpointWorkflow, assignment });
+    cases.set(`drive-checkpoint-live-${assignment.id}`, {
+      ...driveCheckpointWorkflow,
+      ...(assignment.handoff && {
+        ...driveHandoffWorkflow,
+        work: driveCheckpointHandoffWork,
+        skills: driveCheckpointHandoffWork.map(({ operation }) => operation),
+        projectDriveCheckpointSource,
+        sourceGroups: [driveHandoffWorkflow, driveCheckpointWorkflow, scratchHandoffWorkflow]
+          .flatMap(workflowSourceGroups),
+      }),
+      assignment,
+    });
   }
   for (const { id, checks, expected, repair, handoff } of managedNewsWorlds) {
     cases.set(`news-live-${id}`, {
@@ -6747,23 +6765,7 @@ function releaseReviewHandoffEvidence(execution, exercise, scenario, workflow) {
     matchesValue(ownerRoot?.record?.inputs?.request, request),
     "The actual composed workflow request differs from its assigned inputs"
   );
-  const subtree = (skill, report) => {
-    const ids = new Set([direct(skill).callId]);
-    const frontier = [...ids];
-    for (const parent of frontier) {
-      for (const call of allCalls) {
-        if (call.record.parent_call_id === parent && !ids.has(call.callId)) {
-          ids.add(call.callId);
-          frontier.push(call.callId);
-        }
-      }
-    }
-    return {
-      ...exercise,
-      report,
-      calls: allCalls.filter((call) => call.callId === rootId || ids.has(call.callId)),
-    };
-  };
+  const subtree = (skill, report) => exerciseSubtree(exercise, direct(skill), report);
   extensionReleaseEvidence(
     { ...execution, diagnostics: { managedExtensionRelease: release } },
     subtree("reviewExtensionRelease", extensionReport),
@@ -7799,6 +7801,86 @@ function googleSetupChoiceMatches(receipt, previous, check) {
     default:
       return false;
   }
+}
+
+function exerciseSubtree(exercise, branch, report) {
+  const ids = new Set([branch.callId]);
+  for (const parent of ids) {
+    for (const call of exercise.calls) {
+      if (call.record.parent_call_id === parent) ids.add(call.callId);
+    }
+  }
+  return {
+    ...exercise, report,
+    calls: exercise.calls.filter(({ callId }) => callId === exercise.rootCallIds[0] || ids.has(callId)),
+  };
+}
+
+function driveCheckpointHandoffEvidence(execution, exercise, scenario, workflow) {
+  const fixture = execution.diagnostics.managedDriveCheckpoint;
+  const { caseId, request, checkpoint, handoff, sourceSha256, checks, passed } = fixture?.verification ?? {};
+  const results = exercise.report?.results;
+  const { assignment, work } = workflow;
+  requireEvidence(
+    typeof fixture?.contextId === "string" && fixture.contextId === execution.provenance?.contextId &&
+      caseId === assignment.id && passed === true &&
+      ["exactCheckpoint", "exactHandoff", "verifiedTransfer"].every((key) => checks?.[key] === true) &&
+      request?.goal?.startsWith(assignment.goal + " ") &&
+      request.work?.length === work.length && results?.length === work.length &&
+      exercise.report.remaining?.length === 0 &&
+      work.every((assigned, index) =>
+        ["kind", "domain", "operation"].every((key) =>
+          assigned[key] === request.work[index]?.[key] && assigned[key] === results[index]?.[key]
+        )
+      ) &&
+      isDeepStrictEqual(request.work[0].input, checkpoint?.request) &&
+      isDeepStrictEqual(handoff?.sourceIds, ["checkpoint"]) &&
+      request.work[1].input?.sources?.length === 1 && request.work[1].input.sources[0]?.id === "checkpoint",
+    "Drive handoff must join the assigned checkpoint review and scratch task in the same workspace"
+  );
+  const [driveResult, scratchResult] = results.map(({ report }) => report);
+  const rootId = exercise.rootCallIds[0];
+  const root = exercise.calls.find(({ callId }) => callId === rootId);
+  const child = (name) => exercise.calls.find(({ record }) =>
+    record.parent_call_id === rootId && record.definition?.name === name && record.outcome === "done");
+  const guide = child("guideGoogleWorkspace");
+  const assemble = child("assembleHandoff");
+  requireEvidence(
+    guide && assemble &&
+      matchesValue(root?.record.inputs?.request, request) &&
+      matchesValue(assemble.record.inputs?.request, request.work[1].input) &&
+      matchesValue(assemble.record.output, scratchResult) &&
+      Date.parse(guide.record.ended_at) <= Date.parse(assemble.record.started_at),
+    "The recorded scratch task must follow the captured Drive review"
+  );
+  const drive = driveCheckpointEvidence({
+    ...execution,
+    diagnostics: { managedDriveCheckpoint: { contextId: fixture.contextId, verification: checkpoint } },
+  }, exerciseSubtree(exercise, guide, driveResult), scenario, workflow);
+  const scratchTrace = exerciseSubtree(exercise, assemble, scratchResult);
+  const staged = scratchHandoffEvidence({
+    ...execution,
+    diagnostics: {
+      scratchHandoffWorld: { contextId: fixture.contextId, caseId },
+      scratchHandoffVerification: handoff,
+    },
+  }, scratchTrace, scenario, { caseId, expectedStatus: "staged" });
+  const source = workflow.projectDriveCheckpointSource(checkpoint);
+  const effects = scratchTrace.calls.filter(({ callId }) => callId !== rootId).flatMap(({ record }) => record.effects ?? []);
+  const read = effects.find(({ service }) => service === "scratchHandoffRead");
+  const write = effects.find(({ service }) => service === "scratchHandoffWrite");
+  requireEvidence(
+    sourceSha256 === hash(source) && effects.length === 2 &&
+      read?.method === "read" && !read.error && matchesValue(read.args, ["checkpoint"]) &&
+      matchesValue(read.result, { id: "checkpoint", lines: source.trimEnd().split("\n") }) &&
+      write?.method === "stage" && !write.error && matchesValue(write.result, scratchResult.artifact),
+    "The staged handoff must quote the persisted cursor and the actual outcome of the terminal candidate"
+  );
+  return {
+    world: { ...drive.world, seed_revision: staged.world.seed_revision },
+    checks: { ...drive.checks, ...staged.checks, ...checks },
+    evidence: { workspace: { fixture } },
+  };
 }
 
 function driveCheckpointEvidence(execution, exercise, _scenario, { assignment }) {
