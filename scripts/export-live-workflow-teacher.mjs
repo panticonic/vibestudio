@@ -42,6 +42,14 @@ const templateGoalDomains = {
     checks: ["joinedExactNativeRecovery", "honoredPrerequisiteAndOrder", "preservedCurrentDirective",
       "checkedIndependentSource", "verifiedExactOperationalHandoff", "protectedWorkingMain", "exactCompoundDisposition"],
   },
+  templateMigration: {
+    namespace: "vibestudio:template-migration",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-template-migration-managed.ts" },
+    callable: "reviewTemplateMigration",
+    checks: ["observedExactTemplateDeployment", "readExactOwnedMigrationSources",
+      "matchedNativeCandidateOwnership", "preservedProtectedTemplateDeployment", "honoredChangedDossier",
+      "verifiedLocalMigrationHandoff", "exactMigrationDisposition"],
+  },
   githubWork: {
     namespace: "vibestudio:github-work",
     validator: { template: "personal", path: "skills/github/open-github-managed.ts" },
@@ -1288,13 +1296,13 @@ export async function loadLiveTeacherCases(checkouts) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
     const distinctGoals = new Set();
-    const { openGoalWorlds, openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], newsGoalWorlds = [],
+    const { openGoalWorlds, openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], newsGoalWorlds = [],
       spectroliteGoalWorlds = [], openGoalGoogleWorlds = [], openGoalPersonalWorlds = [],
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
       openTerminalWorlds = [], openOwnedResearchWorlds = [], providerHandoffWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
-    for (const assignment of [...openGoalWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
+    for (const assignment of [...openGoalWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
       ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
@@ -1341,6 +1349,7 @@ export async function loadLiveTeacherCases(checkouts) {
         ...(graph ? { verifiesKnowledgeGraph: graph } : {}),
         ...(assignment.devices ? { devices: assignment.devices } : {}),
         ...(assignment.requiresDeploymentPackage ? { requiresDeploymentPackage: true } : {}),
+        ...(assignment.workspaceBaseline ? { workspaceBaseline: assignment.workspaceBaseline } : {}),
         evidence: domain ? openTemplateGoalEvidence : ownedResearch ? openOwnedResearchEvidence : openGoalEvidence,
       });
     }
@@ -7496,6 +7505,29 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
           isDeepStrictEqual(stage.result, proof.handoff) && isDeepStrictEqual(outcome.handoff, proof.handoff) :
           !stage && outcome.handoff === null && proof.handoff === null),
       "Expected exact owned client transitions, matching durable GAD records, and verified local handoff"
+    );
+  } else if (world.kind === "templateMigration") {
+    const names = new Set(["templateMigration", "templateOffer", "templateCandidatePrepare", "templateCandidateReview"]);
+    const traced = effects.filter(({ service }) => names.has(service));
+    const entries = proof.journal ?? [];
+    const exact = entries.length === traced.length && entries.every(row => {
+      const index = traced.findIndex(effect => !effect.error && effect.service === row.service &&
+        effect.method === row.method && matchesValue(effect.args, row.args) && matchesValue(effect.result, row.result));
+      if (index < 0) return false;
+      traced.splice(index, 1);
+      return true;
+    });
+    const outcome = exercise.report.outcome;
+    requireEvidence(
+      performed("templateMigration", "discover") && performed("templateMigration", "read") && exact &&
+      isDeepStrictEqual(outcome.readIds, proof.readIds) && outcome.deployedMain === proof.protectedMain &&
+      (world.authority ? performed("templateCandidatePrepare", "prepare") && performed("templateCandidateReview", "read") &&
+        proof.nativePrepared?.status === "review" && outcome.candidate?.operationId === proof.nativePrepared.operationId
+        : outcome.candidate === null && proof.nativePrepared === null) &&
+      (world.handoff ? performed("templateMigration", "stageHandoff") && isDeepStrictEqual(outcome.handoff, proof.handoff) &&
+        typeof proof.receiptText === "string" && hash(proof.receiptText) === proof.handoff?.sha256
+        : outcome.handoff === null && proof.handoff === null),
+      "Expected exact native template review, ordered VCS dossier evidence, and any authorized local migration receipt"
     );
   } else if (world.kind === "vaultWork") {
     const outcome = exercise.report.outcome;
