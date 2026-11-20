@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,6 +15,7 @@ import {
   workflowSourceGroups,
 } from "./export-live-workflow-teacher.mjs";
 import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
+import { groupLiveTeacherCases } from "./lib/live-teacher-groups.mjs";
 
 const args = process.argv.slice(2);
 const { values } = parseArgs({
@@ -25,6 +26,7 @@ const { values } = parseArgs({
     preflight: { type: "boolean" },
     "review-model": { type: "string" },
     "test-timeout-ms": { type: "string" },
+    "cases-per-instance": { type: "string", default: "12" },
     "approve-codex-session": { type: "boolean" },
     out: { type: "string" },
     model: { type: "string", default: "openai-codex:gpt-6-luna" },
@@ -35,6 +37,9 @@ const { values } = parseArgs({
 const list = values.list && !values.preflight && values.case === undefined && values.out === undefined;
 const preflight = values.preflight && !values.list && values.out === undefined &&
   values["review-model"] === undefined;
+const batchSize = Number(values["cases-per-instance"]);
+if (!/^\d+$/u.test(values["cases-per-instance"]) || !Number.isSafeInteger(batchSize))
+  throw new Error("--cases-per-instance must be a nonnegative integer");
 const caseTimeout = values["test-timeout-ms"];
 if (caseTimeout !== undefined && (!/^\d+$/u.test(caseTimeout) || !Number.isSafeInteger(Number(caseTimeout)) || Number(caseTimeout) <= 0)) {
   throw new Error("--test-timeout-ms must be a positive integer");
@@ -50,7 +55,7 @@ if (
   (!list && !preflight && (values.list || values.preflight || !values.out || !requested.length))
 ) {
   throw new Error(
-    "Usage: pnpm natlang:teacher --list | --preflight [--case CASE ...] | --case CASE [--case CASE ...] --out NEW_DIR [--model PROVIDER:MODEL] [--test-timeout-ms MS] [--approve-codex-session] [--assignments]"
+    "Usage: pnpm natlang:teacher --list | --preflight [--case CASE ...] | --case CASE [--case CASE ...] --out NEW_DIR [--model PROVIDER:MODEL] [--test-timeout-ms MS] [--cases-per-instance N] [--approve-codex-session] [--assignments]"
   );
 }
 
@@ -98,14 +103,7 @@ if (unknown.length) {
   );
 }
 
-const groups = new Map();
-for (const scenario of scenarios) {
-  const { workspace = "system", workspaceBaseline } = liveTeacherCases.get(scenario);
-  const key = workspaceBaseline ? `${workspace}@${workspaceBaseline}` : workspace;
-  if (!groups.has(key))
-    groups.set(key, { workspace, workspaceBaseline, instance: `natlang-live-${randomUUID().slice(0, 12)}`, cases: [] });
-  groups.get(key).cases.push(scenario);
-}
+const groups = groupLiveTeacherCases(scenarios, liveTeacherCases, preflight ? 0 : batchSize);
 
 function command(args, stdout = "inherit") {
   const result = spawnSync("pnpm", args, { cwd: host, stdio: ["inherit", stdout, "inherit"] });
@@ -166,7 +164,7 @@ function unavailableCase(catalog, scenario) {
 
 if (preflight) {
   let unavailableCount = 0;
-  for (const group of groups.values()) {
+  for (const group of groups) {
     const { workspace, workspaceBaseline, cases } = group;
     let stopStatus;
     try {
@@ -231,13 +229,14 @@ function pinSources() {
       throw new Error(`The live run requires a clean source pin for ${name}`);
     }
   }
+  const digests = new Map();
   return {
     repositories,
     validators: Object.fromEntries(
-      [...validators].map(([scenario, validator]) => [
-        scenario,
-        createHash("sha256").update(readFileSync(validator)).digest("hex"),
-      ])
+      [...validators].map(([scenario, validator]) => {
+        if (!digests.has(validator)) digests.set(validator, createHash("sha256").update(readFileSync(validator)).digest("hex"));
+        return [scenario, digests.get(validator)];
+      })
     ),
   };
 }
@@ -256,14 +255,14 @@ const single = scenarios.length === 1;
 const casesDir = path.join(out, "cases");
 if (!single) {
   const instances = Object.fromEntries(
-    [...groups].map(([workspace, group]) => [workspace, group.instance])
+    groups.map(({ key, instance }) => [key, instance])
   );
-  const legacy = groups.size === 1 ? { instance: groups.values().next().value.instance } : {};
+  const legacy = groups.length === 1 ? { instance: groups[0].instance } : {};
   writePins(path.join(out, "source.json"), { ...source, ...legacy, instances, scenarios });
   mkdirSync(casesDir, { mode: 0o700 });
 }
 const failures = [];
-for (const group of groups.values()) {
+for (const group of groups) {
   const { instance, workspace, workspaceBaseline } = group;
   const systemTest = (args, stdout) =>
     command(systemTestArgs(group, args), stdout);
