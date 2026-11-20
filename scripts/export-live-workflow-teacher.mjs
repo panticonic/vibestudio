@@ -10,6 +10,21 @@ import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
 
 const sharedProgram = "skills/vibestudio-workflows/runWorkflow.nl";
 const templateGoalDomains = {
+  "eval-handoff": {
+    namespace: "vibestudio:eval-handoff",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-eval-handoff-managed.ts" },
+    callable: "workOnEvalHandoffGoal",
+    skill: "evalHandoff",
+    checks: ["discoveredOwnedEvalJobs", "keptOriginalEvalReceipts", "boundIndependentBlobReadback", "replayedSameNativeIdentity",
+      "authorizedExactEvalRetry", "reconciledEvalHandoff", "verifiedRetainedEvalScratch", "protectedOwnedEvalContext"],
+  },
+  browserMigration: {
+    namespace: "vibestudio:browser-migration",
+    validator: { template: "personal", path: "skills/browser-import-runtime/open-migration-managed.ts" },
+    callable: "workOnBrowserMigrationGoal",
+    checks: ["discoveredMigrationSources", "boundExactMigration", "preservedOtherProfiles",
+      "matchedMigrationDisposition", "verifiedRetainedHandoff", "preservedCollectionNeighbors"],
+  },
   visualRecovery: {
     namespace: "vibestudio:visual-panel-recovery",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-panel-recovery-managed.ts" },
@@ -1160,13 +1175,13 @@ export async function loadLiveTeacherCases(checkouts) {
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
-      openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [] } = imported.default ?? imported;
+      openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
     for (const assignment of [...openGoalWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
       ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
       ...openGoalCalendarWorlds, ...openPersonalArtifactWorlds, ...openPersonalHistoryWorlds,
-      ...openGoalProgramRunWorlds, ...openGoalAuthoringWorlds, ...openGoalGoogleHandoffWorlds, ...openPersonalAutomationWorlds, ...openGoalOwnedPreviewWorlds, ...openDiagnosticWorlds, ...openLocalDeliveryWorlds, ...openGoalPanelRecoveryWorlds]) {
+      ...openGoalEvalHandoffWorlds, ...openGoalProgramRunWorlds, ...openGoalAuthoringWorlds, ...openGoalGoogleHandoffWorlds, ...openPersonalAutomationWorlds, ...openGoalOwnedPreviewWorlds, ...openDiagnosticWorlds, ...openLocalDeliveryWorlds, ...openGoalPanelRecoveryWorlds, ...openBrowserMigrationWorlds]) {
       const split = assignment.split ?? "train";
       const sourceGroups = [assignment.sourceGroup, assignment.relatedSourceGroup].filter(Boolean);
       const scenario = `open-goal-${assignment.id}`;
@@ -6895,7 +6910,49 @@ function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
     "Expected a verified live goal and its actual installed Natlang skill call"
   );
   const evidence = { workspace: { proof } };
-  if (world.kind === "program-run") {
+  if (world.kind === "eval-handoff") {
+    const outcome = exercise.report.outcome;
+    const observed = (service, method) => effects.filter(effect =>
+      effect.service === service && effect.method === method && !effect.error);
+    const opened = observed("openEvalCatalog", "open");
+    const journals = observed("evalRecoveryJournal", "observe");
+    const blobs = observed("evalRecoveryReadback", "read");
+    const retries = observed("openEvalReentry", "retry");
+    const handoffs = observed("openEvalHandoff", "stage");
+    const attempts = proof.attempts;
+    const prior = attempts?.filter(attempt => attempt.attempt.role !== "retry");
+    const originals = new Map(proof.originalRuns?.map(run => [run.card.runId, run]));
+    requireEvidence(
+      observed("openEvalCatalog", "discover").length === 1 && opened.length === prior?.length &&
+        opened.every((effect, index) => matchesValue(effect.args, [prior[index].jobId, prior[index].attempt.runId]) &&
+          matchesValue(effect.result, prior[index])) && attempts?.length === world.expected.observations.length &&
+        journals.length === attempts.length && proof.journals?.length === attempts.length &&
+        attempts.every((attempt, index) => {
+          const original = originals.get(attempt.attempt.runId);
+          return original?.runDigest === attempt.runDigest && original.resultDigest === attempt.resultDigest &&
+            matchesValue(journals[index].args, [attempt.request.operationId]) &&
+            proof.journals[index]?.[0] === attempt.attempt.runId && matchesValue(journals[index].result, proof.journals[index][1]);
+        }) && blobs.length === proof.readbacks?.length && blobs.every((effect, index) => {
+          const [runId, readback] = proof.readbacks[index];
+          const attempt = attempts.find(entry => entry.attempt.runId === runId);
+          return Boolean(attempt) && matchesValue(effect.args, [attempt.request.operationId, readback.digest]) && matchesValue(effect.result, readback);
+        }) && retries.length === Number(world.expected.use === "retry") &&
+        (retries.length ? proof.retry?.newRunId === attempts.at(-1)?.attempt.runId &&
+          typeof proof.retry.sourceDigest === "string" && originals.get(proof.retry.originalRunId)?.sourceDigest === proof.retry.sourceDigest &&
+          originals.get(proof.retry.newRunId)?.sourceDigest === proof.retry.sourceDigest && matchesValue(retries[0].args, [attempts.at(-1).jobId, proof.retry.originalRunId]) && matchesValue(retries[0].result, attempts.at(-1)) : proof.retry === null) &&
+        (world.expected.active ? outcome?.status === "reviewed" && outcome.trials?.length === attempts.length &&
+          outcome.trials.every((trial, index) => matchesValue(trial.observation, attempts[index]) && exercise.calls.some(({ record }) =>
+            record.definition?.name === "reviewEvalRecovery" && record.outcome === "done" &&
+            matchesValue(record.inputs?.request, trial.observation.request) && matchesValue(record.output, trial.review)))
+          : outcome?.status === "unresolved" && outcome.reason === "job-unavailable") &&
+        handoffs.length === Number(world.expected.stage) &&
+        (handoffs.length ? matchesValue(handoffs[0].args, [outcome.jobId, outcome.decision.runId]) &&
+          matchesValue(handoffs[0].result, proof.artifact) && matchesValue(outcome.artifact, proof.artifact) &&
+          typeof proof.artifactText === "string" && hash(proof.artifactText) === proof.artifact?.sha256
+          : proof.artifact === null && proof.artifactText === null),
+      "Expected original native EvalDO admissions and receipts, an authorized retry if any, and actual retained scratch bytes"
+    );
+  } else if (world.kind === "program-run") {
     const outcome = exercise.report.outcome;
     const effectsOf = (service, method) => effects.filter(effect =>
       effect.service === service && effect.method === method && !effect.error);
@@ -7081,6 +7138,47 @@ function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
           matchesValue(readback[0].args, [proof.attempt.attemptId]) && matchesValue(readback[0].result, proof.readback) :
           outcome.delivery === null && proof.attempt === null && proof.readback === null),
       "Expected exact local room and recipient observations, original attempt and independently joined delivery evidence"
+    );
+  } else if (world.kind === "browserMigration") {
+    const outcome = exercise.report.outcome;
+    const openEffects = effects.filter(({ service, error }) => service === "openBrowserMigration" && !error);
+    const methods = ["discover", "bind", "readOutcome",
+      ...(world.expected.handoff || world.expected.missingHandoff ? ["inspectHandoff"] : []),
+      ...(world.expected.handoff ? ["stageHandoff"] : [])];
+    const matchingOpenEffects = methods.every((method) => {
+      const entries = openEffects.filter(effect => effect.method === method);
+      const journal = proof.journal?.filter(row => row.method === method);
+      return journal?.length === 1 && entries.length === 1 &&
+        matchesValue(entries[0].args, journal[0].args) && matchesValue(entries[0].result, journal[0].result);
+    });
+    const importServices = {
+      source: ["browserImportSource", "observe"],
+      preview: ["browserImportPreview", "observe"],
+      start: ["browserImportStart", "start"],
+      history: ["browserImportHistory", "observe"],
+    };
+    const reads = proof.selected?.reads;
+    const exactReads = Array.isArray(reads) && Object.entries(importServices).every(([kind, [service, method]]) => {
+      const actual = effects.filter(effect => effect.service === service && effect.method === method && !effect.error);
+      const expected = reads.filter(read => read.kind === kind);
+      return actual.length === expected.length &&
+        actual.every((effect, index) => matchesValue(effect.result, expected[index].value));
+    });
+    const expectedPanel = world.expected.handoff;
+    const target = proof.after?.nodes.find(row => row.id === proof.delivery?.targetId);
+    const parent = proof.after?.nodes.find(row => row.id === target?.parentId);
+    requireEvidence(
+      openEffects.length === methods.length && matchingOpenEffects && exactReads &&
+        proof.selected?.passed === true && outcome.choice?.sourceId === world.expected.source &&
+        outcome.status === world.expected.status && proof.evidence?.sourceId === outcome.choice.sourceId &&
+        isDeepStrictEqual(outcome.delivery, proof.delivery) &&
+        (expectedPanel ? proof.delivery?.receiptId === proof.evidence.id &&
+          target?.contextId === proof.contextId && target.title === expectedPanel.title &&
+          parent?.title === expectedPanel.parent && target.note === proof.delivery.note &&
+          isDeepStrictEqual(proof.delivery.bookmark, expectedPanel.bookmark) &&
+          proof.evidence.bookmarks.some(bookmark => isDeepStrictEqual(bookmark, proof.delivery.bookmark))
+          : proof.delivery === null),
+      "Expected an exact migration decision, scoped import effects, and independently joined retained collection evidence"
     );
   } else if (world.kind === "personal-history") {
     requireEvidence(
