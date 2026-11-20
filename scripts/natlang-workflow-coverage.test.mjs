@@ -9,7 +9,9 @@ import { inspectWorkflowCoverage } from "./natlang-workflow-coverage.mjs";
 test("workflow coverage lists mounted entry points and leaves ambiguous cases unattributed", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "natlang-workflow-coverage-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const checkouts = { base: path.join(root, "base"), system: path.join(root, "system") };
+  const checkouts = Object.fromEntries(
+    ["base", "system", "harness"].map((id) => [id, path.join(root, id)])
+  );
   async function write(template, file, content = "") {
     const filename = path.join(checkouts[template], file);
     await mkdir(path.dirname(filename), { recursive: true });
@@ -21,11 +23,17 @@ test("workflow coverage lists mounted entry points and leaves ambiguous cases un
     JSON.stringify({
       workspaceModules: {
         "runWorkflow/domains/api": "skills/api/natlang",
+        "runWorkflow/domains/harness": "skills/harness/natlang",
         "runWorkflow/domains/system": "skills/system/natlang",
       },
     })
   );
   await Promise.all([
+    write("base", "meta/vibestudio.yml", "template: { name: Base }"),
+    write("harness", "meta/vibestudio.yml", "template: { name: Harness }"),
+    write("harness", "skills/harness/natlang/inspectCase.nl"),
+    write("system", "meta/vibestudio.yml",
+      "template:\n  dependencies:\n    - url: git+https://github.com/example/base.git\n"),
     write("base", "skills/api/SKILL.md"),
     write("base", "skills/api/natlang/review.nl"),
     write("base", "skills/api/natlang/review/lookup.nl"),
@@ -56,15 +64,27 @@ test("workflow coverage lists mounted entry points and leaves ambiguous cases un
     cwd: checkouts.base,
   });
   const coverage = await inspectWorkflowCoverage(checkouts, [
-    { id: "managed-direct", execution: "managed-workspace", operations: ["operate"] },
-    { id: "managed-ambiguous", execution: "managed-workspace", operations: ["review"] },
-    { id: "managed-missing", execution: "managed-workspace", operations: ["lookup"] },
+    { id: "managed-direct", workspace: "system", execution: "managed-workspace", operations: ["operate"] },
+    { id: "managed-unambiguous", workspace: "base", execution: "managed-workspace", operations: ["review"] },
+    { id: "managed-ambiguous", workspace: "system", execution: "managed-workspace", operations: ["review"] },
+    { id: "managed-missing", workspace: "system", execution: "managed-workspace", operations: ["lookup"] },
+    { id: "managed-harness", workspace: "system", execution: "managed-workspace", operations: ["inspectCase"] },
+    { id: "managed-wrong-workspace", workspace: "base", execution: "managed-workspace", operations: ["inspectCase"] },
     {
       id: "scoped-api",
       execution: "scoped-fixture",
       request: { work: [{ kind: "domain", domain: "api", operation: "review" }] },
     },
+  ], [
+    { id: "base", url: "git+https://github.com/example/base.git" },
+    { id: "system", url: "git+https://github.com/example/system.git" },
+    { id: "harness", url: "git+https://github.com/example/harness.git", role: "development", consumers: ["system"] },
   ]);
+  assert.deepEqual(coverage.workspaceSources, {
+    base: ["base"],
+    system: ["base", "harness", "system"],
+    harness: ["harness"],
+  });
   assert.deepEqual(
     coverage.callables.map(({ callable, managedCases, scopedCases }) => [
       callable,
@@ -72,9 +92,10 @@ test("workflow coverage lists mounted entry points and leaves ambiguous cases un
       scopedCases,
     ]),
     [
-      ["api/review", 0, 1],
+      ["api/review", 1, 1],
       ["operate", 1, 0],
       ["system/review", 0, 0],
+      ["harness/inspectCase", 1, 0],
     ]
   );
   assert.deepEqual(
@@ -106,13 +127,15 @@ test("workflow coverage lists mounted entry points and leaves ambiguous cases un
     ["api/review"]
   );
   assert.deepEqual(
-    coverage.unresolved.map(({ selector, candidates }) => [
+    coverage.unresolved.map(({ workspace, selector, candidates }) => [
+      workspace,
       selector,
       candidates.map(({ callable }) => callable),
     ]),
     [
-      ["review", ["api/review", "system/review"]],
-      ["lookup", []],
+      ["system", "review", ["api/review", "system/review"]],
+      ["system", "lookup", []],
+      ["base", "inspectCase", []],
     ]
   );
 });

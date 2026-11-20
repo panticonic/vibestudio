@@ -15,7 +15,10 @@ Natlang sources, mounted callables, and managed and scoped case counts for each
 callable. The skill entries also show direct Markdown links to mounted Natlang
 programs elsewhere in the same template or in another configured template repository.
 Cross-template links identify a tracked callable on the repository's main branch.
-Ambiguous or unresolved assignments are listed with their possible sources. The report shows source relationships. A co-located program or case
+For managed cases, the report resolves operation names against the assigned workspace's
+template dependencies, including the development harness. It lists each composition
+under `workspaceSources` and groups ambiguous or unresolved assignments by workspace.
+The report shows source relationships. A co-located program or case
 does not establish that every procedure in a skill is implemented or tested.
 
 The scale target uses the baseline of 316 entries in the managed system-test catalog at System-testing revision

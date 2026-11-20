@@ -3,13 +3,14 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fromMarkdown } from "mdast-util-from-markdown";
+import { parse as parseYaml } from "yaml";
 
 const git = promisify(execFile);
 const shared = "skills/vibestudio-workflows";
 const operationName = (source) => path.posix.basename(source, ".nl");
 
 function githubRepository(remote) {
-  return /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/iu.exec(remote)?.[1].toLowerCase();
+  return /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/iu.exec(remote?.replace(/^git\+/u, ""))?.[1].toLowerCase();
 }
 
 function linkedPrograms(markdown, source, template, templateByRepository) {
@@ -53,8 +54,40 @@ async function originRepository(checkout) {
   }
 }
 
+async function workspaceDependencies(checkouts, sources) {
+  const byRepository = new Map(sources.map(({ id, url }) => [githubRepository(url), id]));
+  byRepository.delete(undefined);
+  const dependencies = new Map(await Promise.all(sources.map(async ({ id }) => {
+    const manifest = parseYaml(
+      await readFile(path.join(checkouts[id], "meta/vibestudio.yml"), "utf8")
+    );
+    return [id, (manifest.template?.dependencies ?? [])
+      .map(({ url }) => byRepository.get(githubRepository(url)))
+      .filter(Boolean)];
+  })));
+  // Development checkpoints declare the harness as a dependency of each consumer.
+  for (const { id, role, consumers } of sources) {
+    if (role !== "development") continue;
+    for (const consumer of consumers) dependencies.get(consumer).push(id);
+  }
+  return dependencies;
+}
+
 /** Index source relationships. A nearby document or task does not establish behavior coverage. */
-export async function inspectWorkflowCoverage(checkouts, cases) {
+export async function inspectWorkflowCoverage(checkouts, cases, sources) {
+  const dependencies = await workspaceDependencies(checkouts, sources);
+  const workspaceSources = new Map();
+  for (const { id } of sources) {
+    const installed = new Set();
+    const pending = [id];
+    while (pending.length > 0) {
+      const next = pending.pop();
+      if (installed.has(next)) continue;
+      installed.add(next);
+      pending.push(...dependencies.get(next));
+    }
+    workspaceSources.set(id, installed);
+  }
   const manifest = JSON.parse(
     await readFile(path.join(checkouts.base, shared, "natlang.json"), "utf8")
   );
@@ -107,6 +140,8 @@ export async function inspectWorkflowCoverage(checkouts, cases) {
   const unresolved = new Map();
   for (const scenario of cases) {
     const scoped = scenario.execution === "scoped-fixture";
+    const workspace = scoped ? null : scenario.workspace;
+    const installed = workspaceSources.get(workspace);
     const requested = scoped
       ? (scenario.request?.work ?? []).map((work) =>
           work.kind === "domain" ? work.domain + "/" + work.operation : work.kind
@@ -116,6 +151,7 @@ export async function inspectWorkflowCoverage(checkouts, cases) {
       unresolved.set(scenario.id, {
         selector: null,
         execution: scenario.execution,
+        workspace,
         cases: 1,
         candidates: [],
       });
@@ -125,18 +161,20 @@ export async function inspectWorkflowCoverage(checkouts, cases) {
       // A managed declaration records the captured operation's name. Require
       // a unique source before attributing its cases to a mounted callable.
       const matches = callables.filter((entry) =>
-        scoped ? entry.callable === selector : entry.name === selector
+        scoped ? entry.callable === selector :
+          installed?.has(entry.template) && entry.name === selector
       );
       if (matches.length === 1) {
         matches[0][scoped ? "scopedCases" : "managedCases"]++;
       } else {
-        const key = JSON.stringify([scenario.execution, selector]);
+        const key = JSON.stringify([scenario.execution, workspace, selector]);
         const previous = unresolved.get(key);
         if (previous) previous.cases++;
         else
           unresolved.set(key, {
             selector,
             execution: scenario.execution,
+            workspace,
             cases: 1,
             candidates: matches.map(({ template, source, callable }) => ({
               template,
@@ -171,7 +209,10 @@ export async function inspectWorkflowCoverage(checkouts, cases) {
     };
   }));
   return {
-    scope: "Tracked sources in configured template checkouts and declared task assignments",
+    scope: "Tracked template sources and declared task assignments, using each managed workspace's template dependencies",
+    workspaceSources: Object.fromEntries(
+      [...workspaceSources].map(([workspace, installed]) => [workspace, [...installed].sort()])
+    ),
     skills,
     callables,
     unresolved: [...unresolved.values()],
