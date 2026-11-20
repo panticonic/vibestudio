@@ -1410,7 +1410,13 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     for (const item of [legacyFile, legacyRaw, native])
       await expect(getBytes(blobsDir, item.digest)).resolves.toBeInstanceOf(Buffer);
     await expect(getBytes(blobsDir, discarded.digest)).resolves.toBeNull();
-    await expect(fsp.stat(path.join(blobsDir, "legacy-replay-retention.json"))).resolves.toBeDefined();
+    const retentionFile = path.join(blobsDir, "legacy-replay-retention.json");
+    await expect(fsp.stat(retentionFile)).resolves.toBeDefined();
+    await fsp.unlink(retentionFile);
+    const untouched = await putBytes(blobsDir, Buffer.from("unreferenced during failed GC"));
+    await expect(reopened.runGc({ minAgeMs: 0, epoch: 2, executionSourceRoots: [] }))
+      .rejects.toMatchObject({ code: "ENOENT" });
+    await expect(getBytes(blobsDir, untouched.digest)).resolves.toBeInstanceOf(Buffer);
   });
 
   it("proves shared semantic, execution, and cached roots in one graph before GC", async () => {

@@ -274,6 +274,13 @@ const sealedLegacyHistoryRetention = z.object({
   contentHashes: z.array(z.string().min(1)),
 }).strict();
 
+async function readSealedLegacyHistoryRetention(file: string, receiptDigest: string) {
+  const record = sealedLegacyHistoryRetention.parse(JSON.parse(await fsp.readFile(file, "utf8")));
+  if (record.receiptDigest !== receiptDigest)
+    throw new Error("Legacy history retention belongs to a different replay receipt");
+  return record;
+}
+
 export interface ExactRepositorySnapshotPlan {
   version: 1;
   contextId: string;
@@ -484,7 +491,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     infrastructureContextId?: string;
     destroyRetiredStorage?: ParticipantHistoryAttachment["destroyRetiredStorage"];
   }) | null = null;
-  private retiredLegacyRoots: z.infer<typeof sealedLegacyHistoryRetention> | undefined;
+  private retiredLegacyRetention: { file: string; receiptDigest: string } | undefined;
   private readonly protectedPublicationListeners = new Set<
     (event: ProtectedPublicationEvent) => void | Promise<void>
   >();
@@ -571,25 +578,25 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     if (!this.participantHistorySource)
       throw new Error("Retired legacy history requires an attached participant history");
     const file = path.join(this.deps.blobsDir, "legacy-replay-retention.json");
-    let record: z.infer<typeof sealedLegacyHistoryRetention>;
     try {
-      record = sealedLegacyHistoryRetention.parse(JSON.parse(await fsp.readFile(file, "utf8")));
+      await readSealedLegacyHistoryRetention(file, receiptDigest);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      record = sealedLegacyHistoryRetention.parse({
+      const record = sealedLegacyHistoryRetention.parse({
         version: 1, receiptDigest, ...await this.gad().contentGcRoots(),
       });
       writeFileAtomicSync(file, JSON.stringify(record), { mode: 0o600 });
     }
-    if (record.receiptDigest !== receiptDigest)
-      throw new Error("Legacy history retention belongs to a different replay receipt");
-    this.retiredLegacyRoots = record;
+    this.retiredLegacyRetention = { file, receiptDigest };
   }
 
   private async collectGcReachableDigests(
     executionSourceRoots: readonly ExecutionSourceContentRoot[]
   ): Promise<Set<string>> {
-    const semantic = this.retiredLegacyRoots ?? (await this.gad().contentGcRoots());
+    const retained = this.retiredLegacyRetention;
+    const semantic = retained
+      ? await readSealedLegacyHistoryRetention(retained.file, retained.receiptDigest)
+      : await this.gad().contentGcRoots();
     const roots = new Set(semantic.contentRoots);
     const mainRoots = new Set<string>();
     for (const main of this.deps.refs.listMains()) {
@@ -2162,7 +2169,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     });
     // Freezing the legacy source required an empty outbox. Once that source
     // is retired, native publication recovery owns subsequent commands.
-    if (this.retiredLegacyRoots) return 0;
+    if (this.retiredLegacyRetention) return 0;
     const owner = this.gad();
     let recovered = 0;
     for (let step = 0; step < 1_000; step += 1) {
