@@ -244,6 +244,12 @@ The smoke runs in a fresh workspace before external Google account setup. The ch
 the installed panel to switch app scope and browser preference, reload, and check the rendered
 guidance. The nested comparison checks the choice that changed, the choice that carried forward,
 and the disabled Connect Google and Open Gmail controls.
+The Gmail continuation cases link the setup review to a second Natlang skill
+that audits a retained compose card. It cites the observed launch control and
+the decisive channel event when recommending preserving a saved draft or
+reconciling an interrupted send before any retry. The system test
+`google-setup-managed-compose-qualification` checks the actual panel and
+channel, including denial of launch evidence before the setup readback.
 Local model comparison cases query the installed local-model extension twice. The workflow assesses the
 assigned candidates against tool and context requirements and offers a fresh or fork handoff only for a
 qualifying local model. The comparison has only inventory access.

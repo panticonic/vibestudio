@@ -570,6 +570,14 @@ const googleSetupWorkflow = {
   root: "guideGoogleWorkspace",
   evidence: googleSetupEvidence,
 };
+const gmailContinuationWorkflow = {
+  ...googleSetupWorkflow,
+  family: "google-live-compose-continuation",
+  namespace: "vibestudio:gmail-continuation",
+  group: "assigned-launch-gate-and-compose-lineage",
+  validator: { template: "system-testing", path: "skills/system-testing/gmail-continuation-managed.ts" },
+  evidence: gmailContinuationEvidence,
+};
 const newsWorkflow = {
   family: "news-live-ownership",
   workspace: "news",
@@ -769,7 +777,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedGrimoireWorlds },
     { managedSpectroliteWorlds },
     { managedNewsWorlds, newsHandoffWork },
-    { managedGoogleSetupWorlds },
+    { managedGoogleSetupWorlds, gmailContinuationWork },
     { localModelComparisonWorlds },
     { managedLogAuditWorlds },
     { incidentContinuationWorlds },
@@ -1103,8 +1111,22 @@ export async function loadLiveTeacherCases(checkouts) {
       ),
     });
   }
-  for (const { id, checks, codes } of managedGoogleSetupWorlds) {
-    cases.set(`google-setup-live-${id}`, { ...googleSetupWorkflow, caseId: id, checks, codes });
+  for (const { id, checks, codes, compose } of managedGoogleSetupWorlds) {
+    const setup = { ...googleSetupWorkflow, caseId: id, checks, codes };
+    if (compose) {
+      const assignment = gmailComposeHistoryWorlds.find(({ id }) => id === compose.caseId);
+      if (!assignment) throw new Error(`Missing retained compose world for ${id}`);
+      cases.set(`google-setup-live-${id}`, {
+        ...setup,
+        ...gmailContinuationWorkflow,
+        continuationAction: compose.action,
+        assignment,
+        skills: gmailContinuationWork.map(({ operation }) => operation),
+        sourceGroups: [gmailContinuationWorkflow, googleSetupWorkflow, gmailComposeHistoryWorkflow].flatMap(workflowSourceGroups),
+      });
+    } else {
+      cases.set(`google-setup-live-${id}`, setup);
+    }
   }
   for (const { id, checks, expected, repair, handoff } of managedNewsWorlds) {
     cases.set(`news-live-${id}`, {
@@ -4227,13 +4249,13 @@ function unitIdentityEvidence(execution, exercise, _scenario, workflow) {
   };
 }
 
-function gmailComposeHistoryEvidence(execution, exercise, _scenario, workflow) {
+function gmailComposeHistoryEvidence(execution, exercise, _scenario, workflow, auditParent) {
   const fixture = execution.diagnostics.gmailComposeHistory;
   const { seed, request, received, projected, checks } = fixture ?? {};
   const { assignment } = workflow;
   const report = exercise.report?.history;
   const records = exercise.calls.map(({ record }) => record);
-  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const root = auditParent ?? records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
   const child = (parent, name) => parent && records.find(
     (record) => record.parent_call_id === parent.call_id && record.definition.name === name
   );
@@ -4244,7 +4266,19 @@ function gmailComposeHistoryEvidence(execution, exercise, _scenario, workflow) {
   const projection = audit?.effects?.[0];
   const assessment = child(history, "assessComposeState");
   const cite = child(history, "citeComposeHistory");
-  const effects = records.flatMap(({ effects }) => effects ?? []);
+  let effectRecords = records;
+  if (auditParent && audit) {
+    effectRecords = [audit];
+    const seen = new Set([audit.call_id]);
+    for (const parent of effectRecords) {
+      for (const nested of records) {
+        if (nested.parent_call_id !== parent.call_id || seen.has(nested.call_id)) continue;
+        seen.add(nested.call_id);
+        effectRecords.push(nested);
+      }
+    }
+  }
+  const effects = effectRecords.flatMap(({ effects }) => effects ?? []);
   const effect = history?.effects?.[0];
   requireEvidence(
     fixture?.passed === true &&
@@ -6511,6 +6545,60 @@ function googleSetupEvidence(execution, exercise, _scenario, workflow) {
   return {
     world: { context_id: fixture.contextId, panel_id: verification.panelId },
     checks: verification.checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function gmailContinuationEvidence(execution, exercise, scenario, workflow) {
+  const fixture = execution.diagnostics.managedGoogleSetup;
+  const verification = fixture?.verification;
+  const results = exercise.report?.results;
+  const { gate, setup, compose } = verification ?? {};
+  const report = results?.[1]?.report;
+  const gateRow = setup?.receipts?.find(({ check }) => check.kind === "launch-gate");
+  const continuation = exercise.calls.map(({ record }) => record).find(
+    (record) =>
+      record.parent_call_id === exercise.rootCallIds[0] &&
+      record.definition.name === "planComposeContinuation"
+  );
+  const decision = exercise.calls.map(({ record }) => record).find(
+    (record) =>
+      continuation && record.parent_call_id === continuation.call_id &&
+      record.definition.name === "decideContinuation"
+  );
+  const [read] = continuation?.effects ?? [];
+  const last = compose?.received?.events?.at(-1);
+  requireEvidence(
+    results?.length === 2 &&
+      results[0]?.domain === "google" && results[0].operation === "guideGoogleWorkspace" &&
+      results[1]?.domain === "gmailReview" && results[1].operation === "planComposeContinuation" &&
+      verification?.passed === true &&
+      ["verifiedSetup", "verifiedCompose", "boundContinuation"].every((key) => verification.checks?.[key] === true) &&
+      gate?.enabled === false && gateRow?.gmailEnabled === false &&
+      typeof gate.evidenceId === "string" && gate.evidenceId === gateRow.id &&
+      typeof last?.id === "string" &&
+      isDeepStrictEqual(report?.continuation, {
+        launch: "held", action: workflow.continuationAction, evidenceIds: [gate.evidenceId, last.id],
+      }) &&
+      continuation?.effects?.length === 1 &&
+      read?.service === "gmailContinuationRead" && read.method === "launchEvidence" &&
+      !read.error && matchesValue(read.args, []) && matchesValue(read.result, gate) &&
+      matchesValue(continuation.inputs?.request, compose.request) &&
+      matchesValue(continuation.output, report) &&
+      matchesValue(decision?.inputs?.gate, gate) &&
+      matchesValue(decision?.inputs?.audit, report.audit) &&
+      matchesValue(decision.output, report.continuation),
+    "Gmail continuation requires the assigned launch observation and the decisive compose event"
+  );
+  const setupEvidence = googleSetupEvidence({
+    ...execution, diagnostics: { managedGoogleSetup: { contextId: fixture.contextId, verification: setup } },
+  }, { ...exercise, report: results[0].report }, scenario, workflow);
+  const composeEvidence = gmailComposeHistoryEvidence({
+    ...execution, diagnostics: { gmailComposeHistory: compose },
+  }, { ...exercise, report: report.audit }, scenario, workflow, continuation);
+  return {
+    world: { ...setupEvidence.world, ...composeEvidence.world },
+    checks: { ...setupEvidence.checks, ...composeEvidence.checks, ...verification.checks },
     evidence: { workspace: { fixture } },
   };
 }

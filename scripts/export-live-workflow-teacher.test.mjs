@@ -6225,6 +6225,66 @@ test("Gmail compose export requires the native delivery history and reconciliati
   diagnostics.natlangTeacher.calls[1].record.output = ref(report);
   await save();
   await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /exact lineage and appropriate recovery/u);
+
+  evidenceIds[1] = latest.id;
+  history.record.output = ref(historyReport);
+  const audit = diagnostics.natlangTeacher.calls[1];
+  audit.record.output = ref(report);
+  audit.record.parent_call_id = "planComposeContinuation";
+  const continuationName = "google-setup-live-hold-interrupted-send-pending-setup";
+  entry.test.name = continuationName;
+  const world = cases.get(continuationName);
+  const receipts = world.checks.map((check, index) => ({
+    id: `ctx:google-setup:${index + 1}`,
+    check,
+    stage: "needs-setup",
+    gmailEnabled: false,
+    inheritedLaunch: null,
+    ...(check.kind === "viewport" ? { viewportWidth: check.width, overflow: false } : {}),
+  }));
+  const setup = {
+    status: "action-needed", action: "open-setup", ids: [], checkpoint: null,
+    panelFindings: receipts.map(({ id, check }, index) => ({ check, code: world.codes[index], evidenceId: id })),
+  };
+  const gate = { evidenceId: receipts[1].id, enabled: false };
+  const disposition = { launch: "held", action: "reconcile-before-retry", evidenceIds: [gate.evidenceId, latest.id] };
+  const continuation = { audit: report, continuation: disposition };
+  diagnostics.managedGoogleSetup = {
+    contextId: "ctx",
+    verification: {
+      passed: true, checks: { verifiedSetup: true, verifiedCompose: true, boundContinuation: true },
+      gate, compose: diagnostics.gmailComposeHistory,
+      setup: {
+        contextId: "ctx", caseId: world.caseId, panelId: "welcome", receipts, passed: true,
+        readiness: { state: "needs-setup" },
+        checks: { driveNeedsSetup: true, browserAgrees: true, reportMatches: true },
+      },
+    },
+  };
+  diagnostics.natlangTeacher.report = { results: [
+    { domain: "google", operation: "guideGoogleWorkspace", report: setup },
+    { domain: "gmailReview", operation: "planComposeContinuation", report: continuation },
+  ] };
+  const setupCall = call("guideGoogleWorkspace", "runWorkflow", {}, setup);
+  const continuationCall = call("planComposeContinuation", "runWorkflow", { request }, continuation, [{
+    service: "gmailContinuationRead", method: "launchEvidence", args: ref([]), result: ref(gate),
+  }]);
+  setupCall.record.ended_at = new Date(1).toISOString();
+  continuationCall.record.started_at = new Date(2).toISOString();
+  diagnostics.natlangTeacher.calls.push(
+    setupCall,
+    call("reviewSetupJourney", "guideGoogleWorkspace", {}, setup),
+    continuationCall,
+    call("decideContinuation", "planComposeContinuation", { gate, audit: report }, disposition),
+  );
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-continuation` });
+  continuationCall.record.effects[0].result = ref({ ...gate, evidenceId: "other-panel" });
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-wrong-launch-control` }),
+    /requires the assigned launch observation/u
+  );
 });
 
 test("unit identity export rejects artwork that differs from the grounded catalog choice", async (t) => {
