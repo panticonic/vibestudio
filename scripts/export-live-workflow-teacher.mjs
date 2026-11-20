@@ -1000,7 +1000,8 @@ export async function loadLiveTeacherCases(checkouts) {
   if (openGoalSource) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
-    for (const assignment of (imported.default ?? imported).openGoalWorlds) {
+    const { openGoalWorlds, browserGoalWorlds = [] } = imported.default ?? imported;
+    for (const assignment of [...openGoalWorlds, ...browserGoalWorlds]) {
       const split = assignment.split ?? "train";
       const sourceGroups = [assignment.sourceGroup, assignment.relatedSourceGroup].filter(Boolean);
       const scenario = `open-goal-${assignment.id}`;
@@ -1015,14 +1016,16 @@ export async function loadLiveTeacherCases(checkouts) {
       cases.set(scenario, {
         family: `workspace-open-user-goal-${assignment.kind}`,
         workspace: "examples",
-        namespace: assignment.kind === "research" ? "vibestudio:web-research" : "vibestudio:workspace-edit",
+        namespace: assignment.kind === "browser" ? "vibestudio:browser" :
+          assignment.kind === "research" ? "vibestudio:web-research" : "vibestudio:workspace-edit",
         group: assignment.sourceGroup,
         sourceGroups,
         split,
         interaction: "open-user-goal",
         program: "skills/open-user-goal/runUserGoal.nl",
         root: "runUserGoal",
-        validator: { template: "system-testing", path: "skills/system-testing/open-goal-managed.ts" },
+        validator: { template: "system-testing", path: assignment.kind === "browser"
+          ? "skills/system-testing/open-goal-browser-managed.ts" : "skills/system-testing/open-goal-managed.ts" },
         assignment,
         evidence: openGoalEvidence,
       });
@@ -6659,11 +6662,18 @@ function openGoalEvidence(execution, exercise, _scenario, workflow) {
   const effects = exercise.calls.flatMap(({ record }) => record.effects ?? []);
   const researchChecks = ["discoveredSources", "exactPageReadback", "answeredGoal", "groundedCitations", "requiredEvidence"];
   const editChecks = ["discoveredWorkspace", "recoveredConcurrentEdit", "exactDocumentReadback", "preservedOtherDocuments", "reportedStoredRevision"];
-  const checks = [
+  const browser = kind === "browser";
+  const browserChanges = browser && Boolean(workflow.assignment.expected.changes?.length);
+  const checks = browser ? [
+    "discoveredBrowser", "readBackBrowser", "exactPanelOutcome", "respectedBrowserAuthority",
+    "reportedVisibleRows", "protectedHeadUnchanged",
+  ] : [
     ...(kind === "workspace-edit" ? [] : researchChecks),
     ...(kind === "research" ? [] : editChecks),
   ];
-  const methods = [
+  const methods = browser ? [
+    ["goalBrowser", "inspect"], ...(browserChanges ? [["goalBrowser", "activate"]] : []),
+  ] : [
     ...(kind === "workspace-edit" ? [] : [["goalDiscovery", "search"], ["web", "fetch"]]),
     ...(kind === "research" ? [] : [["goalWorkspace", "list"], ["goalWorkspace", "read"], ["goalWorkspace", "revise"]]),
   ];
@@ -6680,6 +6690,20 @@ function openGoalEvidence(execution, exercise, _scenario, workflow) {
         effects.some((effect) => effect.service === service && effect.method === method && !effect.error)),
     "Expected the original user goal, model-led discovery, and independently checked outcomes"
   );
+  if (browser) {
+    const bound = (binding) => binding?.generation?.protocol === "panel-cdp-generation.v1" &&
+      binding.generation.panelId === proof.panelId && binding.generation.attemptId === proof.after?.attemptId &&
+      binding.generation.buildKey === proof.after?.buildKey;
+    requireEvidence(
+      typeof proof.panelId === "string" && bound(proof.after?.binding) && proof.inspections?.length > 0 &&
+        proof.inspections.every((snapshot) => bound(snapshot.binding) && snapshot.attemptId === proof.after.attemptId) &&
+        Array.isArray(proof.attempts) && proof.attempts.every((attempt) =>
+          attempt.result !== "activated" || bound(attempt.binding)) &&
+        (browserChanges || !effects.some((effect) =>
+          effect.service === "goalBrowser" && effect.method === "activate")),
+      "Expected retained CDP bindings and an operation inside the user's browser authority"
+    );
+  }
   if (kind === "research-and-edit") {
     const children = exercise.calls.map(({ record }) => record)
       .filter(({ parent_call_id }) => parent_call_id === root.call_id);
@@ -6696,7 +6720,8 @@ function openGoalEvidence(execution, exercise, _scenario, workflow) {
   return {
     world: { context_id: proof.contextId },
     checks: Object.fromEntries(checks.map((check) => [check, true])),
-    evidence: { workspace: { proof } },
+    evidence: browser ? { workspace: { proof }, cdp: { panelId: proof.panelId, inspections: proof.inspections,
+      attempts: proof.attempts, after: proof.after } } : { workspace: { proof } },
   };
 }
 

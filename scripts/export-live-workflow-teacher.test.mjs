@@ -987,6 +987,49 @@ test("open goal export attests the goal-only invocation and rejects a hidden ass
   );
 });
 
+test("open browser goal export retains CDP evidence and rejects a replaced generation", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(path.resolve(import.meta.dirname, ".."));
+  const cases = await loadLiveTeacherCases(checkouts);
+  entry.test.name = "open-goal-find-pending-captions";
+  const workflow = cases.get(entry.test.name);
+  const { id, goal } = workflow.assignment;
+  const pins = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(options.pins, JSON.stringify({ ...pins, workspace: workflow.workspace }));
+  const run = diagnostics.natlangTeacher;
+  run.programPath = workflow.program;
+  const [root, child] = run.calls;
+  const encoded = JSON.stringify(goal);
+  root.record.definition.name = "runUserGoal";
+  root.record.inputs = {
+    goal: { complete: true, bytes: Buffer.byteLength(encoded), hash: createHash("sha256").update(encoded).digest("hex") },
+  };
+  child.record.definition.name = "workInBrowser";
+  child.record.effects = [{ service: "goalBrowser", method: "inspect" }];
+  const snapshot = {
+    attemptId: "rendered", buildKey: "build", binding: {
+      status: "acquired", generation: { protocol: "panel-cdp-generation.v1", panelId: "owned-panel",
+        attemptId: "rendered", buildKey: "build" },
+    },
+  };
+  diagnostics.openGoalVerification = {
+    passed: true, caseId: id, contextId: "ctx", goal, panelId: "owned-panel",
+    inspections: [snapshot], attempts: [], after: structuredClone(snapshot),
+    checks: { discoveredBrowser: true, readBackBrowser: true, exactPanelOutcome: true,
+      respectedBrowserAuthority: true, reportedVisibleRows: true, protectedHeadUnchanged: true },
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  const manifest = JSON.parse(await readFile(path.join(options.out, "manifest.json"), "utf8"));
+  assert.deepEqual(manifest.required_effect_kinds, ["workspace", "cdp"]);
+  snapshot.binding.generation.attemptId = "other-renderer";
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: path.join(path.dirname(options.out), "foreign") }),
+    /retained CDP bindings/u
+  );
+});
+
 test("panel health export rejects an old console record cited after recovery", async (t) => {
   const { options, diagnostics, entry, save } = await fixture(t);
   const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
