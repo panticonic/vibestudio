@@ -360,6 +360,15 @@ Personal Mission planning cases reconcile dependencies, relocate cards and prepa
 for Ready in an assigned Mission Control store. The verifier compares each revision and
 confirms stable card IDs, preserved fields and unchanged unrelated records.
 
+Personal Browser migration review separates source readiness, aggregate
+preview, retained job inspection, and retry guidance into nested Natlang
+calls. The cases distinguish a zero-count category from missing coverage, a
+source disappearing before preview, an interrupted import whose source is
+ready or blocked, and a cancelled import with stored batches. The managed
+tests use a local host fixture for preview and a context-owned Browser Data
+worker for the retained receipts. Run `browser-import-oracle-qualification`
+without making model calls or reading a local browser profile.
+
 Personal Browser handoffs compose Browser library and Collection conductor in one shared
 workflow. Collection writes require a live readback of the retained bookmark. The exporter
 checks skill order and binds the exact bookmark URL to the persisted note on the assigned panel.

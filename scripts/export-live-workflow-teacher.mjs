@@ -700,6 +700,15 @@ const tendrilWorkflow = {
   root: "runTendril",
   evidence: tendrilEvidence,
 };
+const browserImportWorkflow = {
+  family: "personal-live-browser-import-review",
+  workspace: "personal",
+  namespace: "vibestudio:personal:browser-import",
+  group: "browser-migration-preview-and-recovery",
+  validator: { template: "personal", path: "skills/browser-import-runtime/managed.ts" },
+  root: "reviewBrowserImport",
+  evidence: browserImportEvidence,
+};
 const browserLibraryWorkflow = {
   family: "personal-live-browser-library",
   workspace: "personal",
@@ -864,6 +873,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedChecklistWorlds },
     { managedTendrilWorlds },
     { managedCollectionWorlds },
+    { managedBrowserImportWorlds },
     { managedBrowserLibraryWorlds, origin: browserLibraryOrigin },
     { managedBrowserHandoffWorlds },
     { managedMissionPlanningWorlds },
@@ -951,6 +961,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "checklist-worlds.ts",
       "tendril-worlds.ts",
       "collection-worlds.ts",
+      "browser-import-worlds.ts",
       "browser-library-worlds.ts",
       "browser-handoff-worlds.ts",
       "mission-planning-worlds.ts",
@@ -1523,6 +1534,9 @@ export async function loadLiveTeacherCases(checkouts) {
       sourceGroups: [examplesPortfolioWorkflow, grimoireWorkflow, regencyReviewWorkflow]
         .flatMap(workflowSourceGroups),
     });
+  }
+  for (const assignment of managedBrowserImportWorlds) {
+    cases.set(`browser-import-live-${assignment.id}`, { ...browserImportWorkflow, assignment });
   }
   for (const { id, request, expected } of managedBrowserLibraryWorlds) {
     cases.set(`browser-library-live-${id}`, {
@@ -9622,6 +9636,67 @@ function browserHandoffEvidence(execution, exercise, scenario, workflow) {
   );
   return {
     world: { ...libraryEvidence.world, ...panelEvidence.world },
+    checks: verification.checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function browserImportEvidence(execution, exercise, _scenario, { assignment }) {
+  const fixture = execution.diagnostics.managedBrowserImport;
+  const verification = fixture?.verification;
+  const { id, goal, kind, categories, reads, expected } = assignment;
+  const request = { goal, kind, categories };
+  const { findings, ...decision } = exercise.report ?? {};
+  const declared = {
+    source: { service: "browserImportSource", stage: "inspectAssignedSource", value: assignment.source },
+    preview: { service: "browserImportPreview", stage: "inspectPreview", value: assignment.preview },
+    history: { service: "browserImportHistory", stage: "inspectRetainedJob", value: assignment.job },
+  };
+  requireEvidence(
+    typeof fixture?.contextId === "string" && fixture.contextId === execution.provenance?.contextId &&
+      verification?.caseId === id && verification.passed === true &&
+      ["exactReads", "exactReport", "retainedState", "previewCalls"].every((key) => verification.checks?.[key] === true) &&
+      isDeepStrictEqual(verification.request, request) &&
+      isDeepStrictEqual(verification.reads, reads.map((read) => ({ kind: read, value: declared[read].value }))) &&
+      Array.isArray(findings) && isDeepStrictEqual(decision, expected),
+    "Browser migration must retain the assigned preview counts or persisted import progress and the matching decision"
+  );
+  const root = exercise.calls.find(({ callId }) => callId === exercise.rootCallIds[0]);
+  const child = (parent, name) => exercise.calls.find(({ record }) =>
+    parent && record.parent_call_id === parent.callId &&
+      record.definition?.name === name && record.outcome === "done"
+  );
+  const review = child(root, "reviewBrowserImport");
+  const interpret = child(review, "interpretRetainedJob");
+  const stages = reads.map((read) => child(review, declared[read].stage));
+  const effects = exercise.calls.flatMap(({ record }) => record.effects ?? []);
+  const before = (earlier, later) =>
+    Date.parse(earlier?.record.ended_at) <= Date.parse(later?.record.started_at);
+  requireEvidence(
+    matchesValue(root?.record.inputs?.request, {
+      goal, work: [{ kind: "domain", domain: "browserImport", operation: "reviewBrowserImport", input: request }],
+    }) &&
+      matchesValue(review?.record.inputs?.request, request) &&
+      matchesValue(review?.record.output, exercise.report) &&
+      effects.length === reads.length &&
+      reads.every((read, index) => {
+        const [effect] = stages[index]?.record.effects ?? [];
+        const { service, value } = declared[read];
+        return effect?.service === service && effect.method === "observe" && !effect.error &&
+          matchesValue(effect.result, value) &&
+          (read === "history"
+            ? matchesValue(stages[index].record.output, value)
+            : matchesValue(stages[index].record.inputs?.requested, categories)) &&
+          (index === 0 || before(stages[index - 1], stages[index]));
+      }) &&
+      (kind === "recover"
+        ? before(stages[0], interpret) && matchesValue(interpret.record.inputs?.job, assignment.job) &&
+          (stages.length === 1 || before(interpret, stages[1]))
+        : !interpret),
+    "Browser migration trace must read and interpret the assigned records in order before any dependent preview or source check"
+  );
+  return {
+    world: { context_id: fixture.contextId, case_id: id },
     checks: verification.checks,
     evidence: { workspace: { fixture } },
   };

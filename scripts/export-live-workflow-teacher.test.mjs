@@ -167,6 +167,7 @@ test("authored template worlds flow into the collector without losing original s
       ],
       ["tendril-worlds", "managedTendrilWorlds", []],
       ["collection-worlds", "managedCollectionWorlds", []],
+      ["browser-import-worlds", "managedBrowserImportWorlds", []],
       ["browser-library-worlds", "managedBrowserLibraryWorlds", []],
       ["browser-handoff-worlds", "managedBrowserHandoffWorlds", []],
       ["mission-planning-worlds", "managedMissionPlanningWorlds", []],
@@ -3264,6 +3265,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["news-worlds", "export const managedNewsWorlds = [];"],
       ["tendril-worlds", "export const managedTendrilWorlds = [];"],
       ["collection-worlds", "export const managedCollectionWorlds = [];"],
+      ["browser-import-worlds", "export const managedBrowserImportWorlds = [];"],
       ["browser-library-worlds", "export const managedBrowserLibraryWorlds = [];"],
       ["browser-handoff-worlds", "export const managedBrowserHandoffWorlds = [];"],
       ["mission-planning-worlds", "export const managedMissionPlanningWorlds = [];"],
@@ -4966,6 +4968,67 @@ test("Drive checkpoint export binds full, partial and stale outcomes to their ac
       exercise.calls.push(call("commit", "sync", "commitCheckpoint", {}, receipt, [write]));
       assert.throws(() => workflow.evidence(execution, exercise, name, workflow), /guarded terminal write/);
     }
+  }
+});
+
+test("Browser migration export binds each preview or recovery decision to its assigned observations", async () => {
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(path.resolve(import.meta.dirname, ".."));
+  const cases = await loadLiveTeacherCases(checkouts);
+  const ref = (value) => {
+    const json = JSON.stringify(value);
+    return { complete: true, hash: createHash("sha256").update(json).digest("hex"), bytes: Buffer.byteLength(json) };
+  };
+  const migrations = [...cases].filter(([, workflow]) => workflow.family === "personal-live-browser-import-review");
+  assert.equal(migrations.length, 5);
+  for (const [name, workflow] of migrations) {
+    const { id, goal, kind, categories, reads, expected, job, preview, source } = workflow.assignment;
+    const request = { goal, kind, categories };
+    const report = { ...expected, findings: ["Review the assigned records"] };
+    const contextId = "owned-browser-migration";
+    const values = { source, preview, history: job };
+    const verification = {
+      caseId: id, passed: true, request, reads: reads.map((kind) => ({ kind, value: values[kind] })),
+      checks: { exactReads: true, exactReport: true, retainedState: true, previewCalls: true },
+    };
+    const execution = {
+      provenance: { contextId }, diagnostics: { managedBrowserImport: { contextId, verification } },
+    };
+    const call = (callId, parent, label, inputs, output, effects = [], interval = [0, 100]) => ({
+      callId, record: {
+        parent_call_id: parent, outcome: "done", definition: { name: label },
+        started_at: new Date(interval[0]).toISOString(), ended_at: new Date(interval[1]).toISOString(),
+        inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+        output: ref(output), effects,
+      },
+    });
+    const exercise = { report, rootCallIds: ["root"], calls: [
+      call("root", null, "runWorkflow", {
+        request: { goal, work: [{ kind: "domain", domain: "browserImport", operation: "reviewBrowserImport", input: request }] },
+      }, report),
+      call("review", "root", "reviewBrowserImport", { request }, report),
+    ] };
+    const declared = {
+      source: ["inspectAssignedSource", "browserImportSource"],
+      history: ["inspectRetainedJob", "browserImportHistory"],
+      preview: ["inspectPreview", "browserImportPreview"],
+    };
+    for (const [index, read] of reads.entries()) {
+      const [stage, service] = declared[read];
+      const time = 10 + index * 30;
+      exercise.calls.push(call(read, "review", stage,
+        read === "history" ? {} : { requested: categories }, values[read], [
+          { service, method: "observe", result: ref(values[read]) },
+        ], [time, time + 10]));
+    }
+    const interpret = job && call("interpret", "review", "interpretRetainedJob", { job }, { next: expected.next }, [], [25, 30]);
+    if (interpret) exercise.calls.push(interpret);
+    assert.ok(workflow.evidence(execution, exercise, name, workflow));
+    if (interpret) {
+      interpret.record.inputs.job = ref({ ...job, progress: [] });
+    } else {
+      exercise.calls.find(({ callId }) => callId === "preview").record.started_at = new Date(0).toISOString();
+    }
+    assert.throws(() => workflow.evidence(execution, exercise, name, workflow), /read and interpret .* in order/);
   }
 });
 
