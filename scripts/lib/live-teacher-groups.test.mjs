@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { groupLiveTeacherCases } from "./live-teacher-groups.mjs";
+import { groupLiveTeacherCases, terminalStartupFailure } from "./live-teacher-groups.mjs";
 
 test("teacher groups recycle bounded instances and preserve historical baseline placement", () => {
   const selection = ["a", "b", "c", "historical", "system"];
@@ -18,4 +18,11 @@ test("teacher groups recycle bounded instances and preserve historical baseline 
   assert.ok(groups.every(({ instance }) => instance.startsWith("natlang-live-")));
   assert.deepEqual(groupLiveTeacherCases(selection, workflows, 0).map(({ cases }) => cases),
     [["a", "b", "c"], ["historical"], ["system"]]);
+});
+
+
+test("only an explicit terminal startup error suppresses a repeated workspace boot", () => {
+  assert.equal(terminalStartupFailure('[system-test] Created workspace\n{"error":"Missing immutable dependency","recoverable":false}'), true);
+  assert.equal(terminalStartupFailure('{"error":"Timeout","recoverable":true}'), false);
+  assert.equal(terminalStartupFailure("[system-test] No doctor report"), false);
 });
