@@ -513,9 +513,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   private readonly locks = new Map<string, Promise<unknown>>();
   private protectedMainMutationTail: Promise<void> = Promise.resolve();
   private readonly protectedMainMutationScope = new AsyncLocalStorage<boolean>();
-  /** Exact working-head receipts owned by this host's context mutation fence.
-   * A null receipt records explicit deletion; a missing receipt needs recovery. */
-  private readonly contextHeads = new Map<string, VcsStateNodeRef | null>();
+  private readonly retiredContexts = new Set<string>();
   private readonly semanticStateByContent = new Map<string, VcsStateNodeRef>();
   /**
    * Exact immutable build-source entries established during this host
@@ -1400,7 +1398,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     source: NonNullable<WorkspaceVcs["participantHistorySource"]>,
     input: { caller: VerifiedCaller; contextId: string; ownerContextId: string; signal?: AbortSignal }
   ) {
-    if (this.contextHeads.get(input.ownerContextId) === null || this.contextHeads.get(input.contextId) === null) {
+    if (this.retiredContexts.has(input.ownerContextId) || this.retiredContexts.has(input.contextId)) {
       throw new Error("Workspace participant context has retired");
     }
     const forkSources = input.contextId === input.ownerContextId
@@ -1432,7 +1430,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       throw new Error("Workspace fork target must belong to one of its admitted lifetimes");
     }
     return this.lockParticipantContexts(parent.contextId, child.contextId, async () => {
-      if (this.contextHeads.get(child.contextId) === null) {
+      if (this.retiredContexts.has(child.contextId)) {
         throw new Error("Workspace participant context has retired");
       }
       const scope = await this.openAdmittedParticipantScope(source, { ...parent, ownerContextId });
@@ -1474,12 +1472,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     publicationGateContext?: PublicationGateContext
   ): Promise<WorkspaceSemanticOutput<M>> {
     const dispatch = async (): Promise<WorkspaceSemanticOutput<M>> => {
-      const contextId = semanticRequestContextId(request);
-      const operationClass = vcsMethods[semanticApiMethodForWire(method)].operationClass;
-      if (contextId && operationClass !== "read") this.contextHeads.delete(contextId);
       const owner = this.gad();
       const next = await this.dispatchSemanticWire(owner, method, request);
-      const result = await this.drainSemanticResult(
+      return this.drainSemanticResult(
         owner,
         next,
         (value) =>
@@ -1488,22 +1483,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           ) as WorkspaceSemanticOutput<M>,
         publicationGateContext
       );
-      if (contextId && operationClass === "context-write") {
-        // Public mutation results were decoded above. Publish only the exact
-        // resulting working coordinate, never the request's expected basis.
-        const receipt = result as Record<string, unknown>;
-        if (receipt["workingHead"]) {
-          this.publishContextHead(contextId, receipt["workingHead"] as VcsStateNodeRef);
-        } else if (method === "vcsCommit") {
-          this.publishContextHead(contextId, receipt["event"] as VcsStateNodeRef);
-        } else if (method === "vcsImportSnapshot") {
-          this.publishContextHead(contextId, {
-            kind: "event",
-            eventId: receipt["eventId"] as string,
-          });
-        }
-      }
-      return result;
     };
     const operation = (): Promise<WorkspaceSemanticOutput<M>> => {
       const signal =
@@ -2159,10 +2138,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         ) {
           return false;
         }
-        // An acknowledgement can finish the authored context transition.
-        // Recovery owns the same fence but may not have its original public
-        // mutation result, so the next read must acquire an exact receipt.
-        if (effect.scopeKind === "context") this.contextHeads.delete(effect.scopeId);
         if (publication) {
           await this.mutateProtectedMain(() => this.replayPublicationObservers(publication));
         }
@@ -2472,14 +2447,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     if (!source) throw new Error("Participant workspace history is unavailable");
     if (contextId === source.infrastructureContextId) return;
     await this.locked(`context-lifecycle:${contextId}`, async () => {
-      if (this.contextHeads.get(contextId) === null)
+      if (this.retiredContexts.has(contextId))
         throw new Error("Workspace participant context has retired");
       await source.dispatch.dispatch(source.canonical, "ensureHistoryRuntimeContext", { contextId });
     });
-  }
-
-  private publishContextHead(contextId: string, head: VcsStateNodeRef): void {
-    this.contextHeads.set(contextId, Object.freeze({ ...head }));
   }
 
   async activateNativeWorkspace(): Promise<{ stateHash: string }> {
@@ -2494,7 +2465,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     const source = this.participantHistorySource;
     if (!source) throw new Error("Participant workspace history is unavailable");
     await this.locked(`context-lifecycle:${contextId}`, async () => {
-      this.contextHeads.set(contextId, null);
+      this.retiredContexts.add(contextId);
       const retired = await retireWorkspaceParticipantContext({ ...source, contextId });
       for (const owner of retired.owners) {
         await source.destroyRetiredStorage?.(owner);
