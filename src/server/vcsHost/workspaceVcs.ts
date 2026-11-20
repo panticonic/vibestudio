@@ -888,7 +888,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     const readReceipt = async () => sharedHistorySeedReceipt.nullable().parse(
       await dispatch.dispatch(canonical, "readSharedHistorySeedReceipt")
     );
-    await this.withProtectedMainMutation(async () => {
+    // Seeding establishes semantic readiness. Take the publication lease
+    // directly so startup never waits for its own initialization to finish.
+    await this.mutateProtectedMain(async () => {
       const prior = this.deps.refs.readAppliedPublication(publicationId);
       if (prior) {
         await this.replayPublicationObservers(prior);

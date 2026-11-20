@@ -354,7 +354,8 @@ describe("WorkspaceVcs protected publication notification", () => {
     expect(installed).toBe(false);
     await expect(initialize()).rejects.toThrow("native seed install reply was lost");
     expect(refs.readMainSemanticState()).toBeNull();
-    await expect(initialize()).resolves.toBeUndefined();
+    vcs.startSemanticInitialization(initialize);
+    await expect(vcs.whenSemanticReady()).resolves.toBeUndefined();
     expect(refs.readMainSemanticState()?.eventId).toBe(seed.eventId);
     await expect(initialize()).resolves.toBeUndefined();
     expect(gate).toHaveBeenCalledOnce();
