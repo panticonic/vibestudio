@@ -50,7 +50,7 @@ export interface VcsDurabilityBootstrapDeps {
   readWorkspaceHistoryOwner(targetId: string): Promise<{ contextId: string } | null>;
   listWorkspaceHistorySessionOwners(contextIds: readonly string[]): Promise<Array<{ contextId: string; userId: string }>>;
   readProtectedMainEventId(): string | null;
-  activateSemanticWorkspace(workspaceVcs: WorkspaceVcs, sharedHistorySeed?: true): Promise<void>;
+  activateSemanticWorkspace(workspaceVcs: WorkspaceVcs, nativeHistoryReady?: true): Promise<void>;
 }
 
 /** Resume only the canonical history named by this workspace's durable runtime. */
@@ -59,7 +59,8 @@ async function restoreParticipantHistory(
   dispatch: DODispatch,
   runtime: RuntimeManager,
   reserve = false,
-): Promise<boolean> {
+  allowFresh = false,
+): Promise<"native" | "handled" | false> {
   const legacy = deps.workspaceSourceProvider;
   const canonical = { ...legacy, className: "GadHistoryDO", objectKey: "canonical" };
   const target = { source: canonical.source, className: canonical.className, key: canonical.objectKey };
@@ -91,7 +92,13 @@ async function restoreParticipantHistory(
     await deps.sharedHistorySeed.remember();
     await deps.workspaceVcs.attachParticipantHistory(attachment);
     await deps.exportSharedHistorySeed?.(history);
-    return true;
+    return "native";
+  }
+  if (await deps.workspaceVcs.initializeFreshHistory(history, allowFresh)) {
+    await deps.workspaceVcs.attachParticipantHistory({ ...attachment, freshRoot: true });
+    await deps.exportSharedHistorySeed?.(history);
+    console.log("[Vcs] Attached native root workspace history");
+    return "native";
   }
   const replay = await readWorkspaceHistoryReplayState(dispatch, canonical);
   const attachHistory = () => deps.workspaceVcs.attachParticipantHistory({
@@ -103,7 +110,7 @@ async function restoreParticipantHistory(
     await deps.workspaceVcs.retainSealedLegacyHistory(replay.legacySeal.receiptDigest);
     await deps.exportSharedHistorySeed?.(history);
     console.log("[Vcs] Restored participant history using its canonical replay seal");
-    return true;
+    return "handled";
   }
   const receipt = replay?.receipt;
   const held = await readWorkspaceHistoryReplayFreeze(dispatch, legacy, receipt ?? undefined);
@@ -113,7 +120,7 @@ async function restoreParticipantHistory(
     const supportsReplay = await dispatch.dispatch(canonical, "supportsHistoryReplay");
     if (supportsReplay !== true) {
       console.warn("[Vcs] Participant history migration requires a runtime with scoped queries");
-      return true;
+      return "handled";
     }
   }
   // The durable system-owned canonical lifetime is also the reservation
@@ -148,7 +155,7 @@ async function restoreParticipantHistory(
     await recordWorkspaceHistoryReplaySeal({ ...history, seal });
   }
   await deps.exportSharedHistorySeed?.(history);
-  return true;
+  return "handled";
 }
 
 /** Attach the semantic state machine, then initialize its host materialization. */
@@ -206,8 +213,15 @@ export function wireVcsDurability(deps: VcsDurabilityBootstrapDeps): void {
           await deps.activateSemanticWorkspace(deps.workspaceVcs, true);
           return;
         }
+        const declaresNativeHistory = () => runtimeManager.declaresRemoteDoltClass(gadRef.source, "GadHistoryDO");
+        if (historyChecked === "native" ||
+            (!historyChecked && declaresNativeHistory() && deps.readProtectedMainEventId() === null &&
+              await restoreParticipantHistory(deps, doDispatch, runtimeManager, true, true) === "native")) {
+          await deps.activateSemanticWorkspace(deps.workspaceVcs, true);
+          return;
+        }
         await deps.activateSemanticWorkspace(deps.workspaceVcs);
-        if (!historyChecked && runtimeManager.declaresRemoteDoltClass(gadRef.source, "GadHistoryDO")) {
+        if (!historyChecked && declaresNativeHistory()) {
           await restoreParticipantHistory(deps, doDispatch, runtimeManager, true);
           if (deps.workspaceVcs.participantHistoryAttached) phaseComplete("installed participant history");
         }

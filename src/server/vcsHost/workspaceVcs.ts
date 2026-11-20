@@ -265,6 +265,7 @@ const SLOW_SEMANTIC_EFFECT_MS = 500;
 type ParticipantHistoryAttachment = WorkspaceHistorySource & {
   /** Physical allocations inherit this provider lifetime and cannot reenter their creating DO. */
   infrastructureContextId?: string;
+  freshRoot?: true;
   replayedContextOwners?: ReadonlyMap<string, { caller: VerifiedCaller; ownerContextId: string }>;
   /** The runtime entity store supplies these durable user stamps at startup. */
   listReplayedSessionOwners?: (contextIds: readonly string[]) =>
@@ -462,7 +463,54 @@ const sharedHistorySeedReceipt = z.object({
   originalHead: incomingHistory.shape.head,
   installed: z.boolean(),
 }).strict();
+const freshHistoryRoot = z.object({
+  head: incomingHistory.shape.head,
+  originalHead: incomingHistory.shape.head,
+  eventId: z.string().min(1),
+  requestDigest: z.string().regex(/^[a-f0-9]{64}$/u),
+  pin: z.object({ url: z.string().min(1), ref: z.string().min(1), commit: z.string().min(1) }).strict(),
+  installed: z.boolean(),
+}).strict();
 type SharedHistorySeed = z.infer<typeof sharedHistorySeedSchema>;
+
+function exactWorkspaceSourceRequest(
+  prepared: import("../workspaceRootTemplateBootstrap.js").PreparedRootTemplateInitialization,
+) {
+  return {
+    commandId: `workspace-source:${prepared.pin.commit}`,
+    pin: {
+      url: prepared.pin.url,
+      ref: prepared.pin.ref,
+      commit: prepared.pin.commit,
+    },
+    installation: prepared.installation,
+    repositories: [...prepared.repositories]
+      .sort((left, right) => compareUtf16CodeUnits(left.repoPath, right.repoPath))
+      .map((repository) => ({
+        repoPath: repository.repoPath,
+        subdir: repository.subdir,
+        snapshot: repository.snapshot,
+        contentRoot: repository.contentRoot,
+        files: repository.files.map(
+          ({
+            path: filePath,
+            contentHash,
+            mode,
+            contentKind,
+            byteLength,
+            coordinateExtent,
+          }) => ({
+            path: filePath,
+            contentHash,
+            mode,
+            contentKind,
+            byteLength,
+            coordinateExtent,
+          })
+        ),
+      })),
+  } satisfies import("@vibestudio/workspace-contracts/workspaceSource").InitializeExactWorkspaceSnapshotInput;
+}
 
 export type CallerPublicationGateContext = {
   kind: "caller";
@@ -506,6 +554,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   private participantHistorySource: (WorkspaceHistorySource & {
     replayedWorkingHeads: ReadonlyMap<string, { participantId: string; head: string }>;
     infrastructureContextId?: string;
+    freshRoot?: true;
     destroyRetiredStorage?: ParticipantHistoryAttachment["destroyRetiredStorage"];
   }) | null = null;
   private retiredLegacyRetention: { file: string; receiptDigest: string } | undefined;
@@ -611,7 +660,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     executionSourceRoots: readonly ExecutionSourceContentRoot[]
   ): Promise<Set<string>> {
     const retained = this.retiredLegacyRetention;
-    const semantic = retained
+    const semantic = this.participantHistorySource?.freshRoot
+      ? { contentRoots: [], contentHashes: [] }
+      : retained
       ? await readSealedLegacyHistoryRetention(retained.file, retained.receiptDigest)
       : await this.gad().contentGcRoots();
     const roots = new Set(semantic.contentRoots);
@@ -894,10 +945,65 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         dispatch: source.dispatch,
         canonical: source.canonical,
         replayedWorkingHeads,
+        ...(source.freshRoot ? { freshRoot: true } : {}),
         ...(source.infrastructureContextId ? { infrastructureContextId: source.infrastructureContextId } : {}),
         ...(source.destroyRetiredStorage ? { destroyRetiredStorage: source.destroyRetiredStorage } : {}),
       };
       await this.indexPublishedCommitMemory(main.eventId);
+    });
+  }
+
+  async initializeFreshHistory(source: WorkspaceHistorySource, allowCreate: boolean): Promise<boolean> {
+    const { dispatch, canonical } = source;
+    const read = async () => freshHistoryRoot.nullable().parse(
+      await dispatch.dispatch(canonical, "readFreshHistoryRoot"),
+    );
+    const rootTemplate = this.deps.rootTemplateBootstrap;
+    return this.mutateProtectedMain(async () => {
+      const recorded = await read();
+      const published = this.deps.refs.readMainSemanticState();
+      if (published) return recorded?.installed === true;
+      if (!allowCreate || !rootTemplate) return false;
+      const prepared = await rootTemplate.prepareInitialization();
+      if (!prepared) return false;
+      const [request] = gadWireMethods.workspaceSourceInitializeExactSnapshot.args.parse([
+        exactWorkspaceSourceRequest(prepared),
+      ]);
+      const staged = freshHistoryRoot.extend({ repositories: incomingHistory.shape.repositories }).parse(
+        await dispatch.dispatch(canonical, "stageFreshHistoryRoot", request),
+      );
+      if (staged.requestDigest !== sha256HexSyncText(canonicalJson(request)))
+        throw new Error("Workspace history staged a different root template");
+      const roots = new Map(prepared.repositories.map(({ repoPath, contentRoot }) => [repoPath, contentRoot]));
+      const planned = await this.materializer.planContentRoots(staged.repositories);
+      if (planned.length !== roots.size ||
+          planned.some(({ repoPath, contentRoot }) => roots.get(repoPath) !== contentRoot))
+        throw new Error("Workspace history staged different template files");
+      const { eventId, head, requestDigest } = staged;
+      const publicationId = `workspace-root:${requestDigest}`;
+      await this.publishMain({
+        effectId: publicationId,
+        payload: GadJsonRecordSchema.parse({
+          previousEventId: `${publicationId}:empty`,
+          publishedEventId: eventId,
+          repositories: staged.repositories,
+        }),
+      }, { kind: "workspace-initialization" }, {
+        approved: async () => {
+          const receipt = await read();
+          return receipt?.installed === true && receipt.head === head &&
+            receipt.eventId === eventId && receipt.requestDigest === requestDigest;
+        },
+        authorize: async () => undefined,
+        publish: async () => {
+          z.object({ head: z.literal(head), eventId: z.literal(eventId) }).strict().parse(
+            await dispatch.dispatch(canonical, "installFreshHistoryRoot", { head, eventId, requestDigest }),
+          );
+        },
+        acknowledge: async () => undefined,
+      });
+      this.deps.refs.acknowledgePublication(publicationId);
+      return true;
     });
   }
 
@@ -2708,7 +2814,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     this.verifiedProjectionStates.set(contextId, canonicalJson(state));
   }
 
-  async activateWorkspaceFromSource(sharedHistorySeed?: true): Promise<{
+  async activateWorkspaceFromSource(nativeHistoryReady?: true): Promise<{
     stateHash: string;
     initialized: boolean;
     timings: WorkspaceActivationTimings;
@@ -2725,8 +2831,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       ensureFreshMs: 0,
       totalMs: 0,
     };
-    if (sharedHistorySeed) {
-      if (!this.participantHistoryAttached) throw new Error("Shared workspace history has not been attached");
+    if (nativeHistoryReady) {
+      if (!this.participantHistoryAttached) throw new Error("Native workspace history has not been attached");
       const fresh = await this.ensureFresh();
       timings.ensureFreshMs = timings.totalMs = performance.now() - activationStartedAt;
       return { ...fresh, initialized: false, timings };
@@ -2911,40 +3017,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         pendingEffect: string | null;
       }> = [];
       const provider = this.workspaceSourceProvider();
-      const request = {
-        commandId: `workspace-source:${prepared.pin.commit}`,
-        pin: {
-          url: prepared.pin.url,
-          ref: prepared.pin.ref,
-          commit: prepared.pin.commit,
-        },
-        installation: prepared.installation,
-        repositories: [...prepared.repositories]
-          .sort((left, right) => compareUtf16CodeUnits(left.repoPath, right.repoPath))
-          .map((repository) => ({
-            repoPath: repository.repoPath,
-            subdir: repository.subdir,
-            snapshot: repository.snapshot,
-            contentRoot: repository.contentRoot,
-            files: repository.files.map(
-              ({
-                path: filePath,
-                contentHash,
-                mode,
-                contentKind,
-                byteLength,
-                coordinateExtent,
-              }) => ({
-                path: filePath,
-                contentHash,
-                mode,
-                contentKind,
-                byteLength,
-                coordinateExtent,
-              })
-            ),
-          })),
-      } satisfies import("@vibestudio/workspace-contracts/workspaceSource").InitializeExactWorkspaceSnapshotInput;
+      const request = exactWorkspaceSourceRequest(prepared);
       let acknowledgement:
         | import("@vibestudio/workspace-contracts/workspaceSource").WorkspaceSourceEffectAcknowledgement
         | undefined;

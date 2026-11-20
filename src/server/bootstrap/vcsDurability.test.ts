@@ -104,6 +104,48 @@ describe("wireVcsDurability", () => {
     expect(runtimeManager.destroyRetiredDOStorage).toHaveBeenCalledExactlyOnceWith(retired);
   });
 
+  it.each(["fresh", "reopen"] as const)("activates a %s native root before the legacy source", async (mode) => {
+    const sequence: string[] = [];
+    let initialize: (() => Promise<void>) | undefined;
+    const workspaceVcs = {
+      attachGad: vi.fn(async () => undefined),
+      attachWorkspaceSourceProvider: vi.fn(),
+      initializeFreshHistory: vi.fn(async (_source: Parameters<WorkspaceVcs["initializeFreshHistory"]>[0], allowCreate: boolean) => {
+        expect(allowCreate).toBe(mode === "fresh");
+        sequence.push("native");
+        return true;
+      }),
+      attachParticipantHistory: vi.fn(async () => { sequence.push("participant"); }),
+      startSemanticInitialization: (operation: () => Promise<void>) => { initialize = operation; },
+    } as unknown as WorkspaceVcs;
+    const canonicalContextId = canonicalWorkspaceObjectContextId("workspace-1", {
+      source: "workers/workspace-source", className: "GadHistoryDO", key: "canonical",
+    });
+    const activateSemanticWorkspace = vi.fn(async () => { sequence.push("active"); });
+    const { services } = captureServices({
+      workspaceVcs, activateSemanticWorkspace,
+      readWorkspaceHistoryOwner: async () => mode === "reopen" ? { contextId: canonicalContextId } : null,
+      readProtectedMainEventId: () => mode === "reopen" ? "published" : null,
+    });
+    const runtimeManager = {
+      declaresRemoteDoltClass: vi.fn(() => true),
+      ensureDurableObjectEntity: vi.fn(async ({ source, className, key }) => ({
+        targetId: `do:${source}:${className}:${key}`,
+        effectiveVersion: "a".repeat(64), buildKey: "b".repeat(64), executionDigest: "c".repeat(64),
+        authority: { provides: [], requests: [] },
+      })),
+    } as unknown as RuntimeManager;
+    const dispatch = vi.fn();
+    const resolve = <D>(name: string): D | undefined =>
+      ({ doDispatch: { dispatch }, runtimeManager })[name as "doDispatch" | "runtimeManager"] as D | undefined;
+    await services.find((service) => service.name === "vcsAttach")?.start?.(resolve);
+    await initialize!();
+    expect(sequence).toEqual(["native", "participant", "active"]);
+    expect(workspaceVcs.attachParticipantHistory).toHaveBeenCalledWith(expect.objectContaining({ freshRoot: true }));
+    expect(activateSemanticWorkspace).toHaveBeenCalledExactlyOnceWith(workspaceVcs, true);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
   it("loads approved seed files only for the designated workspace and verified pack", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "shared-history-seed-"));
     try {
@@ -355,6 +397,7 @@ describe("wireVcsDurability", () => {
     const workspaceVcs = {
       attachGad: vi.fn(async () => undefined),
       attachWorkspaceSourceProvider: vi.fn(),
+      initializeFreshHistory: vi.fn(async () => false),
       attachParticipantHistory: vi.fn(async () => { sequence.push("participant"); }),
       retainSealedLegacyHistory,
       startSemanticInitialization: vi.fn((operation: () => Promise<void>) => {

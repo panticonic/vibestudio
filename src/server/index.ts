@@ -7482,13 +7482,13 @@ async function main() {
       if (existing) await store.advanceExecution(activation);
       else await store.activate(activation);
     },
-    activateSemanticWorkspace: async (vcs, sharedHistorySeed) => {
+    activateSemanticWorkspace: async (vcs, nativeHistoryReady) => {
       const activationStartedAt = performance.now();
       let spanStartedAt = performance.now();
-      const recovered = sharedHistorySeed ? 0 : await vcs.recoverPendingSemanticEffects();
+      const recovered = nativeHistoryReady ? 0 : await vcs.recoverPendingSemanticEffects();
       if (recovered > 0) console.log(`[Vcs] Recovered ${recovered} pending semantic host effects`);
       const recoverPendingSemanticEffectsMs = performance.now() - spanStartedAt;
-      const activated = await vcs.activateWorkspaceFromSource(sharedHistorySeed);
+      const activated = await vcs.activateWorkspaceFromSource(nativeHistoryReady);
       // Activation either created the workspace (and its creation publication
       // recorded the review it owes) or restored one: only now is "nothing to
       // review" a fact rather than a guess.

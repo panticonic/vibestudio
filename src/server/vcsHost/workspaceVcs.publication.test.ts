@@ -21,6 +21,7 @@ import { parseWorkspaceSystemEpochEnvelope } from "@vibestudio/workspace/configP
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import { createProtectedRefStore } from "../services/protectedRefStore.js";
 import { createWorkspaceSemanticPort } from "../workspaceSourceProvider.js";
+import type { PreparedRootTemplateInitialization } from "../workspaceRootTemplateBootstrap.js";
 import { WorkspaceVcs } from "./workspaceVcs.js";
 
 describe("WorkspaceVcs protected publication notification", () => {
@@ -30,6 +31,68 @@ describe("WorkspaceVcs protected publication notification", () => {
     vi.restoreAllMocks();
     if (root) await fsp.rm(root, { recursive: true, force: true });
     root = undefined;
+  });
+
+  it("publishes an exact fresh native root through the workspace creation gate", async () => {
+    root = await fsp.mkdtemp(path.join(os.tmpdir(), "fresh-native-root-"));
+    const blobsDir = path.join(root, "blobs");
+    ensureLayout(blobsDir);
+    const bytes = Buffer.from("systemEpoch: 0\n");
+    const { digest: contentHash } = await putBytes(blobsDir, bytes);
+    const files = [{ path: "workspace.yaml", contentHash, mode: 0o644 as const }];
+    const contentRoot = (await mirrorWorktreeTree(blobsDir, [
+      { ...files[0]!, mode: 0o100644 },
+    ])).stateHash as `state:${string}`;
+    const pin = { url: "https://github.com/example/template", ref: "refs/tags/v1", commit: "a".repeat(40) };
+    const prepareInitialization = vi.fn(async (): Promise<PreparedRootTemplateInitialization> => ({
+      pin, installation: { sources: [{ pin, manifest: bytes.toString() }] },
+      repositories: [{
+        repoPath: "meta", subdir: "meta", snapshot: `v1-sha256:${"b".repeat(64)}`,
+        contentRoot,
+        files: [{ ...files[0]!, size: bytes.length, contentKind: "text", byteLength: bytes.length, coordinateExtent: bytes.length }],
+      }],
+    }));
+    const prepare = vi.fn();
+    const gate = vi.fn(async () => ({ prepare, committed: vi.fn(), failed: vi.fn() }));
+    const refs = createProtectedRefStore({ statePath: path.join(root, "refs"), gate });
+    const vcs = new WorkspaceVcs({
+      workspaceId: "workspace:test", blobsDir, workspaceRoot: path.join(root, "source"),
+      contextProjectionsRoot: path.join(root, "contexts"), buildSourcesRoot: path.join(root, "builds"),
+      refs, rootTemplateBootstrap: {
+        prepareInitialization, prepareSource: vi.fn(async () => pin), preparedBuildForContent: () => null,
+      },
+    });
+    const canonical = { source: "workers/workspace-source", className: "GadHistoryDO", objectKey: "canonical" };
+    const head = "c".repeat(40);
+    const eventId = "fresh-event";
+    let requestDigest: string | undefined;
+    let installed = false;
+    const receipt = () => ({ head, eventId, installed, requestDigest, originalHead: "d".repeat(40), pin });
+    const dispatch = vi.fn(async (_target, method: string, input?: unknown) => {
+      if (method === "readFreshHistoryRoot") return requestDigest ? receipt() : null;
+      if (method === "stageFreshHistoryRoot") {
+        requestDigest = sha256HexSyncText(canonicalJson(input));
+        return { ...receipt(), repositories: [{
+          repositoryId: "root-repository", repoPath: "meta", presence: "present", fileManifestId: "manifest",
+          source: { kind: "snapshot", files },
+        }] };
+      }
+      if (method === "installFreshHistoryRoot") {
+        expect(prepare).toHaveBeenCalledOnce();
+        expect(refs.readMainSemanticState()).toBeNull();
+        expect(input).toEqual({ head, eventId, requestDigest });
+        installed = true;
+        return { head, eventId };
+      }
+      throw new Error(`Unexpected fresh history request ${method}`);
+    });
+    const source = { dispatch: { dispatch }, canonical };
+    await expect(vcs.initializeFreshHistory(source, true)).resolves.toBe(true);
+    expect(refs.readMainSemanticState()?.eventId).toBe(eventId);
+    expect(refs.readMain("meta")?.contentRoot).toBe(contentRoot);
+    await expect(vcs.initializeFreshHistory(source, false)).resolves.toBe(true);
+    expect(prepareInitialization).toHaveBeenCalledOnce();
+    expect(gate).toHaveBeenCalledOnce();
   });
 
   it.each([false, true])("projects shared main only after the gated participant push is confirmed (template: %s)", async (template) => {
