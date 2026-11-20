@@ -56,6 +56,7 @@ if (list) {
         requiresReview: Boolean(workflow.requiresReview),
         ...(workflow.workspaceBaseline ? { workspaceBaseline: workflow.workspaceBaseline } : {}),
         ...(workflow.devices ? { devices: workflow.devices } : {}),
+        ...(workflow.requiresDeploymentPackage ? { requiresDeploymentPackage: true } : {}),
       })
     );
   process.exit(0);
@@ -112,12 +113,26 @@ function installedTests(group) {
   return byName;
 }
 
+const deploymentPackageProblem = scenarios.some((scenario) => liveTeacherCases.get(scenario).requiresDeploymentPackage)
+  ? await (async () => {
+      const input = process.env.VIBESTUDIO_MANAGED_DEPLOYMENT_PACKAGE?.trim();
+      if (!input) return "set VIBESTUDIO_MANAGED_DEPLOYMENT_PACKAGE to an installed server package";
+      try {
+        const { requireInstalledDeploymentPackage } = await import("./lib/owned-deployment-target.mjs");
+        await requireInstalledDeploymentPackage(path.resolve(host, input));
+        return null;
+      } catch {
+        return "VIBESTUDIO_MANAGED_DEPLOYMENT_PACKAGE must identify an installed Vibestudio server package";
+      }
+    })()
+  : null;
+
 function unavailableCase(catalog, scenario) {
   const test = catalog.get(scenario);
   if (!test) return "missing system-test descriptor";
   if (!test.orchestrated) return "no managed workflow orchestrator";
   if (!test.installed) return `requires installed units: ${test.requiresUnits.join(", ")}`;
-  return null;
+  return liveTeacherCases.get(scenario).requiresDeploymentPackage ? deploymentPackageProblem : null;
 }
 
 if (preflight) {

@@ -1,3 +1,5 @@
+import type { Ownership } from "@vibestudio/shared/ownership";
+import { remoteDeploymentDeviceOperations } from "./remoteDeployment.js";
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -39,6 +41,7 @@ export async function runTerminalDevice(options: {
   links: { device: string; driver: string };
   signal: AbortSignal;
   assignedHub?: string;
+  deployment?: { appRoot: string; ownership: Ownership };
   log(line: string): void;
 }): Promise<void> {
   const { root, repoRoot, signal, log } = options;
@@ -69,6 +72,9 @@ export async function runTerminalDevice(options: {
         scratchRoot: root,
         signal,
       })
+    : undefined;
+  const deployment = options.deployment
+    ? remoteDeploymentDeviceOperations({ ...options.deployment, scratchRoot: root, signal })
     : undefined;
   try {
     const call = deviceCall(device);
@@ -141,7 +147,7 @@ export async function runTerminalDevice(options: {
     driver = await serveDeviceDriver({
       transport,
       deviceKind: "terminal",
-      ops: { ...terminal.ops, ...commission?.ops },
+      ops: { ...terminal.ops, ...commission?.ops, ...deployment?.ops },
       onUndelivered: (error) => log(`an answer was not delivered: ${String(error)}`),
     });
     log(`terminal device ready (home ${layout.home})`);
@@ -153,6 +159,7 @@ export async function runTerminalDevice(options: {
     for (const step of [
       () => driver?.close(),
       () => commission?.close(),
+      () => deployment?.close(),
       () => terminal?.close(),
       () => events?.close(),
       () => release(),

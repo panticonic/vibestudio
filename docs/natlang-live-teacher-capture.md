@@ -243,6 +243,16 @@ profile saved the same workspace. Qualify it with
 This case exercises deployment reuse. The scoped corpus also covers installer
 and update transitions.
 
+Two managed deployment cases use an additional private hub on the terminal
+driver. Set `VIBESTUDIO_MANAGED_DEPLOYMENT_PACKAGE` to the installed server
+npm package directory on the collection host. The collector checks this
+prerequisite in preflight. `remote-deployment-live-fresh-default-workspace`
+launches an empty profile. `remote-deployment-live-preserves-workspace-on-update`
+restarts the same installed build and verifies a new boot and preserved IDs.
+The existing deployment receipt protocol drives both cases. The fixture
+owns the target process and profile and retires both at the end of each case.
+The test launcher uses the installed service's command directly.
+
 CLI continuation cases compose the authenticated gateway review with
 `planCliContinuation`. The gateway receipt comes from the running System
 workspace. The fixtures supply redacted CLI invocation coordinates for explicit,

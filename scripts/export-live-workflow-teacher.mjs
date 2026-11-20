@@ -768,6 +768,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { transcriptCursorWorlds },
     { remoteRouteWorlds, cliContinuationWork },
     { liveRemoteCommissionWorld },
+    { managedDeploymentWorlds },
     { notificationWorlds },
     { retainedTriageWorlds },
     { githubSetupWorlds },
@@ -848,6 +849,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "transcript-cursor-worlds.ts",
       "remote-route-worlds.ts",
       "remote-commission-worlds.ts",
+      "remote-deployment-worlds.ts",
       "notification-worlds.ts",
       "retained-triage-worlds.ts",
       "github-setup-worlds.ts",
@@ -1024,6 +1026,20 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of androidAuditWorlds) {
     cases.set(`android-audit-live-${assignment.id}`, { ...androidAuditWorkflow, assignment });
+  }
+  for (const assignment of managedDeploymentWorlds) {
+    cases.set(`remote-deployment-live-${assignment.id}`, {
+      family: "system-live-remote-deployment",
+      namespace: "vibestudio:remote-access",
+      group: "deployment-and-device-route",
+      workspace: "system",
+      devices: ["terminal"],
+      requiresDeploymentPackage: true,
+      root: "deployRemoteServer",
+      validator: { template: "system-testing", path: "skills/system-testing/remote-deployment-managed.ts" },
+      assignment,
+      evidence: managedDeploymentEvidence,
+    });
   }
   if (liveRemoteCommissionWorld) {
     cases.set(`remote-commission-live-${liveRemoteCommissionWorld.id}`, {
@@ -3265,6 +3281,86 @@ function clientAdmissionEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: contextId, source, host, abi: workingAbi },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function managedDeploymentEvidence(execution, exercise, _name, { assignment }) {
+  const fixture = execution.diagnostics.remoteDeploymentManaged;
+  const { contextId, request, initial, final, steps, order, checks } = fixture ?? {};
+  const { operationId } = request ?? {};
+  const { baseline, apply, verify } = steps ?? {};
+  const update = assignment.intent === "update";
+  const identity = final?.identity;
+  const matchesIdentity = (value) =>
+    /^srv_[A-Za-z0-9_-]{24}$/u.test(value?.serverId) &&
+    /^boot_[A-Za-z0-9_-]{24}$/u.test(value?.bootId) &&
+    /^[a-f0-9]{64}$/u.test(value?.buildId) &&
+    /^ws_[A-Za-z0-9_-]+$/u.test(value?.workspaceId);
+  requireEvidence(
+    fixture?.passed === true && fixture.caseId === assignment.id &&
+      typeof contextId === "string" && contextId === execution.provenance?.contextId &&
+      typeof operationId === "string" && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(operationId) &&
+      ["assignedBaseline", "receiptOrder", "deploymentReady", "expectedIdentity", "exactReport"]
+        .every((check) => checks?.[check] === true) &&
+      isDeepStrictEqual(order, ["baseline", "apply", "verify"]) &&
+      final?.state === "ready" && matchesIdentity(identity) &&
+      (update ? initial?.state === "ready" && matchesIdentity(initial.identity) &&
+        initial.identity.bootId !== identity.bootId && initial.identity.serverId === identity.serverId &&
+        initial.identity.workspaceId === identity.workspaceId
+        : isDeepStrictEqual(initial, { state: "inactive", identity: null })) &&
+      isDeepStrictEqual(baseline, { receipt: operationId + ":baseline", intent: assignment.intent,
+        state: update ? "ready" : "inactive", hasPriorIdentity: update }) &&
+      isDeepStrictEqual(apply, { receipt: operationId + ":apply", state: "applied" }) &&
+      isDeepStrictEqual(verify, { receipt: operationId + ":verification", state: "verified", identity }),
+    "Deployment needs an independently verified fresh hub or a successor with preserved identities",
+  );
+
+  const report = exercise.report;
+  requireEvidence(isDeepStrictEqual(report, {
+    status: "deployment-ready", identity, evidenceIds: [baseline.receipt, apply.receipt, verify.receipt],
+  }), "Deployment report must preserve the exact baseline, apply and readiness receipts");
+
+  const records = exercise.calls.map(({ record }) => record);
+  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const single = (parent, name) => {
+    const matches = parent && records.filter((record) =>
+      record.parent_call_id === parent.call_id && record.definition.name === name);
+    return matches?.length === 1 ? matches[0] : undefined;
+  };
+  const deploy = single(root, "deployRemoteServer");
+  const observe = single(deploy, "observeBaseline");
+  const decide = single(deploy, "decideDeployment");
+  const install = single(deploy, "applyDeployment");
+  const readiness = single(deploy, "checkReadiness");
+  const read = single(readiness, "observeReadiness");
+  const interpret = single(readiness, "interpretReadiness");
+  const links = (node, parameter, input, output) => node?.outcome === "done" &&
+    matchesValue(node.inputs?.[parameter], input) && matchesValue(node.output, output);
+  const native = [
+    [observe, "remoteDeploymentRead", "observe", "operationId", operationId, baseline],
+    [install, "remoteDeploymentApply", "apply", "baselineReceipt", baseline.receipt, apply],
+    [read, "remoteDeploymentVerify", "verify", "actionReceipt", apply.receipt, verify],
+  ];
+  const sequence = [observe, decide, install, read, interpret];
+  requireEvidence(
+    links(deploy, "request", request, report) &&
+      links(decide, "baseline", baseline, "apply") &&
+      links(interpret, "verified", verify, "deployment-ready") &&
+      readiness?.outcome === "done" && matchesValue(readiness.inputs?.actionReceipt, apply.receipt) &&
+      native.every(([node, service, method, parameter, input, output]) => {
+        const effect = node?.effects?.[0];
+        return links(node, parameter, input, output) && node.effects.length === 1 &&
+          effect?.service === service && effect.method === method && !effect.error &&
+          matchesValue(effect.args, [input]) && matchesValue(effect.result, output);
+      }) && records.flatMap(({ effects }) => effects ?? []).length === native.length &&
+      sequence.every((node, index) => !index ||
+        Date.parse(sequence[index - 1].ended_at) <= Date.parse(node.started_at)),
+    "Deployment requires the ordered nested native observe, apply and readiness calls",
+  );
+  return {
+    world: { context_id: contextId, workspace_id: identity.workspaceId, server_boot_id: identity.bootId },
     checks,
     evidence: { workspace: { fixture } },
   };

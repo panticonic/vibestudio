@@ -108,6 +108,7 @@ test("authored template worlds flow into the collector without losing original s
       ["transcript-cursor-worlds", "transcriptCursorWorlds", []],
       ["remote-route-worlds", "remoteRouteWorlds", []],
       ["remote-commission-worlds", "liveRemoteCommissionWorld", null],
+      ["remote-deployment-worlds", "managedDeploymentWorlds", []],
       ["notification-worlds", "notificationWorlds", []],
       ["retained-triage-worlds", "retainedTriageWorlds", []],
       ["github-setup-worlds", "githubSetupWorlds", []],
@@ -3154,6 +3155,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["transcript-cursor-worlds", "export const transcriptCursorWorlds = [];"],
       ["remote-route-worlds", "export const remoteRouteWorlds = [];"],
       ["remote-commission-worlds", "export const liveRemoteCommissionWorld = null;"],
+      ["remote-deployment-worlds", "export const managedDeploymentWorlds = [];"],
       ["notification-worlds", "export const notificationWorlds = [];"],
       ["retained-triage-worlds", "export const retainedTriageWorlds = [];"],
       ["github-setup-worlds", "export const githubSetupWorlds = [];"],
@@ -8698,4 +8700,70 @@ test("commission export requires the live hub, verified new device and exact nes
   proof.persistedNewProfile = false;
   await save();
   await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /new paired device/u);
+});
+
+test("remote deployment binds a real successor boot to the ordered lifecycle receipts", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(path.resolve(import.meta.dirname, ".."));
+  const cases = await loadLiveTeacherCases(checkouts);
+  const name = "remote-deployment-live-preserves-workspace-on-update";
+  entry.test.name = name;
+  assert.equal(cases.get(name).requiresDeploymentPackage, true);
+  const operationId = "f8fbdfc8-0268-4074-bfbe-5579990c9781";
+  const request = { operationId };
+  const identity = { serverId: "srv_" + "s".repeat(24), bootId: "boot_" + "b".repeat(24), buildId: "a".repeat(64), workspaceId: "ws_own" };
+  const initial = { state: "ready", identity: { ...identity, bootId: "boot_" + "c".repeat(24) } };
+  const baseline = { receipt: operationId + ":baseline", intent: "update", state: "ready", hasPriorIdentity: true };
+  const apply = { receipt: operationId + ":apply", state: "applied" };
+  const verify = { receipt: operationId + ":verification", state: "verified", identity };
+  const report = { status: "deployment-ready", identity, evidenceIds: [baseline.receipt, apply.receipt, verify.receipt] };
+  diagnostics.remoteDeploymentManaged = {
+    contextId: "ctx", caseId: cases.get(name).assignment.id, request, initial, final: { state: "ready", identity },
+    steps: { baseline, apply, verify }, order: ["baseline", "apply", "verify"],
+    checks: { assignedBaseline: true, receiptOrder: true, deploymentReady: true, expectedIdentity: true, exactReport: true },
+    passed: true,
+  };
+  const ref = (value) => {
+    const json = JSON.stringify(value);
+    return { complete: true, hash: createHash("sha256").update(json).digest("hex"), bytes: Buffer.byteLength(json) };
+  };
+  const prototype = diagnostics.natlangTeacher.calls[0];
+  let tick = 0;
+  const call = (name, parent, inputs, output, effect) => ({
+    callId: name,
+    summary: { ...prototype.summary, call_id: name },
+    record: {
+      ...prototype.record, call_id: name, parent_call_id: parent, definition: { name }, outcome: "done",
+      inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+      output: ref(output), effects: effect ? [{ service: effect[0], method: effect[1], args: ref(Object.values(inputs)), result: ref(output) }] : [],
+      started_at: new Date(tick++ * 1000).toISOString(),
+      ended_at: new Date(tick * 1000).toISOString(),
+    },
+  });
+  const deploy = "deployRemoteServer";
+  const readiness = "checkReadiness";
+  const calls = [
+    call("runWorkflow", null, {}, null),
+    call(deploy, "runWorkflow", { request }, report),
+    call("observeBaseline", deploy, { operationId }, baseline, ["remoteDeploymentRead", "observe"]),
+    call("decideDeployment", deploy, { baseline }, "apply"),
+    call("applyDeployment", deploy, { baselineReceipt: baseline.receipt }, apply, ["remoteDeploymentApply", "apply"]),
+    call(readiness, deploy, { actionReceipt: apply.receipt }, { status: report.status, identity, evidenceIds: [verify.receipt] }),
+    call("observeReadiness", readiness, { actionReceipt: apply.receipt }, verify, ["remoteDeploymentVerify", "verify"]),
+    call("interpretReadiness", readiness, { verified: verify }, "deployment-ready"),
+  ];
+  diagnostics.natlangTeacher = {
+    ...diagnostics.natlangTeacher, programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+    rootCallIds: ["runWorkflow"], report, calls,
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  const read = calls.find(({ callId }) => callId === "observeReadiness").record;
+  read.effects[0].args = ref([baseline.receipt]);
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /ordered nested native/u);
+  read.effects[0].args = ref([apply.receipt]);
+  initial.identity.bootId = identity.bootId;
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /successor with preserved identities/u);
 });

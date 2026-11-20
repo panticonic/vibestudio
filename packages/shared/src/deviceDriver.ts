@@ -189,6 +189,16 @@ export interface ClientDeviceWire {
   shell(args: { commandLine: string; stdin?: string }): ShellResult;
   /** terminal: the test-owned directory `vibestudio clients link` writes into. */
   binDirectory(args: Record<string, never>): string;
+  remoteDeploymentBegin(args: { intent: "deploy" | "update" }): {
+    operationId: string;
+    initial: RemoteDeploymentObservation;
+  };
+  remoteDeploymentStep(args: {
+    operationId: string;
+    step: keyof RemoteDeploymentStages;
+    evidence: string;
+  }): RemoteDeploymentStages[keyof RemoteDeploymentStages];
+  remoteDeploymentFinish(args: { operationId: string }): RemoteDeploymentObservation;
   /** The terminal fixture binds an already running, disposable hub and one fresh profile. */
   remoteCommissionBegin(args: Record<string, never>): {
     operationId: string;
@@ -210,6 +220,18 @@ export type RemoteCommissionIdentity = {
   bootId: string;
   buildId: string;
   workspaceId: string;
+};
+export type RemoteDeploymentObservation =
+  | { state: "inactive"; identity: RemoteCommissionIdentity | null }
+  | { state: "unverified"; identity: null }
+  | { state: "ready"; identity: RemoteCommissionIdentity };
+export type RemoteDeploymentStages = {
+  baseline: RemoteCommissionStages["baseline"];
+  apply: { receipt: string; state: "applied" | "failed" | "baseline-changed" };
+  verify: { receipt: string } & (
+    | { state: "verified"; identity: RemoteCommissionIdentity }
+    | { state: "unready" | "unchanged-boot" | "identity-changed"; identity: null }
+  );
 };
 export type RemoteCommissionStages = {
   baseline: {

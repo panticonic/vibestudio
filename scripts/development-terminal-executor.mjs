@@ -86,6 +86,10 @@ device operations to its system tests. Runs until stopped.`);
     "../src/dev/terminalDevice/layout.ts",
     import.meta.url
   );
+  const installedDeployment = process.env.VIBESTUDIO_MANAGED_DEPLOYMENT_PACKAGE?.trim();
+  const deployment = assignedHub && installedDeployment
+    ? { appRoot: path.resolve(repoRoot, installedDeployment), ownership }
+    : undefined;
   const layout = terminalDeviceLayout(tempRoot, repoRoot, process.env, "driver");
   for (const key of Object.keys(process.env)) delete process.env[key];
   Object.assign(process.env, layout.env);
@@ -95,6 +99,7 @@ device operations to its system tests. Runs until stopped.`);
     repoRoot,
     links,
     ...(assignedHub ? { assignedHub } : {}),
+    ...(deployment ? { deployment } : {}),
     signal: ownerSignal,
     log: (line) => console.log(`[terminal-executor] ${line}`),
   });
