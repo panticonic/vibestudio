@@ -27,6 +27,14 @@ const templateGoalDomains = {
       "verifiedExactAdventureTurn", "verifiedAdventureJournal", "preservedNativeAdventureScene",
       "isolatedSiblingAdventureSaves", "matchedAdventureHandoff"],
   },
+  "specialist-handoff": {
+    namespace: "vibestudio:owned-specialist",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-specialist-managed.ts" },
+    callable: "workOnSpecialistHandoffGoal",
+    skill: "specialistHandoff",
+    checks: ["exactCurrentSpecialist", "exactSpecialistFrontiers", "exactOriginalAttempt", "verifiedArtifactAndImpact",
+      "exactSpecialistHandoff", "preservedSpecialistContext", "rejectedForeignSpecialist"],
+  },
   "build-incident": {
     namespace: "vibestudio:retained-build",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-build-incidents-managed.ts" },
@@ -1326,13 +1334,13 @@ export async function loadLiveTeacherCases(checkouts) {
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
-      openTerminalWorlds = [], openOwnedResearchWorlds = [], dictationHandoffWorlds = [], providerHandoffWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
+      openTerminalWorlds = [], openOwnedResearchWorlds = [], dictationHandoffWorlds = [], specialistHandoffWorlds = [], providerHandoffWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
     for (const assignment of [...openGoalWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
       ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
       ...openGoalCalendarWorlds, ...openPersonalArtifactWorlds, ...openPersonalHistoryWorlds,
-      ...openTerminalWorlds, ...openOwnedResearchWorlds, ...dictationHandoffWorlds, ...providerHandoffWorlds, ...openGoalEvalHandoffWorlds, ...openGoalProgramRunWorlds, ...openGoalAuthoringWorlds, ...openGoalGoogleHandoffWorlds, ...openPersonalAutomationWorlds, ...openGoalOwnedPreviewWorlds, ...openDiagnosticWorlds, ...openLocalDeliveryWorlds, ...openGoalPanelRecoveryWorlds, ...openBrowserMigrationWorlds]) {
+      ...openTerminalWorlds, ...openOwnedResearchWorlds, ...dictationHandoffWorlds, ...specialistHandoffWorlds, ...providerHandoffWorlds, ...openGoalEvalHandoffWorlds, ...openGoalProgramRunWorlds, ...openGoalAuthoringWorlds, ...openGoalGoogleHandoffWorlds, ...openPersonalAutomationWorlds, ...openGoalOwnedPreviewWorlds, ...openDiagnosticWorlds, ...openLocalDeliveryWorlds, ...openGoalPanelRecoveryWorlds, ...openBrowserMigrationWorlds]) {
       const split = assignment.split ?? "train";
       const sourceGroups = [assignment.sourceGroup, assignment.relatedSourceGroup].filter(Boolean);
       const scenario = `open-goal-${assignment.id}`;
@@ -7205,6 +7213,74 @@ function retainedDictationHandoffEvidence(exercise, world, proof, skill) {
   );
 }
 
+function retainedSpecialistHandoffEvidence(exercise, world, proof, skill) {
+  const { plan, membership, history, handoff } = exercise.report.outcome;
+  const { explanation, ...facts } = plan;
+  const { index, snapshots, membershipReads, artifactReads, independent } = proof;
+  const [earlier, current] = snapshots;
+  const records = exercise.calls.map(({ record }) => record);
+  const select = (name, parent) => records.filter(record => record.definition?.name === name &&
+    record.outcome === "done" && (!parent || record.parent_call_id === parent.call_id));
+  const effects = (name, service, method) => select(name).flatMap(record =>
+    (record.effects ?? []).filter(effect => effect.service === service && effect.method === method && !effect.error));
+  const inventory = effects("discoverCurrentSpecialists", "ownedSpecialistIndex", "list");
+  const read = effects("readRetainedSpecialistRun", "ownedSpecialistRun", "read");
+  const original = effects("readOriginalSpecialistArtifact", "ownedSpecialistArtifact", "read");
+  const writes = effects("stageSpecialistHandoff", "ownedSpecialistHandoff", "stage");
+  const inspections = effects("inspect", "channelAgentRead", "read");
+  const manages = select("manageChannelAgent", skill);
+  const chosen = select("chooseCurrentSpecialist", skill);
+  const joined = select("checkSpecialistReceipt", skill);
+  const historyWrapper = select("reviewSpecialistHistory", skill);
+  const historyPolicy = historyWrapper.length === 1 ? select("reviewHistory", historyWrapper[0]) : [];
+  const decision = select("decideSpecialistHandoff", skill);
+  const [inspection] = membershipReads;
+  const expectedMembership = inspection ? { ...inspection.observed,
+    status: inspection.observed.state === "conflict" ? "held" : "observed" } : null;
+
+  requireEvidence(
+    inventory.length === 1 && matchesValue(inventory[0].args, []) && matchesValue(inventory[0].result, index) &&
+      read.length === 2 && snapshots.length === 2 && snapshots.every((snapshot, i) =>
+        matchesValue(read[i].args, [index.scope.channelId]) && matchesValue(read[i].result, snapshot)) &&
+      chosen.length === 1 && matchesValue(chosen[0].inputs?.index, index) &&
+      matchesValue(chosen[0].inputs?.goal, world.goal) &&
+      (plan.handle ? membershipReads.length === 1 && membership && manages.length === 1 && inspections.length === 1 &&
+        isDeepStrictEqual(membership.request, inspection.request) && isDeepStrictEqual(membership.report, expectedMembership) &&
+        membership.request.handle === plan.handle && membership.request.contextId === index.scope.contextId &&
+        membership.request.channelId === index.scope.channelId && membership.request.action === "inspect" &&
+        select("inspect", manages[0]).length === 1 &&
+        select("inspect", manages[0])[0].effects?.includes(inspections[0]) &&
+        matchesValue(manages[0].inputs?.request, membership.request) && matchesValue(manages[0].output, membership.report) &&
+        matchesValue(inspections[0].args, [inspection.request]) && matchesValue(inspections[0].result, inspection.observed) :
+        membership === null && membershipReads.length === 0 && manages.length === 0 && inspections.length === 0) &&
+      joined.length === 1 && matchesValue(joined[0].inputs?.scope, index.scope) &&
+      matchesValue(joined[0].inputs?.snapshot, current) && matchesValue(joined[0].inputs?.membership, membership?.report ?? null) &&
+      (membership?.report.state === "member" ?
+        select("locateOriginalAttempt", joined[0]).length === 1 && select("checkResultIdentity", joined[0]).length === 1 : true) &&
+      isDeepStrictEqual(facts, independent) && typeof explanation === "string" &&
+      plan.through === current.through && plan.channelId === index.scope.channelId && plan.taskId === index.scope.taskId &&
+      decision.length === 1 && matchesValue(decision[0].inputs?.goal, world.goal) &&
+      matchesValue(decision[0].inputs?.current, current) && matchesValue(decision[0].output, plan) &&
+      original.length === artifactReads.length && artifactReads.every((entry, i) =>
+        matchesValue(original[i].args, [index.scope.channelId, entry.message]) && matchesValue(original[i].result, entry.value)) &&
+      (independent.artifact ? history && historyWrapper.length === 1 && historyPolicy.length === 1 &&
+        history.goal === independent.artifact.text &&
+        isDeepStrictEqual(history.units, { owner: proof.result.owner, consumers: proof.result.consumers, blockers: [] }) &&
+        history.result.persistedContract === world.expected.history &&
+        matchesValue(historyWrapper[0].inputs?.result, proof.result) &&
+        matchesValue(historyWrapper[0].inputs?.original, independent.artifact) &&
+        matchesValue(historyWrapper[0].output, history) && matchesValue(historyPolicy[0].inputs?.goal, history.goal) &&
+        matchesValue(historyPolicy[0].inputs?.units, history.units) && matchesValue(historyPolicy[0].output, history.result) :
+        history === null && historyWrapper.length === 0 && historyPolicy.length === 0) &&
+      writes.length === Number(world.expected.action === "stage") &&
+      (writes.length ? matchesValue(writes[0].args, [plan, history]) && matchesValue(writes[0].result, handoff) &&
+        isDeepStrictEqual(handoff, proof.handoff) && typeof proof.artifact === "string" &&
+        hash(proof.artifact) === handoff?.sha256 && Buffer.byteLength(proof.artifact) === handoff?.bytes :
+        handoff === null && proof.handoff === null && proof.artifact === null),
+    "Expected currently observed specialist identity, exact original evidence, installed impact review and scoped local handoff"
+  );
+}
+
 export function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
   const proof = execution.diagnostics.openGoalVerification;
   const world = workflow.assignment;
@@ -7229,6 +7305,8 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
   const evidence = { workspace: { proof } };
   if (world.kind === "dictation-handoff") {
     retainedDictationHandoffEvidence(exercise, world, proof, skill);
+  } else if (world.kind === "specialist-handoff") {
+    retainedSpecialistHandoffEvidence(exercise, world, proof, skill);
   } else if (world.kind === "provider-handoff") {
     retainedProviderHandoffEvidence(exercise, world, proof, skill);
   } else if (world.kind === "terminal-handoff") {
