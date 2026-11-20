@@ -127,6 +127,7 @@ test("authored template worlds flow into the collector without losing original s
       ["architecture-boundary-worlds", "managedArchitectureBoundaryWorlds", []],
       ["release-review-handoff-worlds", "managedReleaseReviewHandoffWorlds", []],
       ["extension-release-worlds", "managedExtensionReleaseWorlds", []],
+      ["unit-design-worlds", "managedUnitDesignWorlds", []],
       ["authority-review-worlds", "managedAuthorityReviewWorlds", []],
       ["problem-draft-worlds", "managedProblemDraftWorlds", []],
       ["agentic-change-worlds", "managedAgenticChangeWorlds", []],
@@ -3166,6 +3167,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["architecture-boundary-worlds", "export const managedArchitectureBoundaryWorlds = [];"],
       ["release-review-handoff-worlds", "export const managedReleaseReviewHandoffWorlds = [];"],
       ["extension-release-worlds", "export const managedExtensionReleaseWorlds = [];"],
+      ["unit-design-worlds", "export const managedUnitDesignWorlds = [];"],
       ["authority-review-worlds", "export const managedAuthorityReviewWorlds = [];"],
       ["problem-draft-worlds", "export const managedProblemDraftWorlds = [];"],
       ["agentic-change-worlds", "export const managedAgenticChangeWorlds = [];"],
@@ -6739,6 +6741,89 @@ async function checkDeliveryReceiptExport(t, id, verdict, surface = "history") {
     exportLiveTeacherWorkflow({ ...options, cases }),
     /exact origin and consumer decisions/u
   );
+}
+
+for (const id of [
+  "published-manifest-matches-review", "stage-valid-lifecycle-change", "reject-invalid-local-icon",
+]) {
+  test(`Unit design export separates the working and published manifests for ${id}`, async (t) => {
+    const { options, diagnostics, entry, save } = await fixture(t);
+    const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+      path.resolve(import.meta.dirname, "..")
+    );
+    const cases = await loadLiveTeacherCases(checkouts);
+    const name = `unit-design-live-${id}`;
+    const { assignment } = cases.get(name);
+    const pins = JSON.parse(await readFile(options.pins, "utf8"));
+    await writeFile(options.pins, JSON.stringify({ ...pins, workspace: "system" }));
+    entry.test.name = name;
+    const { goal, source, mode } = assignment;
+    const operationId = "manifest-review";
+    const request = { kind: "extension-design-live", goal, operationId };
+    const invalid = mode === "invalid-local";
+    const published = mode === "published";
+    const ids = [`${operationId}:working`, `${operationId}:published`];
+    const manifest = (index, candidateDigest, errorCode) => ({
+      kind: "manifest", source, candidateDigest,
+      receipt: { id: ids[index], unit: source, candidateDigest, errorCode },
+    });
+    const observation = {
+      contextId: "ctx", workingRevision: published ? "protected" : "local", mainRevision: "protected",
+      working: manifest(0, published ? "protected-hash" : "local-hash", invalid ? "MANIFEST_ICON" : null),
+      published: manifest(1, "protected-hash", null),
+    };
+    const components = [
+      { decision: invalid ? "revision-needed" : "ready", finding: invalid ? "MANIFEST_ICON" : "manifest-verified", evidenceIds: [ids[0]] },
+      { decision: "ready", finding: "manifest-verified", evidenceIds: [ids[1]] },
+      { decision: published ? "ready" : "waiting", finding: published ? "manifest-published" : "manifest-not-published", evidenceIds: ids },
+    ];
+    const report = {
+      decision: invalid ? "revision-needed" : published ? "ready" : "waiting",
+      finding: invalid ? "required-revision" : published ? "prerequisites-verified" : "pending-lifecycle",
+      evidenceIds: ids, components,
+    };
+    diagnostics.unitDesign = {
+      passed: true, caseId: id, contextId: "ctx", request, observation,
+      checks: { revision: true, manifests: true, preserved: true, outcome: true },
+    };
+    const ref = (value) => {
+      const bytes = JSON.stringify(value);
+      return { complete: true, hash: createHash("sha256").update(bytes).digest("hex"), bytes: Buffer.byteLength(bytes) };
+    };
+    const prototype = diagnostics.natlangTeacher.calls[0];
+    const at = (second) => new Date(Date.UTC(2026, 0, 1, 0, 0, second)).toISOString();
+    const call = (name, parent, inputs, output, start, end, effects = [], id = name) => ({
+      callId: id, summary: { ...prototype.summary, call_id: id },
+      record: {
+        ...prototype.record, call_id: id, parent_call_id: parent, definition: { name }, outcome: "done",
+        inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+        output: ref(output), started_at: at(start), ended_at: at(end), effects,
+      },
+    });
+    const working = call("reviewExtension", "reviewLiveExtensionDesign", { evidence: observation.working },
+      components[0], 4, 6, [], "review-working");
+    diagnostics.natlangTeacher = {
+      ...diagnostics.natlangTeacher, programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+      report, rootCallIds: ["runWorkflow"], calls: [
+        call("runWorkflow", null, {}, null, 0, 16),
+        call("reviewWorkspaceUnit", "runWorkflow", { request }, report, 1, 15),
+        call("reviewLiveExtensionDesign", "reviewWorkspaceUnit", { request }, report, 2, 14),
+        call("readExtensionDesign", "reviewLiveExtensionDesign", { operationId }, observation, 3, 3,
+          [{ service: "extensionDesignRead", method: "inspect", args: ref([operationId]), result: ref(observation) }]),
+        working,
+        call("inspectManifest", "review-working", { evidence: observation.working }, components[0], 5, 5, [], "inspect-working"),
+        call("reviewExtension", "reviewLiveExtensionDesign", { evidence: observation.published }, components[1], 7, 9, [], "review-published"),
+        call("inspectManifest", "review-published", { evidence: observation.published }, components[1], 8, 8, [], "inspect-published"),
+        call("reviewManifestPublication", "reviewLiveExtensionDesign", { observation }, components[2], 10, 10),
+        call("combineWork", "reviewLiveExtensionDesign", { components }, report, 11, 11),
+      ],
+    };
+    await save();
+    await exportLiveTeacherWorkflow({ ...options, cases });
+    working.record.inputs.evidence = ref(observation.published);
+    await save();
+    await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /keep both manifest validations separate/u);
+  });
 }
 
 for (const id of [

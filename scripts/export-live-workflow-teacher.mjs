@@ -793,6 +793,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedProvenanceHistoryWorlds },
     { personalResumeWorlds },
     { missionFacilityWorlds },
+    { managedUnitDesignWorlds },
   ] = await Promise.all(
     [
       "content-project-worlds.ts",
@@ -867,12 +868,29 @@ export async function loadLiveTeacherCases(checkouts) {
       "provenance-history-worlds.ts",
       "personal-resume-worlds.ts",
       "mission-facility-worlds.ts",
+      "unit-design-worlds.ts",
     ].map(async (file) => {
       const imported = await import(pathToFileURL(path.join(directory, file)).href);
       return imported.default ?? imported;
     })
   );
   const cases = new Map(originalCases);
+  for (const assignment of managedUnitDesignWorlds) {
+    cases.set(`unit-design-live-${assignment.id}`, {
+      ...extensionReleaseWorkflow,
+      family: "workspace-live-unit-design",
+      workspace: "system",
+      group: "working-and-published-manifest-validation",
+      sourceGroups: [
+        "vibestudio:extensiondev:working-and-published-manifest-validation",
+        ...workflowSourceGroups(extensionReleaseWorkflow),
+      ],
+      root: "reviewWorkspaceUnit",
+      validator: { template: "system-testing", path: "skills/system-testing/unit-design-managed.ts" },
+      assignment,
+      evidence: unitDesignEvidence,
+    });
+  }
   for (const assignment of missionFacilityWorlds) {
     cases.set(`mission-facility-live-${assignment.id}`, {
       ...missionPlanningWorkflow,
@@ -6075,6 +6093,91 @@ function releaseReviewHandoffEvidence(execution, exercise, scenario, workflow) {
   );
   return {
     world: { context_id: contextId, case_id: caseId },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function unitDesignEvidence(execution, exercise, _scenario, { assignment }) {
+  const fixture = execution.diagnostics.unitDesign;
+  const { request, observation, caseId, contextId, checks } = fixture ?? {};
+  const records = exercise.calls.map(({ record }) => record);
+  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const children = (parent, name) => parent ? records.filter(
+    ({ definition, parent_call_id }) => parent_call_id === parent.call_id && definition.name === name
+  ) : [];
+  const [review] = children(root, "reviewWorkspaceUnit");
+  const [live] = children(review, "reviewLiveExtensionDesign");
+  const [read] = children(live, "readExtensionDesign");
+  const extensions = children(live, "reviewExtension");
+  const [publication] = children(live, "reviewManifestPublication");
+  const [combine] = children(live, "combineWork");
+  const effects = records.flatMap(({ effects: used }) => used ?? []);
+  const effect = read?.effects?.[0];
+  const operationId = request?.operationId;
+  const invalid = assignment.mode === "invalid-local";
+  const published = assignment.mode === "published";
+  const ids = [`${operationId}:working`, `${operationId}:published`];
+  const manifests = [observation?.working, observation?.published];
+  const before = (earlier, later) => Date.parse(earlier?.ended_at) <= Date.parse(later?.started_at);
+  requireEvidence(
+    fixture?.passed === true && caseId === assignment.id &&
+    ["revision", "manifests", "preserved", "outcome"].every((key) => checks?.[key] === true) &&
+    typeof contextId === "string" && contextId === execution.provenance?.contextId &&
+    observation?.contextId === contextId && typeof observation.workingRevision === "string" &&
+    typeof observation.mainRevision === "string" &&
+    request?.kind === "extension-design-live" && request.goal === assignment.goal &&
+    typeof operationId === "string" && !!operationId &&
+    manifests.every((manifest, index) => manifest?.kind === "manifest" &&
+      manifest.source === assignment.source && typeof manifest.candidateDigest === "string" &&
+      !!manifest.candidateDigest && manifest.receipt?.id === ids[index] && manifest.receipt.unit === manifest.source &&
+      manifest.receipt.candidateDigest === manifest.candidateDigest &&
+      manifest.receipt.errorCode === (index === 0 && invalid ? "MANIFEST_ICON" : null)
+    ) &&
+    (manifests[0].candidateDigest === manifests[1].candidateDigest) === published &&
+    matchesValue(review?.inputs?.request, request) && matchesValue(live?.inputs?.request, request) &&
+    matchesValue(read?.inputs?.operationId, operationId) && matchesValue(read.output, observation) &&
+    effects.length === 1 && effect?.service === "extensionDesignRead" && effect.method === "inspect" &&
+    !effect.error && matchesValue(effect.args, [operationId]) && matchesValue(effect.result, observation),
+    "Unit design review requires exact working and protected-main validator receipts"
+  );
+  const components = [
+    {decision: invalid ? "revision-needed" : "ready",
+      finding: invalid ? "MANIFEST_ICON" : "manifest-verified", evidenceIds: [ids[0]]},
+    {decision: "ready", finding: "manifest-verified", evidenceIds: [ids[1]]},
+    {decision: published ? "ready" : "waiting",
+      finding: published ? "manifest-published" : "manifest-not-published", evidenceIds: ids},
+  ];
+  const expected = {
+    decision: invalid ? "revision-needed" : published ? "ready" : "waiting",
+    finding: invalid ? "required-revision" : published ? "prerequisites-verified" : "pending-lifecycle",
+    evidenceIds: ids, components,
+  };
+  const reviews = manifests.map((manifest) =>
+    extensions.find((call) => matchesValue(call.inputs?.evidence, manifest))
+  );
+  requireEvidence(
+    isDeepStrictEqual(exercise.report, expected) &&
+    matchesValue(review.output, exercise.report) && matchesValue(live.output, exercise.report) &&
+    extensions.length === 2 && reviews.every((call, index) => {
+      const [manifestReview] = children(call, "inspectManifest");
+      return matchesValue(call?.output, exercise.report.components[index]) &&
+        matchesValue(manifestReview?.inputs?.evidence, manifests[index]) &&
+        matchesValue(manifestReview.output, exercise.report.components[index]);
+    }) &&
+    matchesValue(publication?.inputs?.observation, observation) &&
+    matchesValue(publication.output, exercise.report.components[2]) &&
+    matchesValue(combine?.inputs?.components, exercise.report.components) &&
+    matchesValue(combine.output, exercise.report) &&
+    before(read, reviews[0]) && before(reviews[0], reviews[1]) &&
+    before(reviews[1], publication) && before(publication, combine),
+    "Unit design review must keep both manifest validations separate from publication"
+  );
+  return {
+    world: {
+      context_id: contextId, source: assignment.source,
+      working_revision: observation.workingRevision, main_revision: observation.mainRevision,
+    },
     checks,
     evidence: { workspace: { fixture } },
   };

@@ -141,6 +141,13 @@ The cases distinguish a revision that needs rereading, a prerequisite that
 still needs acceptance, and a ready card with no evidence of a started run.
 Run the matching `mission-facility-oracle-<case-id>` for model-free verification.
 
+Live unit design cases call `unitDesign/reviewWorkspaceUnit` in System.
+The program reviews two validator receipts from the exact working and
+protected-main extension manifests, then combines those findings with the
+publication comparison. The cases cover a matching published manifest, a valid
+local lifecycle change, and an invalid local icon declaration. Use the matching
+`unit-design-oracle-<case-id>` for model-free verification.
+
 Assigned automation planning cases use the real Missions service. The shared
 program reads the assigned manual monitor and its ledger, calls the automation
 planner, then checks the same assignment again. The stale case edits the
