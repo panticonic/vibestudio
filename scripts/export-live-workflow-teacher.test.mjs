@@ -76,6 +76,12 @@ test("authored template worlds flow into the collector without losing original s
             expectedBlockers: ["missing-presentation"],
             expectedVisual: "Checklist",
           },
+          {
+            id: "submitted-journal",
+            expectedBlockers: ["awaiting-provider"],
+            expectedNext: "watch-provider",
+            journalPhase: "submitted",
+          },
         ],
       ],
       [
@@ -663,6 +669,28 @@ test("authored template worlds flow into the collector without losing original s
         preflight
       ),
     /exact local artifact/
+  );
+  const submitted = cases.get("publication-preflight-live-submitted-journal");
+  const submittedExecution = structuredClone(publicationExecution);
+  Object.assign(submittedExecution.diagnostics.managedPublication.verification, {
+    caseId: submitted.caseId, next: "watch-provider", journalPhase: "submitted",
+  });
+  submittedExecution.diagnostics.managedPublication.verification.checks.exactJournalReadback = true;
+  const submittedExercise = {
+    rootCallIds: ["runWorkflow"],
+    calls: [
+      "runWorkflow", "preflightPublication", "reviewPublication", "readProgress", "readSubmittedDeployment",
+    ].map((name, index, stages) => ({ record: {
+      call_id: name, parent_call_id: stages[index - 1] ?? null, definition: { name },
+      outcome: "done", model_turns: [{ kind: "generation", reply: {} }],
+    } })),
+    report: { status: "waiting", next: "watch-provider", blockers: ["awaiting-provider"] },
+  };
+  assert.ok(submitted.evidence(submittedExecution, submittedExercise, "", submitted));
+  submittedExercise.calls.pop();
+  assert.throws(
+    () => submitted.evidence(submittedExecution, submittedExercise, "", submitted),
+    /submitted-readback stage/
   );
   const scratch = cases.get("scratch-handoff-live-review");
   assert.equal(scratch.root, "assembleHandoff");

@@ -1688,12 +1688,14 @@ export async function loadLiveTeacherCases(checkouts) {
       ),
     });
   }
-  for (const { id, expectedBlockers, expectedVisual } of managedPublicationWorlds) {
+  for (const { id, expectedBlockers, expectedVisual, expectedNext, journalPhase } of managedPublicationWorlds) {
     cases.set(`publication-preflight-live-${id}`, {
       ...publicationPreflightWorkflow,
       caseId: id,
       expectedBlockers,
       expectedVisual,
+      expectedNext,
+      journalPhase,
     });
   }
   for (const { id, status, problem } of managedAutomationWorlds) {
@@ -10073,6 +10075,11 @@ function publicationPreflightEvidence(execution, exercise, _scenario, workflow) 
   const fixture = execution.diagnostics.managedPublication;
   const verification = fixture?.verification;
   const report = exercise.report;
+  const blockers = workflow.expectedBlockers;
+  const expectedStatus = !blockers.length ? "ready-for-review"
+    : blockers.every((blocker) => blocker === "awaiting-provider" || blocker === "verify-public")
+      ? "waiting"
+      : "blocked";
   requireEvidence(
     typeof fixture?.contextId === "string" &&
       fixture.contextId === execution.provenance?.contextId &&
@@ -10093,12 +10100,38 @@ function publicationPreflightEvidence(execution, exercise, _scenario, workflow) 
       (!workflow.expectedVisual ||
         (verification.visual === workflow.expectedVisual &&
           report?.visual === workflow.expectedVisual)) &&
-      report?.status === (workflow.expectedBlockers.length ? "blocked" : "ready-for-review") &&
+      report?.status === expectedStatus &&
+      report.next === workflow.expectedNext &&
+      (!workflow.journalPhase ||
+        (verification.checks?.exactJournalReadback === true && verification.journalPhase === workflow.journalPhase)) &&
+      (!workflow.expectedNext || verification.next === workflow.expectedNext) &&
       Array.isArray(report.blockers) &&
       JSON.stringify([...report.blockers].sort()) ===
         JSON.stringify([...workflow.expectedBlockers].sort()),
     "The managed publication decision must match the exact local artifact, live panel, and approved review"
   );
+  if (workflow.journalPhase) {
+    const records = exercise.calls.map(({ record }) => record);
+    const children = (parent, name) => records.filter((record) =>
+      record.parent_call_id === parent?.call_id && record.definition.name === name
+    );
+    const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+    const [preflight] = children(root, "preflightPublication");
+    const [review] = children(preflight, "reviewPublication");
+    const progress = children(review, "readProgress");
+    const submitted = children(progress[0], "readSubmittedDeployment");
+    const expectedProgress = workflow.expectedNext === "hold-review" ? 0 : 1;
+    requireEvidence(
+      children(preflight, "reviewPublication").length === 1 &&
+        progress.length === expectedProgress &&
+        submitted.length === (workflow.journalPhase === "submitted" && expectedProgress ? 1 : 0) &&
+        [review, ...progress, ...submitted].every((record) =>
+          record.outcome === "done" &&
+          record.model_turns?.some((turn) => turn.kind === "generation" && turn.reply)
+        ),
+      "The publication decision must retain the native journal branch and any submitted-readback stage"
+    );
+  }
   return {
     world: { context_id: fixture.contextId, seed_revision: verification.seedRevision },
     checks: verification.checks,

@@ -808,7 +808,14 @@ and verified cleanup before the project skill can prepare and commit the evidenc
 Publication preflight uses a locally built website and a real preview panel capture. It checks
 approval for the exact destination, provider, and environment, and distinguishes audience labels
 present only in the website package from labels observed in the reviewed panel. Controlled delivery
-faults exercise missing HTML and changed manifests. The checks cover review and publication status.
+faults exercise missing HTML and changed manifests. Recovery cases seed the
+isolated host's publication journal, build the exact package, and read back
+the same receipt after the decision. The workflow distinguishes an incomplete
+operation, an existing submission, and a receipt for a different artifact.
+The fixtures exercise the local journal without contacting a provider.
+Use the `publication-preflight-qualification-` selectors with suffixes
+`resume-after-destination-setup`, `resume-after-upload`,
+`watch-after-submission`, and `hold-foreign-artifact-journal`.
 Automation lifecycle cases use manual-only Missions. The test context can install a new revision
 around a pause or resume, or interrupt the receipt at the service boundary. The workflow uses
 at most one scheduling attempt and reports the actual installed state and revision. The oracle checks controller receipts
