@@ -125,9 +125,8 @@ export async function wireDevelopmentNative(
       const hostExecutionDigest = readHostBuildFingerprint(deps.hostArtifactRoot).fingerprint;
       const semantic = createNativeDevelopmentSemanticAdapter(deps.workspaceVcs);
       const resolveAccess = async (contextId: string, ctx?: ServiceContext) => {
-        await deps.workspaceVcs.whenSemanticReady(ctx?.signal);
-        if (!deps.workspaceVcs.participantHistoryAttached) return undefined;
         if (!ctx) throw new Error("Development source requires a verified workspace context");
+        await deps.workspaceVcs.whenSemanticReady(ctx.signal);
         return deps.resolveParticipantAccess(contextId, ctx);
       };
       const appendLog = (runId: string, stream: "stdout" | "stderr", line: string, origin = "") => {
@@ -215,21 +214,10 @@ export async function wireDevelopmentNative(
           return current;
         },
         releaseLogs: (runId) => logs.delete(runId),
-        resolveAdoptedRepository: async ({ contextId, repositoryId }, ctx) => {
-          const access = await resolveAccess(contextId, ctx);
-          if (access) {
-            return deps.workspaceVcs.resolveAdoptedParticipantRepository({ contextId, repositoryId }, access);
-          }
-          const workingHead = await deps.workspaceVcs.resolveWorkingState(contextId);
-          const inspected = await deps.workspaceVcs.semanticDirectCall("vcsInspect", {
-            node: { kind: "repository", state: workingHead, repositoryId },
-            edgeLimit: 1,
-          });
-          if (inspected.node.kind !== "repository" || inspected.node.value.kind !== "present") {
-            return null;
-          }
-          return { repoPath: inspected.node.value.repoPath, workingHead };
-        },
+        resolveAdoptedRepository: async ({ contextId, repositoryId }, ctx) =>
+          deps.workspaceVcs.resolveAdoptedParticipantRepository(
+            { contextId, repositoryId }, await resolveAccess(contextId, ctx),
+          ),
       });
     },
     stop: close,

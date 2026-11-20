@@ -26,7 +26,7 @@ function manifest(): string {
   ].join("\n");
 }
 
-async function fixture(participant = false) {
+async function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "semantic-template-exchange-"));
   roots.push(root);
   const checkout = path.join(root, "checkout");
@@ -75,18 +75,21 @@ async function fixture(participant = false) {
     blobsDir: path.join(root, "blobs"),
     planSource: async () => sourcePlan,
     materializeSource,
-    ...(participant ? {
-      resolveAccess: async (contextId: string, ctx?: ServiceContext) => {
-        if (!ctx) throw new Error("Missing caller");
-        return { caller: ctx.caller, ownerContextId: contextId };
-      },
-    } : {}),
+    resolveAccess: async (contextId, ctx) => ({ caller: ctx.caller, ownerContextId: contextId }),
     semantic: { commitChildBase: vi.fn(), importSnapshot: semanticImport },
   });
+  const ctx = {
+    caller: createVerifiedCaller("shell:template-owner", "shell", null, null, {
+      userId: "user:template-owner", handle: "template-owner",
+    }),
+  };
   return {
     root,
     checkout,
-    executor,
+    executor: {
+      prepare: (input: Parameters<typeof executor.prepare>[0], caller: ServiceContext = ctx) => executor.prepare(input, caller),
+      apply: (input: Parameters<typeof executor.apply>[0], caller: ServiceContext = ctx) => executor.apply(input, caller),
+    },
     semanticImport,
     materializeSource,
     setSemantic: (value: string) => (semanticValue = value),
@@ -221,7 +224,7 @@ describe("TemplateRepositoryExchangeExecutor", () => {
   });
 
   it("accepts a private import only for the participant who prepared it", async () => {
-    const fx = await fixture(true);
+    const fx = await fixture();
     const context = (id: string, grant: string) => ({
       caller: { ...createVerifiedCaller(id, "shell"), taskAuthority: `task:${grant.repeat(64)}` as const },
     }) as ServiceContext;
