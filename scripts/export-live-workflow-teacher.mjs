@@ -10,6 +10,13 @@ import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
 
 const sharedProgram = "skills/vibestudio-workflows/runWorkflow.nl";
 const templateGoalDomains = {
+  authoring: {
+    namespace: "vibestudio:authoring",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-authoring-managed.ts" },
+    callable: "workOnAuthoringGoal",
+    checks: ["discoveredAuthoringRecords", "selectedAuthorizedTrees", "observedCurrentCompiler",
+      "verifiedAuthoringFindings", "retainedAuthoringSources", "verifiedAuthoringHandoff", "rejectedStaleAuthoringReceipt"],
+  },
   ownedPreview: {
     namespace: "vibestudio:owned-preview-publication",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-owned-preview-managed.ts" },
@@ -32,6 +39,14 @@ const templateGoalDomains = {
     skill: "googleHandoff",
     checks: ["reconciledGoogleHandoffDecision", "verifiedGoogleHandoffProviderReads", "boundGoogleHandoffAssets",
       "verifiedGoogleHandoffFreshness", "verifiedGoogleHandoffArtifact", "preservedGoogleHandoffAuthority"],
+  },
+  "system-diagnostics": {
+    namespace: "vibestudio:system-diagnostics",
+    validator: { template: "system", path: "skills/open-system-diagnostics-runtime/managed.ts" },
+    callable: "workTowardDiagnosticGoal",
+    skill: "diagnostics",
+    checks: ["discoveredDiagnosticCheckpoints", "boundNativeDiagnosticReadback", "selectedExactDiagnosticWindows",
+      "preservedDiagnosticBootCoverage", "reconciledDiagnosticFinding", "groundedDiagnosticCitations", "verifiedDiagnosticHandoff"],
   },
   "personal-history": {
     namespace: "vibestudio:personal-history",
@@ -1122,13 +1137,13 @@ export async function loadLiveTeacherCases(checkouts) {
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
-      openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [] } = imported.default ?? imported;
+      openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [] } = imported.default ?? imported;
     for (const assignment of [...openGoalWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
       ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
       ...openGoalCalendarWorlds, ...openPersonalArtifactWorlds, ...openPersonalHistoryWorlds,
-      ...openGoalGoogleHandoffWorlds, ...openPersonalAutomationWorlds, ...openGoalOwnedPreviewWorlds]) {
+      ...openGoalAuthoringWorlds, ...openGoalGoogleHandoffWorlds, ...openPersonalAutomationWorlds, ...openGoalOwnedPreviewWorlds, ...openDiagnosticWorlds]) {
       const split = assignment.split ?? "train";
       const sourceGroups = [assignment.sourceGroup, assignment.relatedSourceGroup].filter(Boolean);
       const scenario = `open-goal-${assignment.id}`;
@@ -6857,7 +6872,37 @@ function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
     "Expected a verified live goal and its actual installed Natlang skill call"
   );
   const evidence = { workspace: { proof } };
-  if (world.kind === "news") {
+  if (world.kind === "authoring") {
+    const outcome = exercise.report.outcome;
+    const effectsOf = (service, method) => effects.filter(effect =>
+      effect.service === service && effect.method === method && !effect.error);
+    const runs = world.expected.candidate === null ? 0 : world.edit ? 2 : 1;
+    const readsPerRun = world.expected.baseline === null ? 1 : 2;
+    const readbacks = effectsOf("authoringCompiler", "inspect");
+    const confirmations = effectsOf("authoringReviewControl", "confirm");
+    const stages = effectsOf("authoringReviewControl", "stage");
+    const expectedConfirmations = !runs ? [] : world.edit ? ["changed", "current"] : ["current"];
+    requireEvidence(
+      effectsOf("authoringDiscovery", "list").length === Math.max(1, runs) &&
+        effectsOf("authoringDiscovery", "open").filter(effect => effect.result !== null).length === runs &&
+        readbacks.length === runs * readsPerRun &&
+        confirmations.length === expectedConfirmations.length &&
+        expectedConfirmations.every((result, index) => matchesValue(confirmations[index]?.result, result)) &&
+        isDeepStrictEqual(proof.confirmations, expectedConfirmations) &&
+        (runs ? outcome?.status === "reviewed" && outcome.receipt?.review?.status === world.expected.status &&
+          matchesValue(confirmations.at(-1)?.args, [outcome.receipt]) &&
+          matchesValue(proof.receipt, outcome.receipt) && proof.readbacks?.length === readsPerRun &&
+          readbacks.slice(-readsPerRun).every((effect, index) => matchesValue(effect.result, proof.readbacks[index]))
+          : outcome?.status === "unresolved" && outcome.reason === world.expected.unresolvedReason &&
+            proof.receipt === null && proof.readbacks?.length === 0) &&
+        stages.length === Number(world.expected.stage) &&
+        (world.expected.stage ? matchesValue(stages[0]?.args, [outcome.receipt]) &&
+          matchesValue(stages[0]?.result, outcome.artifact) && matchesValue(outcome.artifact, proof.handoff) &&
+          typeof proof.handoffText === "string" && hash(proof.handoffText) === proof.handoff?.revision
+          : proof.handoff === null && proof.handoffText === null),
+      "Expected exact workspace compiler evidence, a current revision receipt and any authorized scratch handoff"
+    );
+  } else if (world.kind === "news") {
     requireEvidence(
       performed("newsGoal", "observeCadence") &&
         (!world.readers.length || performed("newsGoal", "readReader")) &&
@@ -6933,6 +6978,27 @@ function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
         proof.attempts?.length === expectedAttempts && Array.isArray(proof.independent) &&
         proof.initial && proof.latest && exercise.report.outcome?.disposition === world.expected.disposition,
       "Expected scoped monitor scheduling, current revision readback and verified recovery"
+    );
+  } else if (world.kind === "system-diagnostics") {
+    const outcome = exercise.report.outcome;
+    const calls = (service, method) => effects.filter(effect => effect.service === service && effect.method === method && !effect.error);
+    const catalog = calls("diagnosticCatalog", "discover");
+    const reads = calls("diagnosticLog", "read");
+    const stages = calls("diagnosticHandoff", "stage");
+    const checkpointCount = Object.keys(world.expected.windows).length;
+    requireEvidence(
+      catalog.length > 0 && catalog.every(({ args, result }) => matchesValue(args, []) && matchesValue(result, proof.catalog)) &&
+        Array.isArray(proof.windows) && proof.windows.length === checkpointCount && reads.length === checkpointCount &&
+        new Set(reads.map(({ args }) => args?.[0])).size === checkpointCount &&
+        reads.every(({ args, result }) => proof.windows.some(window =>
+          matchesValue(args, [window.source.id]) && matchesValue(result, window))) &&
+        outcome?.finding?.status === world.expected.status && stages.length === Number(world.expected.stage) &&
+        isDeepStrictEqual(outcome?.artifact, proof.handoff) &&
+        (world.expected.stage ? typeof proof.handoffReadback === "string" &&
+          hash(proof.handoffReadback) === proof.handoff?.sha256 &&
+          matchesValue(stages[0].args, [outcome.finding]) && matchesValue(stages[0].result, proof.handoff)
+          : proof.handoff === null && proof.handoffReadback === null),
+      "Expected observed native Host windows, exact report evidence and the authorized scratch result"
     );
   } else if (world.kind === "personal-history") {
     requireEvidence(

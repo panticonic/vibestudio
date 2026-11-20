@@ -1,3 +1,4 @@
+import { decodeRpcJson, encodeRpcJson } from "@vibestudio/rpc/wireJson";
 import { EventEmitter } from "node:events";
 import { expect, it, vi } from "vitest";
 import type { ProcessAdapter } from "./index.js";
@@ -6,7 +7,10 @@ import { NativeOperationPort } from "./operationPort.js";
 function fixture() {
   const adapter = Object.assign(new EventEmitter(), { postMessage: vi.fn(), bufferedAmount: 0 });
   const port = new NativeOperationPort(adapter as unknown as ProcessAdapter);
-  return { adapter, port };
+  const sent = (index: number) =>
+    decodeRpcJson(adapter.postMessage.mock.calls.at(index)![0]) as { id: string; args?: unknown[] };
+  const receive = (value: object) => adapter.emit("message", encodeRpcJson(value));
+  return { adapter, port, sent, receive };
 }
 
 it("preserves the worker error for all pending and later operations", async () => {
@@ -22,15 +26,15 @@ it("preserves the worker error for all pending and later operations", async () =
 
 it("keeps a slow operation pending until its actual response arrives", async () => {
   vi.useFakeTimers();
-  const { adapter, port } = fixture();
+  const { port, sent, receive } = fixture();
   const pending = port.call("mkdir", []);
-  const frame = adapter.postMessage.mock.calls[0]![0];
+  const frame = sent(0);
   const settled = vi.fn();
   void pending.then(settled, settled);
   try {
     await vi.advanceTimersByTimeAsync(30_000);
     expect(settled).not.toHaveBeenCalled();
-    adapter.emit("message", { type: "operation-result", id: frame.id, value: "created" });
+    receive({ type: "operation-result", id: frame.id, value: "created" });
     await expect(pending).resolves.toBe("created");
   } finally {
     port.retire();
@@ -39,14 +43,14 @@ it("keeps a slow operation pending until its actual response arrives", async () 
 });
 
 it("accepts only results for outstanding operations and retires on attempted owner dispatch", async () => {
-  const { adapter, port } = fixture();
+  const { adapter, port, sent, receive } = fixture();
   const request = port.call("read", []);
-  const frame = adapter.postMessage.mock.calls[0]![0];
-  adapter.emit("message", { type: "operation-result", id: "invented", value: "forged" });
-  adapter.emit("message", { type: "operation-result", id: frame.id, value: "native bytes" });
+  const frame = sent(0);
+  receive({ type: "operation-result", id: "invented", value: "forged" });
+  receive({ type: "operation-result", id: frame.id, value: "native bytes" });
   await expect(request).resolves.toBe("native bytes");
   const pending = port.call("read", []);
-  adapter.emit("message", {
+  receive({
     type: "operation",
     id: "guest",
     method: "hostTerminal.open",
@@ -57,17 +61,17 @@ it("accepts only results for outstanding operations and retires on attempted own
 });
 
 it("retires cancelled request authority before sending cancellation and ignores its late result", async () => {
-  const { adapter, port } = fixture();
+  const { port, sent, receive } = fixture();
   const controller = new AbortController();
   const pending = port.call("read", [], controller.signal);
-  const frame = adapter.postMessage.mock.calls[0]![0];
+  const frame = sent(0);
   controller.abort(new Error("caller retired"));
   await expect(pending).rejects.toThrow("caller retired");
-  expect(adapter.postMessage).toHaveBeenLastCalledWith({ type: "cancel-operation", id: frame.id });
-  adapter.emit("message", { type: "operation-result", id: frame.id, value: "late bytes" });
+  expect(sent(-1)).toEqual({ type: "cancel-operation", id: frame.id });
+  receive({ type: "operation-result", id: frame.id, value: "late bytes" });
   const next = port.call("read", []);
-  const nextFrame = adapter.postMessage.mock.calls.at(-1)![0];
-  adapter.emit("message", { type: "operation-result", id: nextFrame.id, value: "current bytes" });
+  const nextFrame = sent(-1);
+  receive({ type: "operation-result", id: nextFrame.id, value: "current bytes" });
   await expect(next).resolves.toBe("current bytes");
   port.retire();
 });
@@ -83,4 +87,26 @@ it("bounds both outstanding operations and transport backlog", async () => {
   await expect(port.call("read", [])).rejects.toThrow(/limit reached/);
   port.retire();
   expect((await Promise.all(operations)).every((error) => error instanceof Error)).toBe(true);
+});
+
+it("carries exact byte windows through a JSON-only process adapter", async () => {
+  const { port, sent, receive } = fixture();
+  const backing = Uint8Array.of(91, 0, 255, 92);
+  const call = port.call("write", [backing.subarray(1, 3), new Uint8Array()]);
+  const head = sent(0);
+  expect(head.args).toEqual([Uint8Array.of(0, 255), new Uint8Array()]);
+  receive({
+    type: "operation-result",
+    id: head.id,
+    value: { bytes: Buffer.from(backing).subarray(1, 3) },
+  });
+  await expect(call).resolves.toEqual({ bytes: Uint8Array.of(0, 255) });
+  port.retire();
+});
+
+it("does not treat an unencoded control object as a native result", async () => {
+  const { adapter, port, sent } = fixture();
+  const call = port.call("read", []);
+  adapter.emit("message", { type: "operation-result", id: sent(0).id, value: "raw" });
+  await expect(call).rejects.toThrow(/retired/);
 });
