@@ -3189,6 +3189,7 @@ async function main() {
   const workspaceConfigWriter = createWorkspaceConfigMainWriter({
     workspaceId,
     vcs: workspaceVcs,
+    authoringCaller: rootTemplateCaller,
   });
   const replaceLiveWorkspaceConfig = (next: typeof workspaceConfig): void => {
     replaceWorkspaceConfig(workspaceConfig, { ...next, id: workspaceId });

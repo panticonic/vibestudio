@@ -1692,9 +1692,14 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   async publishParticipantContext(input: Omit<WorkspaceHistoryParticipant, "caller"> & {
     push: VcsPushInput;
     gateContext: CallerPublicationGateContext;
+    /** Host-authored work can use an isolated copy while the original caller authorizes main. */
+    storageCaller?: VerifiedCaller;
   }): Promise<VcsPushResult> {
     const { push, gateContext, dispatch, canonical, owner, ownerContextId } = input;
-    const caller = gateContext.caller;
+    if (input.storageCaller && !input.storageCaller.hostOriginated) {
+      throw new Error("Only the host can author a publication for an approving caller");
+    }
+    const caller = input.storageCaller ?? gateContext.caller;
     requireWorkspaceParticipantOwner({ canonical, owner, caller, ownerContextId });
     if (push.epochTransition) {
       throw new Error("This publication requires the workspace installation lifecycle");
