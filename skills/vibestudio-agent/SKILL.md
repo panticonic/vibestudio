@@ -135,6 +135,10 @@ the current queue. See [the CLI approval reference](../../docs/cli.md#hub-and-wo
 for response shapes and lifecycle behavior. Eval's `--approval-level` only
 automates capability approvals in that eval and its task descendants.
 
+The [approval visibility workflow](https://github.com/panticonic/vibestudio-base/blob/main/skills/capabilities/natlang/reviewApprovalQueues.nl)
+reconciles redacted queue receipts and identifies the owner of an observed
+pending request. It distinguishes an empty snapshot from a missing one.
+
 ## Live pages on the user's devices (tendrils)
 
 Create and change tendril pages with `vibestudio eval` and

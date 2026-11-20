@@ -1,6 +1,7 @@
 // Explicit adapters reuse each template's independent verifier. The world and
 // audit stay in this caller-owned module. Only bindings enter the Natlang task.
 const simple = {
+  capabilities: ["skills/approval-visibility-fixtures/verify.ts", "verifyApprovalVisibility"],
   automation: ["skills/automation-workflow-fixtures/verify.ts", "verifyAutomationWorld"],
   conversation: [
     "skills/conversation-evidence-review-fixtures/verify.ts",

@@ -11,6 +11,14 @@ const program = "skills/vibestudio-workflows/runWorkflow.nl";
 
 const domains = [
   {
+    domain: "capabilities",
+    template: "base",
+    source: "skills/approval-visibility-fixtures/worlds.ts",
+    exported: "approvalVisibilityWorlds",
+    operation: "reviewApprovalQueues",
+    identify: (world) => [world.id, [world.sourceGroup]],
+  },
+  {
     domain: "mobileSystem",
     template: "system-testing",
     source: "skills/mobile-system-testing-fixtures/worlds.ts",

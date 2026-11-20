@@ -159,6 +159,12 @@ selector against the gateway and chooses an action for the paired or linked
 caller. The oracle checks the decision and rejects scope reads before route
 verification. These cases plan commands without dispatching them.
 
+Approval visibility cases exercise queue receipt interpretation under the same
+shared Natlang root. The scoped receipts cover both caller tiers, account-only
+devices, independently unavailable queues, and watch snapshots that replace the
+previous pending set. The verifier checks queue ownership and whether the
+assigned ID is located, absent, or unconfirmed.
+
 Gmail compose audits run in an owned channel in the Google Workspace template.
 The shared program calls the compose-history skill, projects a typed draft or
 delivery readback from that same native cursor, and calls the Gmail workflow
