@@ -61,12 +61,6 @@ interface CdpEndpoint {
 
 const RUN_HEADLESS_PANEL_INTEGRATION =
   process.env["VIBESTUDIO_RUN_HEADLESS_PANEL_INTEGRATION"] === "1";
-const serverPath = path.resolve(process.cwd(), "dist", "server.mjs");
-const headlessHostEntry = findHeadlessHostEntry();
-const maybeDescribe =
-  RUN_HEADLESS_PANEL_INTEGRATION && fs.existsSync(serverPath) && headlessHostEntry
-    ? describe
-    : describe.skip;
 
 type HeadlessServerProcess = ChildProcessByStdio<null, Readable, Readable>;
 let tempRoot: string | null = null;
@@ -112,8 +106,11 @@ afterEach(async () => {
   }
 }, 20_000);
 
-maybeDescribe("headless browser panel integration", () => {
+describe.runIf(RUN_HEADLESS_PANEL_INTEGRATION)("headless browser panel integration", () => {
   it("opens a browser panel from a worker principal and drives it through the real headless host", async () => {
+    const hostArtifacts = process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"]!;
+    const serverPath = path.join(hostArtifacts, "server.mjs");
+    const headlessHostEntry = path.join(hostArtifacts, "headless-host", "main.js");
     tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-headless-panel-"));
     const readyFile = path.join(tempRoot, "ready.json");
     const fixture = await startFixtureServer();
@@ -140,7 +137,7 @@ maybeDescribe("headless browser panel integration", () => {
           HOME: tempRoot,
           XDG_CONFIG_HOME: path.join(tempRoot, ".config"),
           VIBESTUDIO_HEADLESS_HOST_AUTOSPAWN: "1",
-          VIBESTUDIO_HEADLESS_HOST_ENTRY: headlessHostEntry!,
+          VIBESTUDIO_HEADLESS_HOST_ENTRY: headlessHostEntry,
           ...(fs.existsSync(playwrightChromiumPath)
             ? { VIBESTUDIO_CHROMIUM_PATH: playwrightChromiumPath }
             : {}),
@@ -366,14 +363,6 @@ async function approveStartupInstallReviews(
     }
     await delay(100);
   }
-}
-
-function findHeadlessHostEntry(): string | null {
-  const candidates = [
-    path.resolve(process.cwd(), "dist", "headless-host", "main.js"),
-    path.resolve(process.cwd(), "apps", "headless-host", "dist", "main.js"),
-  ];
-  return candidates.find((candidate) => fs.existsSync(candidate)) ?? null;
 }
 
 async function startFixtureServer(): Promise<{ baseUrl: string }> {
