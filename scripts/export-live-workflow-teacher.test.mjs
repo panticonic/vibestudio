@@ -258,6 +258,7 @@ test("authored template worlds flow into the collector without losing original s
       writeFile(
         path.join(casesDir, `${file}.ts`),
         `export const ${name} = ${JSON.stringify(worlds)};
+         ${name === "managedWebBriefWorlds" ? "export const managedResearchIntakeWorlds = [];" : ""}
          ${name === "managedAutomationWorlds" ? "export const managedAutomationPlanningWorlds = [];" : ""}
          ${name === "deliveryHistoryWorlds" ? "export const chatDeliveryWorlds = [];" : ""}
          ${name === "ownedOperationsWorlds" ? 'export const ownedOperationsComposedWorlds = [{ id: "release-readiness-dossier", sourceGroup: "vibestudio:owned-operations:release:pending" }];' : ""}
@@ -3159,7 +3160,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["native-suite-worlds", "export const managedNativeSuiteWorlds = [];"],
       ["git-bridge-review-worlds", "export const managedGitBridgeReviewWorlds = [];"],
       ["vcs-delivery-worlds", "export const managedVcsDeliveryWorlds = [];"],
-      ["web-brief-worlds", "export const managedWebBriefWorlds = [];"],
+      ["web-brief-worlds", "export const managedWebBriefWorlds = []; export const managedResearchIntakeWorlds = [];"],
       ["architecture-boundary-worlds", "export const managedArchitectureBoundaryWorlds = [];"],
       ["release-review-handoff-worlds", "export const managedReleaseReviewHandoffWorlds = [];"],
       ["extension-release-worlds", "export const managedExtensionReleaseWorlds = [];"],
@@ -7540,6 +7541,65 @@ test("retained triage export binds diagnosis to the exact released run record", 
     () => workflow.evidence(execution, exercise, id, workflow),
     /assigned native read before the nested failure review/u,
   );
+});
+
+test("research intake export binds the nested review to assigned public receipts", async () => {
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(path.resolve(import.meta.dirname, ".."));
+  const cases = await loadLiveTeacherCases(checkouts);
+  const id = "research-intake-live-documentation-evidence";
+  const workflow = cases.get(id);
+  const { assignment } = workflow;
+  const request = { goal: assignment.goal, operationId: "assigned" };
+  const url = assignment.sources[0];
+  const head = "This domain is for use in documentation examples.";
+  const page = {
+    id: "source-1", requestedUrl: url, finalUrl: url, title: "Example Domain",
+    authority: "primary", session: "public", outcome: "fetched",
+    digest: createHash("sha256").update(head).digest("hex"),
+    head, size: Buffer.byteLength(head), headBytes: Buffer.byteLength(head), truncated: false, reads: [],
+  };
+  const projection = { goal: assignment.goal, checks: ["research"], suppliedUrls: [url],
+    search: [], pages: [page], integration: null };
+  const finding = {
+    check: "research", disposition: "supported", evidenceIds: ["source-1"],
+    citations: [{ sourceId: "source-1", url, quote: "documentation examples", date: null }],
+    detail: "The page states the intended use.",
+  };
+  const report = { findings: [finding] };
+  const execution = {
+    provenance: { contextId: "owned" },
+    diagnostics: { managedResearchIntake: {
+      contextId: "owned", caseId: assignment.id, request, projection, passed: true,
+      checks: { exactAcquisition: true, evidenceDisposition: true, exactCitation: true },
+    } },
+  };
+  const ref = (value) => {
+    const json = JSON.stringify(value);
+    return { complete: true, hash: createHash("sha256").update(json).digest("hex"), bytes: Buffer.byteLength(json) };
+  };
+  const call = (name, parent, input, output, effects = []) => ({
+    record: {
+      call_id: name, parent_call_id: parent, definition: { name },
+      inputs: { request: ref(input) }, output: ref(output), effects,
+    },
+  });
+  const intake = call("reviewResearchIntake", "reviewLiveResearchIntake", projection, report);
+  const exercise = {
+    rootCallIds: ["runWorkflow"], report, calls: [
+      call("reviewLiveResearchIntake", "runWorkflow", request, report, [{
+        service: "assignedResearchIntake", method: "read", args: ref([request.operationId]), result: ref(projection),
+      }]),
+      intake,
+      call("resolveEvidence", "reviewResearchIntake", projection, finding),
+    ],
+  };
+  const verify = () => workflow.evidence(execution, exercise, id, workflow);
+  assert.deepEqual(verify().world.source_digests, [page.digest]);
+  intake.record.inputs.request = ref({ ...projection, pages: [] });
+  assert.throws(verify, /needs the exact acquired receipts/u);
+  intake.record.inputs.request = ref(projection);
+  finding.citations[0].quote = "not the documentation examples";
+  assert.throws(verify, /source-grounded disposition/u);
 });
 
 test("notification export requires the accepted ID to be dismissed and interaction to remain unobserved", async () => {

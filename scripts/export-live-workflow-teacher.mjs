@@ -763,7 +763,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedNativeSuiteWorlds },
     { managedGitBridgeReviewWorlds },
     { deliveryRepository, managedVcsDeliveryWorlds },
-    { managedWebBriefWorlds },
+    { managedWebBriefWorlds, managedResearchIntakeWorlds },
     { managedArchitectureBoundaryWorlds },
     { managedReleaseReviewHandoffWorlds, releaseReviewHandoffWork },
     { managedExtensionReleaseWorlds },
@@ -1033,6 +1033,16 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of managedWebBriefWorlds) {
     cases.set(`web-brief-live-${assignment.id}`, { ...webBriefWorkflow, assignment });
+  }
+  for (const assignment of managedResearchIntakeWorlds) {
+    cases.set(`research-intake-live-${assignment.id}`, {
+      ...webBriefWorkflow,
+      family: "workspace-live-research-intake",
+      workspace: "system",
+      root: "reviewLiveResearchIntake",
+      assignment,
+      evidence: researchIntakeEvidence,
+    });
   }
   for (const assignment of managedArchitectureBoundaryWorlds) {
     cases.set(`architecture-boundary-live-${assignment.id}`, {
@@ -5448,6 +5458,67 @@ function vcsDeliveryEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: contextId, path, repository },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function researchIntakeEvidence(execution, exercise, _scenario, { assignment }) {
+  const fixture = execution.diagnostics.managedResearchIntake;
+  const { request, projection, checks } = fixture ?? {};
+  const report = exercise.report;
+  const finding = report?.findings?.[0];
+  const pages = projection?.pages;
+  const first = pages?.[0];
+  const cite = finding?.citations?.[0];
+  const normalize = (text) => text.replace(/\s+/gu, " ").trim();
+  const records = exercise.calls.map(({ record }) => record);
+  const child = (parent, name) => records.find(
+    (record) => record.parent_call_id === parent && record.definition.name === name
+  );
+  const live = child(exercise.rootCallIds[0], "reviewLiveResearchIntake");
+  const intake = child(live?.call_id, "reviewResearchIntake");
+  const stage = child(intake?.call_id, assignment.check === "research" ? "resolveEvidence" : "compareReports");
+  const [effect] = live?.effects ?? [];
+  requireEvidence(
+    fixture?.contextId === execution.provenance?.contextId && fixture?.caseId === assignment.id &&
+      fixture.passed === true &&
+      ["exactAcquisition", "evidenceDisposition", "exactCitation"].every((name) => checks?.[name] === true) &&
+      request?.goal === assignment.goal && typeof request.operationId === "string" &&
+      projection?.goal === assignment.goal && isDeepStrictEqual(projection.checks, [assignment.check]) &&
+      isDeepStrictEqual(projection.suppliedUrls, assignment.sources) &&
+      isDeepStrictEqual(projection.search, []) && projection.integration === null &&
+      Array.isArray(pages) && isDeepStrictEqual(pages.map(({ requestedUrl }) => requestedUrl), assignment.sources) &&
+      pages.every((page, index) =>
+        page.id === `source-${index + 1}` && page.session === "public" &&
+        page.authority === "primary" && page.outcome === "fetched" && /^[a-f0-9]{64}$/u.test(page.digest) &&
+        typeof page.finalUrl === "string" && typeof page.head === "string" &&
+        page.headBytes === Buffer.byteLength(page.head) &&
+        (page.truncated ? page.headBytes < page.size : page.headBytes === page.size) &&
+        Array.isArray(page.reads) && page.reads.length <= 1 &&
+        page.reads.every((tail) => tail.digest === page.digest && tail.offset === page.headBytes &&
+          tail.bytes === Buffer.byteLength(tail.text) && tail.nextOffset === tail.offset + tail.bytes &&
+          tail.nextOffset <= page.size)
+      ) &&
+      report?.findings?.length === 1 && finding.check === assignment.check &&
+      finding.disposition === assignment.disposition && typeof finding.detail === "string" && finding.detail.trim() &&
+      isDeepStrictEqual(finding.evidenceIds, pages.map(({ id }) => id)) &&
+      (assignment.quotePattern
+        ? finding.citations?.length === 1 && cite?.sourceId === first.id && cite?.url === first.finalUrl &&
+          cite.date === null && typeof cite.quote === "string" &&
+          normalize(first.head + (first.reads[0]?.text ?? "")).includes(normalize(cite.quote)) &&
+          normalize(cite.quote).toLowerCase().includes(assignment.quotePattern)
+        : finding.citations?.length === 0) &&
+      records.flatMap(({ effects }) => effects ?? []).length === 1 &&
+      effect?.service === "assignedResearchIntake" && effect.method === "read" && !effect.error &&
+      matchesValue(effect.args, [request.operationId]) && matchesValue(effect.result, projection) &&
+      matchesValue(live.inputs?.request, request) && matchesValue(live.output, report) &&
+      matchesValue(intake?.inputs?.request, projection) && matchesValue(intake.output, report) &&
+      matchesValue(stage?.inputs?.request, projection) && matchesValue(stage.output, finding),
+    "Research intake needs the exact acquired receipts, nested review and source-grounded disposition"
+  );
+  return {
+    world: { context_id: fixture.contextId, source_digests: pages.map(({ digest }) => digest) },
     checks,
     evidence: { workspace: { fixture } },
   };

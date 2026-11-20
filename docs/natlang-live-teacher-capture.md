@@ -458,6 +458,11 @@ The assigned web brief uses live public Chromium fetches and verifies the
 cleaned source bytes by reading the host's cached digest. The cases cover
 two-source citation, the registry's scope and an unsupported question. Run
 `web-brief-oracle-qualification` for the model-free public-fetch check.
+The live research intake family feeds assigned public receipts through the
+existing research and comparison lambdas after checking their cached bytes.
+The cases distinguish a supported quotation from two sources that answer
+different questions. Run `research-intake-oracle-qualification` to check
+acquisition and reject a foreign operation ID without invoking a model.
 
 Architecture boundary cases trace the actual local RPC provider to its
 authored declaration at the assigned semantic revision. They cover semantic
