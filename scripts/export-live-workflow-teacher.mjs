@@ -10,6 +10,15 @@ import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
 
 const sharedProgram = "skills/vibestudio-workflows/runWorkflow.nl";
 const templateGoalDomains = {
+  "regency-briefing": {
+    namespace: "vibestudio:regency:open-council",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-regency-managed.ts" },
+    callable: "workOnRegencyBriefing",
+    skill: "regencyBriefing",
+    checks: ["exactRegencyAssignment", "independentlyReadRegencyMemo", "exactSavedRegencyFrontiers", "exactRegencyForecasts",
+      "exactInstalledRegencyFindings", "groundedRegencyAction", "verifiedRegencyAdvance",
+      "verifiedPrivateRegencyNote", "preservedRegencyWorkspace", "rejectedRegencyRetarget"],
+  },
   "image-candidate": {
     namespace: "vibestudio:retained-image-candidate",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-image-candidate-managed.ts" },
@@ -1434,14 +1443,14 @@ export async function loadLiveTeacherCases(checkouts) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
     const distinctGoals = new Set();
-    const { openGoalWorlds, openWorkspaceShareWorlds = [], openNotificationStateWorlds = [], openAgentCapabilityWorlds = [], openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openImageCandidateWorlds = [], openApiReadinessWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
+    const { openGoalWorlds, openWorkspaceShareWorlds = [], openNotificationStateWorlds = [], openAgentCapabilityWorlds = [], openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openRegencyWorlds = [], openImageCandidateWorlds = [], openApiReadinessWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
       spectroliteGoalWorlds = [], openGoalGoogleWorlds = [], openGoalPersonalWorlds = [],
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
       openTerminalWorlds = [], openOwnedResearchWorlds = [], personalWelcomeWorlds = [], dictationHandoffWorlds = [], specialistHandoffWorlds = [], providerHandoffWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
     for (const assignment of [...openGoalWorlds, ...openWorkspaceShareWorlds, ...openNotificationStateWorlds, ...openAgentCapabilityWorlds, ...openMobileContinuityWorlds, ...openInstalledPackageWorlds, ...openAssetIntegrityWorlds, ...openTendrilRouteWorlds, ...openExtensionDossierWorlds, ...openDeployedInterfaceWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
-      ...openApiReadinessWorlds, ...openImageCandidateWorlds, ...openNewsEvidenceWorlds, ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
+      ...openApiReadinessWorlds, ...openRegencyWorlds, ...openImageCandidateWorlds, ...openNewsEvidenceWorlds, ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
       ...openGoalCalendarWorlds, ...openPersonalArtifactWorlds, ...openPersonalHistoryWorlds,
@@ -7624,6 +7633,69 @@ function retainedImageCandidateEvidence(exercise, world, proof, skill) {
   );
 }
 
+function verifyRegencyBriefing(exercise, world, proof, skill) {
+  const outcome = exercise.report.outcome;
+  const { index, frontiers, forecasts, plan, witnesses, decision, advance, note } = proof;
+  const records = exercise.calls.map(({ record }) => record);
+  const child = (parent, name) => records.filter(record => record.parent_call_id === parent.call_id &&
+    record.definition?.name === name && record.outcome === "done");
+  const steps = name => child(skill, name);
+  const effects = (name, service, method) => steps(name).flatMap(record => (record.effects ?? [])
+    .filter(effect => effect.service === service && effect.method === method && !effect.error));
+  const assignment = effects("findRegencyRealm", "regencyAssignment", "list");
+  const saved = effects("readRegencyAccounts", "regencySaved", "read");
+  const previews = effects("previewRegencySettlement", "regencyForecast", "preview");
+  const commits = effects("advanceOwnedRegency", "regencyAdvance", "commit");
+  const notes = effects("stageRegencyNote", "regencyNote", "stage");
+  const planned = steps("planRegencyReview");
+  const classified = steps("qualifyRegencyClaim");
+  const decisions = steps("decideRegencyAction");
+  const [opening, current] = frontiers;
+  const listed = index.realm;
+  const artifact = typeof proof.artifact === "string" ? JSON.parse(proof.artifact) : null;
+  requireEvidence(
+    assignment.length === 1 && matchesValue(assignment[0].args, []) && matchesValue(assignment[0].result, index) &&
+      saved.length === 2 && frontiers.length === 2 && frontiers.every((receipt, i) =>
+        matchesValue(saved[i].args, [listed]) && matchesValue(saved[i].result, receipt)) &&
+      isDeepStrictEqual(outcome.opening, opening) && isDeepStrictEqual(outcome.current, current) && isDeepStrictEqual(outcome.plan, plan) &&
+      planned.length === 1 && matchesValue(planned[0].inputs?.goal, world.goal) &&
+      matchesValue(planned[0].inputs?.index, index) && matchesValue(planned[0].inputs?.opening, opening) &&
+      matchesValue(planned[0].inputs?.current, current) && matchesValue(planned[0].output, plan) &&
+      previews.length === forecasts.length && isDeepStrictEqual(outcome.forecasts, forecasts) &&
+      forecasts.every((forecast, i) => matchesValue(previews[i].args, [listed, current.revision, forecast.months]) &&
+        matchesValue(previews[i].result, forecast) && forecast.basis === current.revision &&
+        forecast.accounts.month === current.accounts.month + forecast.months) &&
+      classified.length === witnesses.length && isDeepStrictEqual(outcome.findings, witnesses.map(({ result }) => result)) &&
+      witnesses.every(({ claim, request, result }, i) => {
+        const wrapper = classified[i];
+        const installed = child(wrapper, "reviewRealm");
+        return matchesValue(wrapper.inputs?.claim, claim) && matchesValue(wrapper.inputs?.opening, opening) &&
+          matchesValue(wrapper.inputs?.current, current) && matchesValue(wrapper.inputs?.forecasts, forecasts) &&
+          matchesValue(wrapper.output, result) && (request ?
+          installed.length === 1 && matchesValue(installed[0].inputs?.review, request) && matchesValue(installed[0].output, result.review) &&
+            child(installed[0], request.kind === "settlement" ? "inspectSettlement" : "compareEconomy").length === 1 :
+          installed.length === 0);
+      }) &&
+      decisions.length === 1 && matchesValue(decisions[0].inputs?.goal, world.goal) &&
+      matchesValue(decisions[0].inputs?.plan, plan) && matchesValue(decisions[0].inputs?.index, index) && matchesValue(decisions[0].inputs?.current, current) &&
+      matchesValue(decisions[0].inputs?.forecasts, forecasts) && matchesValue(decisions[0].inputs?.findings, outcome.findings) &&
+      matchesValue(decisions[0].output, decision) && isDeepStrictEqual(outcome.decision, decision) && decision.action === world.action &&
+      isDeepStrictEqual(outcome.advance, advance) && commits.length === Number(decision.action === "advance") &&
+      (advance ? commits.length === 1 && matchesValue(commits[0].args, [listed, current.revision, plan.advance]) &&
+        matchesValue(commits[0].result, advance) && advance.realm === listed && advance.basis === current.revision &&
+        advance.committed.accounts.month === current.accounts.month + plan.advance : commits.length === 0) &&
+      notes.length === Number(plan.localNote && (decision.action === "stage" || decision.action === "advance")) &&
+      isDeepStrictEqual(outcome.note, note) && (note ? artifact && notes.length === 1 &&
+        matchesValue(notes[0].args, [{ ...outcome, note: null }]) && matchesValue(notes[0].result, note) &&
+        note.digest === hash(proof.artifact) && note.realm === listed &&
+        note.revision === (advance?.committed.revision ?? current.revision) &&
+        artifact.scope === "private-local" && artifact.realm === listed &&
+        isDeepStrictEqual(artifact.current, current) && isDeepStrictEqual(artifact.advance, advance) :
+        notes.length === 0 && artifact === null),
+    "Expected exact Regency accounts, installed interpretations and authorized local receipts"
+  );
+}
+
 export function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
   const proof = execution.diagnostics.openGoalVerification;
   const world = workflow.assignment;
@@ -7646,7 +7718,9 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
     "Expected a verified live goal and its actual installed Natlang skill call"
   );
   const evidence = { workspace: { proof } };
-  if (world.kind === "image-candidate") {
+  if (world.kind === "regency-briefing") {
+    verifyRegencyBriefing(exercise, world, proof, skill);
+  } else if (world.kind === "image-candidate") {
     retainedImageCandidateEvidence(exercise, world, proof, skill);
   } else if (world.kind === "api-readiness") {
     quietApiReadinessEvidence(exercise, world, proof, skill);
