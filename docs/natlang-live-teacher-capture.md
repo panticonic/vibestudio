@@ -462,6 +462,13 @@ that instance in `VIBESTUDIO_REMOTE_COMMISSION_INSTANCE`, the System
 userland integration test runs the mounted Natlang call tree with these
 same live host bindings and a scripted executor.
 
+`node scripts/smoke-managed-deployment-boots.mjs` exercises the deployment
+read, apply and verification receipts on a fresh checkout-based server and a
+restart of the same private profile. It uses the installed unit's bootstrap
+arguments and verifies both gateway health responses, stable server and
+workspace IDs, and a new hub boot. The smoke owns its processes and profile.
+Package installation and systemd unit management remain separate checks.
+
 The Examples integration readiness cases compare a live catalog fetch binding with
 an optional path outside its audience or a required publication transport on the same URL.
 The managed launcher seeds a synthetic binding on a reserved hostname inside the disposable

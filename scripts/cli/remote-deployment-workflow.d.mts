@@ -22,6 +22,13 @@ export function inspectDeploymentIdentity(options: {
   active?: boolean;
 }): Promise<DeploymentObservation>;
 
+export function bindRemoteDeploymentTarget(target: {
+  intent: "deploy" | "update";
+  observe(): Promise<DeploymentObservation>;
+  apply(): Promise<void>;
+  signal: AbortSignal;
+}): RemoteDeploymentBinding;
+
 export function bindRemoteDeployment(
   argv: readonly string[],
   options?: {
@@ -32,7 +39,9 @@ export function bindRemoteDeployment(
     ) => Promise<string | undefined>;
     signal?: AbortSignal;
   }
-): {
+): RemoteDeploymentBinding;
+
+type RemoteDeploymentBinding = {
   request: { operationId: string };
   takeVerifiedIdentity(receipt: string): Promise<DeploymentIdentity | null>;
   services: {

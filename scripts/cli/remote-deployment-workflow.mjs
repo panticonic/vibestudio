@@ -126,6 +126,21 @@ export function bindRemoteDeployment(
   const options = parseArgs([...argv]);
   if (options.help || !options.target || !["deploy", "update"].includes(options.verb))
     throw new Error("Assign one explicit Vibestudio deployment target and operation");
+  return bindRemoteDeploymentTarget({
+    intent: options.verb,
+    observe: () => observeManagedTarget(options, runCommand, signal),
+    apply: () => deploy(options, {
+      run: (command, args, runOptions) => runCommand(command, args, { ...runOptions, signal }),
+      showPairing: false,
+    }),
+    signal,
+  });
+}
+
+/** Bind one assigned deployment lifecycle to the shared receipt contract. */
+export function bindRemoteDeploymentTarget({ intent, observe, apply, signal }) {
+  if (intent !== "deploy" && intent !== "update")
+    throw new Error("Assign a deploy or update operation");
   const operationId = randomUUID();
   const receipt = (stage) => `${operationId}:${stage}`;
   let phase = "start";
@@ -142,24 +157,24 @@ export function bindRemoteDeployment(
     request: { operationId },
     /** Trusted caller only. Consume a readiness receipt and verify the same live identity again. */
     async takeVerifiedIdentity(deploymentReceipt) {
-      const reuse = phase === "observed" && options.verb === "deploy" && baseline.state === "ready";
+      const reuse = phase === "observed" && intent === "deploy" && baseline.state === "ready";
       if (reuse) {
         claim("observed", deploymentReceipt, receipt("baseline"));
       } else {
         claim("verified", deploymentReceipt, receipt("verification"));
       }
-      const current = await observeManagedTarget(options, runCommand, signal);
+      const current = await observe();
       return sameBaseline(reuse ? baseline : verified, current) ? current.identity : null;
     },
     services: {
       remoteDeploymentRead: {
         async observe(id) {
           claim("start", id, operationId);
-          baseline = await observeManagedTarget(options, runCommand, signal);
+          baseline = await observe();
           phase = "observed";
           return {
             receipt: receipt("baseline"),
-            intent: options.verb,
+            intent,
             state: baseline.state,
             hasPriorIdentity: Boolean(baseline.identity),
           };
@@ -169,20 +184,16 @@ export function bindRemoteDeployment(
         async apply(baselineReceipt) {
           claim("observed", baselineReceipt, receipt("baseline"));
           const canApply =
-            options.verb === "deploy"
+            intent === "deploy"
               ? baseline.state === "inactive"
               : baseline.state !== "unverified" && baseline.identity !== null;
           if (!canApply)
             throw new Error("The observed deployment does not admit the assigned installer");
           const result = { receipt: receipt("apply") };
-          const current = await observeManagedTarget(options, runCommand, signal);
+          const current = await observe();
           if (!sameBaseline(baseline, current)) return { ...result, state: "baseline-changed" };
           try {
-            await deploy(options, {
-              run: (command, args, runOptions) =>
-                runCommand(command, args, { ...runOptions, signal }),
-              showPairing: false,
-            });
+            await apply();
             phase = "applied";
             return { ...result, state: "applied" };
           } catch {
@@ -194,7 +205,7 @@ export function bindRemoteDeployment(
       remoteDeploymentVerify: {
         async verify(actionReceipt) {
           claim("applied", actionReceipt, receipt("apply"));
-          const current = await observeManagedTarget(options, runCommand, signal);
+          const current = await observe();
           const result = { receipt: receipt("verification"), identity: null };
           if (current.state !== "ready") return { ...result, state: "unready" };
           if (
