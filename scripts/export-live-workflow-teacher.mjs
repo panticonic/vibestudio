@@ -18,6 +18,15 @@ const templateGoalDomains = {
     checks: ["retainedExactMachineScope", "appliedInstalledReadiness", "boundActualProviderAndWidth",
       "exactEvidenceDisposition", "verifiedExactLocalHandoff", "preservedWorkspaceState"],
   },
+  "adventure-journey": {
+    namespace: "vibestudio:adventure-journey",
+    validator: { template: "examples", path: "skills/open-adventure-journey-runtime/index.ts" },
+    callable: "reviewAdventureJourney",
+    skill: "adventureJourney",
+    checks: ["discoveredAssignedAdventureSave", "readComparedAdventureSaves", "attestedAdventurePlayerEvidence",
+      "verifiedExactAdventureTurn", "verifiedAdventureJournal", "preservedNativeAdventureScene",
+      "isolatedSiblingAdventureSaves", "matchedAdventureHandoff"],
+  },
   "build-incident": {
     namespace: "vibestudio:retained-build",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-build-incidents-managed.ts" },
@@ -1312,13 +1321,13 @@ export async function loadLiveTeacherCases(checkouts) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
     const distinctGoals = new Set();
-    const { openGoalWorlds, openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], newsGoalWorlds = [],
+    const { openGoalWorlds, openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], newsGoalWorlds = [],
       spectroliteGoalWorlds = [], openGoalGoogleWorlds = [], openGoalPersonalWorlds = [],
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
       openTerminalWorlds = [], openOwnedResearchWorlds = [], dictationHandoffWorlds = [], providerHandoffWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
-    for (const assignment of [...openGoalWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
+    for (const assignment of [...openGoalWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
       ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
@@ -7589,6 +7598,49 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
           !stage && outcome.handoff === null && proof.handoff === null),
       "Expected exact owned client transitions, matching durable GAD records, and verified local handoff"
     );
+  } else if (world.kind === "adventure-journey") {
+    const outcome = exercise.report.outcome;
+    const calls = (service, method) => effects.filter(effect =>
+      effect.service === service && effect.method === method && !effect.error);
+    const catalogs = calls("adventureSaveCatalog", "list");
+    const reads = calls("adventurePlayerView", "read");
+    const turns = calls("adventurePlayerTurn", "withdraw").concat(calls("adventurePlayerTurn", "stage"));
+    const { expected } = world;
+    const actions = proof.actions ?? [];
+    const available = [...turns];
+    const exactTurns = turns.length === actions.length && actions.every(action => {
+      const index = available.findIndex(effect => effect.method === action.method &&
+        matchesValue(effect.args, action.args) && matchesValue(effect.result, action.result));
+      if (index < 0) return false;
+      available.splice(index, 1);
+      return true;
+    });
+    const latest = proof.readbacks?.findLast(view => view.save.id === proof.selected);
+    const successes = actions.filter(action => ["withdrawn", "staged"].includes(action.result.status));
+    const needsWithdrawal = expected.turn === "withdrawn" || expected.turn === "replaced";
+    const needsStage = expected.turn === "staged" || expected.turn === "replaced";
+    const withdrawal = needsWithdrawal ? successes[0] : undefined;
+    const stage = needsStage ? successes.at(-1) : undefined;
+    const retired = withdrawal && proof.readbacks?.find(view =>
+      view.save.id === proof.selected && view.observation === withdrawal.args[1])?.pending;
+    const observedStageBasis = stage && (withdrawal?.result.view ?? proof.readbacks?.find(view =>
+      view.save.id === proof.selected && view.observation === stage.args[1]));
+    requireEvidence(catalogs.length > 0 && catalogs.length === proof.catalogs?.length &&
+      catalogs.every(({ args, result }, index) => matchesValue(args, []) && matchesValue(result, proof.catalogs[index])) &&
+      reads.length > 0 && reads.length === proof.readbacks?.length && reads.every(({ args, result }, index) =>
+        matchesValue(args, [proof.readbacks[index].save.id]) && matchesValue(result, proof.readbacks[index])) &&
+      exactTurns && successes.length === Number(needsWithdrawal) + Number(needsStage) &&
+      successes.every(action => action.args[0] === proof.selected && action.result.view.save.id === proof.selected) &&
+      (!needsWithdrawal || withdrawal?.method === "withdraw" && withdrawal.result.status === "withdrawn" &&
+        retired && withdrawal.result.view.pending === null && retired.id !== latest?.pending?.id) &&
+      (!needsStage || stage?.method === "stage" && stage.result.status === "staged" &&
+        observedStageBasis?.observation === stage.args[1] && observedStageBasis.pending === null &&
+        isDeepStrictEqual(stage.args[2], expected.proposal) && stage.result.view.pending?.text === expected.text) &&
+      (!successes.length || isDeepStrictEqual(successes.at(-1).result.view, latest)) &&
+      isDeepStrictEqual(latest, proof.final) && proof.retiredInputIsIdempotent === true &&
+      outcome?.save === proof.selected && outcome.observation === latest?.observation &&
+      isDeepStrictEqual(outcome.pending, latest?.pending) && outcome.disposition === expected.turn,
+      "Expected exact live player observations and the verified durable turn and handoff");
   } else if (world.kind === "templateMigration") {
     const names = new Set(["templateMigration", "templateOffer", "templateCandidatePrepare", "templateCandidateReview"]);
     const traced = effects.filter(({ service }) => names.has(service));
