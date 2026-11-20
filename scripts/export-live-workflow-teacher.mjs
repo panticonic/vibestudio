@@ -10,6 +10,14 @@ import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
 
 const sharedProgram = "skills/vibestudio-workflows/runWorkflow.nl";
 const templateGoalDomains = {
+  "build-incident": {
+    namespace: "vibestudio:retained-build",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-build-incidents-managed.ts" },
+    callable: "reviewRetainedBuildIncident",
+    skill: "buildIncident",
+    checks: ["exactOwnedCheckpointCatalog", "nativeObservationAndProvenance", "verifiedPerformanceAndDiagnosis",
+      "exactFindingAndEvidenceBoundary", "exactLocalHandoff", "protectedWorkingAndMain"],
+  },
   "provider-handoff": {
     namespace: "vibestudio:retained-provider",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-provider-handoff-managed.ts" },
@@ -1280,13 +1288,13 @@ export async function loadLiveTeacherCases(checkouts) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
     const distinctGoals = new Set();
-    const { openGoalWorlds, openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], newsGoalWorlds = [],
+    const { openGoalWorlds, openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], newsGoalWorlds = [],
       spectroliteGoalWorlds = [], openGoalGoogleWorlds = [], openGoalPersonalWorlds = [],
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
       openTerminalWorlds = [], openOwnedResearchWorlds = [], providerHandoffWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
-    for (const assignment of [...openGoalWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
+    for (const assignment of [...openGoalWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
       ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
@@ -7593,6 +7601,31 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
         proof.initial && proof.latest && exercise.report.outcome?.disposition === world.expected.disposition,
       "Expected scoped monitor scheduling, current revision readback and verified recovery"
     );
+  } else if (world.kind === "build-incident") {
+    const outcome = exercise.report.outcome;
+    const strict = new Set(["buildIncidentCatalog", "buildPerformance", "buildIncidentHandoff"]);
+    const observed = effects.filter(effect => strict.has(effect.service) && !effect.error);
+    const receipts = proof.effects?.slice();
+    const currentChild = exercise.calls.find(call => call.record === skill);
+    const profiles = exercise.calls.filter(({ record }) => record.parent_call_id === currentChild?.callId &&
+      record.definition?.name === "reviewBuildPerformance" && record.outcome === "done");
+    const requested = [outcome?.current, outcome?.baseline].filter(Boolean);
+    requireEvidence(Array.isArray(receipts) && receipts.length === observed.length && observed.every(({ service, method, args, result }) => {
+      const index = receipts.findIndex(item => item.service === service && item.method === method &&
+        matchesValue(args, item.args) && matchesValue(result, item.result));
+      if (index < 0) return false;
+      receipts.splice(index, 1);
+      return true;
+    }) && isDeepStrictEqual(outcome?.subject, proof.subject) &&
+      isDeepStrictEqual(outcome?.current?.checkpoint ?? null, proof.current) &&
+      isDeepStrictEqual(outcome?.baseline?.checkpoint ?? null, proof.baseline) &&
+      isDeepStrictEqual(outcome?.handoff, proof.handoff) && profiles.length === requested.length &&
+      requested.every(({ checkpoint, review }) => {
+        const request = proof.effects.find(effect => effect.service === "buildIncidentCatalog" &&
+          effect.method === "open" && effect.args[0] === checkpoint.id)?.result?.request;
+        return request && profiles.some(({ record }) => matchesValue(record.inputs?.request, request) &&
+          matchesValue(record.output, review));
+      }), "Expected both retained source authority and exact native performance hierarchy evidence");
   } else if (world.kind === "system-diagnostics") {
     const outcome = exercise.report.outcome;
     const calls = (service, method) => effects.filter(effect => effect.service === service && effect.method === method && !effect.error);
