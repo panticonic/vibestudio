@@ -1000,8 +1000,8 @@ export async function loadLiveTeacherCases(checkouts) {
   if (openGoalSource) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
-    const { openGoalWorlds, browserGoalWorlds = [] } = imported.default ?? imported;
-    for (const assignment of [...openGoalWorlds, ...browserGoalWorlds]) {
+    const { openGoalWorlds, browserGoalWorlds = [], suiteGoalWorlds = [] } = imported.default ?? imported;
+    for (const assignment of [...openGoalWorlds, ...browserGoalWorlds, ...suiteGoalWorlds]) {
       const split = assignment.split ?? "train";
       const sourceGroups = [assignment.sourceGroup, assignment.relatedSourceGroup].filter(Boolean);
       const scenario = `open-goal-${assignment.id}`;
@@ -1017,6 +1017,7 @@ export async function loadLiveTeacherCases(checkouts) {
         family: `workspace-open-user-goal-${assignment.kind}`,
         workspace: "examples",
         namespace: assignment.kind === "browser" ? "vibestudio:browser" :
+          assignment.kind === "suite" ? "vibestudio:workspace-verification" :
           assignment.kind === "research" ? "vibestudio:web-research" : "vibestudio:workspace-edit",
         group: assignment.sourceGroup,
         sourceGroups,
@@ -1024,8 +1025,9 @@ export async function loadLiveTeacherCases(checkouts) {
         interaction: "open-user-goal",
         program: "skills/open-user-goal/runUserGoal.nl",
         root: "runUserGoal",
-        validator: { template: "system-testing", path: assignment.kind === "browser"
-          ? "skills/system-testing/open-goal-browser-managed.ts" : "skills/system-testing/open-goal-managed.ts" },
+        validator: { template: "system-testing", path: `skills/system-testing/open-goal${[
+          "browser", "suite",
+        ].includes(assignment.kind) ? `-${assignment.kind}` : ""}-managed.ts` },
         assignment,
         evidence: openGoalEvidence,
       });
@@ -6663,16 +6665,23 @@ function openGoalEvidence(execution, exercise, _scenario, workflow) {
   const researchChecks = ["discoveredSources", "exactPageReadback", "answeredGoal", "groundedCitations", "requiredEvidence"];
   const editChecks = ["discoveredWorkspace", "recoveredConcurrentEdit", "exactDocumentReadback", "preservedOtherDocuments", "reportedStoredRevision"];
   const browser = kind === "browser";
+  const suite = kind === "suite";
+  const suiteRuns = suite && workflow.assignment.expected.choice.mode === "verify";
   const browserChanges = browser && Boolean(workflow.assignment.expected.changes?.length);
   const checks = browser ? [
     "discoveredBrowser", "readBackBrowser", "exactPanelOutcome", "respectedBrowserAuthority",
     "reportedVisibleRows", "protectedHeadUnchanged",
+  ] : suite ? [
+    "discoveredSuites", "selectedAuthorizedSuite", "currentSuitePlan", "identifiedApproval", "checkedSuiteReceipt",
   ] : [
     ...(kind === "workspace-edit" ? [] : researchChecks),
     ...(kind === "research" ? [] : editChecks),
   ];
   const methods = browser ? [
     ["goalBrowser", "inspect"], ...(browserChanges ? [["goalBrowser", "activate"]] : []),
+  ] : suite ? [
+    ["goalSuite", "discover"], ["goalSuite", "prepare"], ["testSuitePlanRead", "resolve"],
+    ...(suiteRuns ? [["testSuiteVerificationRun", "run"]] : []),
   ] : [
     ...(kind === "workspace-edit" ? [] : [["goalDiscovery", "search"], ["web", "fetch"]]),
     ...(kind === "research" ? [] : [["goalWorkspace", "list"], ["goalWorkspace", "read"], ["goalWorkspace", "revise"]]),
@@ -6702,6 +6711,19 @@ function openGoalEvidence(execution, exercise, _scenario, workflow) {
         (browserChanges || !effects.some((effect) =>
           effect.service === "goalBrowser" && effect.method === "activate")),
       "Expected retained CDP bindings and an operation inside the user's browser authority"
+    );
+  }
+  if (suite) {
+    const { expected } = workflow.assignment;
+    requireEvidence(
+      isDeepStrictEqual(proof.selected, expected.choice) && isDeepStrictEqual(exercise.report?.selection, proof.selected) &&
+        proof.plan?.contextId === proof.contextId && proof.plan?.runtime === expected.runtime &&
+        proof.routes?.some((route) => route.id === expected.choice.routeId && route.stateHash === proof.plan.stateHash) &&
+        (suiteRuns ? proof.runAttempts === 1 && proof.execution?.status === expected.status &&
+          proof.execution?.receipt?.stateHash === proof.plan.stateHash &&
+          isDeepStrictEqual(exercise.report?.review?.execution, proof.execution) :
+          proof.runAttempts === 0 && !effects.some((effect) => effect.service === "testSuiteVerificationRun")),
+      "Expected a current suite receipt or an inspection without execution"
     );
   }
   if (kind === "research-and-edit") {

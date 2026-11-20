@@ -1903,7 +1903,7 @@ describe("FsService", () => {
       expect(calls).toEqual([{ contextId: "ctx-glob-demand", repos: ["panels/foo"] }]);
     });
 
-    function makeChainedExtensionCtx(contextId: string): ServiceContext {
+    function makeChainedExtensionCtx(contextId: string, ready = true): ServiceContext {
       const ctx = makeExtensionCtx("@workspace-extensions/file-tools");
       ctx.chainCaller = {
         callerId: `do:workers/agent-worker:AiChatWorker:${contextId}`,
@@ -1912,7 +1912,7 @@ describe("FsService", () => {
         effectiveVersion: "ev-1",
       };
       registerContext(ctx.chainCaller.callerId, "do", contextId);
-      mkdirSync(path.join(tmpRoot, contextId), { recursive: true });
+      if (ready) mkdirSync(path.join(tmpRoot, contextId), { recursive: true });
       return ctx;
     }
 
@@ -1929,6 +1929,30 @@ describe("FsService", () => {
       ).resolves.toBe(path.join(tmpRoot, "ctx-s4"));
 
       expect(calls).toEqual([{ contextId: "ctx-s4", repos: ["panels/chat"] }]);
+    });
+
+    it("lets a chained extension explicitly materialize a deferred context", async () => {
+      const { bridge, calls } = makeMaterializeBridge({ materialize: true });
+      const ensureProjection = bridge.ensureMaterialized;
+      bridge.ensureMaterialized = async (contextId, repos) => {
+        mkdirSync(path.join(tmpRoot, contextId), { recursive: true });
+        await ensureProjection(contextId, repos);
+      };
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
+        contextAuthority: { kind: "semantic", bridge },
+      });
+      const ctx = makeChainedExtensionCtx("ctx-deferred-native-suite", false);
+      await expect(svc.handleCall(ctx, "nativeRoots", [])).rejects.toMatchObject({
+        code: "ENOTREADY",
+      });
+      await expect(
+        svc.handleCall(ctx, "ensureMaterialized", ["packages/lib/index.test.ts"])
+      ).resolves.toBe(path.join(tmpRoot, "ctx-deferred-native-suite"));
+      expect(calls).toEqual([{ contextId: "ctx-deferred-native-suite", repos: ["packages/lib"] }]);
+      await expect(svc.handleCall(ctx, "nativeRoots", [])).resolves.toMatchObject({
+        source: path.join(tmpRoot, "ctx-deferred-native-suite"),
+      });
     });
 
     it("ensureMaterialized RPC ignores direct-disk scratch paths", async () => {

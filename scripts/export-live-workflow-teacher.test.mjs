@@ -1030,6 +1030,46 @@ test("open browser goal export retains CDP evidence and rejects a replaced gener
   );
 });
 
+test("open suite goal export requires the recorded current suite receipt", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(path.resolve(import.meta.dirname, ".."));
+  const cases = await loadLiveTeacherCases(checkouts);
+  entry.test.name = "open-goal-verify-adventure-world-state";
+  const workflow = cases.get(entry.test.name);
+  const { id, goal, expected } = workflow.assignment;
+  const pins = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(options.pins, JSON.stringify({ ...pins, workspace: workflow.workspace }));
+  const run = diagnostics.natlangTeacher;
+  run.programPath = workflow.program;
+  const [root, child] = run.calls;
+  const encoded = JSON.stringify(goal);
+  root.record.definition.name = "runUserGoal";
+  root.record.inputs = {
+    goal: { complete: true, bytes: Buffer.byteLength(encoded), hash: createHash("sha256").update(encoded).digest("hex") },
+  };
+  child.record.definition.name = "verifyWorkspaceSuite";
+  child.record.effects = [
+    ["goalSuite", "discover"], ["goalSuite", "prepare"], ["testSuitePlanRead", "resolve"], ["testSuiteVerificationRun", "run"],
+  ].map(([service, method]) => ({ service, method }));
+  const plan = { contextId: "ctx", runtime: "workerd", stateHash: "current" };
+  const execution = { status: "passed", receipt: { stateHash: "current" } };
+  run.report = { selection: expected.choice, review: { execution } };
+  diagnostics.openGoalVerification = {
+    passed: true, caseId: id, contextId: "ctx", goal, selected: expected.choice,
+    plan, routes: [{ id: "adventure", stateHash: "current" }], execution: structuredClone(execution), runAttempts: 1,
+    checks: { discoveredSuites: true, selectedAuthorizedSuite: true, currentSuitePlan: true,
+      identifiedApproval: true, checkedSuiteReceipt: true },
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  run.report.review.execution.receipt.stateHash = "prior-revision";
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: path.join(path.dirname(options.out), "stale") }),
+    /current suite receipt/u
+  );
+});
+
 test("panel health export rejects an old console record cited after recovery", async (t) => {
   const { options, diagnostics, entry, save } = await fixture(t);
   const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(

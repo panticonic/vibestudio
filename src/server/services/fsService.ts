@@ -343,6 +343,17 @@ function scopeForPath(wsRel: string): RepoPath[] | "all" | null {
   return null;
 }
 
+function extensionProjectionScope(arg: unknown): RepoPath[] | "all" | null {
+  if (arg === "all") return "all";
+  const repos = new Set<RepoPath>();
+  for (const path of Array.isArray(arg) ? arg : [arg]) {
+    const scope = scopeForPath(String(path));
+    if (scope === "all") return "all";
+    for (const repo of scope ?? []) repos.add(repo);
+  }
+  return repos.size ? [...repos] : null;
+}
+
 /** The path a disk-reading fs method scopes to (its search/target path), or null
  *  for methods that don't read managed content. */
 function readScopePath(method: string, args: unknown[]): string | null {
@@ -1139,7 +1150,11 @@ export class FsService {
    *   the args array). Shell callers must name an existing
    *   context; server callers may create one on the fly.
    */
-  private async resolveContextRoot(ctx: ServiceContext, args: unknown[]): Promise<FsCallScope> {
+  private async resolveContextRoot(
+    ctx: ServiceContext,
+    args: unknown[],
+    demandProjection = false
+  ): Promise<FsCallScope> {
     let contextId: string;
     let panelId: string;
 
@@ -1173,16 +1188,20 @@ export class FsService {
         }
         contextId = cid;
         const state = this.contextFolderManager.getContextFolderState(contextId);
-        if (state.status !== "ready") {
+        if (state.status !== "ready" && !demandProjection) {
           throw codedError(
             "ENOTREADY",
             `Context folder ${contextId} is ${state.status}; scoped extension filesystem calls must wait for context materialization`
           );
         }
-        const root = await this.contextFolderManager.ensureContextFolder(contextId);
+        const root = demandProjection
+          ? this.contextFolderManager.contextSourcePath(contextId)
+          : await this.contextFolderManager.ensureContextFolder(contextId);
         return {
           sourceRoot: root,
-          root: await this.contextFolderManager.ensureContextScratch(contextId),
+          root: demandProjection
+            ? this.contextFolderManager.contextScratchPath(contextId)
+            : await this.contextFolderManager.ensureContextScratch(contextId),
           panelId,
           ownerCallerIds: this.callerOwners(ctx),
           contextId,
@@ -2087,8 +2106,13 @@ export class FsService {
   ): Promise<unknown> {
     // Clone args so shift() in resolveContextRoot doesn't mutate the original
     const args = [...rawArgs];
+    const projection = method === "ensureMaterialized" ? extensionProjectionScope(args[0]) : null;
     const scopeStartedAt = Date.now();
-    const scope = await this.resolveContextRoot(ctx, args);
+    const scope = await this.resolveContextRoot(
+      ctx,
+      args,
+      projection !== null && this.contextAuthority.kind === "semantic"
+    );
     this.emitTelemetry({
       method,
       phase: "scope",
@@ -2115,26 +2139,8 @@ export class FsService {
           "EACCES",
           "ensureMaterialized is available only to scoped native extensions"
         );
-      if (scope.contextId && bridge) {
-        const arg = args[0];
-        let repos: RepoPath[] | "all";
-        if (arg === "all") {
-          repos = "all";
-        } else {
-          const paths = Array.isArray(arg) ? arg.map(String) : [String(arg)];
-          const set = new Set<RepoPath>();
-          let any = false;
-          for (const p of paths) {
-            const s = scopeForPath(p.replace(/^\/+/, ""));
-            if (s === null) continue;
-            if (s === "all") any = true;
-            else for (const r of s) set.add(r);
-          }
-          if (!any && set.size === 0) return scope.sourceRoot;
-          repos = any ? "all" : [...set];
-        }
-        await bridge.ensureMaterialized(scope.contextId, repos);
-      }
+      if (scope.contextId && bridge && projection)
+        await bridge.ensureMaterialized(scope.contextId, projection);
       return scope.sourceRoot;
     }
 
