@@ -433,6 +433,11 @@ panel's loaded image to the stored asset and canonical scene signature. The
 Embassy case checks an opening with the optional artwork configuration removed
 in the disposable context. Run
 `adventure-review-oracle-qualification` in Examples for the model-free check.
+Regency tasks compare the saved realm with a one- or three-month forecast
+computed by the installed policy engine. The Natlang settlement and economy
+reviewers cite the assigned source for each claim. Run
+`regency-review-oracle-qualification` in Examples to check the horizon, final
+accounts, and preservation of the saved realm without invoking a model.
 Spectrolite navigation reviews retain the browser-observed source and destination of each
 wiki-link hop. The navigation finding binds the whole route to the final canonical document,
 and any preview finding refers to that same editor and revision. Draft reviews compare the

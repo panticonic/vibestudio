@@ -114,6 +114,7 @@ test("authored template worlds flow into the collector without losing original s
       ["github-setup-worlds", "githubSetupWorlds", []],
       ["github-diagnosis-worlds", "managedGitHubDiagnosisWorlds", []],
       ["adventure-review-worlds", "managedAdventureWorlds", []],
+      ["regency-review-worlds", "managedRegencyWorlds", []],
       ["personal-resume-worlds", "personalResumeWorlds", []],
       ["template-release-worlds", "templateReleaseWorlds", []],
       ["template-candidate-worlds", "templateCandidateManagedWorlds", []],
@@ -3204,6 +3205,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["github-setup-worlds", "export const githubSetupWorlds = [];"],
       ["github-diagnosis-worlds", "export const managedGitHubDiagnosisWorlds = [];"],
       ["adventure-review-worlds", "export const managedAdventureWorlds = [];"],
+      ["regency-review-worlds", "export const managedRegencyWorlds = [];"],
       ["template-release-worlds", "export const templateReleaseWorlds = [];"],
       ["template-candidate-worlds", "export const templateCandidateManagedWorlds = [];"],
       ["delivery-history-worlds", "export const deliveryHistoryWorlds = []; export const chatDeliveryWorlds = [];"],
@@ -4688,6 +4690,70 @@ test("client admission export preserves unavailable required capabilities", (t) 
 test("client admission export preserves denied optional capabilities", (t) =>
   checkClientCapabilityCase(t, "android-candidate-requests-optional-menu", "review-candidate")
 );
+
+test("Regency export keeps the committed claim and forecast evidence distinct", async () => {
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const name = "regency-review-live-one-month-ledger-and-reserves";
+  const workflow = (await loadLiveTeacherCases(checkouts)).get(name);
+  const { assignment } = workflow;
+  const ref = (value) => {
+    const json = JSON.stringify(value);
+    return { complete: true, hash: createHash("sha256").update(json).digest("hex"), bytes: Buffer.byteLength(json) };
+  };
+  const contextId = "owned-realm";
+  const realm = "natlang-realm-e7e43702-5e20-4592-ac74-06605c3776da";
+  const saved = { id: realm + ":saved", month: 0, treasury: 120 };
+  const forecast = { id: realm + ":forecast:1", month: 1, treasury: assignment.projectedTreasury };
+  const observed = { saved, forecast };
+  const components = assignment.expected.map((decision, index) => ({
+    decision, finding: "finding-" + index, evidenceIds: [saved.id, forecast.id],
+  }));
+  const report = { decision: "contradicted", finding: "criteria-contradicted", evidenceIds: [saved.id, forecast.id], components };
+  const execution = {
+    provenance: { contextId },
+    diagnostics: { managedRegencyReview: { contextId, verification: {
+      passed: true, realm, observed, expected: report,
+      checks: Object.fromEntries(["exactBasis", "openingIntact", "exactForecast", "assignedClaims", "exactReport"].map((key) => [key, true])),
+    } } },
+  };
+  const call = (callId, parent, name, fields = {}) => ({
+    callId, record: { parent_call_id: parent, outcome: "done", definition: { name }, ...fields },
+  });
+  const branches = assignment.request.claims.flatMap((claim, index) => {
+    const settlement = claim.kind === "settlement";
+    const values = settlement ? {
+      check: claim.check, current: claim.source === "saved" ? saved : forecast,
+    } : { check: claim.check, before: saved, after: forecast, basis: "forecast", assertCommitted: claim.assertCommitted };
+    const inputs = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, ref(value)]));
+    return [
+      call("claim-" + index, "live", "qualifyClaim", { inputs: { claim: ref(claim), observed: ref(observed) }, output: ref(components[index]) }),
+      call("review-" + index, "claim-" + index, "reviewRealm"),
+      call("leaf-" + index, "review-" + index, settlement ? "inspectSettlement" : "compareEconomy", { inputs, output: ref(components[index]) }),
+    ];
+  });
+  const observation = { service: "realmRead", method: "observe", args: ref([1]), result: ref(observed) };
+  const exercise = {
+    report,
+    rootCallIds: ["root"],
+    calls: [
+      call("root", null, "runWorkflow"),
+      call("review", "root", "reviewExample", { inputs: { request: ref(assignment.request) }, output: ref(report) }),
+      call("live", "review", "inspectLiveRealm"),
+      call("observe", "live", "readSettlement", { effects: [observation] }),
+      call("combine", "live", "combineFindings", { output: ref(report) }),
+      ...branches,
+    ],
+  };
+  assert.ok(workflow.evidence(execution, exercise, name, workflow));
+  const leaf = branches.at(-1);
+  leaf.record.inputs.basis = ref("observed");
+  assert.throws(() => workflow.evidence(execution, exercise, name, workflow), /saved or projected evidence/);
+  leaf.record.inputs.basis = ref("forecast");
+  observation.args = ref([3]);
+  assert.throws(() => workflow.evidence(execution, exercise, name, workflow), /saved or projected evidence/);
+});
 
 test("Adventure export joins the loaded cover to the saved journey and requires each nested reviewer", async () => {
   const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(

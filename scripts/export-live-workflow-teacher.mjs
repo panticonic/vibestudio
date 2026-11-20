@@ -646,6 +646,15 @@ const adventureReviewWorkflow = {
   root: "reviewExample",
   evidence: adventureReviewEvidence,
 };
+const regencyReviewWorkflow = {
+  family: "examples-live-regency-forecast",
+  workspace: "examples",
+  namespace: "vibestudio:examples",
+  group: "regency-saved-and-projected-accounts",
+  validator: { template: "examples", path: "skills/examples-review-fixtures/live-realm.ts" },
+  root: "reviewExample",
+  evidence: regencyReviewEvidence,
+};
 const tendrilWorkflow = {
   family: "workspace-tendril-presentation",
   namespace: "vibestudio:tendrils",
@@ -837,6 +846,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedTerminalEvidenceWorlds },
     { managedGitHubDiagnosisWorlds },
     { managedAdventureWorlds },
+    { managedRegencyWorlds },
   ] = await Promise.all(
     [
       "content-project-worlds.ts",
@@ -919,6 +929,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "terminal-evidence-worlds.ts",
       "github-diagnosis-worlds.ts",
       "adventure-review-worlds.ts",
+      "regency-review-worlds.ts",
     ].map(async (file) => {
       const imported = await import(pathToFileURL(path.join(directory, file)).href);
       return imported.default ?? imported;
@@ -1432,6 +1443,9 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of managedAdventureWorlds) {
     cases.set(`adventure-review-live-${assignment.id}`, { ...adventureReviewWorkflow, assignment });
+  }
+  for (const assignment of managedRegencyWorlds) {
+    cases.set(`regency-review-live-${assignment.id}`, { ...regencyReviewWorkflow, assignment });
   }
   for (const { id, request, expected } of managedBrowserLibraryWorlds) {
     cases.set(`browser-library-live-${id}`, {
@@ -8248,6 +8262,72 @@ function spectroliteHandoffEvidence(execution, exercise, scenario, workflow) {
   return {
     world: review.world,
     checks: { ...review.checks, ...verification.checks },
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function regencyReviewEvidence(execution, exercise, _scenario, { assignment }) {
+  const fixture = execution.diagnostics.managedRegencyReview;
+  const { realm, observed, expected, checks, passed } = fixture?.verification ?? {};
+  const { saved, forecast } = observed ?? {};
+  const { request } = assignment;
+  const report = exercise.report;
+  requireEvidence(
+    typeof fixture?.contextId === "string" &&
+      fixture.contextId === execution.provenance?.contextId &&
+      passed === true &&
+      ["exactBasis", "openingIntact", "exactForecast", "assignedClaims", "exactReport"].every((key) => checks?.[key] === true) &&
+      /^natlang-realm-[0-9a-f-]{36}$/u.test(realm) &&
+      saved?.id === `${realm}:saved` && saved.month === 0 && saved.treasury === 120 &&
+      forecast?.id === `${realm}:forecast:${request.months}` && forecast.month === request.months &&
+      forecast.treasury === assignment.projectedTreasury &&
+      isDeepStrictEqual(report, expected) &&
+      isDeepStrictEqual(report?.components?.map(({ decision }) => decision), assignment.expected),
+    "Regency review must match the unchanged saved realm and its assigned forecast horizon"
+  );
+  const root = exercise.calls.find(({ callId }) => callId === exercise.rootCallIds[0]);
+  const children = (parent, name) => exercise.calls.filter(({ record }) =>
+    parent && record.parent_call_id === parent.callId &&
+    record.definition?.name === name && record.outcome === "done"
+  );
+  const [review] = children(root, "reviewExample");
+  const [inspect] = children(review, "inspectLiveRealm");
+  const [read] = children(inspect, "readSettlement");
+  const [combined] = children(inspect, "combineFindings");
+  const claims = children(inspect, "qualifyClaim");
+  const effects = exercise.calls.flatMap(({ record }) => record.effects ?? []);
+  const [observation] = effects;
+  requireEvidence(
+    matchesValue(review?.record.inputs?.request, request) &&
+      matchesValue(review?.record.output, report) &&
+      matchesValue(combined?.record.output, report) &&
+      effects.length === 1 && read?.record.effects?.includes(observation) &&
+      observation?.service === "realmRead" && observation.method === "observe" &&
+      !observation.error && matchesValue(observation.args, [request.months]) &&
+      matchesValue(observation.result, observed) &&
+      claims.length === request.claims.length &&
+      request.claims.every((claim, index) => claims.some((branch) => {
+        const [subtree] = children(branch, "reviewRealm");
+        const settlement = claim.kind === "settlement";
+        const [leaf] = children(subtree, settlement ? "inspectSettlement" : "compareEconomy");
+        const wanted = settlement ? {
+          check: claim.check, current: claim.source === "saved" ? saved : forecast,
+        } : {
+          check: claim.check, before: saved, after: forecast,
+          basis: "forecast", assertCommitted: claim.assertCommitted,
+        };
+        const verdict = report.components[index];
+        return matchesValue(branch.record.inputs?.claim, claim) &&
+          matchesValue(branch.record.inputs?.observed, observed) &&
+          Object.entries(wanted).every(([key, value]) => matchesValue(leaf?.record.inputs?.[key], value)) &&
+          matchesValue(branch.record.output, verdict) &&
+          matchesValue(leaf?.record.output, verdict);
+      })),
+    "Regency review must retain the live read and the saved or projected evidence passed to every nested reviewer"
+  );
+  return {
+    world: { context_id: fixture.contextId, case_id: assignment.id, realm },
+    checks,
     evidence: { workspace: { fixture } },
   };
 }
