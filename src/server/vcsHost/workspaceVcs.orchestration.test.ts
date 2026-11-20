@@ -24,7 +24,7 @@ import {
 } from "../services/blobstoreService.js";
 import { createProtectedRefStore } from "../services/protectedRefStore.js";
 import { createWorkspaceSemanticPort } from "../workspaceSourceProvider.js";
-import { workspaceParticipantIdentity } from "./workspaceHistoryHost.js";
+import { editWorkspaceParticipant, workspaceParticipantIdentity } from "./workspaceHistoryHost.js";
 import { WorkspaceRepositories } from "./workspaceRepositories.js";
 import { WorkspaceVcs } from "./workspaceVcs.js";
 
@@ -171,7 +171,25 @@ async function harness() {
     refs,
   };
   const vcs = new WorkspaceVcs(deps);
-  return { root, blobsDir, refs, vcs, deps };
+  const attachGcHistory = async (
+    readRoots: (owner: typeof TEST_PROVIDER) => string[] = () => [],
+    participants: string[] = []
+  ) => {
+    const canonical = { ...TEST_PROVIDER, objectKey: "canonical" };
+    const eventId = "event:gc-main";
+    vi.spyOn(refs, "readMainSemanticState").mockReturnValue({ kind: "event", eventId });
+    const dispatch = vi.fn(async (owner: typeof canonical, method: string) => {
+      switch (method) {
+        case "readHistoryMain": return { head: "main", eventId };
+        case "listHistoryAppliedPublications": return [];
+        case "listHistoryRetainedParticipants": return participants;
+        case "readHistoryContentRoots": return readRoots(owner);
+        default: throw new Error(`Unexpected history method ${method}`);
+      }
+    });
+    await vcs.attachParticipantHistory({ dispatch: { dispatch }, canonical });
+  };
+  return { root, blobsDir, refs, vcs, deps, attachGcHistory };
 }
 
 afterEach(async () => {
@@ -1259,12 +1277,10 @@ describe("WorkspaceVcs semantic host orchestration", () => {
   });
 
   it("keeps cached composed workspace views rooted during content GC", async () => {
-    const { blobsDir, vcs } = await harness();
+    const { blobsDir, vcs, attachGcHistory } = await harness();
     const cached = await putBytes(blobsDir, Buffer.from("cached-composed-view"));
     const unreachable = await putBytes(blobsDir, Buffer.from("unreachable"));
-    await vcs.attachGad({
-      contentGcRoots: vi.fn(async () => ({ contentRoots: [], contentHashes: [] })),
-    } as never);
+    await attachGcHistory();
     vi.spyOn(vcs.repositories, "collectCachedReachableDigests").mockReturnValue({
       treeDigests: [],
       contentDigests: [cached.digest],
@@ -1279,34 +1295,26 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     await expect(getBytes(blobsDir, unreachable.digest)).resolves.toBeNull();
   });
 
-  it("rechecks semantic roots before committing a GC epoch", async () => {
-    const { blobsDir, vcs } = await harness();
-    const retained = await putBytes(blobsDir, Buffer.from("materialized during preflight"));
-    const source = await putTree(
-      blobsDir,
-      [{ name: "index.ts", kind: "file", contentHash: retained.digest, mode: 0o100644 }],
-      { root: true }
-    );
-    const unreachable = await putBytes(blobsDir, Buffer.from("unreachable"));
-    let roots: string[] = [];
-    await vcs.attachGad({
-      contentGcRoots: vi.fn(async () => ({ contentRoots: roots, contentHashes: [] })),
-    } as never);
-
+  it("preserves content when a retained participant cannot report its roots", async () => {
+    const { blobsDir, vcs, attachGcHistory } = await harness();
+    const bytes = Buffer.from("retained by offline participant");
+    const retained = await putBytes(blobsDir, bytes);
+    const participant = `work-${"a".repeat(64)}`;
+    const failure = new Error("Retained participant could not be reached");
+    let offline = false;
+    await attachGcHistory((owner) => {
+      if (owner.objectKey !== participant) return [];
+      if (offline) throw failure;
+      return [retained.digest];
+    }, [participant]);
     const prepared = await vcs.prepareGc({ minAgeMs: 0, epoch: 1, executionSourceRoots: [] });
-    // This simulates a context materialization completing after the read-only
-    // preflight but before the destructive commit.
-    roots = [source.stateHash!];
-    await prepared.commit();
-
-    await expect(getBytes(blobsDir, retained.digest)).resolves.toEqual(
-      Buffer.from("materialized during preflight")
-    );
-    await expect(getBytes(blobsDir, unreachable.digest)).resolves.toBeNull();
+    offline = true;
+    await expect(prepared.commit()).rejects.toBe(failure);
+    await expect(getBytes(blobsDir, retained.digest)).resolves.toEqual(bytes);
   });
 
   it("keeps a retained execution source composition rooted during content GC", async () => {
-    const { blobsDir, vcs } = await harness();
+    const { blobsDir, vcs, attachGcHistory } = await harness();
     const retained = await putBytes(blobsDir, Buffer.from("retained build source"));
     const source = await putTree(
       blobsDir,
@@ -1314,9 +1322,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       { root: true }
     );
     const unreachable = await putBytes(blobsDir, Buffer.from("unreachable"));
-    await vcs.attachGad({
-      contentGcRoots: vi.fn(async () => ({ contentRoots: [], contentHashes: [] })),
-    } as never);
+    await attachGcHistory();
 
     await expect(
       vcs.runGc({
@@ -1332,11 +1338,9 @@ describe("WorkspaceVcs semantic host orchestration", () => {
   });
 
   it("fails closed when an execution source root is missing from the content store", async () => {
-    const { blobsDir, vcs } = await harness();
+    const { blobsDir, vcs, attachGcHistory } = await harness();
     const unreachable = await putBytes(blobsDir, Buffer.from("unreachable"));
-    await vcs.attachGad({
-      contentGcRoots: vi.fn(async () => ({ contentRoots: [], contentHashes: [] })),
-    } as never);
+    await attachGcHistory();
 
     await expect(
       vcs.runGc({
@@ -1359,9 +1363,6 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const archived = await putBytes(blobsDir, Buffer.from("saved during retirement"));
     const recent = await putBytes(blobsDir, Buffer.from("private after preparation"));
     const discarded = await putBytes(blobsDir, Buffer.from("unreferenced"));
-    await vcs.attachGad({
-      contentGcRoots: vi.fn(async () => ({ contentRoots: [], contentHashes: [] })),
-    } as never);
     const canonical = { ...TEST_PROVIDER, objectKey: "canonical" };
     const retiring = `work-${"a".repeat(64)}`;
     const active = `work-${"b".repeat(64)}`;
@@ -1393,13 +1394,13 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     await expect(getBytes(blobsDir, discarded.digest)).resolves.toBeNull();
   });
 
-  it("proves shared semantic, execution, and cached roots in one graph before GC", async () => {
-    const { blobsDir, vcs } = await harness();
+  it("proves protected main, execution, and cached roots in one graph before GC", async () => {
+    const { blobsDir, vcs, refs, attachGcHistory } = await harness();
     const sharedContent = await putBytes(blobsDir, Buffer.from("shared subtree content"));
     const sharedTree = await putTree(blobsDir, [
       { name: "shared.txt", kind: "file", contentHash: sharedContent.digest, mode: 0o100644 },
     ]);
-    const semanticRoot = await putTree(
+    const protectedRoot = await putTree(
       blobsDir,
       [{ name: "shared", kind: "dir", childHash: sharedTree.treeHash }],
       { root: true }
@@ -1420,14 +1421,12 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     );
     const unreachable = await putBytes(blobsDir, Buffer.from("unreachable"));
     const cachedView = await vcs.repositories.contentView([
-      { repoPath: "packages/cached", stateHash: semanticRoot.stateHash! },
+      { repoPath: "packages/cached", stateHash: protectedRoot.stateHash! },
     ]);
-    await vcs.attachGad({
-      contentGcRoots: vi.fn(async () => ({
-        contentRoots: [semanticRoot.stateHash!],
-        contentHashes: [],
-      })),
-    } as never);
+    await attachGcHistory();
+    vi.spyOn(refs, "listMains").mockReturnValue([
+      { repoPath: "packages/published", contentRoot: protectedRoot.stateHash!, updatedAt: 1 },
+    ]);
 
     const collect = vi.spyOn(blobstoreService, "collectTreeReachableDigestsBatch");
     await expect(
@@ -1444,7 +1443,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     expect(collect).toHaveBeenCalledWith(
       blobsDir,
       expect.arrayContaining([
-        semanticRoot.stateHash,
+        protectedRoot.stateHash,
         executionRoot.stateHash,
         cachedView.stateHash,
       ]),
@@ -1460,7 +1459,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
   });
 
   it("evicts a missing cached composition during the shared GC proof", async () => {
-    const { blobsDir, vcs } = await harness();
+    const { blobsDir, vcs, attachGcHistory } = await harness();
     const content = await putBytes(blobsDir, Buffer.from("cached source"));
     const source = await putTree(
       blobsDir,
@@ -1473,9 +1472,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const cachedRoots = vcs.repositories.cachedViewRoots();
     expect(cachedRoots).toHaveLength(1);
     await fsp.unlink(blobPath(blobsDir, cachedRoots[0]!.stateHash.slice("state:".length)));
-    await vcs.attachGad({
-      contentGcRoots: vi.fn(async () => ({ contentRoots: [], contentHashes: [] })),
-    } as never);
+    await attachGcHistory();
 
     await expect(
       vcs.prepareGc({ minAgeMs: 0, epoch: 1, executionSourceRoots: [] })
@@ -1484,7 +1481,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
   });
 
   it("keeps cache views admitted after the GC root snapshot out of that batch", async () => {
-    const { blobsDir, vcs } = await harness();
+    const { blobsDir, vcs, attachGcHistory } = await harness();
     const initialContent = await putBytes(blobsDir, Buffer.from("initial cached source"));
     const initialSource = await putTree(
       blobsDir,
@@ -1495,9 +1492,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       { repoPath: "packages/cached", stateHash: initialSource.stateHash! },
     ]);
     const initialCachedRoots = vcs.repositories.cachedViewRoots();
-    await vcs.attachGad({
-      contentGcRoots: vi.fn(async () => ({ contentRoots: [], contentHashes: [] })),
-    } as never);
+    await attachGcHistory();
 
     let started!: () => void;
     const batchStarted = new Promise<void>((resolve) => {
@@ -1539,16 +1534,17 @@ describe("WorkspaceVcs semantic host orchestration", () => {
   });
 
   it("serializes a cache-miss composition with the final GC proof and sweep", async () => {
-    const { blobsDir, refs, vcs } = await harness();
+    const { blobsDir, refs, vcs, attachGcHistory } = await harness();
     const sourceContent = await putBytes(blobsDir, Buffer.from("source for composed view"));
     const source = await putTree(
       blobsDir,
       [{ name: "index.ts", kind: "file", contentHash: sourceContent.digest, mode: 0o100644 }],
       { root: true }
     );
-    await vcs.attachGad({
-      contentGcRoots: vi.fn(async () => ({ contentRoots: [source.stateHash!], contentHashes: [] })),
-    } as never);
+    await attachGcHistory();
+    vi.spyOn(refs, "listMains").mockReturnValue([
+      { repoPath: "packages/published", contentRoot: source.stateHash!, updatedAt: 1 },
+    ]);
     const repositories = [{ repoPath: "packages/old-scaffold", stateHash: source.stateHash! }];
     const otherCache = new WorkspaceRepositories({
       blobsDir,
@@ -1603,18 +1599,17 @@ describe("WorkspaceVcs semantic host orchestration", () => {
   });
 
   it("joins every invalid strict GC root before refusing the sweep", async () => {
-    const { blobsDir, vcs } = await harness();
+    const { blobsDir, vcs, attachGcHistory } = await harness();
     const unreachable = await putBytes(blobsDir, Buffer.from("unreachable"));
     const missingA = `state:${"a".repeat(64)}`;
     const missingB = `state:${"b".repeat(64)}`;
-    await vcs.attachGad({
-      contentGcRoots: vi.fn(async () => ({
-        contentRoots: [missingA, missingB],
-        contentHashes: [],
-      })),
-    } as never);
+    await attachGcHistory();
 
-    const failure = await vcs.runGc({ minAgeMs: 0, epoch: 1, executionSourceRoots: [] }).then(
+    const failure = await vcs.runGc({
+      minAgeMs: 0,
+      epoch: 1,
+      executionSourceRoots: [{ stateHash: missingA, repoPath: null }, { stateHash: missingB, repoPath: null }],
+    }).then(
       () => null,
       (error: unknown) => error
     );
@@ -1628,7 +1623,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
   });
 
   it("fails closed before sweeping when an execution source closure is corrupt", async () => {
-    const { blobsDir, vcs } = await harness();
+    const { blobsDir, vcs, attachGcHistory } = await harness();
     const retained = await putBytes(blobsDir, Buffer.from("retained build source"));
     const source = await putTree(
       blobsDir,
@@ -1637,9 +1632,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     );
     const unreachable = await putBytes(blobsDir, Buffer.from("unreachable"));
     await fsp.unlink(blobPath(blobsDir, retained.digest));
-    await vcs.attachGad({
-      contentGcRoots: vi.fn(async () => ({ contentRoots: [], contentHashes: [] })),
-    } as never);
+    await attachGcHistory();
 
     await expect(
       vcs.prepareGc({
@@ -2140,50 +2133,46 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     expect(await getBytes(blobsDir, sha256Hex(valid))).toBeNull();
   });
 
-  it("protects prepared content from GC until its semantic acknowledgement commits", async () => {
-    const { blobsDir, vcs } = await harness();
-    const bytes = Buffer.from("content awaiting semantic commit");
+  it("protects prepared native content until its participant mutation commits", async () => {
+    const { blobsDir, vcs, attachGcHistory } = await harness();
+    const bytes = Buffer.from("content awaiting participant commit");
     const contentHash = sha256Hex(bytes);
+    const owner = { ...TEST_PROVIDER, objectKey: `work-${"b".repeat(64)}` };
+    const edit = editInput();
+    const cause = { parent: null };
+    const { workingHead: _prior, ...result } = mutationResult(edit);
     let committed = false;
-    let acknowledgeStarted!: () => void;
-    const started = new Promise<void>((resolve) => {
-      acknowledgeStarted = resolve;
-    });
-    let finishAcknowledgement!: () => void;
-    const finish = new Promise<void>((resolve) => {
-      finishAcknowledgement = resolve;
-    });
-    const call = vi.fn(async (method: string) => {
-      if (method === "vcsContentGcRoots")
-        return { contentRoots: [], contentHashes: committed ? [contentHash] : [] };
-      if (method === "vcsEdit")
+    let applicationStarted!: () => void;
+    let finishApplication!: () => void;
+    const started = new Promise<void>((resolve) => { applicationStarted = resolve; });
+    const finish = new Promise<void>((resolve) => { finishApplication = resolve; });
+    const dispatch = vi.fn(async (_owner: typeof owner, method: string) => {
+      if (method === "planHistoryEdit") {
         return {
-          kind: "host-content",
-          request: {
-            kind: "prepare-semantic-content",
-            operation: "edit",
-            input: {},
-            ingress: {
-              causalParent: null,
-            },
-            blobs: [{ contentHash, base64: bytes.toString("base64") }],
-          },
+          kind: "planned",
+          command: { commandId: edit.commandId, method: "edit", requestDigest: "request", cause },
+          application: {},
+          blobs: [{ contentHash, base64: bytes.toString("base64") }],
+          result,
         };
-      if (method === "vcsSemanticContentAck") {
-        acknowledgeStarted();
+      }
+      if (method === "applyHistoryApplication") {
+        applicationStarted();
         await finish;
         committed = true;
-        return { kind: "complete", result: mutationResult(editInput()) };
+        return { head: "working", value: { kind: "application", applicationId: result.applicationId } };
       }
-      throw new Error(`unexpected ${method}`);
+      throw new Error(`Unexpected participant call ${method}`);
     });
-    await vcs.attachGad(providerFromWireCall(call));
+    await attachGcHistory((reader) => reader.objectKey === owner.objectKey && committed
+      ? [contentHash]
+      : [], [owner.objectKey]);
     const gc = await vcs.prepareGc({ minAgeMs: 0, epoch: 1, executionSourceRoots: [] });
-    const edit = vcs.semanticDirectCall("vcsEdit", editInput());
+    const mutation = editWorkspaceParticipant({ dispatch: { dispatch }, owner, head: "head", edit, cause, blobsDir });
     await started;
     const sweep = gc.commit();
-    finishAcknowledgement();
-    await Promise.all([edit, sweep]);
+    finishApplication();
+    await Promise.all([mutation, sweep]);
     expect(await getBytes(blobsDir, contentHash)).toEqual(bytes);
   });
 

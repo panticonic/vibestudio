@@ -263,7 +263,6 @@ export const GAD_WIRE_METHOD_NAMES = [
   "vcsSemanticHostReadAck",
   "vcsSemanticContentAck",
   "vcsPendingSemanticEffects",
-  "vcsContentGcRoots",
   "vcsReferencesReachable",
   "vcsContextMaterializationCommand",
   "resolveRef",

@@ -1971,19 +1971,6 @@ const gadInternalWireMethods = defineServiceMethods({
     returns: z.array(semanticEffectSchema),
     agentFacing: false,
   },
-  vcsContentGcRoots: {
-    website: {
-      kind: "closed",
-      reason:
-        "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
-    } as const,
-    description: "List content roots retained by semantic state.",
-    args: z.tuple([]),
-    returns: z
-      .object({ contentRoots: z.array(nonemptyText), contentHashes: z.array(nonemptyText) })
-      .strict(),
-    agentFacing: false,
-  },
   vcsReferencesReachable: {
     website: {
       kind: "closed",
@@ -2571,7 +2558,6 @@ const GAD_AUTHORITY_GROUPS: readonly GadAuthorityGroup[] = [
   {
     methods: [
       "vcsPendingSemanticEffects",
-      "vcsContentGcRoots",
       "vcsReferencesReachable",
       "listChannelMembershipsForUser",
     ],

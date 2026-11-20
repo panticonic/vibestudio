@@ -561,6 +561,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     epoch: number;
     executionSourceRoots: readonly ExecutionSourceContentRoot[];
   }): Promise<PreparedWorkspaceGc> {
+    await this.whenSemanticReady();
     const reachable = await this.collectGcReachableDigests(options.executionSourceRoots);
     let committed = false;
     return {
@@ -585,34 +586,20 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   private async collectGcReachableDigests(
     executionSourceRoots: readonly ExecutionSourceContentRoot[]
   ): Promise<Set<string>> {
-    const semantic = this.participantHistorySource
-      ? { contentRoots: [], contentHashes: [] }
-      : await this.gad().contentGcRoots();
-    const roots = new Set(semantic.contentRoots);
-    const mainRoots = new Set<string>();
-    for (const main of this.deps.refs.listMains()) {
-      mainRoots.add(main.contentRoot);
-      roots.add(main.contentRoot);
-    }
-    const executionRoots = new Set<string>();
+    const source = this.participantHistorySource;
+    if (!source) throw new Error("Participant workspace history is unavailable");
+    const mainRoots = new Set(this.deps.refs.listMains().map(({ contentRoot }) => contentRoot));
+    const roots = new Set(mainRoots);
     const executionRootPaths = new Map<string, Set<string>>();
     for (const executionRoot of executionSourceRoots) {
-      const validated = assertExecutionSourceContentRoot(executionRoot);
-      const stateHash = validated.stateHash;
-      executionRoots.add(stateHash);
+      const { stateHash, repoPath } = assertExecutionSourceContentRoot(executionRoot);
       roots.add(stateHash);
       const paths = executionRootPaths.get(stateHash) ?? new Set<string>();
-      paths.add(validated.repoPath ?? "<workspace>");
+      paths.add(repoPath ?? "<workspace>");
       executionRootPaths.set(stateHash, paths);
     }
-    const reachable = new Set([
-      ...semantic.contentHashes,
-      ...retainedBlobDigests(this.deps.blobsDir),
-    ]);
-    if (this.participantHistorySource) {
-      for (const digest of await collectWorkspaceHistoryContentRoots(this.participantHistorySource))
-        reachable.add(digest);
-    }
+    const reachable = await collectWorkspaceHistoryContentRoots(source);
+    for (const digest of retainedBlobDigests(this.deps.blobsDir)) reachable.add(digest);
     const cachedViewRoots = this.repositories.cachedViewRoots();
     const allRoots = [
       ...new Set([...roots, ...cachedViewRoots.map(({ stateHash }) => stateHash)]),
@@ -629,8 +616,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     }
 
     // Cached workspace compositions are disposable. Preserve the existing
-    // policy of evicting a broken cached root while the semantic/main/execution
-    // roots below remain strict publication inputs.
+    // policy of evicting a broken cached root. Protected main and retained
+    // execution roots remain strict inputs.
     const cachedReachable = this.repositories.collectCachedReachableDigests(
       cachedViewRoots,
       outcomesByRoot
@@ -648,15 +635,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       }
       const tree = outcome.value;
       if (!tree) {
-        const provenance = semantic.contentRoots.includes(root)
-          ? "semantic materialization/pending effect"
-          : mainRoots.has(root)
-            ? "protected main"
-            : executionRoots.has(root)
-              ? `retained execution source (${[...(executionRootPaths.get(root) ?? [])].join(
-                  ", "
-                )})`
-              : "unknown";
+        const provenance = mainRoots.has(root)
+          ? "protected main"
+          : `retained execution source (${[...(executionRootPaths.get(root) ?? [])].join(", ")})`;
         failures.push({
           root,
           reason: new Error(
