@@ -1370,6 +1370,49 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     await expect(getBytes(blobsDir, discarded.digest)).resolves.toBeNull();
   });
 
+  it("reopens sealed history without scanning the legacy outbox or content roots", async () => {
+    const { blobsDir, vcs, refs, deps } = await harness();
+    vi.spyOn(refs, "readMainSemanticState").mockReturnValue({ kind: "event", eventId: "main-event" });
+    const legacyFile = await putBytes(blobsDir, Buffer.from("legacy materialized bytes"));
+    const legacyRaw = await putBytes(blobsDir, Buffer.from("legacy retained provenance bytes"));
+    const native = await putBytes(blobsDir, Buffer.from("native participant bytes"));
+    const discarded = await putBytes(blobsDir, Buffer.from("unreferenced bytes"));
+    const legacyTree = await putTree(blobsDir, [
+      { name: "history.txt", kind: "file", contentHash: legacyFile.digest, mode: 0o100644 },
+    ], { root: true });
+    const contentGcRoots = vi.fn(async () => ({
+      contentRoots: [legacyTree.stateHash!],
+      contentHashes: [legacyRaw.digest],
+    }));
+    await vcs.attachGad({ contentGcRoots } as never);
+    const canonical = { ...TEST_PROVIDER, objectKey: "canonical" };
+    const dispatch = vi.fn(async (_owner: typeof TEST_PROVIDER, method: string) => {
+      switch (method) {
+        case "readHistoryMain": return { head: "main-head", eventId: "main-event" };
+        case "readHistoryReplayReceipt": return null;
+        case "listHistoryAppliedPublications":
+        case "listHistoryRetainedParticipants": return [];
+        case "readHistoryContentRoots": return [native.digest];
+        default: throw new Error(`Unexpected history call ${method}`);
+      }
+    });
+    const digest = "a".repeat(64);
+    await vcs.attachParticipantHistory({ dispatch: { dispatch }, canonical });
+    await vcs.retainSealedLegacyHistory(digest);
+    const reopened = new WorkspaceVcs(deps);
+    await reopened.attachParticipantHistory({ dispatch: { dispatch }, canonical });
+    await expect(reopened.retainSealedLegacyHistory("b".repeat(64)))
+      .rejects.toThrow("different replay receipt");
+    await reopened.retainSealedLegacyHistory(digest);
+    await expect(reopened.recoverPendingSemanticEffects()).resolves.toBe(0);
+    await reopened.runGc({ minAgeMs: 0, epoch: 1, executionSourceRoots: [] });
+    expect(contentGcRoots).toHaveBeenCalledOnce();
+    for (const item of [legacyFile, legacyRaw, native])
+      await expect(getBytes(blobsDir, item.digest)).resolves.toBeInstanceOf(Buffer);
+    await expect(getBytes(blobsDir, discarded.digest)).resolves.toBeNull();
+    await expect(fsp.stat(path.join(blobsDir, "legacy-replay-retention.json"))).resolves.toBeDefined();
+  });
+
   it("proves shared semantic, execution, and cached roots in one graph before GC", async () => {
     const { blobsDir, vcs } = await harness();
     const sharedContent = await putBytes(blobsDir, Buffer.from("shared subtree content"));

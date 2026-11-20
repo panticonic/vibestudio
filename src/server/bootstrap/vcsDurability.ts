@@ -18,6 +18,7 @@ import {
   readWorkspaceHistoryReplayFreeze,
   readWorkspaceHistoryReplayReceipt,
   sealWorkspaceHistoryReplay,
+  workspaceHistoryReplayReceiptDigest,
   WORKSPACE_PARTICIPANT_HISTORY_MIGRATION,
 } from "../vcsHost/workspaceHistoryMigration.js";
 import { canonicalWorkspaceObjectContextId } from "./workspaceObjectIdentity.js";
@@ -120,8 +121,10 @@ async function restoreParticipantHistory(
     ...history, infrastructureContextId: contextId,
     listReplayedSessionOwners: deps.listWorkspaceHistorySessionOwners,
   });
-  if (installed) await sealWorkspaceHistoryReplay({ dispatch, source: legacy, freeze, installed });
-  if (held?.verification?.sealed) {
+  if (installed && await sealWorkspaceHistoryReplay({ dispatch, source: legacy, freeze, installed })) {
+    await deps.workspaceVcs.retainSealedLegacyHistory(workspaceHistoryReplayReceiptDigest(installed.receipt));
+  } else if (held?.verification?.sealed && receipt) {
+    await deps.workspaceVcs.retainSealedLegacyHistory(workspaceHistoryReplayReceiptDigest(receipt));
     console.log("[Vcs] Restored participant history from the sealed legacy freeze");
   }
   await deps.exportSharedHistorySeed?.(history);

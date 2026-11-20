@@ -70,6 +70,7 @@ import {
   type WorkspaceMaterializationRepository,
 } from "@vibestudio/shared/vcs/workspaceProjection";
 import { hostRefBasisDigest } from "@vibestudio/shared/vcs/publication";
+import { writeFileAtomicSync } from "../../atomicFile.js";
 import {
   collectTreeReachableDigests,
   collectTreeReachableDigestsBatch,
@@ -265,6 +266,13 @@ type ParticipantHistoryAttachment = WorkspaceHistorySource & {
     Promise<readonly { contextId: string; userId: string }[]>;
   destroyRetiredStorage?: (owner: WorkspaceSourceProviderRef) => Promise<void>;
 };
+
+const sealedLegacyHistoryRetention = z.object({
+  version: z.literal(1),
+  receiptDigest: z.string().regex(/^[0-9a-f]{64}$/u),
+  contentRoots: z.array(z.string().min(1)),
+  contentHashes: z.array(z.string().min(1)),
+}).strict();
 
 export interface ExactRepositorySnapshotPlan {
   version: 1;
@@ -476,6 +484,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     infrastructureContextId?: string;
     destroyRetiredStorage?: ParticipantHistoryAttachment["destroyRetiredStorage"];
   }) | null = null;
+  private retiredLegacyRoots: z.infer<typeof sealedLegacyHistoryRetention> | undefined;
   private readonly protectedPublicationListeners = new Set<
     (event: ProtectedPublicationEvent) => void | Promise<void>
   >();
@@ -557,10 +566,30 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     };
   }
 
+  /** Preserve the retired source's complete GC contract under the exact migration receipt. */
+  async retainSealedLegacyHistory(receiptDigest: string): Promise<void> {
+    if (!this.participantHistorySource)
+      throw new Error("Retired legacy history requires an attached participant history");
+    const file = path.join(this.deps.blobsDir, "legacy-replay-retention.json");
+    let record: z.infer<typeof sealedLegacyHistoryRetention>;
+    try {
+      record = sealedLegacyHistoryRetention.parse(JSON.parse(await fsp.readFile(file, "utf8")));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      record = sealedLegacyHistoryRetention.parse({
+        version: 1, receiptDigest, ...await this.gad().contentGcRoots(),
+      });
+      writeFileAtomicSync(file, JSON.stringify(record), { mode: 0o600 });
+    }
+    if (record.receiptDigest !== receiptDigest)
+      throw new Error("Legacy history retention belongs to a different replay receipt");
+    this.retiredLegacyRoots = record;
+  }
+
   private async collectGcReachableDigests(
     executionSourceRoots: readonly ExecutionSourceContentRoot[]
   ): Promise<Set<string>> {
-    const semantic = await this.gad().contentGcRoots();
+    const semantic = this.retiredLegacyRoots ?? (await this.gad().contentGcRoots());
     const roots = new Set(semantic.contentRoots);
     const mainRoots = new Set<string>();
     for (const main of this.deps.refs.listMains()) {
@@ -2131,6 +2160,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       const head = this.deps.refs.readHeadPublication();
       if (head) await this.replayPublicationObservers(head);
     });
+    // Freezing the legacy source required an empty outbox. Once that source
+    // is retired, native publication recovery owns subsequent commands.
+    if (this.retiredLegacyRoots) return 0;
     const owner = this.gad();
     let recovered = 0;
     for (let step = 0; step < 1_000; step += 1) {

@@ -39,6 +39,10 @@ const freezeEvidenceSchema = freezeSchema.extend({
 type ReplayReceipt = z.infer<typeof replayReceiptSchema>;
 type InstalledFreeze = { generation: string; receipt: ReplayReceipt };
 
+export function workspaceHistoryReplayReceiptDigest(receipt: ReplayReceipt): string {
+  return sha256HexSyncText(canonicalJson(receipt));
+}
+
 export async function readWorkspaceHistoryReplayFreeze(
   dispatch: Pick<DODispatch, "dispatch">,
   source: WorkspaceSourceProviderRef,
@@ -46,7 +50,7 @@ export async function readWorkspaceHistoryReplayFreeze(
 ) {
   const received = receipt
     ? await dispatch.dispatch(source, "readHistoryReplayFreeze", {
-        receiptDigest: sha256HexSyncText(canonicalJson(receipt)),
+        receiptDigest: workspaceHistoryReplayReceiptDigest(receipt),
       })
     : await dispatch.dispatch(source, "readHistoryReplayFreeze");
   return freezeEvidenceSchema.nullable().parse(received);
@@ -57,22 +61,24 @@ export async function sealWorkspaceHistoryReplay(input: {
   source: WorkspaceSourceProviderRef;
   freeze: z.infer<typeof freezeSchema>;
   installed: InstalledFreeze;
-}): Promise<void> {
+}): Promise<boolean> {
   const { dispatch, source, freeze, installed: { receipt, generation } } = input;
   if (!receipt.frozenPlanDigest || receipt.eventId !== freeze.expectedMainEventId)
     throw new Error("Cannot retire legacy history without its exact installed receipt");
   const held = await readWorkspaceHistoryReplayFreeze(dispatch, source, receipt);
   if (held?.operationId !== freeze.operationId || held.expectedMainEventId !== freeze.expectedMainEventId)
     throw new Error("Legacy history changed before retirement");
-  if (!held.verification) return;
+  if (!held.verification) return false;
   if (held.verification.generation !== generation)
     throw new Error("Legacy history freeze generation changed before retirement");
-  if (held.verification.sealed) return;
-  await dispatch.dispatch(source, "sealHistoryReplayFreeze", {
-    freeze,
-    generation,
-    receiptDigest: sha256HexSyncText(canonicalJson(receipt)),
-  });
+  if (!held.verification.sealed) {
+    await dispatch.dispatch(source, "sealHistoryReplayFreeze", {
+      freeze,
+      generation,
+      receiptDigest: workspaceHistoryReplayReceiptDigest(receipt),
+    });
+  }
+  return true;
 }
 
 const planSchema = z

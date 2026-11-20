@@ -296,6 +296,10 @@ describe("wireVcsDurability", () => {
     let frozen = installed;
     let sealed = resumeAt === "sealed";
     const receiptDigest = sha256HexSyncText(canonicalJson(receipt));
+    const retainSealedLegacyHistory = vi.fn(async () => {
+      expect(sealed).toBe(true);
+      expect(sequence.at(-1)).toBe("participant");
+    });
     const dispatch = vi.fn(async (_target: typeof source, method: string, input: unknown) => {
       switch (method) {
         case "readHistoryReplayReceipt":
@@ -337,6 +341,7 @@ describe("wireVcsDurability", () => {
       attachGad: vi.fn(async () => undefined),
       attachWorkspaceSourceProvider: vi.fn(),
       attachParticipantHistory: vi.fn(async () => { sequence.push("participant"); }),
+      retainSealedLegacyHistory,
       startSemanticInitialization: vi.fn((operation: () => Promise<void>) => {
         sequence.push("initialization");
         initialize = operation;
@@ -368,6 +373,7 @@ describe("wireVcsDurability", () => {
       expect(runtimeManager.declaresRemoteDoltClass).toHaveBeenCalledWith(source.source, canonical.className);
       expect(dispatch).toHaveBeenCalledWith(source, "beginHistoryReplayFreeze", freeze);
       expect(dispatch).toHaveBeenCalledWith(source, "sealHistoryReplayFreeze", { freeze, generation, receiptDigest });
+      expect(retainSealedLegacyHistory).toHaveBeenCalledExactlyOnceWith(receiptDigest);
       expect(sequence).toEqual(["initialization", "root active", "participant"]);
       return;
     }
@@ -390,6 +396,11 @@ describe("wireVcsDurability", () => {
       ]);
     } else {
       expect(dispatch).toHaveBeenCalledWith(source, "beginHistoryReplayFreeze", freeze);
+    }
+    if (resumeAt === "installed") {
+      expect(retainSealedLegacyHistory).not.toHaveBeenCalled();
+    } else {
+      expect(retainSealedLegacyHistory).toHaveBeenCalledExactlyOnceWith(receiptDigest);
     }
     expect(dispatch.mock.calls.some(([, method]) => method === "stageHistoryReplayStep"))
       .toBe(resumeAt === "before-freeze");
