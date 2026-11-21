@@ -514,7 +514,7 @@ export class DurableWorkDriver {
   }
 
   async recoverNow(): Promise<void> {
-    if (!this.accepting) return;
+    if (!this.accepting || this.timer === null) return;
     if (this.recovering) return this.recovering;
     const controller = new AbortController();
     this.recoveryController = controller;
@@ -532,7 +532,7 @@ export class DurableWorkDriver {
     this.recoveryScans++;
     try {
       const hints = await this.scanReadyOwners(signal);
-      if (!this.accepting) return;
+      if (!this.accepting || signal.aborted) return;
       if (hints.length > 0) this.recoveryHits += hints.length;
       for (const hint of hints) this.notify(hint, "recovery");
     } catch (error) {
@@ -541,15 +541,22 @@ export class DurableWorkDriver {
     }
   }
 
-  async quiesce(): Promise<void> {
-    this.accepting = false;
+  stopRecovery(): void {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
     }
+    this.recoveryController?.abort(new Error("durable work recovery stopped"));
+    for (const [key, pending] of this.pending) {
+      if (pending.trigger === "recovery") this.pending.delete(key);
+    }
+  }
+
+  async quiesce(): Promise<void> {
+    this.accepting = false;
+    this.stopRecovery();
     this.pending.clear();
     const reason = new Error("durable work driver quiesced");
-    this.recoveryController?.abort(reason);
     for (const controller of this.controllers) controller.abort(reason);
     await this.pumping;
     await Promise.allSettled([...this.prerequisites, ...this.runners]);

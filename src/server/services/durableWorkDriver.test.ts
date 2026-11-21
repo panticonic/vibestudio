@@ -573,6 +573,27 @@ describe("DurableWorkDriver", () => {
     );
   });
 
+  it("stops periodic owner recovery while letting immediate observations drain", async () => {
+    const suite = handlers();
+    const scanReadyOwners = vi.fn(async () => []);
+    const driver = new DurableWorkDriver({
+      handlers: suite.record,
+      scanReadyOwners,
+      recoveryScanMs: 100,
+    });
+    driver.start();
+    await driver.recoverNow();
+
+    driver.stopRecovery();
+    await driver.recoverNow();
+    driver.notify({ owner: owner("channel"), queues: ["channel-observation"] });
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(scanReadyOwners).toHaveBeenCalledOnce();
+    expect(suite.handler.claim).toHaveBeenCalledOnce();
+    await driver.quiesce();
+  });
+
   it("scans owner recovery status through a single low-priority lane", async () => {
     const registrations = Array.from({ length: 12 }, (_, index) => ({
       owner: owner(`registered-${index}`),

@@ -697,6 +697,34 @@ describe("dynamicCode admission", () => {
     }
   });
 
+  it("closes the tracked eval admission when its exact host is already retired", async () => {
+    const ownerId = "session:default";
+    const harness = createHarness(
+      { [ownerId]: "ctx_1" },
+      {
+        executeRunPending: true,
+        cancel: async () => {
+          throw Object.assign(new Error("eval host retired"), { code: "DURABLE_OBJECT_RETIRED" });
+        },
+      }
+    );
+    await harness.service.handler(
+      { caller: authenticatedCaller("shell:dev_cli", "shell") },
+      "start",
+      [
+        inlineEvalStart({
+          target: { kind: "owner-session", sessionId: ownerId },
+          runId: "run:retired-host",
+          code: "await new Promise(() => {});",
+        }),
+      ]
+    );
+    expect(harness.activity.getActivity().activeRuns).toBe(1);
+
+    await expect(harness.shutdown()).resolves.toBeUndefined();
+    expect(harness.activity.getActivity().activeRuns).toBe(0);
+  });
+
   it("preserves original eval cancellation failure and joins independent cleanup before shutdown rejects", async () => {
     const original = new Error("registered eval cleanup refused", {
       cause: new Error("original provider failure"),

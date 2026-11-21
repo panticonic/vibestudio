@@ -208,8 +208,9 @@ export function createDynamicCodeService(deps: {
           try {
             await hostedEntityClient(deps.doDispatch, entry.evalDoRef).cancel(entry.runId);
           } catch (error) {
-            // A pull caller that was admitted but never started its run has nothing to cancel.
-            if ((error as { code?: unknown }).code !== "ENOTFOUND") throw error;
+            // An unstarted run or a retired host has no execution left to cancel.
+            const code = (error as { code?: unknown })?.code;
+            if (code !== "ENOTFOUND" && code !== "DURABLE_OBJECT_RETIRED") throw error;
           } finally {
             // The hosted kernel owns terminal truth. Once cancellation has
             // either completed or failed, remove the host admission so a
@@ -820,6 +821,9 @@ export function createDynamicCodeService(deps: {
       );
     }
     await deps.retireEntity(entityId);
+    for (const entry of activeRuns.values()) {
+      if (entityIdOfRef(entry.evalDoRef) === entityId) entry.closeAdmission();
+    }
     return { ok: true };
   }
 

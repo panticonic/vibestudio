@@ -8786,6 +8786,9 @@ async function main() {
       container.get<import("./services/durableWorkDriver.js").DurableWorkDriver>(
         "durableWorkDriver"
       );
+    // Recovery must stop asking owners to adopt this host before lifecycle
+    // preparation suspends them. Already-admitted observations can still drain.
+    durableWorkDriver.stopRecovery();
 
     // Close the shared eval admission before tearing down its host-held
     // transports. Every eval kernel run is a durable trust unit with its own
