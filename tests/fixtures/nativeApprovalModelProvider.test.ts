@@ -80,7 +80,7 @@ it("refuses to overwrite an existing local-model extension", () => {
   }
 });
 
-it("attests only the live model to the trusted host", async () => {
+it("attests the model to the trusted host and resumes the actual tools after compaction", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "native-approval-runtime-"));
   const subscriptions: Array<{ dispose(): Promise<void> }> = [];
   try {
@@ -96,11 +96,56 @@ it("attests only the live model to the trusted host", async () => {
     expect(() => provider.attestRuntime(NATIVE_APPROVAL_MODEL)).toThrow("trusted host");
     callerKind = "server";
     const model = provider.ensureLoaded("native-approval-fixture");
-    expect(provider.attestRuntime(NATIVE_APPROVAL_MODEL)).toEqual({
+    const runtime = provider.attestRuntime(NATIVE_APPROVAL_MODEL);
+    expect(runtime).toEqual({
       baseUrl: model.baseUrl,
       apiKey: expect.any(String),
     });
     expect(() => provider.attestRuntime("local:foreign")).toThrow("Foreign fixture model");
+    const complete = async (
+      messages: Array<{ role: string; content: string }>,
+      tools: string[] = []
+    ) => {
+      const response = await fetch(`${runtime.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${runtime.apiKey}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "native-approval-fixture",
+          messages,
+          tools: tools.map((name) => ({ type: "function", function: { name } })),
+        }),
+      });
+      expect(response.status).toBe(200);
+      return (await response.json()).choices[0];
+    };
+    const prompt = "Open the onboarding setup overview.";
+    expect(await complete([{ role: "user", content: prompt }], ["read"])).toMatchObject({
+      finish_reason: "tool_calls",
+      message: { tool_calls: [{ function: { name: "read" } }] },
+    });
+    const conversation = [
+      `[User]: ${prompt}`,
+      '[Assistant tool calls]: read(path="skills/onboarding/SKILL.md")',
+      "[Tool result]: name: onboarding",
+    ].join("\n\n");
+    const summary = await complete([
+      { role: "system", content: "You are a context summarization assistant." },
+      { role: "user", content: `<conversation>\n${conversation}\n</conversation>` },
+    ]);
+    expect(summary).toMatchObject({ finish_reason: "stop", message: { role: "assistant" } });
+    expect(summary.message.tool_calls).toBeUndefined();
+    expect(
+      await complete(
+        [{ role: "user", content: `<summary>\n${summary.message.content}\n</summary>` }],
+        ["read", "inline_ui"]
+      )
+    ).toMatchObject({
+      finish_reason: "tool_calls",
+      message: { tool_calls: [{ function: { name: "inline_ui" } }] },
+    });
   } finally {
     await Promise.all(subscriptions.map((subscription) => subscription.dispose()));
     fs.rmSync(root, { recursive: true, force: true });
