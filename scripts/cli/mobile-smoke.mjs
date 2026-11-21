@@ -44,7 +44,7 @@ import {
   waitForAndroidBoot,
 } from "./lib/android-avd.mjs";
 import { flagValue } from "./lib/args.mjs";
-import { visibleAgentTurnState } from "./lib/mobile-agent-turn-state.mjs";
+import { readRenderedAgentReply, visibleAgentTurnState } from "./lib/mobile-agent-turn-state.mjs";
 import { mobileApprovalSurfaceState } from "./lib/mobile-approval-surface.mjs";
 import {
   assertSecondClientSeparateTask,
@@ -1849,71 +1849,91 @@ async function assertNoVisiblePanelCrash(device, xml, context) {
 // device's startup logs carry its independent transport and panel readiness.
 const AGENT_TURN_VISUAL_POLL_MS = 20_000;
 
-async function waitForInitialAgentTurn(device, deadlineMs, realModel) {
+async function waitForInitialAgentTurn(device, packageName, deadlineMs, realModel) {
+  const page = await openPanelWebViewDebugger(device, packageName, "/panels/chat/", deadlineMs);
+  const inspectReply = `(${readRenderedAgentReply.toString()})(document)`;
+  const expectedReply =
+    !realModel && !process.env.VIBESTUDIO_TEST_MODEL_SCRIPT
+      ? "E2E model response: initial agent turn completed."
+      : null;
   let lastLabels = [];
   let stableVisualAgentFingerprint = "";
+  let lastReply = { id: null, reply: "", typing: false };
   let stableVisualAgentPolls = 0;
   const requestedRemaining = new Set();
-  while (Date.now() < deadlineMs) {
-    const xml = await dumpWindowXml(device);
-    const labels = collectWindowLabels(xml);
-    const text = labels.join("\n");
-    lastLabels = labels;
+  try {
+    while (Date.now() < deadlineMs) {
+      const xml = await dumpWindowXml(device);
+      const labels = collectWindowLabels(xml);
+      const text = labels.join("\n");
+      lastLabels = labels;
 
-    const approval = await advanceWorkspaceApproval(device, xml, requestedRemaining);
-    if (approval.acted) {
-      await sleep(1_000);
-      continue;
-    }
-    if (approval.surface.visible) {
-      // A submitted decision can remain busy while its install landing runs.
-      await sleep(AGENT_TURN_VISUAL_POLL_MS);
-      continue;
-    }
+      const approval = await advanceWorkspaceApproval(device, xml, requestedRemaining);
+      if (approval.acted) {
+        await sleep(1_000);
+        continue;
+      }
+      if (approval.surface.visible) {
+        // A submitted decision can remain busy while its install landing runs.
+        await sleep(AGENT_TURN_VISUAL_POLL_MS);
+        continue;
+      }
 
-    assertNoBlockingPermissionDialog(xml);
-    await assertNoVisiblePanelCrash(device, xml, "Initial agent turn");
+      assertNoBlockingPermissionDialog(xml);
+      await assertNoVisiblePanelCrash(device, xml, "Initial agent turn");
 
-    if (
-      /\b(Error|Recovery failed)\b/i.test(text) ||
-      /Runner (?:prompt|continue) completed without/i.test(text) ||
-      /Agent turn failed|Cannot continue|DO RPC relay failed|Connection error/i.test(text)
-    ) {
-      throw new Error(
-        `Initial agent turn surfaced a visible error. Visible labels: ${summarizeLabels(labels)}`
-      );
-    }
+      if (
+        /\b(Error|Recovery failed)\b/i.test(text) ||
+        /Runner (?:prompt|continue) completed without/i.test(text) ||
+        /Agent turn failed|Cannot continue|DO RPC relay failed|Connection error/i.test(text)
+      ) {
+        throw new Error(
+          `Initial agent turn surfaced a visible error. Visible labels: ${summarizeLabels(labels)}`
+        );
+      }
 
-    const visualAgentTurn = visibleAgentTurnState(labels);
-    if (visualAgentTurn.hasCredentialSetupPrompt) {
-      const mode = realModel ? "Real-model" : "Deterministic-mode";
-      throw new Error(
-        `${mode} smoke reached model credential setup instead of an agent response. ` +
-          `Visible labels: ${summarizeLabels(labels)}`
-      );
-    }
+      const visualAgentTurn = visibleAgentTurnState(labels);
+      if (visualAgentTurn.hasCredentialSetupPrompt) {
+        const mode = realModel ? "Real-model" : "Deterministic-mode";
+        throw new Error(
+          `${mode} smoke reached model credential setup instead of an agent response. ` +
+            `Visible labels: ${summarizeLabels(labels)}`
+        );
+      }
 
-    if (visualAgentTurn.hasFinalVisibleOutput) {
-      if (visualAgentTurn.fingerprint === stableVisualAgentFingerprint) {
-        stableVisualAgentPolls += 1;
+      lastReply = await cdpEvaluate(page.socket, inspectReply);
+      const replyComplete =
+        lastReply.id &&
+        lastReply.reply &&
+        !lastReply.typing &&
+        !visualAgentTurn.hasUnresolvedApproval &&
+        (expectedReply === null || lastReply.reply === expectedReply);
+      if (replyComplete) {
+        const fingerprint = JSON.stringify([lastReply.id, lastReply.reply]);
+        if (fingerprint === stableVisualAgentFingerprint) {
+          stableVisualAgentPolls += 1;
+        } else {
+          stableVisualAgentFingerprint = fingerprint;
+          stableVisualAgentPolls = 1;
+        }
+        if (stableVisualAgentPolls >= 3) {
+          console.log("[mobile-smoke] Initial agent turn completed by stable final visible output");
+          return;
+        }
       } else {
-        stableVisualAgentFingerprint = visualAgentTurn.fingerprint;
-        stableVisualAgentPolls = 1;
+        stableVisualAgentFingerprint = "";
+        stableVisualAgentPolls = 0;
       }
-      if (stableVisualAgentPolls >= 3) {
-        console.log("[mobile-smoke] Initial agent turn completed by stable final visible output");
-        return;
-      }
-    } else {
-      stableVisualAgentFingerprint = "";
-      stableVisualAgentPolls = 0;
-    }
 
-    await sleep(AGENT_TURN_VISUAL_POLL_MS);
+      await sleep(AGENT_TURN_VISUAL_POLL_MS);
+    }
+  } finally {
+    await page.close();
   }
 
   throw new Error(
     `Timed out waiting for the initial onboarding agent turn to finish. ` +
+      `Rendered reply: ${JSON.stringify({ id: lastReply.id, length: lastReply.reply.length, typing: lastReply.typing })}. ` +
       `Last visible labels: ${summarizeLabels(lastLabels)}`
   );
 }
@@ -1939,7 +1959,12 @@ async function captureAndAssertPanelVisible(device, agentTimeoutMs, options = {}
   await sleep(2_000);
   let agentTurnCompleted = false;
   if (options.checkAgentTurn !== false) {
-    await waitForInitialAgentTurn(device, Date.now() + agentTimeoutMs, options.realModel);
+    await waitForInitialAgentTurn(
+      device,
+      options.packageName ?? defaultPackage,
+      Date.now() + agentTimeoutMs,
+      options.realModel
+    );
     agentTurnCompleted = true;
   }
   // Agent completion and approval completion are independent. A review that

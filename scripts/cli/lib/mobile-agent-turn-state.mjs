@@ -1,11 +1,21 @@
+export function readRenderedAgentReply(document) {
+  const conversation = document.querySelector('[data-part="message-list"]');
+  const contents = conversation?.querySelectorAll(
+    '[data-message-role="agent"][data-message-tier="primary"] .message-content'
+  );
+  const last = contents?.[contents.length - 1];
+  return {
+    id: last?.getAttribute("data-message-id") ?? null,
+    reply: last?.textContent?.trim() ?? "",
+    typing: Boolean(conversation?.querySelector(".typing-indicator")),
+  };
+}
+
 export function visibleAgentTurnState(labels) {
   const text = labels.join("\n");
-  const isTyping = /\b(?:AI Chat|Agent) typing\b/i.test(text);
   const agentIndex = labels.findLastIndex((label) => isAgentAttributionLabel(label));
   const agentLabels = agentIndex >= 0 ? labels.slice(agentIndex + 1, agentIndex + 12) : [];
   const agentText = agentLabels.join("\n");
-  const hasAgentAttribution =
-    agentIndex >= 0 || /(?:^|\n)AI Chat(?:\s*|\n)@[a-z0-9][a-z0-9_-]*(?:\s|\n|$)/i.test(text);
   const credentialSetupCopy =
     /Credential (?:required|needs refresh) for/i.test(agentText) ||
     /Connect a URL-bound model credential for/i.test(agentText) ||
@@ -19,16 +29,9 @@ export function visibleAgentTurnState(labels) {
     credentialSetupCopy ||
     hasPendingProviderSetup ||
     /This subscription sign-in requires a desktop browser/i.test(text);
-  const hasUnresolvedApproval = hasVisibleApprovalPrompt(labels);
-  const hasSubstantialContent = agentLabels.some(isSubstantialAgentContent);
-  const hasAgentOutput = hasAgentAttribution && hasSubstantialContent && !hasCredentialSetupPrompt;
   return {
-    hasAgentOutput,
-    hasFinalVisibleOutput: hasAgentOutput && !isTyping && !hasUnresolvedApproval,
     hasCredentialSetupPrompt,
-    hasUnresolvedApproval,
-    isTyping,
-    fingerprint: (agentLabels.length ? agentLabels : labels).filter(Boolean).slice(0, 60).join("|"),
+    hasUnresolvedApproval: hasVisibleApprovalPrompt(labels),
   };
 }
 
@@ -49,19 +52,4 @@ function isAgentAttributionLabel(label) {
     /^(?:AI Chat\s*)?@[a-z0-9][a-z0-9_-]*$/i.test(normalized) ||
     /^AI Chat\s*@[a-z0-9][a-z0-9_-]*(?:\s|$)/i.test(normalized)
   );
-}
-
-function isSubstantialAgentContent(label) {
-  const normalized = label.replace(/\s+/g, " ").trim();
-  if (normalized.length < 8) return false;
-  if (/^(?:AI Chat|AI Chat typing|Agent typing)$/i.test(normalized)) return false;
-  if (isAgentAttributionLabel(normalized)) return false;
-  if (
-    /^(?:Approve all|Use once|Reply|Copy message|Enter API Key|Internal Browser|External Browser)$/i.test(
-      normalized
-    )
-  ) {
-    return false;
-  }
-  return true;
 }
