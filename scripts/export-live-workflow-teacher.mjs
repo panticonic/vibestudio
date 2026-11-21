@@ -17,6 +17,14 @@ const templateGoalDomains = {
     checks: ["exactSystemCandidateFrontier", "exactNativeCoordinateAndSides", "currentSystemReview",
       "scopedPrivateDiagnosis", "independentReadbackAndProtectedMain"],
   },
+  "owned-operations": {
+    namespace: "vibestudio:open-owned-operations",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-owned-operations-managed.ts" },
+    callable: "coordinateOwnedOperations",
+    skill: "ownedOperations",
+    checks: ["exactCurrentOwnedDocket", "exactBoundRoleDisposition", "preservedAuthorization",
+      "actualPrivateDossierReadback", "preservedWorkspaceHead"],
+  },
   examplesAdoption: {
     namespace: "vibestudio:examples-adoption",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-examples-adoption-managed.ts" },
@@ -1584,14 +1592,14 @@ export async function loadLiveTeacherCases(checkouts) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
     const distinctGoals = new Set();
-    const { openGoalWorlds, openPhoneFirstRunWorlds = [], openSkillMaintenanceWorlds = [], openWebhookAdmissionWorlds = [], openDevelopmentAuditWorlds = [], openDesktopReadinessWorlds = [], openContentArchiveWorlds = [], openSystemReleaseWorlds = [], openTestkitCloseoutWorlds = [], openPanelSourceMigrationWorlds = [], openWorkspaceShareWorlds = [], openNotificationStateWorlds = [], openAgentCapabilityWorlds = [], openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openChatContinuityWorlds = [], openPtyContinuityWorlds = [], openSystemCandidateWorlds = [], openWorkspaceClaimWorlds = [], openExamplesAdoptionWorlds = [], openGrimoireSceneWorlds = [], openBridgeDeliveryWorlds = [], openEditorialWorlds = [], openPortfolioWorlds = [], openRegencyWorlds = [], openImageCandidateWorlds = [], openApiReadinessWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
+    const { openGoalWorlds, openPhoneFirstRunWorlds = [], openSkillMaintenanceWorlds = [], openWebhookAdmissionWorlds = [], openDevelopmentAuditWorlds = [], openDesktopReadinessWorlds = [], openContentArchiveWorlds = [], openSystemReleaseWorlds = [], openTestkitCloseoutWorlds = [], openPanelSourceMigrationWorlds = [], openWorkspaceShareWorlds = [], openNotificationStateWorlds = [], openAgentCapabilityWorlds = [], openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openChatContinuityWorlds = [], openOwnedOperationsWorlds = [], openPtyContinuityWorlds = [], openSystemCandidateWorlds = [], openWorkspaceClaimWorlds = [], openExamplesAdoptionWorlds = [], openGrimoireSceneWorlds = [], openBridgeDeliveryWorlds = [], openEditorialWorlds = [], openPortfolioWorlds = [], openRegencyWorlds = [], openImageCandidateWorlds = [], openApiReadinessWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
       spectroliteGoalWorlds = [], openGoalGoogleWorlds = [], openGoalPersonalWorlds = [],
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
       openTerminalWorlds = [], openOwnedResearchWorlds = [], personalWelcomeWorlds = [], dictationHandoffWorlds = [], specialistHandoffWorlds = [], providerHandoffWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
     for (const assignment of [...openGoalWorlds, ...openPhoneFirstRunWorlds, ...openSkillMaintenanceWorlds, ...openWebhookAdmissionWorlds, ...openDevelopmentAuditWorlds, ...openDesktopReadinessWorlds, ...openContentArchiveWorlds, ...openSystemReleaseWorlds, ...openTestkitCloseoutWorlds, ...openPanelSourceMigrationWorlds, ...openWorkspaceShareWorlds, ...openNotificationStateWorlds, ...openAgentCapabilityWorlds, ...openMobileContinuityWorlds, ...openInstalledPackageWorlds, ...openAssetIntegrityWorlds, ...openTendrilRouteWorlds, ...openExtensionDossierWorlds, ...openDeployedInterfaceWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
-      ...openExamplesAdoptionWorlds, ...openGrimoireSceneWorlds, ...openApiReadinessWorlds, ...openChatContinuityWorlds, ...openPtyContinuityWorlds, ...openSystemCandidateWorlds, ...openWorkspaceClaimWorlds, ...openBridgeDeliveryWorlds, ...openEditorialWorlds, ...openPortfolioWorlds, ...openRegencyWorlds, ...openImageCandidateWorlds, ...openNewsEvidenceWorlds, ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
+      ...openExamplesAdoptionWorlds, ...openGrimoireSceneWorlds, ...openApiReadinessWorlds, ...openChatContinuityWorlds, ...openOwnedOperationsWorlds, ...openPtyContinuityWorlds, ...openSystemCandidateWorlds, ...openWorkspaceClaimWorlds, ...openBridgeDeliveryWorlds, ...openEditorialWorlds, ...openPortfolioWorlds, ...openRegencyWorlds, ...openImageCandidateWorlds, ...openNewsEvidenceWorlds, ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
       ...openGoalCalendarWorlds, ...openPersonalArtifactWorlds, ...openPersonalHistoryWorlds,
@@ -8191,6 +8199,97 @@ function verifyChatContinuity(exercise, world, proof, skill) {
   );
 }
 
+function verifyOpenOwnedOperations(exercise, world, proof, skill) {
+  const outcome = exercise.report.outcome;
+  const { audit, docket, artifact, effects: journal } = proof;
+  const records = exercise.calls.map(({ record }) => record);
+  const children = (parent, name) => records.filter(record =>
+    record.parent_call_id === parent?.call_id && record.definition?.name === name && record.outcome === "done");
+  const effects = (call, service, method) => call?.effects?.filter(effect =>
+    effect.service === service && effect.method === method && !effect.error) ?? [];
+  const selection = children(skill, "selectOperationsDocket");
+  const discovery = effects(selection[0], "operationsDocket", "list");
+  const reads = effects(selection[0], "operationsDocket", "read");
+  const held = world.authority === "review-only";
+  const release = world.request.kind === "release-continuation";
+  const retain = !held && world.retainWhenReady && world.expected.decision === "ready";
+  const branch = children(skill, release ? "release" : "incident");
+  const dossier = children(skill, "retainOperationsDossier");
+  const closes = effects(skill, "ownedOperations", "close");
+  requireEvidence(
+    isDeepStrictEqual(outcome, proof.outcome) && isDeepStrictEqual(outcome.docket, docket) &&
+    selection.length === 1 && matchesValue(selection[0].inputs?.goal, world.goal) &&
+    discovery.length === 1 && matchesValue(discovery[0].args, []) &&
+    journal?.list?.length === 1 && matchesValue(discovery[0].result, journal.list[0]) &&
+    reads.length === 1 && matchesValue(reads[0].args, [docket.id, docket.revision]) &&
+    journal?.reads?.length === 1 && matchesValue(reads[0].result, journal.reads[0]) &&
+    matchesValue(selection[0].output, journal.reads[0]) &&
+    isDeepStrictEqual(journal.reads[0].request, world.request) && journal.reads[0].authority === world.authority &&
+    branch.length === Number(!held) && closes.length === Number(!held) && dossier.length === Number(retain),
+    "Expected an exact owned docket selection, authorized role operation and conditional dossier"
+  );
+  if (held) {
+    requireEvidence(outcome.operation === null && outcome.dossier === null && artifact === null &&
+      audit?.opened?.length === 0 && audit.snapshots?.length === 0 &&
+      records.every(record => (record.effects ?? []).every(effect =>
+        effect.service !== "ownedOperations" && effect.service !== "operationsDossier")),
+      "A review-only docket cannot issue workers or retain a dossier");
+    return;
+  }
+  const installed = branch[0];
+  const { operation } = outcome;
+  const roles = audit.opened.map(({ handle }) => handle.role).sort();
+  const exactHandles = audit.opened.every(({ handle }) =>
+    operation.handles.some(value => isDeepStrictEqual(value, handle)));
+  const opens = effects(installed, "ownedOperations", "open");
+  const appends = effects(installed, "ownedOperations", "append");
+  const readbacks = effects(installed, "ownedOperations", "read");
+  const restarts = effects(installed, "ownedOperations", "restart");
+  const cleanup = { retiredIds: audit.retiredIds, destroyedContextIds: audit.destroyedContextIds };
+  requireEvidence(operation.kind === world.request.kind && operation.handoff.decision === world.expected.decision &&
+    isDeepStrictEqual(roles, Object.keys(world.expected.roles).sort()) && exactHandles &&
+    operation.handles.length === roles.length && opens.length === roles.length && readbacks.length === roles.length &&
+    audit.remainingContextIds.length === 0 && audit.remainingEntityIds.length === 0 && audit.programRequestedCleanup === true &&
+    matchesValue(installed.inputs?.goal, world.goal) &&
+    matchesValue(installed.output, { handoff: operation.handoff, handles: operation.handles }) &&
+    matchesValue(closes[0].args, []) && matchesValue(closes[0].result, cleanup) &&
+    isDeepStrictEqual(operation.cleanup, cleanup) &&
+    audit.opened.every(({ handle }) => {
+      const retained = audit.snapshots.find(row => row.phase === "before-cleanup" && row.handle.id === handle.id);
+      return opens.some(effect => matchesValue(effect.args, [handle.role]) && matchesValue(effect.result, handle)) &&
+        readbacks.some(effect => matchesValue(effect.args, [handle]) && matchesValue(effect.result, retained?.value)) &&
+        retained?.value?.checkpoints?.every(({ revision, assessment }) => appends.some(effect =>
+          matchesValue(effect.args, [handle, revision - 1, assessment])));
+    }), "Expected bound native operations, exact persisted checkpoints and cleanup receipts");
+  if (release) {
+    const before = audit.snapshots.find(row => row.phase === "before-restart");
+    const after = audit.snapshots.find(row => row.phase === "after-restart");
+    const gate = children(installed, "assessGate");
+    requireEvidence(appends.length === 2 && restarts.length === 1 && audit.restarts.length === 1 &&
+      isDeepStrictEqual(before, after && { ...after, phase: "before-restart" }) &&
+      matchesValue(restarts[0].args, [before?.handle]) && matchesValue(restarts[0].result, after?.value) &&
+      matchesValue(installed.inputs?.before, world.request.before) && matchesValue(installed.inputs?.after, world.request.after) &&
+      gate.length === 2 && gate.some(call => matchesValue(call.inputs?.gates, world.request.before)) &&
+      gate.some(call => matchesValue(call.inputs?.gates, world.request.after)) &&
+      children(installed, "handoff").length === 1,
+      "Expected the same release worker to continue from its native retained checkpoint");
+  } else {
+    requireEvidence(appends.length === 2 && restarts.length === 0 && audit.restarts.length === 0 &&
+      matchesValue(installed.inputs?.signals, world.request.signals) &&
+      children(installed, "assign").length === 1 && children(installed, "assess").length === 2 &&
+      children(installed, "synthesize").length === 1,
+      "Expected distinct installed impact and recovery role assessments");
+  }
+  const staged = journal.dossiers?.[0];
+  const retainEffects = effects(dossier[0], "operationsDossier", "retain");
+  requireEvidence(journal.dossiers?.length === Number(retain) &&
+    (retain ? staged && isDeepStrictEqual(outcome.dossier, artifact) &&
+      isDeepStrictEqual(artifact, staged.result) && artifact.digest === hash(staged.record) &&
+      retainEffects.length === 1 && matchesValue(retainEffects[0].args, [docket.id, docket.revision, operation]) &&
+      matchesValue(retainEffects[0].result, artifact) : outcome.dossier === null && artifact === null),
+    "Expected an authorized private dossier, or an independently observed hold");
+}
+
 export function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
   const proof = execution.diagnostics.openGoalVerification;
   const world = workflow.assignment;
@@ -8213,7 +8312,9 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
     "Expected a verified live goal and its actual installed Natlang skill call"
   );
   const evidence = { workspace: { proof } };
-  if (world.kind === "testkit-closeout") {
+  if (world.kind === "owned-operations") {
+    verifyOpenOwnedOperations(exercise, world, proof, skill);
+  } else if (world.kind === "testkit-closeout") {
     verifyTestkitCloseout(exercise, world, proof, skill);
   } else if (world.kind === "chat-continuity") {
     verifyChatContinuity(exercise, world, proof, skill);
