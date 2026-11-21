@@ -37,12 +37,14 @@ async function waitForPanelRuntime(owner: TestApp, panelId: string): Promise<voi
 }
 
 test.describe("agentic DX contracts", () => {
+  // The cold source launch provisions System and its companion workspaces.
+  test.describe.configure({ timeout: 360_000 });
+
   test("Electron preserves directory reads and bounded causal diagnostics end to end", async () => {
-    test.setTimeout(240_000);
     const workspacePath = await createManagedTestWorkspace();
     const testApp = await launchTestApp({ workspace: workspacePath, launchTimeout: 180_000 });
     try {
-      await approvePendingStartupUnits(testApp, 75_000);
+      await approvePendingStartupUnits(testApp);
       await ensureHostedShellReady(testApp, {
         panelSource: "panels/chat",
         timeoutMs: 75_000,
@@ -128,14 +130,13 @@ test.describe("agentic DX contracts", () => {
   });
 
   test("Electron captures hosted-panel pixels and historical console diagnostics end to end", async () => {
-    test.setTimeout(240_000);
     const workspacePath = await createManagedTestWorkspace({
       workspaceKind: "project",
       configureSource: configureInspectionFixture,
     });
     const testApp = await launchTestApp({ workspace: workspacePath, launchTimeout: 180_000 });
     try {
-      await approvePendingStartupUnits(testApp, 75_000);
+      await approvePendingStartupUnits(testApp);
       await ensureHostedShellReady(testApp, {
         panelSource: "panels/chat",
         timeoutMs: 75_000,
