@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { RpcCaller } from "@vibestudio/rpc";
+import { deserializeRpcFailure, serializeRpcFailure, type RpcCaller } from "@vibestudio/rpc";
+import { AmbiguousDoDispatchError } from "@vibestudio/shared/doDispatcher";
 import {
   createEvalExecutor,
   createDeferredEvalExecutor,
@@ -353,6 +354,53 @@ describe("eval lifecycle contract", () => {
       "eval.get",
     ]);
     expect(call.mock.calls[1]?.[1]).toEqual([{ runId: "run:1" }]);
+  });
+
+  it("reconciles a lost status response against the same accepted run", async () => {
+    const lost = new AmbiguousDoDispatchError("workerd response lost");
+    const wrapped = new Error("eval.get failed", { cause: lost });
+    const wireFailure = deserializeRpcFailure(serializeRpcFailure(wrapped));
+    const call = vi
+      .fn()
+      .mockResolvedValueOnce({ runId: "run:1", status: "accepted" })
+      .mockRejectedValueOnce(wireFailure)
+      .mockResolvedValueOnce({ status: "done", result: SUCCESS });
+    const execute = createEvalExecutor(call);
+    await expect(
+      execute({ runId: "run:1", source: { kind: "inline", code: "return 42" } })
+    ).resolves.toEqual(SUCCESS);
+    expect(call.mock.calls.slice(1)).toEqual([
+      ["eval.get", [{ runId: "run:1" }]],
+      ["eval.get", [{ runId: "run:1" }]],
+    ]);
+  });
+
+  it("retains both failures when a lost status response cannot be reconciled", async () => {
+    const lost = new AmbiguousDoDispatchError("workerd response lost");
+    const failed = new Error("durable owner unreachable");
+    const call = vi
+      .fn()
+      .mockResolvedValueOnce({ runId: "run:1", status: "accepted" })
+      .mockRejectedValueOnce(lost)
+      .mockRejectedValueOnce(failed);
+    const execute = createEvalExecutor(call);
+    await expect(
+      execute({ runId: "run:1", source: { kind: "inline", code: "return 42" } })
+    ).rejects.toMatchObject({ cause: lost, errors: [lost, failed] });
+    expect(call).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not reconcile semantic status rejections", async () => {
+    const refused = new Error("status read denied");
+    const call = vi
+      .fn()
+      .mockResolvedValueOnce({ runId: "run:1", status: "accepted" })
+      .mockRejectedValueOnce(refused);
+    const execute = createEvalExecutor(call);
+    await expect(
+      execute({ runId: "run:1", source: { kind: "inline", code: "return 42" } })
+    ).rejects.toBe(refused);
+    expect(call).toHaveBeenCalledTimes(2);
   });
 
   it("preserves a pre-start abort without manufacturing an external run or cancellation", async () => {

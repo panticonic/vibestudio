@@ -11,12 +11,15 @@ export interface DORef {
   objectKey: string;
 }
 
+export const AMBIGUOUS_DO_DISPATCH = "AMBIGUOUS_DO_DISPATCH" as const;
+
 /**
  * The request crossed the local dispatch boundary, but the host did not receive
  * a trustworthy acknowledgement. Callers may retry only operations whose
  * identity makes replay safe.
  */
 export class AmbiguousDoDispatchError extends Error {
+  readonly code = AMBIGUOUS_DO_DISPATCH;
   constructor(message: string, cause?: unknown) {
     super(message);
     if (cause !== undefined) {
@@ -28,6 +31,20 @@ export class AmbiguousDoDispatchError extends Error {
     }
     this.name = "AmbiguousDoDispatchError";
   }
+}
+
+/** Structured dispatch ambiguity can cross RPC and be wrapped by a host service. */
+export function isAmbiguousDoDispatchError(error: unknown): boolean {
+  const seen = new Set<object>();
+  while (error && typeof error === "object" && !seen.has(error)) {
+    // A compound failure may include unrelated operation or cleanup failures.
+    if (error instanceof AggregateError) return false;
+    seen.add(error);
+    const { code, cause } = error as { code?: unknown; cause?: unknown };
+    if (code === AMBIGUOUS_DO_DISPATCH) return true;
+    error = cause;
+  }
+  return false;
 }
 
 /** Lifecycle release delivered by the host before an activation disappears. */

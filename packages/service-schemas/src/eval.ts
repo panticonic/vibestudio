@@ -11,6 +11,7 @@ import { z } from "zod";
 import { rpcFailureSchema } from "./rpcFailure.js";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { createRpcMethods } from "@vibestudio/shared/rpcMethods";
+import { isAmbiguousDoDispatchError } from "@vibestudio/shared/doDispatcher";
 import { CapabilityScopeSchema } from "./build.js";
 import { sha256HexSyncText } from "@vibestudio/content-addressing";
 
@@ -1117,7 +1118,27 @@ export function createEvalExecutor(
       for (;;) {
         if (receiverResult) return receiverResult;
         if (options.signal?.aborted) return cancel();
-        const snapshot = await handle.get();
+        let snapshot: Awaited<ReturnType<typeof handle.get>>;
+        try {
+          snapshot = await handle.get();
+        } catch (observationFailure) {
+          if (receiverResult) return receiverResult;
+          if (!isAmbiguousDoDispatchError(observationFailure)) throw observationFailure;
+          if (options.signal?.aborted) return cancel();
+          // An accepted run outlives a lost response to a read. Reconcile that
+          // exact run once through fresh dispatch. Its start or work is never
+          // replayed. Preserve both failures if the durable read is still lost.
+          try {
+            snapshot = await handle.get();
+          } catch (reconciliationFailure) {
+            if (receiverResult) return receiverResult;
+            throw new AggregateError(
+              [observationFailure, reconciliationFailure],
+              `eval: status reconciliation failed for accepted run ${input.runId}`,
+              { cause: observationFailure }
+            );
+          }
+        }
         if (receiverResult) return receiverResult;
         const result = settledResult(snapshot);
         if (result) return result;
