@@ -15,6 +15,7 @@ import {
   hasElectronDisplay,
   launchTestApp,
   approvePendingStartupUnits,
+  approvePendingWorkspaceCreationReview,
   type TestApp,
 } from "../../setup/electronSetup";
 import {
@@ -112,44 +113,6 @@ async function getPanelSurfaceLayout(shellPage: Page): Promise<{
 async function approveStartupUnitsAndDeclineReporting(testApp: TestApp): Promise<void> {
   await approvePendingStartupUnits(testApp);
   await declineFirstRunReporting(testApp);
-}
-
-async function workspaceReviewState(
-  page: Page,
-  workspaceId: string
-): Promise<{ status: string; approvalId?: string; error?: string }> {
-  return nativeUiRead(
-    page,
-    { kind: "workspace", workspaceId },
-    mainRpcMethods["shellApproval.getWorkspaceCreationReviewState"],
-    []
-  );
-}
-
-async function approveWorkspaceCreationReviewInShell(
-  page: Page,
-  workspaceId: string
-): Promise<void> {
-  await expect
-    .poll(async () => (await workspaceReviewState(page, workspaceId)).status, {
-      timeout: 120_000,
-    })
-    .not.toBe("preparing");
-  let state = await workspaceReviewState(page, workspaceId);
-  if (state.status === "failed") {
-    throw new Error(`Workspace creation review failed: ${state.error}`);
-  }
-  if (state.status === "pending") {
-    if (!state.approvalId) throw new Error("Pending workspace review has no approval ID");
-    const card = await presentApprovalCard(page, state.approvalId);
-    expect(await card.getAttribute("data-approval-id")).toBe(state.approvalId);
-    await card.getByRole("button", { name: "Add to workspace", exact: true }).click();
-    await expect
-      .poll(() => workspaceReviewState(page, workspaceId), { timeout: 120_000 })
-      .toMatchObject({ status: "resolved" });
-    state = await workspaceReviewState(page, workspaceId);
-  }
-  expect(["resolved", "not-required"]).toContain(state.status);
 }
 
 test.describe("Desktop Shell Chrome", () => {
@@ -669,12 +632,9 @@ test.describe("Desktop Shell Chrome", () => {
 
   test("places the native panel exactly in the measured shell panel surface", async () => {
     testApp = await launchTestApp({ launchTimeout: 240_000 });
+    await approvePendingWorkspaceCreationReview(testApp);
     await approveStartupUnitsAndDeclineReporting(testApp);
     const shellPage = await findWorkspaceShellPage(testApp);
-    await approveWorkspaceCreationReviewInShell(shellPage, testApp.systemWorkspaceId);
-    if (testApp.workspaceId !== testApp.systemWorkspaceId) {
-      await approveWorkspaceCreationReviewInShell(shellPage, testApp.workspaceId);
-    }
     const nativeBounds = () =>
       testApp!.app.evaluate(({ BaseWindow }) =>
         BaseWindow.getAllWindows().flatMap((window) =>
