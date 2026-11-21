@@ -24,6 +24,7 @@ import { parseHubReadyPayload } from "./lib/hub-ready.mjs";
 import {
   assertTemplateCheckoutBootable,
   createRemoteServeArgs,
+  createRemoteSmokeServerEnvironment,
   resolveDevelopmentTemplates,
   waitForRootInvite,
 } from "./lib/smoke-remote-server.mjs";
@@ -2545,21 +2546,10 @@ async function runSmoke(
     // 1. Start the normal remote-serve hub with the public-relay defaults.
     const gatewayPort = await findFreePort();
     const serverArgs = createRemoteServeArgs(repoRoot, readyFilePath, gatewayPort);
-    const serverHome = path.join(tempRoot, "server-home");
-    const serverConfig = path.join(tempRoot, "server-config");
-    await Promise.all([
-      fsp.mkdir(serverHome, { recursive: true }),
-      fsp.mkdir(serverConfig, { recursive: true }),
-    ]);
+    const serverInstanceRoot = path.join(tempRoot, "server-instance");
+    await fsp.mkdir(serverInstanceRoot, { recursive: true });
     const serverEnv = {
-      ...process.env,
-      NODE_ENV: "development",
-      // A source-checkout smoke must exercise the source server. Otherwise the
-      // phone is rebuilt from current code while pairing against stale dist.
-      VIBESTUDIO_SERVER_ENTRY: "live",
-      HOME: serverHome,
-      XDG_CONFIG_HOME: serverConfig,
-      VIBESTUDIO_SHARED_DERIVED_CACHE_DIR: sharedDerivedCacheDir,
+      ...createRemoteSmokeServerEnvironment(process.env, serverInstanceRoot, sharedDerivedCacheDir),
       // Build results and artifact payloads are immutable, source-keyed data.
       // Keeping them inside the ephemeral profile makes each smoke create and
       // then synchronously unlink hundreds of megabytes of duplicate files.
@@ -2648,7 +2638,7 @@ async function runSmoke(
     );
     readyInfo = {
       ...ready,
-      workspacesRoot: path.join(serverConfig, "vibestudio", "workspaces"),
+      workspacesRoot: path.join(serverInstanceRoot, "workspaces"),
     };
 
     const invite = await waitForRootInvite({
@@ -2688,8 +2678,10 @@ async function runSmoke(
     // one-use); the phone is paired from an invite that CLI mints, as a second device.
     const cli = createSmokeCli({ root: path.join(tempRoot, "cli"), own });
     await cli.json("remote", "pair", invite.pairUrl);
+    console.log("[mobile-smoke] Paired command-line bootstrap device");
     const systemWorkspace = systemWorkspaceName(await cli.json("remote", "workspaces"));
     await cli.json("agent", "attach", "default", "--workspace", systemWorkspace);
+    console.log("[mobile-smoke] Attached the command-line session to System");
     const phoneInvite = (await cli.json("remote", "pair-device")).pairing;
     const link = buildConnectLinkFromLog(phoneInvite.pairUrl);
     const parsedLink = parseConnectLink(link);
@@ -2884,7 +2876,7 @@ async function runSmoke(
     readyInfo = {
       ...restartedReady,
       personalStateDir: readyInfo.personalStateDir,
-      workspacesRoot: path.join(serverConfig, "vibestudio", "workspaces"),
+      workspacesRoot: path.join(serverInstanceRoot, "workspaces"),
     };
     await logcat.waitForPhaseAfter(
       "workspace-recovery-complete",
