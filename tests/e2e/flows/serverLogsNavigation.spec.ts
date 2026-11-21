@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import YAML from "yaml";
+import { createPanelDeepLink } from "@vibestudio/shared/panelLocation";
 
 import {
   clickPanelSelector,
@@ -32,7 +33,8 @@ function configureInitialPanel(sourceRoot: string): void {
 }
 
 async function clickServerLogs(owner: TestApp, panelId: string): Promise<boolean> {
-  return clickPanelSelector(owner, panelId, 'a[href*="/about/server-logs/"]');
+  const link = createPanelDeepLink({ source: "about/server-logs" });
+  return clickPanelSelector(owner, panelId, `a[role="option"][href=${JSON.stringify(link)}]`);
 }
 
 test.describe("Server Logs navigation", () => {

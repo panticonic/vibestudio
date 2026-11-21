@@ -2,9 +2,10 @@ import { expect, test } from "@playwright/test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import YAML from "yaml";
+import { createPanelDeepLink } from "@vibestudio/shared/panelLocation";
 
 import {
-  clickPanelText,
+  clickPanelSelector,
   createManagedTestWorkspace,
   ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE,
   ensureHostedShellReady,
@@ -157,6 +158,8 @@ test.describe("Panel navigation convergence", () => {
       // Utility pages are searchable, but intentionally stay out of the idle
       // app suggestions.
       await typePanelText(testApp, initialPanelId, "About Vibestudio");
+      const aboutLink = createPanelDeepLink({ source: "about/about" });
+      const aboutOption = `a[role="option"][href=${JSON.stringify(aboutLink)}]`;
       await expect
         .poll(
           async () => {
@@ -174,12 +177,7 @@ test.describe("Panel navigation convergence", () => {
               // A dispatched native click is not the navigation outcome. Keep
               // the idempotent user action coupled to the authoritative panel
               // tree until the same panel has actually converged.
-              await clickPanelText(
-                testApp!,
-                initialPanelId,
-                ".launcher-title",
-                "About Vibestudio"
-              ).catch(() => false);
+              await clickPanelSelector(testApp!, initialPanelId, aboutOption).catch(() => false);
               return {
                 source: panel?.snapshot?.source ?? null,
                 state: readiness.presentation.state,
