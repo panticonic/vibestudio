@@ -30,16 +30,23 @@ import {
 
 let sdkPath: string;
 test.beforeAll(async () => {
-  test.setTimeout(120_000);
+  test.setTimeout(190_000);
   const root = process.env["VIBESTUDIO_E2E_TEMP_ROOT"];
   if (!root) throw new Error("The website SDK acceptance requires the owned E2E temporary root");
   const directory = path.join(root, "website-runtime-sdk");
   await promisify(execFile)(
     process.execPath,
-    ["node_modules/tsx/dist/cli.mjs", "scripts/build-website-runtime.ts", "--out-dir", directory],
+    [
+      "--max-old-space-size=4300",
+      "--import",
+      "tsx",
+      "scripts/build-website-runtime.ts",
+      "--out-dir",
+      directory,
+    ],
     {
       cwd: process.cwd(),
-      timeout: 110_000,
+      timeout: 180_000,
       maxBuffer: 1024 * 1024,
     }
   );
