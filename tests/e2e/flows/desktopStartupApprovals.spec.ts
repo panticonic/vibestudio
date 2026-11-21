@@ -1440,13 +1440,42 @@ test.describe("Desktop Startup Approvals", () => {
     }
 
     if (!networkApproval) throw new Error("Expected the pending network approval");
-    const paused = await collectStartupAgentCompletion(testApp, prompt);
-    const originalNetworkInvocations = paused.channels.flatMap(
-      (channel) => channel.networkInvocationIds
-    );
-    expect(originalNetworkInvocations).toHaveLength(1);
-    expect(paused.complete).toBe(false);
-    expect(paused.channels.flatMap((channel) => channel.completedNetworkInvocationIds)).toEqual([]);
+    let originalNetworkInvocations: string[] = [];
+    let lastPaused: StartupAgentCompletionState | undefined;
+    try {
+      // The approval inbox and the channel replay are read from different
+      // owners. Observe the durable invocation before deciding the approval.
+      await expect
+        .poll(
+          async () => {
+            const paused = await collectStartupAgentCompletion(testApp!, prompt);
+            lastPaused = paused;
+            const failures = paused.channels.flatMap((channel) => channel.failures);
+            if (failures.length > 0) {
+              throw new Error(
+                `Agent failed while awaiting network approval: ${failures.join("; ")}`
+              );
+            }
+            expect(paused.complete).toBe(false);
+            expect(
+              paused.channels.flatMap((channel) => channel.completedNetworkInvocationIds)
+            ).toEqual([]);
+            originalNetworkInvocations = paused.channels.flatMap(
+              (channel) => channel.networkInvocationIds
+            );
+            return originalNetworkInvocations;
+          },
+          { timeout: 45_000, intervals: [250, 500, 1000, 2000] }
+        )
+        .toHaveLength(1);
+    } catch (error) {
+      await test.info().attach("paused-agent-completion.json", {
+        body: JSON.stringify(lastPaused ?? null, null, 2),
+        contentType: "application/json",
+      });
+      await attachStartupDiagnostics(testApp);
+      throw error;
+    }
     expect(networkApproval).toMatchObject({
       kind: "capability",
       capability: "network.response.read",
