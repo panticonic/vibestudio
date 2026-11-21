@@ -139,6 +139,13 @@ const templateGoalDomains = {
     skill: "testkitCloseout",
     checks: ["exactNominatedTestkitAttempts", "separatedActualCurrentAndPrior", "separateReleaseAndObservedResidue",
       "exactUserAcceptanceDecision", "verifiedPrivateCloseout"],
+  "content-archive": {
+    namespace: "vibestudio:content-archive",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-content-archive-managed.ts" },
+    callable: "recoverContentArchive",
+    skill: "contentArchive",
+    checks: ["exactArchiveTreesAndBasis", "matchedApprovedEdition", "matchedScopedLocalPlan",
+      "restoredExactAddressedMembers", "verifiedAtomicReceipt", "preservedWorkingProjectAndNeighbor"],
   },
   "system-release": {
     namespace: "vibestudio:system-release",
@@ -1499,13 +1506,13 @@ export async function loadLiveTeacherCases(checkouts) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
     const distinctGoals = new Set();
-    const { openGoalWorlds, openSkillMaintenanceWorlds = [], openDesktopReadinessWorlds = [], openSystemReleaseWorlds = [], openTestkitCloseoutWorlds = [], openPanelSourceMigrationWorlds = [], openWorkspaceShareWorlds = [], openNotificationStateWorlds = [], openAgentCapabilityWorlds = [], openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openEditorialWorlds = [], openPortfolioWorlds = [], openRegencyWorlds = [], openImageCandidateWorlds = [], openApiReadinessWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
+    const { openGoalWorlds, openSkillMaintenanceWorlds = [], openDesktopReadinessWorlds = [], openContentArchiveWorlds = [], openSystemReleaseWorlds = [], openTestkitCloseoutWorlds = [], openPanelSourceMigrationWorlds = [], openWorkspaceShareWorlds = [], openNotificationStateWorlds = [], openAgentCapabilityWorlds = [], openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openEditorialWorlds = [], openPortfolioWorlds = [], openRegencyWorlds = [], openImageCandidateWorlds = [], openApiReadinessWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
       spectroliteGoalWorlds = [], openGoalGoogleWorlds = [], openGoalPersonalWorlds = [],
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
       openTerminalWorlds = [], openOwnedResearchWorlds = [], personalWelcomeWorlds = [], dictationHandoffWorlds = [], specialistHandoffWorlds = [], providerHandoffWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
-    for (const assignment of [...openGoalWorlds, ...openSkillMaintenanceWorlds, ...openDesktopReadinessWorlds, ...openSystemReleaseWorlds, ...openTestkitCloseoutWorlds, ...openPanelSourceMigrationWorlds, ...openWorkspaceShareWorlds, ...openNotificationStateWorlds, ...openAgentCapabilityWorlds, ...openMobileContinuityWorlds, ...openInstalledPackageWorlds, ...openAssetIntegrityWorlds, ...openTendrilRouteWorlds, ...openExtensionDossierWorlds, ...openDeployedInterfaceWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
+    for (const assignment of [...openGoalWorlds, ...openSkillMaintenanceWorlds, ...openDesktopReadinessWorlds, ...openContentArchiveWorlds, ...openSystemReleaseWorlds, ...openTestkitCloseoutWorlds, ...openPanelSourceMigrationWorlds, ...openWorkspaceShareWorlds, ...openNotificationStateWorlds, ...openAgentCapabilityWorlds, ...openMobileContinuityWorlds, ...openInstalledPackageWorlds, ...openAssetIntegrityWorlds, ...openTendrilRouteWorlds, ...openExtensionDossierWorlds, ...openDeployedInterfaceWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
       ...openApiReadinessWorlds, ...openEditorialWorlds, ...openPortfolioWorlds, ...openRegencyWorlds, ...openImageCandidateWorlds, ...openNewsEvidenceWorlds, ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
@@ -9000,6 +9007,46 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
         receipts.splice(index, 1);
         return true;
       }), "Expected exact package baseline, scoped local effect and installed native verification plan trajectory");
+  } else if (world.kind === "content-archive") {
+    const outcome = exercise.report.outcome;
+    const observed = effects.filter(effect => ["contentArchiveEvidence", "contentArchiveChange"].includes(effect.service));
+    const receipts = proof.effects?.slice();
+    const branch = exercise.calls.find(({ record }) => record === skill);
+    const child = (parent, name) => exercise.calls.filter(({ record }) => record.parent_call_id === parent?.callId &&
+      record.definition?.name === name && record.outcome === "done");
+    const inspection = child(branch, "inspectArchive");
+    const read = child(inspection[0], "readArchiveEvidence");
+    const selection = child(branch, "chooseEdition");
+    const plan = child(branch, "planRestoration");
+    const analysis = child(plan[0], "analyzeWorking");
+    const restore = child(branch, "applyArchive");
+    const allowed = proof.observation.working.filter(row => proof.assignment.permitted.includes(row.path));
+    const diff = { paths: allowed.filter(row => ["old", "missing", "mode"].includes(row.state)).map(row => row.path),
+      collision: allowed.some(row => row.state === "collision"), coedit: allowed.some(row => row.state === "coedit") };
+    requireEvidence(isDeepStrictEqual(outcome.assignment, proof.assignment) && isDeepStrictEqual(outcome.observation, proof.observation) &&
+      isDeepStrictEqual(outcome.archive, proof.archive) && isDeepStrictEqual(outcome.plan, proof.plan) && isDeepStrictEqual(outcome.receipt, proof.receipt) &&
+      inspection.length === 1 && matchesValue(inspection[0].record.inputs?.assignment, proof.assignment) &&
+      matchesValue(inspection[0].record.output, proof.observation) && read.length === 1 &&
+      matchesValue(read[0].record.inputs?.assignment, proof.assignment) && matchesValue(read[0].record.output, proof.observation) &&
+      selection.length === 1 && matchesValue(selection[0].record.inputs?.assignment, proof.assignment) &&
+      matchesValue(selection[0].record.inputs?.observation, proof.observation) && matchesValue(selection[0].record.output, proof.archive) &&
+      plan.length === 1 && matchesValue(plan[0].record.inputs?.assignment, proof.assignment) &&
+      matchesValue(plan[0].record.inputs?.observation, proof.observation) && matchesValue(plan[0].record.inputs?.archive, proof.archive) &&
+      matchesValue(plan[0].record.output, proof.plan) &&
+      (proof.archive.ref ? analysis.length === 1 && matchesValue(analysis[0].record.inputs?.assignment, proof.assignment) &&
+        matchesValue(analysis[0].record.inputs?.observation, proof.observation) && matchesValue(analysis[0].record.output, diff) :
+        analysis.length === 0) &&
+      (proof.receipt ? restore.length === 1 && matchesValue(restore[0].record.inputs?.assignment, proof.assignment) &&
+        matchesValue(restore[0].record.inputs?.observation, proof.observation) && matchesValue(restore[0].record.inputs?.archive, proof.archive) &&
+        matchesValue(restore[0].record.inputs?.plan, proof.plan) && matchesValue(restore[0].record.output, proof.receipt) : restore.length === 0) &&
+      Array.isArray(receipts) && receipts.length === observed.length && observed.every(({ service, method, args, result, error }) => {
+        if (error) return false;
+        const index = receipts.findIndex(item => item.service === service && item.method === method &&
+          matchesValue(args, item.args) && matchesValue(result, item.result));
+        if (index < 0) return false;
+        receipts.splice(index, 1);
+        return true;
+      }), "Expected exact content archive selection, current scoped restoration plan, and atomic receipt trajectory");
   } else if (world.kind === "system-release") {
     const outcome = exercise.report.outcome;
     const observed = effects.filter(effect => ["systemReleaseEvidence", "systemReleaseHandoff"].includes(effect.service));
