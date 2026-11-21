@@ -621,7 +621,7 @@ test.describe("Desktop Shell Chrome", () => {
         contentType: "text/plain",
       });
       await test.info().attach("selected-copy-dom.txt", {
-        body: await page.locator("body").innerText(),
+        body: await page.locator("body").innerText({ timeout: 2_000 }).catch(() => ""),
         contentType: "text/plain",
       });
       throw new Error(
