@@ -2820,13 +2820,10 @@ export class WorkspaceStateDO extends DurableObjectBase {
           slotIds = JSON.parse(String(prior["value"])) as string[];
         } else {
           slotIds = [];
-          // Earlier clients owned template seeding. Any durable tree use,
-          // including closed slots, means that presentation is already adopted.
-          // An empty live tree is never permission to recreate deleted panels.
-          if (
-            this.panelTreeRevision() === 0 &&
-            !this.sql.exec("SELECT 1 FROM slots LIMIT 1").toArray().length
-          ) {
+          // Workspace services can advance the revision before any panel opens.
+          // An existing slot, including a closed one, is evidence of an
+          // established panel tree.
+          if (!this.sql.exec("SELECT 1 FROM slots LIMIT 1").toArray().length) {
             for (const input of inputs) {
               const slotId = computePanelId({ relativePath: input.source, isRoot: true });
               const key = mintHistoryEntryKey();

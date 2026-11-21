@@ -92,6 +92,17 @@ function activateAlarmKey(
 describe("workspace template panel initialization", () => {
   const seeds = [{ source: SOURCE, stateArgs: { mode: "initial" } }, { source: "panels/second" }];
 
+  it("seeds a fresh panel tree after workspace service entities have started", async () => {
+    const { instance } = await createWorkspaceStateTestDO();
+    instance.entityActivate(doInput({ parentId: "server" }));
+    expect(instance.panelTreeRootGroups({ limit: 10 }).revision).toBeGreaterThan(0);
+
+    expect(instance.initializePanels(seeds, "alice")).toHaveLength(2);
+    expect(instance.panelTreeRootGroups({ limit: 10 }).groups).toEqual([
+      { ownerUserId: "alice", rootCount: 2 },
+    ]);
+  });
+
   it("commits one durable set of preparing roots and resumes after restart without duplicates", async () => {
     const { instance, fake } = await createWorkspaceStateTestDO();
     const first = instance.initializePanels(seeds);
