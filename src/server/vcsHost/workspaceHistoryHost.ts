@@ -182,6 +182,12 @@ export async function readWorkspaceParticipantStatus(input: WorkspaceHistoryPart
   contextId: string;
 }): Promise<VcsStatusResult> {
   requireWorkspaceParticipantOwner(input);
+  return readWorkspaceStatus(input);
+}
+
+async function readWorkspaceStatus(input: Pick<WorkspaceHistoryParticipant, "dispatch" | "owner"> & {
+  contextId: string;
+}): Promise<VcsStatusResult> {
   const status = vcsStatusResultSchema.parse(
     await input.dispatch.dispatch(input.owner, "readHistoryStatus", { contextId: input.contextId })
   );
@@ -573,6 +579,56 @@ async function readWorkspaceRuntimeFork(source: WorkspaceHistorySource, contextI
   return runtimeForkSchema.nullable().parse(await source.dispatch.dispatch(source.canonical, "readHistoryRuntimeFork", { contextId }));
 }
 
+async function readWorkspaceRuntimeAuthor(source: WorkspaceHistorySource, contextId: string, runtimeId?: string) {
+  const participant = z.string().min(1).nullable().parse(
+    await source.dispatch.dispatch(source.canonical, "readHistoryRuntimeAuthor", {
+      contextId, ...(runtimeId ? { runtimeId } : {}),
+    })
+  );
+  return participant ? { participant, ...participantStorage(source.canonical, participant) } : null;
+}
+
+/** The caller already holds read authority for this exact supervised context. */
+export async function readWorkspaceRuntimeStatus(
+  source: WorkspaceHistorySource, contextId: string, runtimeId?: string
+): Promise<VcsStatusResult | null> {
+  const author = await readWorkspaceRuntimeAuthor(source, contextId, runtimeId);
+  return author ? readWorkspaceStatus({ dispatch: source.dispatch, owner: author.owner, contextId }) : null;
+}
+
+/** Import a reachable child revision into an immutable branch in the reader's cell. */
+export async function receiveWorkspaceRuntimeReference(input: WorkspaceHistoryParticipant & {
+  sourceContextId: string;
+  reference: { kind: string; value: unknown };
+  blobsDir: string;
+}): Promise<string | null> {
+  const targetParticipant = requireWorkspaceParticipantOwner(input);
+  const targetOwnerContextId = input.ownerContextId;
+  const reference = historyReference(input.reference);
+  if (!targetOwnerContextId || !reference.success) return null;
+  const { dispatch, canonical, blobsDir, sourceContextId } = input;
+  const author = await readWorkspaceRuntimeAuthor(input, sourceContextId);
+  if (!author || author.participant === targetParticipant) return null;
+  const visible = z.boolean().parse(await dispatch.dispatch(author.owner, "readHistoryReferenceVisibility", {
+    contextIds: [sourceContextId],
+    references: [reference.data],
+  }));
+  if (!visible) return null;
+  const { workingHead } = z.object({ workingHead: head }).parse(
+    await dispatch.dispatch(author.owner, "readHistoryHeads", { contextId: sourceContextId })
+  );
+  const targetContextId = `review:${sha256HexSyncText(canonicalJson([sourceContextId, workingHead]))}`;
+  await transferWorkspaceHistoryFork({
+    dispatch, canonical, blobsDir, sourceContextId,
+    sourceParticipant: author.participant, targetContextId,
+    targetOwnerContextId, targetParticipant, expectedHead: workingHead,
+  });
+  const copied = await workspaceParticipantReferencesReachable({
+    ...input, contextIds: [targetContextId], references: [input.reference],
+  });
+  return copied ? targetContextId : null;
+}
+
 /** The host has verified authority over the source and admitted the destination lifetime. */
 export async function forkWorkspaceParticipantContext(input: WorkspaceHistoryParticipant & {
   contextId: string;
@@ -623,6 +679,7 @@ async function transferWorkspaceHistoryFork(input: WorkspaceHistorySource & {
   targetParticipant: string;
   blobsDir: string;
   capture?: z.infer<typeof runtimeForkSchema>;
+  expectedHead?: string;
 }) {
   const { dispatch, canonical, targetParticipant: participantId, targetContextId, targetOwnerContextId } = input;
   const target = participantStorage(canonical, participantId);
@@ -635,13 +692,18 @@ async function transferWorkspaceHistoryFork(input: WorkspaceHistorySource & {
   }));
   if (reservation.targetId !== target.targetId)
     throw new Error("Workspace fork reserved a different storage peer");
-  const request = { parentContextId: input.sourceContextId, childContextId: targetContextId, childPeer: target.targetId };
+  const request = {
+    parentContextId: input.sourceContextId, childContextId: targetContextId, childPeer: target.targetId,
+    ...(input.expectedHead !== undefined ? { expectedHead: input.expectedHead } : {}),
+  };
   return withBlobContentLock(input.blobsDir, async () => {
     const { seed, token } = z.object({
       seed: historyForkSeed,
       token: z.string().min(1).nullable(),
     }).strict().parse(await dispatch.dispatch(source.owner, "offerHistoryContextFork", request));
     const capture = input.capture;
+    if (input.expectedHead && seed.head !== input.expectedHead)
+      throw new Error("Workspace source changed before the exact review revision was copied");
     if (capture && (seed.head !== capture.head || canonicalJson(seed.state) !== canonicalJson(capture.state))) {
       throw new Error("Runtime workspace fork did not offer its captured revision");
     }

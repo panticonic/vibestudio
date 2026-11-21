@@ -150,6 +150,8 @@ function participantFixture(
   return {
     participantHistoryAttached: options?.attached ?? true,
     whenSemanticReady: vi.fn(async () => {}),
+    readRuntimeParticipantStatus: vi.fn(async () => null as Awaited<ReturnType<WorkspaceVcs["readRuntimeParticipantStatus"]>>),
+    receiveRuntimeParticipantReference: vi.fn(async () => null as string | null),
     openParticipantScope: vi.fn<WorkspaceVcs["openParticipantScope"]>(async (input) => {
       const { caller, contextId, ownerContextId } = input;
       const participant = workspaceParticipantIdentity(caller, ownerContextId);
@@ -293,6 +295,8 @@ describe("canonical vcsService", () => {
       participantHistoryAttached: true,
       whenSemanticReady: vi.fn(async () => {}),
       openParticipantScope: vi.fn().mockResolvedValue(scope),
+      readRuntimeParticipantStatus: vi.fn(),
+      receiveRuntimeParticipantReference: vi.fn(),
       readParticipantMain: vi.fn().mockResolvedValue(EVENT),
       readPublishedCatalog: vi.fn<WorkspaceVcs["readPublishedCatalog"]>(),
       readTrajectoryProvenance: vi.fn(),
@@ -567,7 +571,7 @@ describe("canonical vcsService", () => {
     const ctx = agentContext();
     const resolver = "vcs.files.mainState";
     const prepared = await definition.authorityPreparation![resolver]!(ctx, []);
-    expect(prepared.payload).toEqual([]);
+    expect(prepared.payload).toEqual({ args: [], reviewContextIds: [] });
     await expect(
       definition.handler(
         {
@@ -589,6 +593,56 @@ describe("canonical vcsService", () => {
     const { definition, read } = service();
     await definition.handler(shellContext(), "status", [{ contextId: "context:target" }]);
     expect(read).toHaveBeenCalledWith("readHistoryStatus", { contextId: "context:target" });
+  });
+
+  it("reads the exact author for a supervised child and denies other callers", async () => {
+    const child = "context:child";
+    const blocked = service();
+    const caller = agentContext("channel:parent");
+    await expect(blocked.definition.handler(caller, "status", [{ contextId: child }]))
+      .rejects.toThrow("outside the caller's reachable context graph");
+    expect(blocked.workspace.readRuntimeParticipantStatus).not.toHaveBeenCalled();
+
+    const admitted = service({ owned: [{ contextId: child, kind: "lifecycle" }] });
+    const status = {
+      contextId: child,
+      committed: EVENT,
+      workingHead: EVENT,
+      clean: true,
+      mainEventId: EVENT.eventId,
+      mainRelation: "at" as const,
+      workingCounts: { applications: 0, workUnits: 0, changes: 0 },
+      integrating: [],
+    };
+    vi.mocked(admitted.workspace.readRuntimeParticipantStatus).mockResolvedValue(status);
+    await expect(admitted.definition.handler(caller, "status", [{ contextId: child }]))
+      .resolves.toEqual(status);
+    expect(admitted.workspace.readRuntimeParticipantStatus).toHaveBeenCalledWith(child);
+    expect(admitted.workspace.openParticipantScope).not.toHaveBeenCalled();
+  });
+
+  it("admits comparison against an exact child review copy", async () => {
+    const child = "context:child";
+    const review = "context:review";
+    const source = { kind: "event" as const, eventId: "event:child" };
+    const caller = agentContext("channel:parent");
+    const admitted = service({
+      owned: [{ contextId: child, kind: "lifecycle" }],
+      referencesReachable: (contexts, references) =>
+        contexts.includes(review) ||
+        references.every(({ value }) => JSON.stringify(value) === JSON.stringify(EVENT)),
+    });
+    vi.mocked(admitted.workspace.receiveRuntimeParticipantReference).mockResolvedValue(review);
+    await admitted.definition.handler(caller, "compare", [{ target: EVENT, source }]);
+    expect(admitted.workspace.receiveRuntimeParticipantReference).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextIds: expect.arrayContaining([child]),
+        reference: { kind: "event", value: source.eventId },
+      }),
+    );
+    expect(admitted.workspace.reviewParticipantMerge).toHaveBeenCalledWith(
+      expect.objectContaining({ readableContextIds: expect.arrayContaining([child, review]) }),
+    );
   });
 
   it("notifies the owning host coordinator after an ordinary delta merge", async () => {

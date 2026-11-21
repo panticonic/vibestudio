@@ -61,6 +61,8 @@ export interface VcsServiceDeps {
     | "readPublishedCatalog"
     | "readTrajectoryProvenance"
     | "openParticipantScope"
+    | "readRuntimeParticipantStatus"
+    | "receiveRuntimeParticipantReference"
     | "editParticipantContext"
     | "transferParticipantContext"
     | "revertParticipantContext"
@@ -351,7 +353,8 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
     ctx: ServiceContext,
     method: VcsMethodName,
     input: unknown,
-    caller = participantReadCaller(ctx)
+    caller = participantReadCaller(ctx),
+    reviewContextIds: readonly string[] = []
   ) => {
     const explicitContext = vcsOperationContextId(method, input);
     const scope = await participantScope(ctx, explicitContext, caller);
@@ -362,7 +365,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
     if (!reference) return scope;
     const contextId = await workspaceParticipantReferenceContext({
       ...scope,
-      readableContextIds: await reachableContextAuthorities(ctx, deps),
+      readableContextIds: [...await reachableContextAuthorities(ctx, deps), ...reviewContextIds],
       reference,
     });
     return { ...scope, contextId };
@@ -373,7 +376,8 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
     method: VcsMethodName,
     input: unknown,
     effectCaller: VerifiedCaller = participantReadCaller(ctx),
-    epochTransition = false
+    epochTransition = false,
+    reviewContextIds: readonly string[] = []
   ): Promise<unknown> => {
     if (method === "mainState") return workspace.readParticipantMain();
     if (!effectCaller.agentBinding && !callerContextId(ctx, deps) && privileged(ctx, deps)) {
@@ -417,7 +421,23 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
         return workspace.readTrajectoryProvenance({ operation: "neighbors", request: neighbors, expand });
       }
     }
-    const scope = await participantOperationScope(ctx, method, input, effectCaller);
+    const statusReader = method === "status" ? verifiedAgentBinding(ctx, deps) : null;
+    if (statusReader) {
+      const targetContextId = vcsOperationContextId(method, input);
+      if (targetContextId && targetContextId !== statusReader.contextId) {
+        await authorizeContext(ctx, deps, targetContextId, "read");
+        const status = await workspace.readRuntimeParticipantStatus(targetContextId);
+        if (status) return status;
+      } else if (!ctx.caller.nativeInvocation) {
+        const status = await workspace.readRuntimeParticipantStatus(
+          statusReader.contextId, statusReader.entityId,
+        );
+        if (status) return status;
+      }
+    }
+    const scope = await participantOperationScope(ctx, method, input, effectCaller, reviewContextIds);
+    const readableContextIds = async () =>
+      [...await reachableContextAuthorities(ctx, deps), ...reviewContextIds];
     const cause = { parent: ctx.causalParent ?? null };
     const common = { ...scope, head: scope.workingHead, cause };
     switch (method) {
@@ -469,7 +489,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
         return workspace.reviewParticipantMerge({
           ...scope,
           compare: vcsMethods.compare.args.parse([input])[0],
-          readableContextIds: await reachableContextAuthorities(ctx, deps),
+          readableContextIds: await readableContextIds(),
         });
       case "merge":
         return (
@@ -477,7 +497,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
             ...scope,
             cause,
             merge: vcsMethods.merge.args.parse([input])[0],
-            readableContextIds: await reachableContextAuthorities(ctx, deps),
+            readableContextIds: await readableContextIds(),
           })
         ).result;
       case "edit":
@@ -499,7 +519,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           await workspace.transferParticipantContext({
             ...common,
             transfer: { method: "copy", value: vcsMethods.copy.args.parse([input])[0] },
-            readableContextIds: await reachableContextAuthorities(ctx, deps),
+            readableContextIds: await readableContextIds(),
           })
         ).result;
       case "revert":
@@ -579,6 +599,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
   };
 
   const admitOperation = async (ctx: ServiceContext, method: VcsMethodName, input: unknown) => {
+    const reviewContextIds: string[] = [];
     if ((method === "push" || method === "commit") &&
         isRecord(input) && input["templateInstallation"] !== undefined)
       requireReviewedSourceConsumer(ctx.caller);
@@ -626,11 +647,25 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
       const scope = await participantScope(
         ctx, primaryContextId, isMutation ? ctx.caller : participantReadCaller(ctx)
       );
-      const reachable = await workspaceParticipantReferencesReachable({
+      let reachable = await workspaceParticipantReferencesReachable({
         ...scope,
         contextIds,
         references: guardedRoots,
       });
+      if (!reachable && verifiedAgentBinding(ctx, deps)) {
+        for (const reference of guardedRoots) {
+          if (await workspaceParticipantReferencesReachable({
+            ...scope, contextIds: [...contextIds, ...reviewContextIds], references: [reference],
+          })) continue;
+          const reviewed = await workspace.receiveRuntimeParticipantReference({
+            ...scope, contextIds, reference,
+          });
+          if (reviewed) reviewContextIds.push(reviewed);
+        }
+        reachable = reviewContextIds.length > 0 && await workspaceParticipantReferencesReachable({
+          ...scope, contextIds: [...contextIds, ...reviewContextIds], references: guardedRoots,
+        });
+      }
       if (
         !reachable &&
         !(
@@ -663,7 +698,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
       parsed.input["visibilityContextIds"] = await reachableContextAuthorities(ctx, deps);
     }
 
-    return parsed.input;
+    return { input: parsed.input, reviewContextIds };
   };
 
   const invokeOperation = async (
@@ -673,9 +708,12 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
   ): Promise<unknown> => {
     const prepared = ctx.preparedAuthority?.resolver === `vcs.files.${method}`;
     if (prepared) await requireHistory(ctx, method);
-    const admittedInput = prepared
-      ? preparedAuthorityPayload<readonly unknown[]>(ctx, `vcs.files.${method}`)[0]
+    const admitted = prepared
+      ? preparedAuthorityPayload<{ args: readonly unknown[]; reviewContextIds: string[] }>(
+          ctx, `vcs.files.${method}`
+        )
       : await admitOperation(ctx, method, input);
+    const admittedInput = "args" in admitted ? admitted.args[0] : admitted.input;
     const parsed = { input: admittedInput };
     const primaryContextId = vcsOperationContextId(method, admittedInput);
     const epochTransition =
@@ -694,7 +732,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
         : access === "context-write" || access === "workspace-write"
           ? ctx.caller
           : participantReadCaller(ctx);
-    const result = await invoke(ctx, method, semanticInput, effectCaller, epochTransition);
+    const result = await invoke(ctx, method, semanticInput, effectCaller, epochTransition, admitted.reviewContextIds);
     if (epochTransition) deps.onEpochTransitionPublished?.();
     if (
       method === "merge" &&
@@ -735,35 +773,38 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
         .map(([method]) => [
           `vcs.files.${method}`,
           async (ctx, [input]) => {
-            const admittedInput = await admitOperation(ctx, method as VcsMethodName, input);
+            const { input: admittedInput, reviewContextIds } = await admitOperation(ctx, method as VcsMethodName, input);
             // Seal the canonical argument tuple as JSON. Zero-argument calls
             // retain absence rather than an undefined payload's null default.
             const admittedArgs = admittedInput === undefined ? [] : [admittedInput];
+            const preparedInput = { args: admittedArgs, reviewContextIds };
             if (!websiteAuthorityIdentity(ctx.caller))
-              return preparedAuthorityState([], admittedArgs);
+              return preparedAuthorityState([], preparedInput);
             const scope = method === "mainState"
               ? null
-              : await participantOperationScope(ctx, method as VcsMethodName, admittedInput);
+              : await participantOperationScope(ctx, method as VcsMethodName, admittedInput, undefined, reviewContextIds);
             const catalog = scope ? workspaceParticipantCatalog({
               ...scope,
               ...((method === "compare" || method === "merge" || method === "copy")
-                ? { readableContextIds: await reachableContextAuthorities(ctx, deps) }
+                ? { readableContextIds: [...await reachableContextAuthorities(ctx, deps), ...reviewContextIds] }
                 : {}),
             }) : null;
+            const read = (name: VcsMethodName, value: unknown) =>
+              invoke(ctx, name, value, undefined, false, reviewContextIds);
             const reads: SemanticReads = {
               inspect: async (value) =>
-                vcsMethods.inspect.returns.parse(await invoke(ctx, "inspect", value)),
+                vcsMethods.inspect.returns.parse(await read("inspect", value)),
               compare: async (value) => {
                 if (catalog && value.source.kind !== "external-delta")
                   throw new Error("Participant merge requires a reviewed placement scope");
-                return vcsMethods.compare.returns.parse(await invoke(ctx, "compare", value));
+                return vcsMethods.compare.returns.parse(await read("compare", value));
               },
               status: async (value) =>
-                vcsMethods.status.returns.parse(await invoke(ctx, "status", value)),
+                vcsMethods.status.returns.parse(await read("status", value)),
               listDirectory: async (value) =>
-                vcsMethods.listDirectory.returns.parse(await invoke(ctx, "listDirectory", value)),
+                vcsMethods.listDirectory.returns.parse(await read("listDirectory", value)),
               listFiles: async (value) =>
-                vcsMethods.listFiles.returns.parse(await invoke(ctx, "listFiles", value)),
+                vcsMethods.listFiles.returns.parse(await read("listFiles", value)),
               ...(scope && catalog
                 ? {
                     repositoryPath: catalog.repositoryPath,
@@ -784,7 +825,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
               admittedInput,
               reads
             );
-            return preparedAuthorityState(selections, admittedArgs);
+            return preparedAuthorityState(selections, preparedInput);
           },
         ])
     ),

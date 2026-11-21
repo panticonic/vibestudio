@@ -17,6 +17,7 @@ import {
   openWorkspaceParticipantContext,
   readWorkspaceParticipantNeighbors,
   readWorkspaceParticipantStatus,
+  receiveWorkspaceRuntimeReference,
   reviewWorkspaceParticipantMerge,
   workspaceParticipantReferencesReachable,
   workspaceParticipantCatalog,
@@ -220,6 +221,47 @@ it("transfers the selected fork to the destination identity and requires the exa
     : remote(ref, method));
   await expect(fork()).rejects.toThrow("accepted a different revision");
   expect(dispatch).toHaveBeenCalledTimes(3);
+});
+
+it("copies an admitted runtime revision into the reviewer's private cell", async () => {
+  const ownerContextId = "parent-context";
+  const sourceContextId = "child-context";
+  const caller = native(1, "parent", "parent");
+  const targetParticipant = workspaceParticipantIdentity(caller, ownerContextId);
+  const sourceParticipant = workspaceParticipantIdentity(native(2, "child", "child"), sourceContextId);
+  const storage = (participant: string) => ({
+    ...canonical,
+    objectKey: `work-${sha256HexSyncText(participant)}`,
+  });
+  const owner = storage(targetParticipant);
+  const author = storage(sourceParticipant);
+  const targetId = `do:${owner.source}:${owner.className}:${owner.objectKey}`;
+  const seed = {
+    branch: `fork/${"a".repeat(64)}`,
+    head: "exact-head",
+    state: { kind: "event", eventId: "event:child" },
+  };
+  const dispatch = vi.fn(async (_receiver: WorkspaceSourceProviderRef, method: string, _input: unknown) => {
+    switch (method) {
+      case "readHistoryRuntimeAuthor": return sourceParticipant;
+      case "readHistoryReferenceVisibility": return true;
+      case "readHistoryHeads": return { workingHead: seed.head };
+      case "reserveHistoryParticipant": return { targetId, head: "main", origin: { ref: "GadHistoryDO:canonical", token: "origin" } };
+      case "offerHistoryContextFork": return { seed, token: "scoped-review-grant" };
+      case "acceptHistoryContextFork": return seed;
+      case "finishHistoryContextFork": return;
+      default: throw new Error(`Unexpected history call ${method}`);
+    }
+  });
+  const copied = await receiveWorkspaceRuntimeReference({
+    dispatch: { dispatch }, canonical, caller, owner, ownerContextId, sourceContextId,
+    reference: { kind: "event", value: seed.state.eventId }, blobsDir: tmpdir(),
+  });
+  expect(copied).toMatch(/^review:[a-f0-9]{64}$/);
+  expect(dispatch).toHaveBeenCalledWith(author, "offerHistoryContextFork", {
+    parentContextId: sourceContextId, childContextId: copied, childPeer: targetId, expectedHead: seed.head,
+  });
+  expect(dispatch.mock.calls.map(([, method]) => method)).not.toContain("publishHistoryContext");
 });
 
 it("avoids opening a new participant copy during shutdown", async () => {

@@ -135,6 +135,8 @@ import {
   mergeWorkspaceParticipantContext,
   observeAppliedWorkspacePublication,
   openWorkspaceParticipantContext,
+  readWorkspaceRuntimeStatus,
+  receiveWorkspaceRuntimeReference,
   workspaceHistoryFileContentVisible,
   workspaceHistoryPlacementInContexts,
   workspaceParticipantIdentity,
@@ -1332,6 +1334,37 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         ...(input.retainForRuntime ? { retainForRuntime: true } : {}),
       });
     });
+  }
+
+  readRuntimeParticipantStatus(contextId: string, runtimeId?: string) {
+    const source = this.participantHistorySource;
+    if (!source) return Promise.resolve(null);
+    return this.locked(`context-lifecycle:${contextId}`, () =>
+      this.retiredContexts.has(contextId)
+        ? Promise.resolve(null)
+        : readWorkspaceRuntimeStatus(source, contextId, runtimeId)
+    );
+  }
+
+  async receiveRuntimeParticipantReference(
+    input: Omit<Parameters<typeof receiveWorkspaceRuntimeReference>[0], "blobsDir" | "sourceContextId"> & {
+      contextIds: readonly string[];
+    }
+  ) {
+    const targetContext = input.ownerContextId;
+    if (!targetContext) return null;
+    for (const sourceContext of new Set(input.contextIds)) {
+      if (sourceContext === targetContext) continue;
+      const copied = await this.lockParticipantContexts(sourceContext, targetContext, () =>
+        this.retiredContexts.has(sourceContext) || this.retiredContexts.has(targetContext)
+          ? Promise.resolve(null)
+          : receiveWorkspaceRuntimeReference({
+              ...input, sourceContextId: sourceContext, blobsDir: this.deps.blobsDir,
+            })
+      );
+      if (copied) return copied;
+    }
+    return null;
   }
 
   /**
