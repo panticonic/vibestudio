@@ -368,8 +368,8 @@ test.describe("Desktop Shell Chrome", () => {
       const system = workspaces.find((workspace) => workspace.privateRole === "system")!;
       expect(personal).toBeTruthy();
       expect(system).toBeTruthy();
-      const approveVisibleStartupReviews = async (workspaceId: string) => {
-        const approvals = createTypedServiceClient(
+      const workspaceApprovals = (workspaceId: string) =>
+        createTypedServiceClient(
           "shellApproval",
           shellApprovalMethods,
           nativeUiServiceInvoker(
@@ -379,6 +379,8 @@ test.describe("Desktop Shell Chrome", () => {
             shellApprovalMethods
           )
         );
+      const approveVisibleStartupReviews = async (workspaceId: string) => {
+        const approvals = workspaceApprovals(workspaceId);
         await expect
           .poll(async () => (await approvals.getWorkspaceCreationReviewState()).status, {
             timeout: 60_000,
@@ -519,6 +521,13 @@ test.describe("Desktop Shell Chrome", () => {
       expect(status.workingHead).not.toEqual(targetMain);
       await page.getByRole("button", { name: "Review with an agent", exact: true }).click();
       const targetOwner = { app: testApp.app, workspaceId: system.workspaceId };
+      const systemSection = page.getByRole("region", { name: "System workspace", exact: true });
+      const focusedSection = page.locator(".workspace-section-focused");
+      if ((await focusedSection.getAttribute("aria-label")) !== "System workspace") {
+        await systemSection.getByRole("button", { name: "Open System", exact: true }).click();
+      }
+      await expect(focusedSection).toHaveAttribute("aria-label", "System workspace");
+      const targetApprovals = workspaceApprovals(system.workspaceId);
       await expect
         .poll(
           async () => {
@@ -526,11 +535,20 @@ test.describe("Desktop Shell Chrome", () => {
               ({ snapshot }) =>
                 snapshot?.source === "panels/chat" && snapshot.contextId === contextId
             );
-            return panel ? (await getPanelReadiness(targetOwner, panel.id)).presentation.state : null;
+            if (panel) {
+              const { presentation } = await getPanelReadiness(targetOwner, panel.id);
+              if (presentation.state === "ready") return { state: presentation.state };
+              const approvals = await targetApprovals.listPending();
+              if (approvals.some((approval) => approval.kind === "unit-install-review")) {
+                await approveVisibleStartupReviews(system.workspaceId);
+              }
+              return { state: presentation.state, pendingKinds: approvals.map(({ kind }) => kind) };
+            }
+            return null;
           },
           { timeout: 60_000 }
         )
-        .toBe("ready");
+        .toEqual({ state: "ready" });
       const targetFs = createTypedServiceClient(
         "fs",
         fsMethods,
