@@ -10,6 +10,15 @@ import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
 
 const sharedProgram = "skills/vibestudio-workflows/runWorkflow.nl";
 const templateGoalDomains = {
+  "chat-continuity": {
+    namespace: "vibestudio:chat:owned-continuity",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-chat-continuity-managed.ts" },
+    callable: "workOnChatContinuity",
+    skill: "chatContinuity",
+    checks: ["exactOwnedChatSelection", "exactChatFrontiers", "independentDurableChatReceipt", "exactFirstPartyChatProjection",
+      "exactNativeChatWorker", "groundedChatDeliveryReview", "groundedChatContinuityDisposition", "verifiedPrivateChatHandoff",
+      "preservedChatWorkspace", "rejectedChatRetarget"],
+  },
   "editorial-packet": {
     namespace: "vibestudio:personal:editorial-packet",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-editorial-managed.ts" },
@@ -1514,14 +1523,14 @@ export async function loadLiveTeacherCases(checkouts) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
     const distinctGoals = new Set();
-    const { openGoalWorlds, openPhoneFirstRunWorlds = [], openSkillMaintenanceWorlds = [], openDesktopReadinessWorlds = [], openContentArchiveWorlds = [], openSystemReleaseWorlds = [], openTestkitCloseoutWorlds = [], openPanelSourceMigrationWorlds = [], openWorkspaceShareWorlds = [], openNotificationStateWorlds = [], openAgentCapabilityWorlds = [], openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openEditorialWorlds = [], openPortfolioWorlds = [], openRegencyWorlds = [], openImageCandidateWorlds = [], openApiReadinessWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
+    const { openGoalWorlds, openPhoneFirstRunWorlds = [], openSkillMaintenanceWorlds = [], openDesktopReadinessWorlds = [], openContentArchiveWorlds = [], openSystemReleaseWorlds = [], openTestkitCloseoutWorlds = [], openPanelSourceMigrationWorlds = [], openWorkspaceShareWorlds = [], openNotificationStateWorlds = [], openAgentCapabilityWorlds = [], openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openChatContinuityWorlds = [], openEditorialWorlds = [], openPortfolioWorlds = [], openRegencyWorlds = [], openImageCandidateWorlds = [], openApiReadinessWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
       spectroliteGoalWorlds = [], openGoalGoogleWorlds = [], openGoalPersonalWorlds = [],
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
       openTerminalWorlds = [], openOwnedResearchWorlds = [], personalWelcomeWorlds = [], dictationHandoffWorlds = [], specialistHandoffWorlds = [], providerHandoffWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
     for (const assignment of [...openGoalWorlds, ...openPhoneFirstRunWorlds, ...openSkillMaintenanceWorlds, ...openDesktopReadinessWorlds, ...openContentArchiveWorlds, ...openSystemReleaseWorlds, ...openTestkitCloseoutWorlds, ...openPanelSourceMigrationWorlds, ...openWorkspaceShareWorlds, ...openNotificationStateWorlds, ...openAgentCapabilityWorlds, ...openMobileContinuityWorlds, ...openInstalledPackageWorlds, ...openAssetIntegrityWorlds, ...openTendrilRouteWorlds, ...openExtensionDossierWorlds, ...openDeployedInterfaceWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
-      ...openApiReadinessWorlds, ...openEditorialWorlds, ...openPortfolioWorlds, ...openRegencyWorlds, ...openImageCandidateWorlds, ...openNewsEvidenceWorlds, ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
+      ...openApiReadinessWorlds, ...openChatContinuityWorlds, ...openEditorialWorlds, ...openPortfolioWorlds, ...openRegencyWorlds, ...openImageCandidateWorlds, ...openNewsEvidenceWorlds, ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
       ...openGoalCalendarWorlds, ...openPersonalArtifactWorlds, ...openPersonalHistoryWorlds,
@@ -7961,6 +7970,51 @@ function verifyTestkitCloseout(exercise, world, proof, skill) {
   );
 }
 
+function verifyChatContinuity(exercise, world, proof, skill) {
+  const report=exercise.report.outcome;
+  const {index,plan,frames,evidence,decision,handoff}=proof;
+  const [opening,current]=frames;
+  const records=exercise.calls.map(({record})=>record);
+  const child=(parent,name)=>records.filter(record=>record.parent_call_id===parent.call_id&&
+    record.definition?.name===name&&record.outcome==="done");
+  const step=name=>child(skill,name);
+  const effects=(name,service,method)=>step(name).flatMap(record=>(record.effects??[])
+    .filter(effect=>effect.service===service&&effect.method===method&&!effect.error));
+  const list=effects("discoverChatContinuity","chatContinuityIndex","list");
+  const reads=effects("observeChatContinuity","chatContinuityState","read");
+  const notes=effects("stageChatContinuityNote","chatContinuityHandoff","stage");
+  const selected=step("chooseChatContinuity");
+  const review=step("reviewChatContinuity");
+  const decided=step("decideChatContinuity");
+  const artifact=typeof proof.artifact==="string"?JSON.parse(proof.artifact):null;
+  const installed=review.length===1?child(review[0],"reviewConversation"):[];
+  requireEvidence(
+    list.length===1&&matchesValue(list[0].args,[])&&matchesValue(list[0].result,index)&&
+      selected.length===1&&matchesValue(selected[0].inputs?.goal,world.goal)&&matchesValue(selected[0].inputs?.index,index)&&
+      matchesValue(selected[0].output,plan)&&isDeepStrictEqual(report.plan,plan)&&
+      reads.length===2&&frames.length===2&&frames.every((frame,i)=>frame.channelId===plan.channelId&&
+        matchesValue(reads[i].args,[plan.channelId])&&matchesValue(reads[i].result,frame))&&
+      isDeepStrictEqual(report.opening,opening)&&isDeepStrictEqual(report.current,current)&&
+      review.length===1&&matchesValue(review[0].inputs?.goal,world.goal)&&
+      matchesValue(review[0].inputs?.index,index)&&matchesValue(review[0].inputs?.plan,plan)&&
+      matchesValue(review[0].inputs?.opening,opening)&&matchesValue(review[0].inputs?.current,current)&&
+      matchesValue(review[0].output,evidence)&&isDeepStrictEqual(report.evidence,evidence)&&
+      installed.length===1&&matchesValue(installed[0].inputs?.request,evidence.request)&&
+      matchesValue(installed[0].output,evidence.review)&&child(installed[0],"reviewDelivery").length===1&&
+      decided.length===1&&matchesValue(decided[0].inputs?.goal,world.goal)&&matchesValue(decided[0].inputs?.plan,plan)&&
+      matchesValue(decided[0].inputs?.opening,opening)&&matchesValue(decided[0].inputs?.current,current)&&
+      matchesValue(decided[0].inputs?.evidence,evidence)&&matchesValue(decided[0].output,decision)&&
+      decision.status===world.status&&isDeepStrictEqual(report.disposition,decision)&&
+      isDeepStrictEqual(report.handoff,handoff)&&notes.length===Number(decision.write)&&
+      (handoff?artifact&&matchesValue(notes[0].args,[{...report,handoff:null}])&&matchesValue(notes[0].result,handoff)&&
+        handoff.digest===hash(proof.artifact)&&handoff.messageId===current.receipt.messageId&&
+        handoff.channelId===plan.channelId&&handoff.through===current.through&&artifact.scope==="private-local"&&
+        isDeepStrictEqual(artifact.current,current)&&isDeepStrictEqual(artifact.evidence,evidence):
+        notes.length===0&&artifact===null),
+    "Expected exact first-party chat, installed worker continuity and private delivery evidence"
+  );
+}
+
 export function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
   const proof = execution.diagnostics.openGoalVerification;
   const world = workflow.assignment;
@@ -7985,6 +8039,8 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
   const evidence = { workspace: { proof } };
   if (world.kind === "testkit-closeout") {
     verifyTestkitCloseout(exercise, world, proof, skill);
+  } else if (world.kind === "chat-continuity") {
+    verifyChatContinuity(exercise, world, proof, skill);
   } else if (world.kind === "editorial-packet") {
     verifyEditorialPacket(exercise, world, proof, skill);
   } else if (world.kind === "demo-portfolio") {
