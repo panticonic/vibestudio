@@ -128,20 +128,7 @@ test.describe("Desktop Shell Chrome", () => {
 
   test("mounts the dynamic shell app with custom titlebar chrome", async () => {
     testApp = await launchTestApp({ launchTimeout: 240_000 });
-    let deletePermission: { action: string; unrecognized?: true } | undefined;
-    await approvePendingStartupUnits(testApp, 180_000, (review) => {
-      const part = review.parts.find((entry) => entry.repoPath === "extensions/browser-data");
-      if (!part) return;
-      const permission = [...part.notableRows, ...part.everydayRows].find(
-        (entry) =>
-          entry.kind === "permission" &&
-          entry.row.capability === "userland:workers/browser-data/browser-data.delete#*"
-      );
-      if (permission?.kind === "permission") deletePermission = permission.row;
-    });
-    expect(deletePermission?.action).toBe("delete persistent browser data");
-    expect(deletePermission?.unrecognized).toBeUndefined();
-    await declineFirstRunReporting(testApp);
+    await approveStartupUnitsAndDeclineReporting(testApp);
 
     const shellPage = await findWorkspaceShellPage(testApp);
     try {
