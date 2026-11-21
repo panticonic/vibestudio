@@ -1,5 +1,9 @@
 import type { TestApp } from "../../setup/electronSetup";
 import { expect, test } from "@playwright/test";
+import type {
+  DiagnoseInvocationInput,
+  InvocationDiagnosticPacket,
+} from "@vibestudio/service-schemas/workspaceSource";
 import { configureInspectionFixture } from "../support/inspectionFixture";
 import { declineFirstRunReporting } from "../support/workspaceCreation";
 import {
@@ -56,26 +60,15 @@ test.describe("agentic DX contracts", () => {
       expect(panel).toBeTruthy();
       await waitForPanelRuntime(testApp, panel!.id);
 
+      const coordinate = {
+        trajectoryId: "electron-diagnostic-missing",
+        branchId: "main",
+        invocationId: "invocation-missing",
+      };
+      const diagnosticInput = { ...coordinate, eventLimit: 3 } satisfies DiagnoseInvocationInput;
       const result = await executePanelScript<{
         entries: string[];
-        diagnostic: {
-          coordinate: {
-            trajectoryId: string;
-            branchId: string;
-            invocationId: string;
-          };
-          invocation: unknown;
-          events: unknown[];
-          commands: unknown[];
-          summary: {
-            terminal: boolean;
-            eventCount: number;
-            commandCount: number;
-            pendingEffectCount: number;
-            cleanupFailureCount: number;
-            truncated: { events: boolean; commands: boolean; effects: boolean };
-          };
-        };
+        diagnostic: InvocationDiagnosticPacket;
       }>(
         testApp,
         panel!.id,
@@ -92,14 +85,10 @@ test.describe("agentic DX contracts", () => {
             () => globalThis.__vibestudioRequireAsync__("@workspace/runtime"),
           );
           const entries = await fs.readdir("panels");
-          const diagnostic = await bounded("gad.diagnoseInvocation", () => gad.diagnoseInvocation({
-            trajectoryId: "electron-diagnostic-missing",
-            branchId: "main",
-            invocationId: "invocation-missing",
-            eventLimit: 3,
-            commandLimit: 2,
-            effectLimit: 2,
-          }));
+          const diagnostic = await bounded(
+            "gad.diagnoseInvocation",
+            () => gad.diagnoseInvocation(${JSON.stringify(diagnosticInput)}),
+          );
           return { entries, diagnostic };
         })()`
       );
@@ -107,22 +96,15 @@ test.describe("agentic DX contracts", () => {
       expect(result.entries).toContain("chat");
       expect(result.diagnostic).toEqual({
         generatedAt: expect.any(String),
-        coordinate: {
-          trajectoryId: "electron-diagnostic-missing",
-          branchId: "main",
-          invocationId: "invocation-missing",
-        },
+        coordinate,
         invocation: null,
         turn: null,
         events: [],
-        commands: [],
         summary: {
           terminal: false,
           eventCount: 0,
-          commandCount: 0,
-          pendingEffectCount: 0,
           cleanupFailureCount: 0,
-          truncated: { events: false, commands: false, effects: false },
+          truncated: { events: false },
         },
       });
     } finally {
