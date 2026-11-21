@@ -116,22 +116,20 @@ test.describe("agentic DX contracts", () => {
   test("Electron captures hosted-panel pixels and historical console diagnostics end to end", async () => {
     const workspacePath = await createManagedTestWorkspace({
       workspaceKind: "project",
-      configureSource: configureInspectionFixture,
+      configureSource: (sourceRoot) => configureInspectionFixture(sourceRoot, "about/new"),
     });
     const testApp = await launchTestApp({ workspace: workspacePath, launchTimeout: 180_000 });
     try {
       await approvePendingWorkspaceCreationReview(testApp);
       await approvePendingStartupUnits(testApp);
       await declineFirstRunReporting(testApp);
-      await ensureHostedShellReady(testApp, {
-        panelSource: "panels/chat",
+      const { panelId } = await ensureHostedShellReady(testApp, {
+        panelSource: "about/new",
         timeoutMs: 75_000,
       });
-      const panel = (await getPanelTree(testApp))[0];
-      expect(panel).toBeTruthy();
-      await waitForPanelRuntime(testApp, panel!.id);
+      await waitForPanelRuntime(testApp, panelId);
 
-      await callTestApi(testApp, "focusPanel", [panel!.id]);
+      await callTestApi(testApp, "focusPanel", [panelId]);
       const result = await executePanelScript<{
         screenshot: {
           mimeType: string;
@@ -158,7 +156,7 @@ test.describe("agentic DX contracts", () => {
         };
       }>(
         testApp,
-        panel!.id,
+        panelId,
         `(async () => {
           const bounded = (stage, operation) => Promise.race([
             operation(),
@@ -173,7 +171,7 @@ test.describe("agentic DX contracts", () => {
           );
           const handle = await bounded(
             "hosted panel open",
-            () => openPanel("panels/chat", { focus: false }),
+            () => openPanel("about/help", { focus: false }),
           );
           try {
             const observation = await bounded("panel observation", () => handle.observe());
@@ -232,7 +230,7 @@ test.describe("agentic DX contracts", () => {
         byteLength: expect.any(Number),
       });
       expect(result.screenshot.width).toBeGreaterThan(0);
-      expect(await callTestApi(testApp, "getFocusedPanelId", [])).toBe(panel!.id);
+      expect(await callTestApi(testApp, "getFocusedPanelId", [])).toBe(panelId);
       expect(result.screenshot.height).toBeGreaterThan(0);
       expect(result.screenshot.byteLength).toBeGreaterThan(100);
       expect(result.blob).toEqual({
@@ -245,7 +243,7 @@ test.describe("agentic DX contracts", () => {
       expect(result.console.errorCount).toBe(0);
       expect(result.console.dropped).toBeTruthy();
       expect(result.observation).toMatchObject({
-        source: "panels/chat",
+        source: "about/help",
         phase: "ready",
         runtimeEntityId: expect.any(String),
         buildKey: expect.any(String),
