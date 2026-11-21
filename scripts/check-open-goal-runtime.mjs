@@ -7,16 +7,30 @@ import { requireDevelopmentTemplateCheckouts } from "../src/dev/developmentTempl
 const host = fileURLToPath(new URL("../", import.meta.url));
 const { checkouts } = requireDevelopmentTemplateCheckouts(host);
 const base = checkouts.base;
-const directories = [
+const profiles = [
   "base",
-  "system-testing",
   "system",
   "examples",
   "personal",
   "google-workspace",
   "news",
   "spectrolite",
-].map((name) => checkouts[name]);
+];
+const composition = process.argv[2] ?? "all";
+const withTesting = composition.endsWith("+system-testing");
+const profile = withTesting ? composition.slice(0, -"+system-testing".length) : composition;
+if (composition !== "all" && !profiles.includes(profile)) {
+  throw new Error(`Unknown workspace composition: ${composition}`);
+}
+const templates =
+  composition === "all"
+    ? ["base", "system-testing", ...profiles.slice(1)]
+    : [
+        "base",
+        ...(profile === "base" ? [] : [profile]),
+        ...(withTesting ? ["system-testing"] : []),
+      ];
+const directories = templates.map((name) => checkouts[name]);
 const serviceSource = pathToFileURL(
   path.join(base, "packages/natlang-services/src/serviceDeclarations.generated.ts")
 );
@@ -173,7 +187,7 @@ for (const definition of definitions) {
 
 const brokenTypes = [...typeErrors.values()].filter(({ errors }) => errors.length);
 console.log(
-  `Checked ${definitions.size} linked lambdas and ${references} explicit qualified references.`
+  `${composition}: checked ${definitions.size} linked lambdas and ${references} explicit qualified references.`
 );
 for (const issue of scopes.sort()) console.error(`Unavailable callable ${issue}`);
 for (const { source, errors } of brokenTypes)
