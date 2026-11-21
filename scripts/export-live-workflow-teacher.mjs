@@ -18,6 +18,14 @@ const templateGoalDomains = {
     checks: ["exactIntentNotice", "installedIntentDiscovery", "exactIntentActionSelection", "independentlyScopedIntentResults",
       "exactIntentOutcome", "exactPrivateIntentNote", "preservedIntentWorkspace", "rejectedIntentRetarget"],
   },
+  "live-tendril-board": {
+    namespace: "vibestudio:open-tendril-board",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-live-tendril-board-managed.ts" },
+    callable: "workOnLiveTendrilBoard",
+    skill: "liveTendrilBoard",
+    checks: ["exactCurrentTendrilTicket", "exactPlannedTendrilEffects", "ownedTendrilPresentation",
+      "independentlyObservedRenderedAndStored", "verifiedTendrilBuildHistory", "matchedTendrilGoalReport"],
+  },
   "route-authority": {
     namespace: "vibestudio:owned-route-authority",
     validator: { template:"system-testing", path:"skills/system-testing/open-goal-route-authority-managed.ts" },
@@ -1654,14 +1662,14 @@ export async function loadLiveTeacherCases(checkouts) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
     const distinctGoals = new Set();
-    const { openGoalWorlds, openPhoneFirstRunWorlds = [], openSkillMaintenanceWorlds = [], openWebhookAdmissionWorlds = [], openDevelopmentAuditWorlds = [], openDesktopReadinessWorlds = [], openContentArchiveWorlds = [], openSystemReleaseWorlds = [], openTestkitCloseoutWorlds = [], openPanelSourceMigrationWorlds = [], openWorkspaceShareWorlds = [], openNotificationStateWorlds = [], openAgentCapabilityWorlds = [], openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openChatContinuityWorlds = [], openSameTurnEvalWorlds = [], openCliRouteWorlds = [], openIntentDiscoveryWorlds = [], openRouteAuthorityWorlds = [], openLogFollowerWorlds = [], openLaunchStateWorlds = [], openScaffoldWorlds = [], openOwnedOperationsWorlds = [], openPtyContinuityWorlds = [], openSystemCandidateWorlds = [], openWorkspaceClaimWorlds = [], openExamplesAdoptionWorlds = [], openGrimoireSceneWorlds = [], openBridgeDeliveryWorlds = [], openEditorialWorlds = [], openPortfolioWorlds = [], openRegencyWorlds = [], openImageCandidateWorlds = [], openApiReadinessWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
+    const { openGoalWorlds, openPhoneFirstRunWorlds = [], openSkillMaintenanceWorlds = [], openWebhookAdmissionWorlds = [], openDevelopmentAuditWorlds = [], openDesktopReadinessWorlds = [], openContentArchiveWorlds = [], openSystemReleaseWorlds = [], openTestkitCloseoutWorlds = [], openPanelSourceMigrationWorlds = [], openWorkspaceShareWorlds = [], openNotificationStateWorlds = [], openAgentCapabilityWorlds = [], openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openChatContinuityWorlds = [], openLiveTendrilBoardWorlds = [], openSameTurnEvalWorlds = [], openCliRouteWorlds = [], openIntentDiscoveryWorlds = [], openRouteAuthorityWorlds = [], openLogFollowerWorlds = [], openLaunchStateWorlds = [], openScaffoldWorlds = [], openOwnedOperationsWorlds = [], openPtyContinuityWorlds = [], openSystemCandidateWorlds = [], openWorkspaceClaimWorlds = [], openExamplesAdoptionWorlds = [], openGrimoireSceneWorlds = [], openBridgeDeliveryWorlds = [], openEditorialWorlds = [], openPortfolioWorlds = [], openRegencyWorlds = [], openImageCandidateWorlds = [], openApiReadinessWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
       spectroliteGoalWorlds = [], openGoalGoogleWorlds = [], openGoalPersonalWorlds = [],
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
       openTerminalWorlds = [], openOwnedResearchWorlds = [], personalWelcomeWorlds = [], dictationHandoffWorlds = [], specialistHandoffWorlds = [], providerHandoffWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalMethodWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
     for (const assignment of [...openGoalWorlds, ...openPhoneFirstRunWorlds, ...openSkillMaintenanceWorlds, ...openWebhookAdmissionWorlds, ...openDevelopmentAuditWorlds, ...openDesktopReadinessWorlds, ...openContentArchiveWorlds, ...openSystemReleaseWorlds, ...openTestkitCloseoutWorlds, ...openPanelSourceMigrationWorlds, ...openWorkspaceShareWorlds, ...openNotificationStateWorlds, ...openAgentCapabilityWorlds, ...openMobileContinuityWorlds, ...openInstalledPackageWorlds, ...openAssetIntegrityWorlds, ...openTendrilRouteWorlds, ...openExtensionDossierWorlds, ...openDeployedInterfaceWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
-      ...openExamplesAdoptionWorlds, ...openGrimoireSceneWorlds, ...openApiReadinessWorlds, ...openChatContinuityWorlds, ...openSameTurnEvalWorlds, ...openCliRouteWorlds, ...openIntentDiscoveryWorlds, ...openRouteAuthorityWorlds, ...openLogFollowerWorlds, ...openLaunchStateWorlds, ...openScaffoldWorlds, ...openOwnedOperationsWorlds, ...openPtyContinuityWorlds, ...openSystemCandidateWorlds, ...openWorkspaceClaimWorlds, ...openBridgeDeliveryWorlds, ...openEditorialWorlds, ...openPortfolioWorlds, ...openRegencyWorlds, ...openImageCandidateWorlds, ...openNewsEvidenceWorlds, ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
+      ...openExamplesAdoptionWorlds, ...openGrimoireSceneWorlds, ...openApiReadinessWorlds, ...openChatContinuityWorlds, ...openLiveTendrilBoardWorlds, ...openSameTurnEvalWorlds, ...openCliRouteWorlds, ...openIntentDiscoveryWorlds, ...openRouteAuthorityWorlds, ...openLogFollowerWorlds, ...openLaunchStateWorlds, ...openScaffoldWorlds, ...openOwnedOperationsWorlds, ...openPtyContinuityWorlds, ...openSystemCandidateWorlds, ...openWorkspaceClaimWorlds, ...openBridgeDeliveryWorlds, ...openEditorialWorlds, ...openPortfolioWorlds, ...openRegencyWorlds, ...openImageCandidateWorlds, ...openNewsEvidenceWorlds, ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
       ...openGoalCalendarWorlds, ...openPersonalArtifactWorlds, ...openPersonalHistoryWorlds,
@@ -8561,6 +8569,62 @@ function verifyOpenCliRoute(exercise, world, proof, skill) {
     "Expected the installed exact CLI scope continuation or a gateway hold without scope reads");
 }
 
+function verifyOpenLiveTendril(exercise, world, proof, skill) {
+  const records = exercise.calls.map(({ record }) => record);
+  const children = (parent, name) => records.filter(record =>
+    record.parent_call_id === parent?.call_id && record.definition?.name === name && record.outcome === "done");
+  const effects = (call, service, method) => call?.effects?.filter(effect =>
+    effect.service === service && effect.method === method && !effect.error) ?? [];
+  const ticketCall = children(skill, "findLiveTendrilTicket");
+  const planCall = children(skill, "planLiveTendrilEffect");
+  const work = children(skill, "runTendril");
+  const present = children(work[0], "openPresentation");
+  const steps = children(work[0], "runSteps");
+  const discover = effects(ticketCall[0], "tendrilBoardDocket", "list");
+  const read = effects(ticketCall[0], "tendrilBoardDocket", "read");
+  const devices = effects(present[0], "tendrilPresentation", "devices");
+  const presented = effects(present[0], "tendrilPresentation", "present");
+  const first = effects(steps[0], "tendrilPage", "inspect");
+  const { ticket, outcome, native } = proof;
+  const plan = world.fixture.request;
+  const presentation = native?.presentation;
+  const observed = native?.observed;
+  requireEvidence(isDeepStrictEqual(exercise.report.outcome, outcome) && isDeepStrictEqual(outcome?.card, ticket?.card) &&
+    isDeepStrictEqual(outcome?.plan, plan) && ticketCall.length === 1 && planCall.length === 1 && work.length === 1 &&
+    present.length === 1 && steps.length === 1 && discover.length === 1 && read.length === 1 &&
+    devices.length === 1 && presented.length === 1 && first.length === 1 && observed?.length === plan.steps.length + 1 &&
+    matchesValue(ticketCall[0].inputs?.goal, world.goal) && matchesValue(ticketCall[0].output, ticket) &&
+    matchesValue(discover[0].args, []) && matchesValue(discover[0].result, proof.available) &&
+    matchesValue(read[0].args, [ticket.card.id]) && matchesValue(read[0].result, ticket) &&
+    matchesValue(planCall[0].inputs?.goal, world.goal) && matchesValue(planCall[0].inputs?.ticket, ticket) &&
+    matchesValue(planCall[0].output, plan) && matchesValue(work[0].inputs?.request, plan) &&
+    matchesValue(work[0].output, outcome.actual) && matchesValue(presented[0].args, [presentation?.deviceId]) &&
+    matchesValue(presented[0].result, presentation) && matchesValue(steps[0].inputs?.presentation, presentation) &&
+    matchesValue(steps[0].inputs?.steps, plan.steps) && matchesValue(first[0].result, observed[0]) &&
+    isDeepStrictEqual(outcome.actual.presentation, presentation),
+    "Expected the same owned Tendril, user plan, installed workflow and native baseline observation");
+  const used = new Set();
+  for (const [index, step] of plan.steps.entries()) {
+    const build = step.kind === "update" || step.kind === "restore";
+    const name = build ? "reviewBuildStep" : "reviewLiveStep";
+    const call = children(steps[0], name).find(record => !used.has(record.call_id) &&
+      matchesValue(record.inputs?.previous, observed[index]) && matchesValue(record.inputs?.step, step));
+    requireEvidence(call && matchesValue(call.output, outcome.actual.findings[index]),
+      "Expected each verified Tendril step to use the immediately preceding native observation");
+    used.add(call.call_id);
+    const method = { read: "inspect", write: "write", invoke: "invoke", update: "update", restore: "back" }[step.kind];
+    const effect = effects(call, build ? "tendrilBuild" : "tendrilPage", method);
+    const args = step.kind === "update" ? [step.candidate] : step.kind === "write" ? [step.field] :
+      step.kind === "invoke" ? [step.name] : [];
+    const page = observed[index + 1];
+    const buildResult = native.builds?.outcomes.find(item => item.pageId === page.id);
+    const result = step.kind === "update" ? { outcome: buildResult?.outcome, page } : page;
+    requireEvidence(effect.length === 1 && matchesValue(effect[0].args, args) &&
+      matchesValue(effect[0].result, result) && isDeepStrictEqual(page, outcome.actual.findings[index]?.page),
+      "Expected the actual rendered and durable Tendril page or native build outcome");
+  }
+}
+
 export function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
   const proof = execution.diagnostics.openGoalVerification;
   const world = workflow.assignment;
@@ -8583,7 +8647,9 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
     "Expected a verified live goal and its actual installed Natlang skill call"
   );
   const evidence = { workspace: { proof } };
-  if (world.kind === "cli-route") {
+  if (world.kind === "live-tendril-board") {
+    verifyOpenLiveTendril(exercise, world, proof, skill);
+  } else if (world.kind === "cli-route") {
     verifyOpenCliRoute(exercise, world, proof, skill);
   } else if (world.kind === "owned-operations") {
     verifyOpenOwnedOperations(exercise, world, proof, skill);
