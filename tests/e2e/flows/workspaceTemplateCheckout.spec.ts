@@ -4,6 +4,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import YAML from "yaml";
+import {
+  inspectWorkspaceSources,
+  workspaceSourceFromCheckout,
+} from "../../../src/workspaceTemplateSource";
+import { WorkspaceCreationDescriptorSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import type { HubWorkspaceEntry } from "@vibestudio/service-schemas/hubControl";
 import { createRpcMethods } from "@vibestudio/shared/rpcMethods";
 import { hubControlMethods } from "@vibestudio/service-schemas/hubControl";
@@ -116,6 +121,19 @@ test("opens the selected local checkout as a separate workspace after exact revi
       manifest.template.name = "Unpublished local workspace";
       fs.writeFileSync(manifestPath, YAML.stringify(manifest));
     }
+    const [expectedSource] = await inspectWorkspaceSources({
+      sources: [workspaceSourceFromCheckout(checkout)],
+      checkpointRoot: path.join(root, "expected-checkpoint"),
+    });
+    const templateTitle = expectedSource?.review?.presentation?.name;
+    if (!expectedSource || !templateTitle)
+      throw new Error("The selected checkout has no reviewed template title");
+    if (!process.env["VIBESTUDIO_E2E_TEMPLATE_CHECKOUT"]) {
+      const originalHead = execFileSync("git", ["-C", checkout, "rev-parse", "HEAD"], {
+        encoding: "utf8",
+      }).trim();
+      expect(expectedSource.pin.commit).not.toBe(originalHead);
+    }
     app = await launchTestApp({ launchTimeout: 300_000 });
     const activeApp = app;
     await waitHostedShellReady(activeApp);
@@ -148,7 +166,9 @@ test("opens the selected local checkout as a separate workspace after exact revi
     await page.getByRole("radio", { name: /Folder/ }).click();
     await page.getByRole("button", { name: "Choose folder…", exact: true }).click();
     await expect(page.getByRole("textbox", { name: "Workspace name" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Unpublished local workspace" })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: templateTitle, exact: true })
+    ).toBeVisible();
     expect(
       await nativeUiRead(page, { kind: "hub" }, hubControlRpcMethods.listWorkspaces, [])
     ).toHaveLength(before.length);
@@ -186,12 +206,11 @@ test("opens the selected local checkout as a separate workspace after exact revi
       WORKSPACE_CREATION_DESCRIPTOR_PATH
     );
     await expect.poll(() => fs.existsSync(descriptorPath), { timeout: 120_000 }).toBe(true);
-    const descriptor = JSON.parse(fs.readFileSync(descriptorPath, "utf8"));
-    expect(descriptor.rootTemplate.url).toBe(
-      "git+https://example.invalid/unpublished-workspace.git"
+    const descriptor = WorkspaceCreationDescriptorSchema.parse(
+      JSON.parse(fs.readFileSync(descriptorPath, "utf8"))
     );
-    expect(descriptor.rootTemplate.commit).toMatch(/^[0-9a-f]{40}$/);
-    expect(descriptor.rootTemplate.snapshot).toMatch(/^v1-sha256:[0-9a-f]{64}$/);
+    expect(descriptor.workspaceId).toBe(created.workspaceId);
+    expect(descriptor.rootTemplate).toEqual(expectedSource.pin);
     const owner = { app: activeApp.app, workspaceId: created.workspaceId };
     let creationReview: string | null = null;
     await expect
