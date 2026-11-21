@@ -9111,27 +9111,30 @@ function verifyPreparedContentProject(exercise, world, proof, skill) {
     "Expected exact owned content provenance, source selection, and retained local authorization"
   );
   if (!created) return undefined;
-  const write = child(author.callId,"writeInitialProject");
-  const analyze = child(author.callId,"analyzeRequest");
-  const plan = child(author.callId,"planDocuments");
-  const drafts = child(author.callId,"draftDocuments");
-  const navigate = child(author.callId,"completeNavigation");
-  const review = child(author.callId,"reviewCandidate");
-  const commit = child(finish.callId,"commitReviewedProject");
+  const write = child(author?.callId,"writeInitialProject");
+  const analyze = child(author?.callId,"analyzeRequest");
+  const plan = child(author?.callId,"planDocuments");
+  const drafts = child(author?.callId,"draftDocuments");
+  const review = child(author?.callId,"reviewCandidate");
+  const commit = child(finish?.callId,"commitReviewedProject");
   const initial = journal.find(row=>row.service==="contentProjectDraft" && row.method==="prepare")?.result;
   const documents = journal.find(row=>row.service==="contentProjectDraft" && row.method==="write")?.args[2];
   const commitMessage = journal.find(row=>row.service==="contentProjectCommit")?.args[2];
   const pages = exercise.calls.filter(({record}) => record.parent_call_id===drafts?.callId &&
     record.definition?.name==="writePage" && record.outcome==="done");
   const input = artifact?.semanticReviewInput;
+  const readme = input?.actual?.documents?.find(file=>file.path==="README.md")?.text;
+  const ownedDocs = input?.actual?.documents?.filter(file=>file.path.startsWith("docs/")) ?? [];
+  const directLinks = new Set(Array.from(readme?.matchAll(/\]\((docs\/[^)#]+)(?:#[^)]*)?\)/gu) ?? [],match=>match[1]));
   requireEvidence(
     draft?.review?.ready===true && draft.review.blockers?.length===0 && draft.review.unsupportedClaims?.length===0 &&
       world.roles.every(role=>draft.review.coveredRoles?.includes(role)) &&
       isDeepStrictEqual(final.candidate,draft.snapshot) && draft.snapshot.repoPath===native.repoPath &&
       matchesValue(author?.record.inputs?.scope,scope) && matchesValue(author?.record.output,draft) &&
       matchesValue(analyze?.record.inputs?.request,scope.request) && matchesValue(plan?.record.inputs?.request,scope.request) &&
-      matchesValue(drafts?.record.inputs?.request,scope.request) && matchesValue(navigate?.record.output,documents) &&
-      pages.length>=world.roles.length && pages.every(({record})=>matchesValue(record.inputs?.request,scope.request)) &&
+      matchesValue(drafts?.record.inputs?.request,scope.request) && drafts.record.output?.complete===true &&
+      pages.length>=world.roles.length && pages.every(({record})=>matchesValue(record.inputs?.request,scope.request) &&
+        record.output?.complete===true) &&
       matchesValue(write?.record.inputs?.scope,scope) && matchesValue(write?.record.inputs?.documents,documents) &&
       matchesValue(write?.record.output,draft.snapshot) &&
       trace(write,"contentProjectDraft","prepare",[scope.receipt,scope.initialHead],initial) &&
@@ -9144,7 +9147,7 @@ function verifyPreparedContentProject(exercise, world, proof, skill) {
       isDeepStrictEqual(input.actual.committedEvent,actual.committed) && isDeepStrictEqual(input.expected,scope.request) &&
       isDeepStrictEqual(input.actual.documents?.slice().sort((a,b)=>a.path.localeCompare(b.path)),
         draft.snapshot.files.slice().sort((a,b)=>a.path.localeCompare(b.path))) &&
-      input.actual.documents.filter(file=>file.path.startsWith("docs/")).length>=world.roles.length &&
+      ownedDocs.length>=world.roles.length && ownedDocs.every(file=>directLinks.has(file.path)) &&
       typeof input.rubric==="string" &&
       (committed ? actual.clean && final.event?.eventId===actual.committed.eventId &&
         final.event.head===JSON.stringify(actual.workingHead) && typeof commitMessage==="string" &&
