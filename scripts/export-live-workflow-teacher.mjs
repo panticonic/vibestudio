@@ -10,6 +10,15 @@ import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
 
 const sharedProgram = "skills/vibestudio-workflows/runWorkflow.nl";
 const templateGoalDomains = {
+  "editorial-packet": {
+    namespace: "vibestudio:personal:editorial-packet",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-editorial-managed.ts" },
+    callable: "workOnEditorialPacket",
+    skill: "editorialPacket",
+    checks: ["exactOwnedEditorialMission", "exactEditorialFrontiers", "exactApprovedPdfEvidence", "minimalEditorialProposal",
+      "preservedCoeditorBoundary", "verifiedEditorialReadback", "groundedEditorialDisposition", "verifiedPrivateEditorialNote",
+      "protectedEditorialSources", "rejectedEditorialRetarget"],
+  },
   "demo-portfolio": {
     namespace: "vibestudio:examples:paired-demo",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-portfolio-managed.ts" },
@@ -1482,14 +1491,14 @@ export async function loadLiveTeacherCases(checkouts) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
     const distinctGoals = new Set();
-    const { openGoalWorlds, openSkillMaintenanceWorlds = [], openDesktopReadinessWorlds = [], openSystemReleaseWorlds = [], openPanelSourceMigrationWorlds = [], openWorkspaceShareWorlds = [], openNotificationStateWorlds = [], openAgentCapabilityWorlds = [], openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openPortfolioWorlds = [], openRegencyWorlds = [], openImageCandidateWorlds = [], openApiReadinessWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
+    const { openGoalWorlds, openSkillMaintenanceWorlds = [], openDesktopReadinessWorlds = [], openSystemReleaseWorlds = [], openPanelSourceMigrationWorlds = [], openWorkspaceShareWorlds = [], openNotificationStateWorlds = [], openAgentCapabilityWorlds = [], openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openEditorialWorlds = [], openPortfolioWorlds = [], openRegencyWorlds = [], openImageCandidateWorlds = [], openApiReadinessWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
       spectroliteGoalWorlds = [], openGoalGoogleWorlds = [], openGoalPersonalWorlds = [],
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
       openTerminalWorlds = [], openOwnedResearchWorlds = [], personalWelcomeWorlds = [], dictationHandoffWorlds = [], specialistHandoffWorlds = [], providerHandoffWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
     for (const assignment of [...openGoalWorlds, ...openSkillMaintenanceWorlds, ...openDesktopReadinessWorlds, ...openSystemReleaseWorlds, ...openPanelSourceMigrationWorlds, ...openWorkspaceShareWorlds, ...openNotificationStateWorlds, ...openAgentCapabilityWorlds, ...openMobileContinuityWorlds, ...openInstalledPackageWorlds, ...openAssetIntegrityWorlds, ...openTendrilRouteWorlds, ...openExtensionDossierWorlds, ...openDeployedInterfaceWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
-      ...openApiReadinessWorlds, ...openPortfolioWorlds, ...openRegencyWorlds, ...openImageCandidateWorlds, ...openNewsEvidenceWorlds, ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
+      ...openApiReadinessWorlds, ...openEditorialWorlds, ...openPortfolioWorlds, ...openRegencyWorlds, ...openImageCandidateWorlds, ...openNewsEvidenceWorlds, ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
       ...openGoalCalendarWorlds, ...openPersonalArtifactWorlds, ...openPersonalHistoryWorlds,
@@ -7802,6 +7811,78 @@ function verifyDemoPortfolio(exercise, world, proof, skill) {
   );
 }
 
+function verifyEditorialPacket(exercise, world, proof, skill) {
+  const report=exercise.report.outcome;
+  const {listed,snapshots,plan,sources,attempts,stored,edit,decision,note}=proof;
+  const [opening]=snapshots;
+  const current=snapshots.at(-1);
+  const records=exercise.calls.map(({record})=>record);
+  const child=(parent,name)=>records.filter(record=>record.parent_call_id===parent.call_id&&
+    record.definition?.name===name&&record.outcome==="done");
+  const step=name=>child(skill,name);
+  const effects=(rows,service,method)=>rows.flatMap(record=>(record.effects??[])
+    .filter(effect=>effect.service===service&&effect.method===method&&!effect.error));
+  const list=effects(step("listPacketMissions"),"editorialMission","list");
+  const reads=effects(step("readPacketSnapshot"),"editorialWorkspace","read");
+  const writes=effects(step("applyPacketRevision"),"editorialRevision","apply");
+  const final=effects(step("readStoredPacket"),"editorialRevision","read");
+  const notes=effects(step("writePacketHandoff"),"editorialHandoff","stage");
+  const chosen=step("chooseEditorialMission");
+  const digested=step("reviewPacketSource");
+  const proposed=step("proposeEditorialRevision");
+  const rec=step("reconcileEditorialRevision");
+  const decisionCalls=step("decideEditorialHandoff");
+  const artifact=typeof proof.artifact==="string"?JSON.parse(proof.artifact):null;
+  requireEvidence(
+    list.length===1&&matchesValue(list[0].args,[])&&matchesValue(list[0].result,listed)&&
+      chosen.length===1&&matchesValue(chosen[0].inputs?.goal,world.goal)&&
+      matchesValue(chosen[0].inputs?.missions,listed)&&matchesValue(chosen[0].output,plan)&&isDeepStrictEqual(report.plan,plan)&&
+      reads.length===snapshots.length&&snapshots.every((snapshot,i)=>matchesValue(reads[i].args,[plan.missionId])&&matchesValue(reads[i].result,snapshot))&&
+      isDeepStrictEqual(report.opening,opening)&&isDeepStrictEqual(report.current,current)&&
+      digested.length===sources.length&&isDeepStrictEqual(report.sources,sources)&&sources.every((source,i)=>{
+        const wrapper=digested[i];
+        const selected=child(wrapper,"chooseAttachmentPages");
+        const native=child(wrapper,"extractPdfEvidence");
+        const binds=effects(child(wrapper,"bindPacketPdf"),"editorialPdf","bind");
+        const attest=effects(child(wrapper,"attestPacketPdf"),"editorialPdf","attest");
+        return matchesValue(wrapper.inputs?.goal,world.goal)&&matchesValue(wrapper.inputs?.snapshot,snapshots[i])&&
+          matchesValue(wrapper.inputs?.plan,plan)&&matchesValue(wrapper.output,source)&&selected.length===1&&
+          matchesValue(selected[0].output,source.selection)&&
+          (source.request? binds.length===1&&matchesValue(binds[0].args,[snapshots[i],plan,source.selection])&&
+            matchesValue(binds[0].result,source.request)&&native.length===1&&matchesValue(native[0].inputs?.request,source.request)&&
+            matchesValue(native[0].output,source.pdf)&&child(native[0],"probeDocument").length===1&&
+            (!source.pdf.readPages.length||child(native[0],"readBatch").length>0)&&attest.length===1&&
+            matchesValue(attest[0].args,[source.pdf])&&matchesValue(attest[0].result,source.evidence):
+            !source.selection&&binds.length===0&&native.length===0&&attest.length===0);
+      })&&isDeepStrictEqual(report.edit,edit)&&
+      proposed.length===Number(edit.proposed!==null)&&(edit.proposed?matchesValue(proposed[0].inputs?.goal,world.goal)&&
+        matchesValue(proposed[0].inputs?.snapshot,opening)&&matchesValue(proposed[0].inputs?.source,sources[0])&&
+        matchesValue(proposed[0].output,edit.proposed)&&child(proposed[0],"chooseRevision").length===1&&
+        matchesValue(child(proposed[0],"chooseRevision")[0].inputs?.documents,[opening.candidate,sources[0].evidence.document])&&
+        matchesValue(child(proposed[0],"chooseRevision")[0].output,edit.proposed):true)&&
+      writes.length===attempts.length&&attempts.every((item,i)=>matchesValue(writes[i].args,[plan.missionId,item.proposal])&&
+        matchesValue(writes[i].result,item.result))&&
+      rec.length===Number(snapshots.length===2)&&(rec.length?matchesValue(rec[0].inputs?.opening,opening)&&
+        matchesValue(rec[0].inputs?.current,current)&&matchesValue(rec[0].inputs?.proposal,edit.proposed)&&
+        matchesValue(rec[0].inputs?.earlier,sources[0])&&matchesValue(rec[0].inputs?.refreshed,sources[1])&&
+        matchesValue(rec[0].output,edit.revised)&&child(rec[0],"reconcileRevision").length===1&&
+        matchesValue(child(rec[0],"reconcileRevision")[0].inputs?.refreshedEvidence,
+          sources[1].evidence?.document?[sources[1].evidence.document]:[]):true)&&
+      final.length===1&&matchesValue(final[0].args,[plan.missionId])&&matchesValue(final[0].result,stored)&&isDeepStrictEqual(edit.stored,stored)&&
+      decisionCalls.length===1&&matchesValue(decisionCalls[0].inputs?.goal,world.goal)&&
+      matchesValue(decisionCalls[0].inputs?.opening,opening)&&matchesValue(decisionCalls[0].inputs?.current,current)&&
+      matchesValue(decisionCalls[0].inputs?.plan,plan)&&matchesValue(decisionCalls[0].inputs?.sources,sources)&&
+      matchesValue(decisionCalls[0].inputs?.edit,edit)&&matchesValue(decisionCalls[0].output,decision)&&
+      isDeepStrictEqual(report.decision,decision)&&decision.status===world.end&&writes.length===edit.attempts.length&&
+      notes.length===Number(decision.write)&&isDeepStrictEqual(report.note,note)&&
+      (note?artifact&&matchesValue(notes[0].args,[{...report,note:null}])&&matchesValue(notes[0].result,note)&&
+        note.digest===hash(proof.artifact)&&note.candidateVersion===stored.version&&note.missionRevision===current.mission.revision&&
+        artifact.scope==="private-local"&&isDeepStrictEqual(artifact.candidate,stored)&&
+        isDeepStrictEqual(artifact.sources,sources.map(source=>source.evidence)):notes.length===0&&artifact===null),
+    "Expected exact editorial mission, approved original PDF evidence, native revision and private handoff"
+  );
+}
+
 export function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
   const proof = execution.diagnostics.openGoalVerification;
   const world = workflow.assignment;
@@ -7824,7 +7905,9 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
     "Expected a verified live goal and its actual installed Natlang skill call"
   );
   const evidence = { workspace: { proof } };
-  if (world.kind === "demo-portfolio") {
+  if (world.kind === "editorial-packet") {
+    verifyEditorialPacket(exercise, world, proof, skill);
+  } else if (world.kind === "demo-portfolio") {
     verifyDemoPortfolio(exercise, world, proof, skill);
   } else if (world.kind === "regency-briefing") {
     verifyRegencyBriefing(exercise, world, proof, skill);
