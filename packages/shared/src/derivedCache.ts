@@ -622,7 +622,7 @@ export class DerivedCacheCoordinator {
   }
 }
 
-function isSqliteBusy(error: unknown): boolean {
+export function isSqliteBusy(error: unknown): boolean {
   return (
     typeof error === "object" &&
     error !== null &&
