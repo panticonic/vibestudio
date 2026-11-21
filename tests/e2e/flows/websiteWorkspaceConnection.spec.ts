@@ -23,6 +23,7 @@ import { clickNativeApproval } from "../support/nativeApproval";
 import { requireE2eRootTemplate } from "../../setup/e2eRootTemplate";
 import { hasOwnedX11Display } from "../../setup/ownedXvfb";
 import {
+  declineFirstRunReporting,
   findWorkspaceShellPage,
   presentApprovalCard,
   settleWorkspaceInstallReviews,
@@ -140,6 +141,7 @@ test("website SDK requires explicit connection and retires access on document re
       app: app.app,
       workspaceId: app.systemWorkspaceId,
     });
+    await declineFirstRunReporting(app);
     const initial = await ensureHostedShellReady(app, { panelSource: "about/new" });
     const panel = await createBrowserPanel(app, initial.panelId, url, { focus: true });
     await ensureHostedShellReady(app, { panelSource: `browser:${url}` });
@@ -180,27 +182,7 @@ test("website SDK requires explicit connection and retires access on document re
         .poll(async () => (await pendingCapability(capability)).length, { timeout: 30_000 })
         .toBe(1);
       const approvalId = (await pendingCapability(capability))[0]!.approvalId;
-      let approval!: Locator;
-      await expect
-        .poll(
-          async () => {
-            for (const page of app!.app.context().pages()) {
-              const candidate = page.locator(`[data-approval-id=${JSON.stringify(approvalId)}]`);
-              if (await candidate.isVisible()) {
-                approval = candidate;
-                return true;
-              }
-              if (await page.locator("[data-approval-id]:visible").count()) {
-                approval = await presentApprovalCard(page, approvalId);
-                return true;
-              }
-            }
-            return false;
-          },
-          { timeout: 30_000 }
-        )
-        .toBe(true);
-      return approval;
+      return presentApprovalCard(shell, approvalId);
     };
     const denied = await visibleConnectionApproval();
     const clickApproval = (button: Locator) => clickNativeApproval(app!, button);
