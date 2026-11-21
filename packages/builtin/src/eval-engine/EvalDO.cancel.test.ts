@@ -396,6 +396,44 @@ describe("EvalDO cancellation + forced recovery", () => {
     expect(dispatch).toHaveBeenCalledTimes(8);
   });
 
+  it("retains one observation for a source batch and preserves later operation evidence", async () => {
+    const { instance } = await createTestDO(EvalDO);
+    const roots = Array.from({ length: 126 }, (_, index) => `skills/skill-${index}`);
+    const sourceSnapshot = { snapshot: "a".repeat(64), directories: roots, files: [] };
+    const dispatch = vi.fn(async (_target: string, method: string) =>
+      method === "fs.readProgramSources" ? sourceSnapshot : "source"
+    );
+    mockOwnedCall(instance, dispatch);
+    const execution = priv<
+      (input: { contextId: string }) => { rpc: RpcWireClient; operationJournal: ExecutionJournal }
+    >(instance, "createExecutionContext").call(instance, { contextId: "ctx" });
+    const fs = execution.rpc.peer("main").withContract(
+      {
+        filesystem: {
+          methods: {
+            readProgramSources: mainRpcMethods["fs.readProgramSources"],
+            readFile: mainRpcMethods["fs.readFile"],
+          },
+        },
+      },
+      "filesystem"
+    ).call;
+    await expect(fs.readProgramSources({ roots })).resolves.toEqual(sourceSnapshot);
+    await expect(fs.readFile("skills/skill-0/program.nl", "utf8")).resolves.toBe("source");
+    expect(execution.operationJournal.truncated).toBe(false);
+    expect(execution.operationJournal.entries).toEqual([
+      {
+        type: "rpc.call",
+        receipt: expect.objectContaining({ method: "fs.readProgramSources", outcome: "fulfilled" }),
+      },
+      { type: "fs.read", method: "fs.readFile", path: "skills/skill-0/program.nl" },
+      {
+        type: "rpc.call",
+        receipt: expect.objectContaining({ method: "fs.readFile", outcome: "fulfilled" }),
+      },
+    ]);
+  });
+
   it("borrows the current cell through a retained view instead of capturing the creating cell", async () => {
     const { instance } = await createTestDO(EvalDO);
     const dispatch = vi.fn(
