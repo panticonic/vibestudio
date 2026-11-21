@@ -5,6 +5,7 @@ import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { isSystemTestWorkspace } from "../src/dev/cliWorkspaceSelection.js";
 import {
   requireDevelopmentTemplateCheckouts,
   developmentTemplateHead,
@@ -65,6 +66,8 @@ const liveTeacherCases = await loadLiveTeacherCases(checkouts);
 for (const [scenario, workflow] of liveTeacherCases) {
   if ((workflow.interaction === "open-user-goal") === Boolean(values.assignments)) {
     liveTeacherCases.delete(scenario);
+  } else if (workflow.interaction === "open-user-goal" && !isSystemTestWorkspace(workflow.workspace ?? "system")) {
+    throw new Error(`Open goal ${scenario} requires an instantiable System Test workspace, received ${workflow.workspace}`);
   }
 }
 if (!liveTeacherCases.size) {
