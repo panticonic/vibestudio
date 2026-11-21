@@ -382,8 +382,7 @@ async function ensurePanelSource(
       },
       { workspaceId: owner.workspaceId, payload: existingPanelId }
     );
-    await approveShellPrompts(owner);
-    await waitForTerminalPanel(owner, existingPanelId, source);
+    await waitForPanelReady(owner, existingPanelId, source);
     return existingPanelId;
   }
 
@@ -392,19 +391,22 @@ async function ensurePanelSource(
     focus: true,
     stateArgs: options?.stateArgs,
   });
-  await approveShellPrompts(owner);
-  await waitForTerminalPanel(owner, created.id, source);
+  await waitForPanelReady(owner, created.id, source);
   return created.id;
 }
 
-async function waitForTerminalPanel(
+async function waitForPanelReady(
   owner: TestApp,
   panelId: string,
   source: string
 ): Promise<void> {
   try {
     await expect
-      .poll(() => isPanelReady(owner, panelId).catch(() => false), {
+      .poll(async () => {
+        if (await isPanelReady(owner, panelId).catch(() => false)) return true;
+        await approveShellPrompts(owner);
+        return false;
+      }, {
         timeout: 60_000,
         intervals: [250, 500, 1000],
       })
@@ -412,9 +414,11 @@ async function waitForTerminalPanel(
   } catch (error) {
     const readiness = await getPanelReadiness(owner, panelId).catch(() => null);
     const tree = await getPanelTree(owner).catch(() => []);
+    const approvals = await listPendingApprovals(owner).catch(() => []);
     throw new Error(
       `Panel ${source} (${panelId}) did not become terminally ready. ` +
-        `readiness=${JSON.stringify(readiness)} tree=${JSON.stringify(tree)}`,
+        `readiness=${JSON.stringify(readiness)} approvals=${JSON.stringify(approvals)} ` +
+        `tree=${JSON.stringify(tree)}`,
       { cause: error }
     );
   }
@@ -771,13 +775,6 @@ test.describe("Phone-width desktop panels", () => {
     await collapsePanelSidebar(testApp!);
     const panelId = await ensurePanelSource(testApp!, "panels/terminal");
     await startPanelDiagnostics(testApp!, panelId);
-    await approveShellPrompts(testApp!);
-    // Terminal is the first flow that lazily activates the native shell
-    // extension. Re-run the host launch review after the panel has requested
-    // it; approving only the cold-start batch leaves the panel waiting forever
-    // when the extension build is first materialized on demand.
-    await approvePendingStartupUnits(testApp!, 30_000).catch(() => {});
-    await approvePendingWorkspaceCreationReview(testApp!).catch(() => {});
 
     try {
       await expect
