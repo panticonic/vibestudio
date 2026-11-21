@@ -521,11 +521,7 @@ test.describe("Desktop Shell Chrome", () => {
       expect(status.workingHead).not.toEqual(targetMain);
       await page.getByRole("button", { name: "Review with an agent", exact: true }).click();
       const targetOwner = { app: testApp.app, workspaceId: system.workspaceId };
-      const systemSection = page.getByRole("region", { name: "System workspace", exact: true });
       const focusedSection = page.locator(".workspace-section-focused");
-      if ((await focusedSection.getAttribute("aria-label")) !== "System workspace") {
-        await systemSection.getByRole("button", { name: "Open System", exact: true }).click();
-      }
       await expect(focusedSection).toHaveAttribute("aria-label", "System workspace");
       const targetApprovals = workspaceApprovals(system.workspaceId);
       await expect
