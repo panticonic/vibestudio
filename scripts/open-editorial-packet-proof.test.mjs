@@ -8,7 +8,7 @@ function ref(value) {
   const text=JSON.stringify(value);
   return {complete:true,hash:hash(text),bytes:Buffer.byteLength(text)};
 }
-function example(branch) {
+function example(branch, allowOcr = false) {
   const retry=branch==="retry", missing=branch==="hold", editRequested=branch!=="review";
   const world={id:"editorial-proof",kind:"editorial-packet",goal:"Correct the opening window.",end:missing?"held":editRequested?"ready":"reviewed"};
   const mission={id:"mission",title:"Exact mission",revision:1};
@@ -19,7 +19,7 @@ function example(branch) {
   const snapshots=retry?[opening,current]:[opening];
   const plan={missionId:mission.id,operation:editRequested?"revise":"review",fields:["Hours"],note:"diagnostic"};
   const selection={attachment:"proof.pdf",pages:[1],query:"Hours"};
-  const request={...selection,document:selection.attachment};
+  const request={...selection,document:selection.attachment,allowOcr};
   const pdf={digest:"pdf",readPages:[1],citations:[{page:1,line:0,quote:"Hours: New line"}]};
   const evidence={status:"grounded",source:"proof.pdf",document:{path:"proof.pdf",version:"pdf",text:"Hours: New line"},citations:pdf.citations};
   const source=missing?{selection:null,request:null,pdf:null,evidence:null}:{selection,request,pdf,evidence};
@@ -92,6 +92,7 @@ function example(branch) {
 
 test("editorial packet export binds exact sources, stale semantic receipts, installed policy calls and private handoff",()=>{
   for(const branch of ["ready","review","hold","retry"])assert.doesNotThrow(example(branch).validate);
+  assert.throws(example("ready",true).validate,/Expected exact editorial mission/u);
   for(const fault of [
     x=>{x.reads[1].result=x.reads[0].result;},
     x=>{x.readsPdf[0].bind.result.complete=false;},

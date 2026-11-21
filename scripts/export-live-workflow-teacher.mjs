@@ -7848,7 +7848,7 @@ function verifyEditorialPacket(exercise, world, proof, skill) {
         return matchesValue(wrapper.inputs?.goal,world.goal)&&matchesValue(wrapper.inputs?.snapshot,snapshots[i])&&
           matchesValue(wrapper.inputs?.plan,plan)&&matchesValue(wrapper.output,source)&&selected.length===1&&
           matchesValue(selected[0].output,source.selection)&&
-          (source.request? binds.length===1&&matchesValue(binds[0].args,[snapshots[i],plan,source.selection])&&
+          (source.request? source.request.allowOcr===false&&binds.length===1&&matchesValue(binds[0].args,[snapshots[i],plan,source.selection])&&
             matchesValue(binds[0].result,source.request)&&native.length===1&&matchesValue(native[0].inputs?.request,source.request)&&
             matchesValue(native[0].output,source.pdf)&&child(native[0],"probeDocument").length===1&&
             (!source.pdf.readPages.length||child(native[0],"readBatch").length>0)&&attest.length===1&&
