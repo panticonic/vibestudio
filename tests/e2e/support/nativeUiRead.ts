@@ -1,60 +1,63 @@
-import { randomUUID } from "node:crypto";
 import { build } from "esbuild";
 import type { Page } from "@playwright/test";
 import { createRpcMethods } from "@vibestudio/shared/rpcMethods";
 import type { ServiceMethodSchemas } from "@vibestudio/shared/typedServiceClient";
 import {
-  createRpcClient,
   deserializeRpcFailure,
-  type EnvelopeRpcTransport,
   type RpcDestination,
-  type RpcEnvelope,
-  type RpcErrorKind,
   type RpcFailure,
   type RpcMethod,
 } from "@vibestudio/rpc";
 
-const SERIALIZER_SYMBOL = "vibestudio.e2e.rpcFailureSerializer.v1";
-const DOCUMENT_TOKEN_SYMBOL = "vibestudio.e2e.nativeUiRead.documentToken.v1";
+const READER_SYMBOL = "vibestudio.e2e.nativeUiRead.v2";
+let readerBundle: Promise<string> | undefined;
 
-type BridgeIdentity = { runtimeId: string; workspaceId: string };
-type PageTransportBridge = {
-  identity: BridgeIdentity;
-  send(envelope: RpcEnvelope): Promise<void>;
-  onMessage(handler: (envelope: RpcEnvelope) => void): () => void;
-};
-
-let serializerBundle: Promise<string> | undefined;
-const pageBrokers = new WeakMap<Page, PageBridgeSlot>();
-
-type PageBridgeSlot = {
-  generation: number;
-  callbackName: string;
-  binding: Promise<void>;
-  initialization: Promise<PageBridgeBroker> | undefined;
-  active: PageBridgeBroker | undefined;
-};
-
-type PageBridgeBroker = {
-  transport: EnvelopeRpcTransport;
-  identity: BridgeIdentity;
-  generation: number;
-  documentToken: string;
-  deliver: (documentToken: string, envelope: RpcEnvelope) => void;
-  disconnect: () => void;
-};
-
-function getSerializerBundle(): Promise<string> {
-  serializerBundle ??= build({
+function getReaderBundle(): Promise<string> {
+  readerBundle ??= build({
     absWorkingDir: process.cwd(),
     stdin: {
       contents: `
-        import { serializeRpcFailure } from "@vibestudio/rpc";
-        const key = Symbol.for(${JSON.stringify(SERIALIZER_SYMBOL)});
-        Object.defineProperty(globalThis, key, { value: serializeRpcFailure });
+        import { createRpcClient, serializeRpcFailure } from "@vibestudio/rpc";
+
+        const key = Symbol.for(${JSON.stringify(READER_SYMBOL)});
+        globalThis[key] ??= async ({ destination, methodName, args }) => {
+          const bridge = globalThis.__vibestudioTransport;
+          if (!bridge) throw new Error("Native UI RPC transport is unavailable");
+
+          const lifetime = new AbortController();
+          const deadline = new AbortController();
+          const timer = setTimeout(() => deadline.abort(new Error("Timed out reading " + methodName)), 30_000);
+          try {
+            const client = createRpcClient({
+              selfId: bridge.identity.runtimeId,
+              callerKind: "client",
+              workspaceId: bridge.identity.workspaceId,
+              transport: {
+                send: (envelope) => bridge.send(envelope),
+                onMessage: (handler) => bridge.onMessage(handler),
+                status: () => "connected",
+                ready: () => Promise.resolve(),
+                onStatusChange: () => () => {},
+              },
+              lifetime: lifetime.signal,
+            });
+            await client.ready();
+            const value = await client.call("main", {
+              name: methodName,
+              invoke: (args, dispatch) => dispatch(args),
+              parseArgs: async (args) => args,
+            }, args, { destination, signal: deadline.signal });
+            return { ok: true, value };
+          } catch (error) {
+            return { ok: false, failure: serializeRpcFailure(error, "transport") };
+          } finally {
+            clearTimeout(timer);
+            lifetime.abort(new Error("Native UI read RPC client retired"));
+          }
+        };
       `,
       resolveDir: process.cwd(),
-      sourcefile: "native-ui-read-rpc-failure-serializer.ts",
+      sourcefile: "native-ui-read-rpc.ts",
       loader: "ts",
     },
     bundle: true,
@@ -63,229 +66,41 @@ function getSerializerBundle(): Promise<string> {
     write: false,
   }).then((result) => {
     const output = result.outputFiles[0];
-    if (!output) throw new Error("RPC failure serializer bundle produced no browser output");
+    if (!output) throw new Error("Native UI RPC reader bundle produced no browser output");
     return output.text;
   });
-  return serializerBundle;
+  return readerBundle;
 }
 
-function createPageBridgeSlot(page: Page): PageBridgeSlot {
-  const slot: PageBridgeSlot = {
-    generation: 0,
-    callbackName: `__vibestudioE2eRpcMessage_${randomUUID().replaceAll("-", "")}`,
-    binding: Promise.resolve(),
-    initialization: undefined,
-    active: undefined,
-  };
-  const invalidateDocument = (): void => {
-    slot.generation += 1;
-    slot.initialization = undefined;
-    const active = slot.active;
-    slot.active = undefined;
-    active?.disconnect();
-  };
-  page.on("framenavigated", (frame) => {
-    if (frame === page.mainFrame()) invalidateDocument();
-  });
-  page.on("close", invalidateDocument);
-  slot.binding = page.exposeFunction(
-    slot.callbackName,
-    (documentToken: string, envelope: RpcEnvelope) => {
-      slot.active?.deliver(documentToken, envelope);
-    }
-  );
-  return slot;
-}
+type BrowserReadResult = { ok: true; value: unknown } | { ok: false; failure: RpcFailure };
 
-async function createPageBridgeTransport(
-  page: Page,
-  slot: PageBridgeSlot,
-  generation: number
-): Promise<PageBridgeBroker> {
-  const assertCurrentDocument = (): void => {
-    if (page.isClosed() || slot.generation !== generation) {
-      throw new Error("Native UI RPC page navigated before the bridge was ready");
-    }
-  };
-  await slot.binding;
-  assertCurrentDocument();
-  await page.addScriptTag({ content: await getSerializerBundle() });
-  assertCurrentDocument();
-  const identity = await page.evaluate(() => {
-    const bridge = (window as unknown as { __vibestudioTransport: PageTransportBridge })
-      .__vibestudioTransport;
-    return bridge.identity;
-  });
-  assertCurrentDocument();
-  const documentToken = randomUUID();
-  const listeners = new Set<(envelope: RpcEnvelope) => void>();
-  const statusListeners = new Set<(status: "connected" | "disconnected") => void>();
-  const state = { connected: true };
-  await page.evaluate(
-    ({ name, documentToken, documentTokenSymbol }) => {
-      const bridge = (window as unknown as { __vibestudioTransport: PageTransportBridge })
-        .__vibestudioTransport;
-      const callback = (globalThis as unknown as Record<string, unknown>)[name];
-      if (typeof callback !== "function") throw new Error("RPC message callback is unavailable");
-      Object.defineProperty(globalThis, Symbol.for(documentTokenSymbol), {
-        configurable: true,
-        value: documentToken,
-      });
-      bridge.onMessage((envelope) => {
-        const currentToken = (globalThis as unknown as Record<PropertyKey, unknown>)[
-          Symbol.for(documentTokenSymbol)
-        ];
-        if (currentToken === documentToken) {
-          void (callback as (token: string, message: RpcEnvelope) => Promise<void>)(
-            documentToken,
-            envelope
-          );
-        }
-      });
-    },
-    { name: slot.callbackName, documentToken, documentTokenSymbol: DOCUMENT_TOKEN_SYMBOL }
-  );
-  assertCurrentDocument();
-
-  const transport: EnvelopeRpcTransport = {
-    async send(envelope) {
-      if (!state.connected || page.isClosed())
-        throw new Error("Native UI RPC page is disconnected");
-      const outcome = await page.evaluate(
-        async ({ envelope, serializerSymbol, documentToken, documentTokenSymbol }) => {
-          const currentToken = (globalThis as unknown as Record<PropertyKey, unknown>)[
-            Symbol.for(documentTokenSymbol)
-          ];
-          if (currentToken !== documentToken) throw new Error("Native UI RPC document changed");
-          const bridge = (window as unknown as { __vibestudioTransport: PageTransportBridge })
-            .__vibestudioTransport;
-          try {
-            await bridge.send(envelope);
-            return { ok: true as const };
-          } catch (error) {
-            const serializer = (globalThis as unknown as Record<PropertyKey, unknown>)[
-              Symbol.for(serializerSymbol)
-            ];
-            if (typeof serializer !== "function") throw error;
-            return {
-              ok: false as const,
-              failure: (serializer as (value: unknown, fallback: RpcErrorKind) => RpcFailure)(
-                error,
-                "transport"
-              ),
-            };
-          }
-        },
-        {
-          envelope,
-          serializerSymbol: SERIALIZER_SYMBOL,
-          documentToken,
-          documentTokenSymbol: DOCUMENT_TOKEN_SYMBOL,
-        }
-      );
-      if (!outcome.ok) throw deserializeRpcFailure(outcome.failure);
-    },
-    onMessage(handler) {
-      listeners.add(handler);
-      return () => listeners.delete(handler);
-    },
-    status: () => (state.connected && !page.isClosed() ? "connected" : "disconnected"),
-    ready: () => Promise.resolve(),
-    onStatusChange(handler) {
-      statusListeners.add(handler);
-      if (!state.connected || page.isClosed()) handler("disconnected");
-      return () => statusListeners.delete(handler);
-    },
-  };
-
-  const broker: PageBridgeBroker = {
-    transport,
-    identity,
-    generation,
-    documentToken,
-    deliver(token, envelope) {
-      if (!state.connected || token !== documentToken) return;
-      for (const listener of listeners) listener(envelope);
-    },
-    disconnect() {
-      if (!state.connected) return;
-      state.connected = false;
-      for (const listener of statusListeners) listener("disconnected");
-      statusListeners.clear();
-      listeners.clear();
-    },
-  };
-  return broker;
-}
-
-function pageBridgeTransport(page: Page): Promise<PageBridgeBroker> {
-  let slot = pageBrokers.get(page);
-  if (!slot) {
-    slot = createPageBridgeSlot(page);
-    pageBrokers.set(page, slot);
-  }
-  if (slot.active?.generation === slot.generation) return Promise.resolve(slot.active);
-  if (slot.initialization) return slot.initialization;
-  const generation = slot.generation;
-  let initialization: Promise<PageBridgeBroker>;
-  initialization = createPageBridgeTransport(page, slot, generation)
-    .then((broker) => {
-      if (slot?.generation !== generation || page.isClosed()) {
-        broker.disconnect();
-        throw new Error("Native UI RPC page navigated before the bridge was ready");
-      }
-      slot!.active = broker;
-      return broker;
-    })
-    .catch((error: unknown) => {
-      if (slot?.initialization === initialization) slot.initialization = undefined;
-      if (slot?.active?.generation === generation) {
-        slot.active.disconnect();
-        slot.active = undefined;
-      }
-      throw error;
-    });
-  slot.initialization = initialization;
-  return initialization;
-}
-
-/** Read-only assertions use the same admitted native System UI transport as the product. */
+/** Execute a schema-checked read through the renderer's admitted native session. */
 export async function nativeUiRead<Args extends unknown[], Result>(
   page: Page,
   destination: RpcDestination,
   method: RpcMethod<Args, Result>,
   args: NoInfer<Args>
 ): Promise<Result> {
-  const bridge = await pageBridgeTransport(page);
-  const lifetime = new AbortController();
-  const client = createRpcClient({
-    selfId: bridge.identity.runtimeId,
-    callerKind: "client",
-    workspaceId: bridge.identity.workspaceId,
-    transport: bridge.transport,
-    lifetime: lifetime.signal,
+  return method.invoke(args, async (parsedArgs) => {
+    const installed = await page.evaluate(
+      (symbol) => typeof Reflect.get(globalThis, Symbol.for(symbol)) === "function",
+      READER_SYMBOL
+    );
+    if (!installed) await page.evaluate(await getReaderBundle());
+
+    const result = await page.evaluate(
+      ({ symbol, request }) => {
+        const read = Reflect.get(globalThis, Symbol.for(symbol)) as
+          | ((input: typeof request) => Promise<BrowserReadResult>)
+          | undefined;
+        if (!read) throw new Error("Native UI RPC reader is unavailable in this document");
+        return read(request);
+      },
+      { symbol: READER_SYMBOL, request: { destination, methodName: method.name, args: parsedArgs } }
+    );
+    if (!result.ok) throw deserializeRpcFailure(result.failure);
+    return result.value;
   });
-  const deadline = new AbortController();
-  const deadlineError = new Error(`Timed out reading ${method.name}`);
-  const timer = setTimeout(() => deadline.abort(deadlineError), 30_000);
-  let result: Result | undefined;
-  let primaryFailure: unknown;
-  let hasPrimaryFailure = false;
-  try {
-    await client.ready();
-    result = await client.call("main", method, args, {
-      destination,
-      signal: deadline.signal,
-    });
-  } catch (error) {
-    hasPrimaryFailure = true;
-    primaryFailure = error;
-  } finally {
-    clearTimeout(timer);
-    lifetime.abort(new Error("Native UI read RPC client retired"));
-  }
-  if (hasPrimaryFailure) throw primaryFailure;
-  return result as Result;
 }
 
 /** Adapt the schema-derived service client's dynamic invoker to owned descriptors. */
