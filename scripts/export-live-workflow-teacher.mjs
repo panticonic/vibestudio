@@ -18,6 +18,7 @@ const templateGoalDomains = {
     checks: ["exactOwnedEditorialMission", "exactEditorialFrontiers", "exactApprovedPdfEvidence", "minimalEditorialProposal",
       "preservedCoeditorBoundary", "verifiedEditorialReadback", "groundedEditorialDisposition", "verifiedPrivateEditorialNote",
       "protectedEditorialSources", "rejectedEditorialRetarget"],
+  },
   phoneFirstRun: {
     namespace: "vibestudio:phone-first-run",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-phone-first-run-managed.ts" },
@@ -145,6 +146,7 @@ const templateGoalDomains = {
     skill: "testkitCloseout",
     checks: ["exactNominatedTestkitAttempts", "separatedActualCurrentAndPrior", "separateReleaseAndObservedResidue",
       "exactUserAcceptanceDecision", "verifiedPrivateCloseout"],
+  },
   "content-archive": {
     namespace: "vibestudio:content-archive",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-content-archive-managed.ts" },
