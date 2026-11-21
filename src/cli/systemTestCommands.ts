@@ -664,6 +664,16 @@ async function run(inv: ParsedInvocation): Promise<number> {
     if (!all && names.length === 0 && !category) {
       throw new UsageError("select exact test names, --category CATEGORY, or --all");
     }
+    const retainTrajectories = inv.flags["retain-trajectories"] === true;
+    if (retainTrajectories && (all || category || inv.flags["detach"] === true)) {
+      throw new UsageError("--retain-trajectories requires a foreground run with exact test names");
+    }
+    if (
+      retainTrajectories &&
+      new Set(names.map((name) => trajectoryArtifactName(name, true))).size !== names.length
+    ) {
+      throw new UsageError("--retain-trajectories requires distinct trajectory artifact names");
+    }
     const approveCodex = inv.flags["approve-codex-session"] === true;
     if (
       approveCodex &&
@@ -751,6 +761,7 @@ async function run(inv: ParsedInvocation): Promise<number> {
       const value = resultValue(status, stored.runId);
       const artifact = writeSystemTestArtifact(stored.runId, "summary", value, stored.artifactDir);
       await retainFailedRunEvidence(scope, stored, value);
+      if (retainTrajectories) await retainPassingTestTrajectories(scope, stored, value);
       printRun(value, json, artifact);
       return failedSummary(value) ? 1 : 0;
     } finally {
@@ -1013,6 +1024,23 @@ function failedSummaryTestNames(summary: unknown): string[] {
         .filter((value): value is string => typeof value === "string")
     ),
   ];
+}
+
+export async function retainPassingTestTrajectories(
+  scope: SessionScope,
+  stored: StoredSystemTestRun,
+  summary: unknown
+): Promise<void> {
+  const failed = new Set(failedSummaryTestNames(summary));
+  for (const testName of stored.config.names) {
+    if (failed.has(testName)) continue;
+    writeSystemTestArtifact(
+      stored.runId,
+      trajectoryArtifactName(testName, true),
+      await fetchTrajectory(scope, stored, testName, true),
+      stored.artifactDir
+    );
+  }
 }
 
 /**
@@ -1606,6 +1634,11 @@ const RUN_FLAGS = [
     description: "Optional per-test timeout in milliseconds (no timeout when omitted)",
   },
   { name: "poll-ms", takesValue: true, description: "Status polling interval (default 1000)" },
+  {
+    name: "retain-trajectories",
+    takesValue: false,
+    description: "Save full trajectories for an exact foreground run",
+  },
   {
     name: "detach",
     takesValue: false,

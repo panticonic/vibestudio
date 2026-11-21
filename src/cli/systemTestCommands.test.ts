@@ -22,6 +22,7 @@ import {
   failedSummary,
   resultValue,
   retainFailedRunEvidence,
+  retainPassingTestTrajectories,
   unavailableTrajectory,
 } from "./systemTestCommands.js";
 import { RpcError } from "./rpcClient.js";
@@ -642,6 +643,21 @@ describe("system-test failure evidence retention", () => {
     const before = calls.length;
     await retainFailedRunEvidence(scopeFor(calls), run, summary);
     expect(calls).toHaveLength(before);
+  });
+
+  it("exports the passing full trajectories without fetching failures again", async () => {
+    const run = storedRun();
+    const calls: Array<{ method: string; args: unknown[] }> = [];
+    await retainPassingTestTrajectories(scopeFor(calls), run, { failedTests: ["beta"] });
+    expect(loadSystemTestArtifact(run.runId, "trajectory-alpha-full", run.artifactDir)).toEqual({
+      test: "alpha",
+      events: ["x".repeat(300_000)],
+    });
+    expect(loadSystemTestArtifact(run.runId, "trajectory-beta-full", run.artifactDir)).toBeNull();
+    expect(calls.length).toBeGreaterThan(1);
+    expect(calls.every(({ method, args }) =>
+      method === "readSystemTestTrajectoryPage" && args[1] === "alpha" && args[2] === true
+    )).toBe(true);
   });
 
   it("retains nothing for a passing run", async () => {
