@@ -9048,9 +9048,16 @@ function verifyOpenAndroidAudit(exercise, world, proof, skill) {
   const { scope, outcome, native } = proof;
   const request = native?.request;
   const observeApp = world.mode === "application";
+  const requestIntent = world.mode === "target" ? "device" : "application";
+  const targetState = world.mode === "foreign" ? { state: null, review: "target-absent" }
+    : { state: "device", review: "target-ready" };
+  const report = outcome?.report;
+  const expectedStatus = world.expectedStatus ?? "app-absent";
   requireEvidence(isDeepStrictEqual(exercise.report.outcome, outcome) &&
     isDeepStrictEqual(outcome?.request, request) && isDeepStrictEqual(outcome?.scope, scope) &&
-    request?.goal === world.goal && request?.target === scope?.target &&
+    request?.goal === world.goal && request?.target === scope?.target && request?.intent === requestIntent &&
+    native?.observed?.target === request.target && native.observed.state === targetState.state &&
+    isDeepStrictEqual(report?.targetObservation, native.observed) && report?.targetReview === targetState.review &&
     request?.operationId === scope?.operationId && typeof request?.operationId === "string" &&
     scopeCall.length === 1 && plan.length === 1 && installed.length === 1 && targetReview.length === 1 &&
     scopeRead.length === 1 && targetRead.length === 1 && matchesValue(scopeRead[0].args, [world.goal]) &&
@@ -9067,7 +9074,10 @@ function verifyOpenAndroidAudit(exercise, world, proof, skill) {
   requireEvidence(runtimeReview.length === Number(observeApp) && appRead.length === Number(observeApp) &&
     auditReadEffects.length === (observeApp ? 3 : 2) &&
     (observeApp
-      ? matchesValue(appRead[0].args, [request.operationId]) &&
+      ? report?.runtime?.status === expectedStatus &&
+        report.runtime.image === (native.application?.screenshotCaptured ? "captured" : "unavailable") &&
+        isDeepStrictEqual(report.runtime.observation, native.application) &&
+        matchesValue(appRead[0].args, [request.operationId]) &&
         matchesValue(appRead[0].result, native.application) &&
         matchesValue(runtimeReview[0].output, outcome?.report?.runtime)
       : outcome?.report?.runtime === null),
