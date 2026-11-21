@@ -208,6 +208,13 @@ describe("WorkspaceVcs semantic host orchestration", () => {
         )}`;
         return belongsToOwner ? "private-working" : "main";
       }
+      if (method === "readHistoryWorkingState") {
+        expect(raw).toEqual({ contextId });
+        expect(owner.objectKey).toBe(`work-${sha256HexSyncText(
+          workspaceParticipantIdentity(taskCaller(1), contextId)
+        )}`);
+        return state;
+      }
       if (method === "readHistoryProjection") {
         return {
           head: "private-working",
@@ -250,6 +257,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const callsBeforeRebind = dispatch.mock.calls.length;
     await expect(bind(1)).resolves.toMatchObject({ sourceRoot: first.sourceRoot });
     expect(dispatch).toHaveBeenCalledTimes(callsBeforeRebind);
+    await expect(first.bridge.status({ contextId })).resolves.toEqual({ workingHead: state });
     const { vcs: restarted, refs: restartedRefs } = await harness();
     vi.spyOn(restartedRefs, "readMainSemanticState").mockReturnValue({ kind: "event", eventId: "main-event" });
     await restarted.attachParticipantHistory({ dispatch: { dispatch }, canonical });
@@ -267,6 +275,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     expect(destroyRetiredStorage).not.toHaveBeenCalled();
     await expect(fsp.stat(first.sourceRoot)).resolves.toBeDefined();
     await expect(bind(1)).rejects.toThrow("context has retired");
+    await expect(first.bridge.status({ contextId })).rejects.toThrow("context has retired");
     refuseRetirement = false;
     await vcs.dropContext(contextId);
     expect(destroyRetiredStorage.mock.calls.map(([owner]) => owner)).toEqual(

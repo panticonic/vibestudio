@@ -39,7 +39,7 @@ import type {
   VcsWalkResult,
 } from "@vibestudio/service-schemas/vcs";
 import { z } from "zod";
-import { vcsQueryResultSchema, vcsReadMemoryResultSchema, vcsTrajectoryInvocationRefSchema } from "@vibestudio/service-schemas/vcs";
+import { vcsQueryResultSchema, vcsReadMemoryResultSchema, vcsStateNodeRefSchema, vcsTrajectoryInvocationRefSchema } from "@vibestudio/service-schemas/vcs";
 import { vcsCommitResultSchema, vcsDiscardResultSchema, vcsExternalDeltaResultSchema, vcsImportSnapshotResultSchema, vcsMethods } from "@vibestudio/service-schemas/vcs";
 import type {
   ProtectedPublicationEvent,
@@ -146,7 +146,6 @@ import {
   workspacePublishedCatalog,
   readWorkspaceParticipantProjection,
   readWorkspaceParticipantRevision,
-  readWorkspaceParticipantStatus,
   readWorkspacePublicationApproval,
   readWorkspacePublishedRevision,
   requireWorkspaceParticipantOwner,
@@ -1748,7 +1747,12 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         ...catalog,
         status: ({ contextId: requested }) => {
           assertContext(requested);
-          return readWorkspaceParticipantStatus(scope);
+          return this.lockParticipantContexts(contextId, contextId, async () => {
+            input.signal?.throwIfAborted();
+            if (this.retiredContexts.has(contextId)) throw new Error("Workspace participant context has retired");
+            const state = await dispatch.dispatch(owner, "readHistoryWorkingState", { contextId });
+            return { workingHead: vcsStateNodeRefSchema.parse(state) };
+          });
         },
         readFile: async ({ state, ...file }) => (await readFiles({ state, files: [file] }))[0] ?? null,
         readFiles,
