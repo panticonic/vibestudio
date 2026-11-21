@@ -162,6 +162,14 @@ const templateGoalDomains = {
     checks: ["exactNominatedTestkitAttempts", "separatedActualCurrentAndPrior", "separateReleaseAndObservedResidue",
       "exactUserAcceptanceDecision", "verifiedPrivateCloseout"],
   },
+  "webhook-admission": {
+    namespace: "vibestudio:webhook-admission",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-webhook-admission-managed.ts" },
+    callable: "reviewWebhookAdmission",
+    skill: "webhookAdmission",
+    checks: ["matchedOwnedRegistrationReceipt", "exactNativeActiveAndTombstone", "exactCurrentBinding",
+      "matchedAdmissionDisposition", "verifiedScopedPrivateAudit", "preservedNativeRegistryAndRedaction"],
+  },
   "content-archive": {
     namespace: "vibestudio:content-archive",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-content-archive-managed.ts" },
@@ -1529,13 +1537,13 @@ export async function loadLiveTeacherCases(checkouts) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
     const distinctGoals = new Set();
-    const { openGoalWorlds, openPhoneFirstRunWorlds = [], openSkillMaintenanceWorlds = [], openDesktopReadinessWorlds = [], openContentArchiveWorlds = [], openSystemReleaseWorlds = [], openTestkitCloseoutWorlds = [], openPanelSourceMigrationWorlds = [], openWorkspaceShareWorlds = [], openNotificationStateWorlds = [], openAgentCapabilityWorlds = [], openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openChatContinuityWorlds = [], openGrimoireSceneWorlds = [], openEditorialWorlds = [], openPortfolioWorlds = [], openRegencyWorlds = [], openImageCandidateWorlds = [], openApiReadinessWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
+    const { openGoalWorlds, openPhoneFirstRunWorlds = [], openSkillMaintenanceWorlds = [], openWebhookAdmissionWorlds = [], openDesktopReadinessWorlds = [], openContentArchiveWorlds = [], openSystemReleaseWorlds = [], openTestkitCloseoutWorlds = [], openPanelSourceMigrationWorlds = [], openWorkspaceShareWorlds = [], openNotificationStateWorlds = [], openAgentCapabilityWorlds = [], openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openChatContinuityWorlds = [], openGrimoireSceneWorlds = [], openEditorialWorlds = [], openPortfolioWorlds = [], openRegencyWorlds = [], openImageCandidateWorlds = [], openApiReadinessWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
       spectroliteGoalWorlds = [], openGoalGoogleWorlds = [], openGoalPersonalWorlds = [],
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
       openTerminalWorlds = [], openOwnedResearchWorlds = [], personalWelcomeWorlds = [], dictationHandoffWorlds = [], specialistHandoffWorlds = [], providerHandoffWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
-    for (const assignment of [...openGoalWorlds, ...openPhoneFirstRunWorlds, ...openSkillMaintenanceWorlds, ...openDesktopReadinessWorlds, ...openContentArchiveWorlds, ...openSystemReleaseWorlds, ...openTestkitCloseoutWorlds, ...openPanelSourceMigrationWorlds, ...openWorkspaceShareWorlds, ...openNotificationStateWorlds, ...openAgentCapabilityWorlds, ...openMobileContinuityWorlds, ...openInstalledPackageWorlds, ...openAssetIntegrityWorlds, ...openTendrilRouteWorlds, ...openExtensionDossierWorlds, ...openDeployedInterfaceWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
+    for (const assignment of [...openGoalWorlds, ...openPhoneFirstRunWorlds, ...openSkillMaintenanceWorlds, ...openWebhookAdmissionWorlds, ...openDesktopReadinessWorlds, ...openContentArchiveWorlds, ...openSystemReleaseWorlds, ...openTestkitCloseoutWorlds, ...openPanelSourceMigrationWorlds, ...openWorkspaceShareWorlds, ...openNotificationStateWorlds, ...openAgentCapabilityWorlds, ...openMobileContinuityWorlds, ...openInstalledPackageWorlds, ...openAssetIntegrityWorlds, ...openTendrilRouteWorlds, ...openExtensionDossierWorlds, ...openDeployedInterfaceWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
       ...openGrimoireSceneWorlds, ...openApiReadinessWorlds, ...openChatContinuityWorlds, ...openEditorialWorlds, ...openPortfolioWorlds, ...openRegencyWorlds, ...openImageCandidateWorlds, ...openNewsEvidenceWorlds, ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
@@ -9205,6 +9213,42 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
         receipts.splice(index, 1);
         return true;
       }), "Expected exact package baseline, scoped local effect and installed native verification plan trajectory");
+  } else if (world.kind === "webhook-admission") {
+    const outcome = exercise.report.outcome;
+    const observed = effects.filter(effect => ["webhookAdmissionEvidence", "webhookAdmissionHandoff"].includes(effect.service));
+    const receipts = proof.effects?.slice();
+    const branch = exercise.calls.find(({ record }) => record === skill);
+    const child = (parent, name) => exercise.calls.filter(({ record }) => record.parent_call_id === parent?.callId &&
+      record.definition?.name === name && record.outcome === "done");
+    const read = child(branch, "inspectWebhookStatus");
+    const native = child(read[0], "readWebhookEvidence");
+    const match = child(branch, "matchRegistration");
+    const assess = child(branch, "assessWebhookAdmission");
+    const policy = child(assess[0], "assessRequiredPolicy");
+    const stage = child(branch, "stageWebhookAudit");
+    requireEvidence(isDeepStrictEqual(outcome.assignment, proof.assignment) && isDeepStrictEqual(outcome.evidence, proof.evidence) &&
+      isDeepStrictEqual(outcome.binding, proof.binding) && isDeepStrictEqual(outcome.assessment, proof.assessment) &&
+      isDeepStrictEqual(outcome.handoff, proof.handoff) && read.length === 1 && native.length === 1 &&
+      matchesValue(read[0].record.inputs?.assignment, proof.assignment) && matchesValue(read[0].record.output, proof.evidence) &&
+      matchesValue(native[0].record.inputs?.assignment, proof.assignment) && matchesValue(native[0].record.output, proof.evidence) &&
+      match.length === 1 && matchesValue(match[0].record.inputs?.assignment, proof.assignment) &&
+      matchesValue(match[0].record.inputs?.evidence, proof.evidence) && matchesValue(match[0].record.output, proof.binding) &&
+      assess.length === 1 && matchesValue(assess[0].record.inputs?.assignment, proof.assignment) &&
+      matchesValue(assess[0].record.inputs?.binding, proof.binding) && matchesValue(assess[0].record.output, proof.assessment) &&
+      (proof.binding.row ? policy.length === 1 && matchesValue(policy[0].record.inputs?.assignment, proof.assignment) &&
+        matchesValue(policy[0].record.inputs?.row, proof.binding.row) && matchesValue(policy[0].record.output, proof.assessment.disposition) :
+        policy.length === 0) &&
+      (proof.handoff ? stage.length === 1 && matchesValue(stage[0].record.inputs?.assignment, proof.assignment) &&
+        matchesValue(stage[0].record.inputs?.evidence, proof.evidence) && matchesValue(stage[0].record.inputs?.binding, proof.binding) &&
+        matchesValue(stage[0].record.inputs?.assessment, proof.assessment) && matchesValue(stage[0].record.output, proof.handoff) : stage.length === 0) &&
+      Array.isArray(receipts) && receipts.length === observed.length && observed.every(({ service, method, args, result, error }) => {
+        if (error) return false;
+        const index = receipts.findIndex(item => item.service === service && item.method === method &&
+          matchesValue(args, item.args) && matchesValue(result, item.result));
+        if (index < 0) return false;
+        receipts.splice(index, 1);
+        return true;
+      }), "Expected exact owned webhook admission, retained native binding, and private audit trajectory");
   } else if (world.kind === "content-archive") {
     const outcome = exercise.report.outcome;
     const observed = effects.filter(effect => ["contentArchiveEvidence", "contentArchiveChange"].includes(effect.service));
