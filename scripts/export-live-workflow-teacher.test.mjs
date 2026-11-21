@@ -10,8 +10,36 @@ import {
   effectsInGraphOrder,
   exportLiveTeacherWorkflow,
   loadLiveTeacherCases,
+  openOutcomeGoalEvidence,
   workflowSourceGroups,
 } from "./export-live-workflow-teacher.mjs";
+
+test("open outcome admission accepts alternate skill paths and binds the workspace", () => {
+  const goal = "Use the current handoff to update the guide.";
+  const caseId = "update-guide";
+  const contextId = "context";
+  const checks = { storedCurrentRevision: true, protectedOtherDocuments: true };
+  const boundGoal = JSON.stringify(goal);
+  const root = { callId: "root", record: { inputs: { goal: {
+    complete: true, bytes: Buffer.byteLength(boundGoal),
+    hash: createHash("sha256").update(boundGoal).digest("hex"),
+  } } } };
+  const execution = { provenance: { contextId }, diagnostics: {
+    openGoalVerification: { passed: true, caseId, contextId, goal, checks },
+  } };
+  const workflow = { assignment: { id: caseId, goal } };
+  for (const name of ["readCurrentHandoff", "discoverScopedIntent"]) {
+    const exercise = { rootCallIds: ["root"], calls: [root, { callId: "child", record: { definition: { name } } }] };
+    assert.deepEqual(openOutcomeGoalEvidence(execution, exercise, caseId, workflow).checks, checks);
+  }
+  const exercise = { rootCallIds: ["root"], calls: [root] };
+  assert.throws(() => openOutcomeGoalEvidence({ ...execution, provenance: { contextId: "other" } },
+    exercise, caseId, workflow), /bound to the actual workspace/);
+  assert.throws(() => openOutcomeGoalEvidence(execution, exercise, caseId,
+    { assignment: { id: caseId, goal: "Different goal" } }), /original user goal/);
+  checks.storedCurrentRevision = false;
+  assert.throws(() => openOutcomeGoalEvidence(execution, exercise, caseId, workflow), /independently verified outcomes/);
+});
 
 test("orders native effects across calls by their recorded execution order", () => {
   const first = { service: "programRunCatalog", graph_order: 0 };
