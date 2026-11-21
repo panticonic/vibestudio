@@ -1188,6 +1188,7 @@ test.describe("Terminal Startup", () => {
       )
       .not.toBe(`${beforeResize?.cols ?? 0}x${beforeResize?.rows ?? 0}`);
 
+    let storedTerminalState = "";
     await expect
       .poll(
         async () => {
@@ -1204,6 +1205,7 @@ test.describe("Terminal Startup", () => {
             { workspaceId: testApp!.workspaceId, payload: terminalPanelId }
           );
           if (!stateArgs) return { leaves: 0, focusedSessionId: null };
+          storedTerminalState = stateArgs;
           const state = JSON.parse(stateArgs) as {
             tree?: { kind: string; sessionId?: string; a?: unknown; b?: unknown };
             focusedSessionId?: string;
@@ -1223,6 +1225,10 @@ test.describe("Terminal Startup", () => {
         { timeout: 30_000, intervals: [250, 500, 1000] }
       )
       .toEqual({ leaves: 3, focusedSessionId: sessionRef.sessionId });
+    await test.info().attach("stored-terminal-layout.json", {
+      body: storedTerminalState,
+      contentType: "application/json",
+    });
 
     const preReloadPanelId = terminalPanelId;
     await reloadPanel(testApp, preReloadPanelId);
