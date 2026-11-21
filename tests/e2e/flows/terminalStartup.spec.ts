@@ -12,6 +12,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import YAML from "yaml";
 import {
+  approvePendingStartupUnits,
+  approvePendingWorkspaceCreationReview,
   callTerminalPanel,
   clickPanelSelector,
   clickPanelText,
@@ -36,6 +38,7 @@ import {
   typeTerminalThroughNativeInput,
 } from "../../setup/nativeInput";
 import { hasOwnedX11Display } from "../../setup/ownedXvfb";
+import { declineFirstRunReporting, findWorkspaceShellPage } from "../support/workspaceCreation";
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -73,7 +76,7 @@ async function getTerminalPanelId(
   let lastError: unknown;
   while (Date.now() < deadline) {
     try {
-      await resolvePendingTerminalWork(owner, window, resolvedApprovals);
+      await approvePendingTerminalWork(owner, window, resolvedApprovals);
       const id = await app.evaluate(
         async (_electron, { workspaceId }) => {
           type PanelNode = {
@@ -116,68 +119,12 @@ async function getTerminalPanelId(
   throw lastError instanceof Error ? lastError : new Error("Timed out waiting for terminal panel");
 }
 
-async function clickLaunchApprovalButton(owner: TestApp): Promise<boolean> {
-  const { app } = owner;
-  return app.evaluate(
-    async ({ webContents }, source) => {
-      const candidates = webContents
-        .getAllWebContents()
-        .filter((contents) => {
-          if (contents.isDestroyed()) return false;
-          const title = contents.getTitle();
-          return contents.getURL().startsWith("vs-client://") || title === "Vibestudio Launch";
-        })
-        .sort((left, right) =>
-          left.getTitle() === "Vibestudio Launch"
-            ? -1
-            : right.getTitle() === "Vibestudio Launch"
-              ? 1
-              : 0
-        );
-      for (const contents of candidates) {
-        if (contents.isDestroyed()) continue;
-        try {
-          const clicked = await Promise.race([
-            contents.executeJavaScript(
-              `(() => {
-                const pattern = new RegExp(${JSON.stringify(source)}, "i");
-                const buttons = Array.from(document.querySelectorAll("button"));
-                const button = buttons.find((item) => pattern.test((item.textContent ?? "").trim()));
-                if (!button) return false;
-                button.click();
-                return true;
-              })()`,
-              true
-            ),
-            new Promise<false>((resolve) => setTimeout(() => resolve(false), 2_000)),
-          ]);
-          if (clicked) return true;
-        } catch {
-          // The shell can navigate while startup authority is being committed.
-        }
-      }
-      return false;
-    },
-    /^(Trust and (start|connect)|Approve and (start|connect)|Approve all|Approve|Allow|Continue|Run)$/i
-      .source
-  );
-}
-
-async function resolvePendingTerminalWork(
-  owner: TestApp,
-  window?: Page,
-  resolvedApprovals?: PendingApproval[]
-): Promise<void> {
-  await approvePendingTerminalWork(owner, window, resolvedApprovals);
-  await clickLaunchApprovalButton(owner).catch(() => false);
-}
-
 async function waitForTerminalPanel(
   owner: TestApp,
   window: Page,
   resolvedApprovals?: PendingApproval[]
 ): Promise<string> {
-  await resolvePendingTerminalWork(owner, window, resolvedApprovals);
+  await approvePendingTerminalWork(owner, window, resolvedApprovals);
   const panelId = await getTerminalPanelId(owner, window, resolvedApprovals);
   await expect
     .poll(
@@ -781,12 +728,16 @@ test.describe("Terminal Startup", () => {
   });
 
   test("opens one usable terminal after required approvals are resolved", async () => {
-    test.setTimeout(240_000);
+    test.setTimeout(360_000);
     workspacePath = await createTerminalOnlyWorkspace();
     testApp = await launchTestApp({ workspace: workspacePath, launchTimeout: 90_000 });
+    await approvePendingWorkspaceCreationReview(testApp);
+    await approvePendingStartupUnits(testApp);
+    await declineFirstRunReporting(testApp);
+    const shell = await findWorkspaceShellPage(testApp);
     const { app } = testApp;
     const resolvedApprovals: PendingApproval[] = [];
-    let terminalPanelId = await waitForTerminalPanel(testApp, testApp.window, resolvedApprovals);
+    let terminalPanelId = await waitForTerminalPanel(testApp, shell, resolvedApprovals);
     await startPanelDiagnostics(testApp, terminalPanelId);
     expect(await terminalAuthorityRequests(testApp, terminalPanelId)).toContainEqual(
       expect.objectContaining({
@@ -815,7 +766,7 @@ test.describe("Terminal Startup", () => {
     const session = await waitForAutomaticallyResumedTerminalSession(
       testApp,
       terminalPanelId,
-      testApp.window,
+      shell,
       resolvedApprovals
     );
     expect(
@@ -842,7 +793,7 @@ test.describe("Terminal Startup", () => {
       terminalPanelId,
       sessionRef,
       "echo vibestudio-e2e-input\r",
-      testApp.window
+      shell
     );
     await expectScrollbackToContain(testApp, terminalPanelId, sessionRef, "vibestudio-e2e-input");
 
@@ -1040,7 +991,7 @@ test.describe("Terminal Startup", () => {
     await expect
       .poll(
         async () => {
-          await approvePendingTerminalWork(testApp!, testApp!.window);
+          await approvePendingTerminalWork(testApp!, shell);
           return getElectronClipboardText(app);
         },
         {
@@ -1088,7 +1039,7 @@ test.describe("Terminal Startup", () => {
 
     const split = await callTerminalPanelWithApprovals<{ sessionId: string | undefined }>(
       testApp,
-      testApp.window,
+      shell,
       terminalPanelId,
       "splitPane",
       { direction: "right" }
@@ -1113,7 +1064,7 @@ test.describe("Terminal Startup", () => {
 
     const tab = await callTerminalPanelWithApprovals<{ sessionId: string | undefined }>(
       testApp,
-      testApp.window,
+      shell,
       terminalPanelId,
       "openSession",
       {}
@@ -1134,7 +1085,7 @@ test.describe("Terminal Startup", () => {
       testApp,
       terminalPanelId,
       sessionRef,
-      testApp.window
+      shell
     );
     sessionRef.sessionId = focusSessionId;
     await callTerminalPanel(testApp, terminalPanelId, "focusSession", {
@@ -1214,7 +1165,7 @@ test.describe("Terminal Startup", () => {
     await expect
       .poll(
         async () => {
-          await approvePendingTerminalWork(testApp!, testApp!.window);
+          await approvePendingTerminalWork(testApp!, shell);
           const stateArgs = await app.evaluate(
             async (_electron, { workspaceId, payload: panelId }) => {
               const testApi = await globalThis.__testApi?.forWorkspace(workspaceId);
@@ -1249,14 +1200,14 @@ test.describe("Terminal Startup", () => {
 
     const preReloadPanelId = terminalPanelId;
     await reloadPanel(testApp, preReloadPanelId);
-    terminalPanelId = await waitForTerminalPanel(testApp, testApp.window);
+    terminalPanelId = await waitForTerminalPanel(testApp, shell);
     if (terminalPanelId !== preReloadPanelId) {
       await startPanelDiagnostics(testApp, terminalPanelId);
     }
     await expect
       .poll(
         async () => {
-          await approvePendingTerminalWork(testApp!, testApp!.window).catch(() => {});
+          await approvePendingTerminalWork(testApp!, shell).catch(() => {});
           return getPanelHtml(testApp!, terminalPanelId).catch(() => "");
         },
         { timeout: 30_000, intervals: [500, 1000, 2000] }
@@ -1267,7 +1218,7 @@ test.describe("Terminal Startup", () => {
       testApp,
       terminalPanelId,
       sessionRef,
-      testApp.window
+      shell
     );
     await callTerminalPanel(testApp, terminalPanelId, "focusSession", {
       sessionId: reloadedSessionId,
