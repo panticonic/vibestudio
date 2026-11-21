@@ -23,6 +23,7 @@ import {
   getPanelTree,
   hasElectronDisplay,
   launchTestApp,
+  approvePendingStartupUnits,
   approvePendingWorkspaceCreationReview,
   removeManagedTestWorkspace,
   startPanelDiagnostics,
@@ -1120,17 +1121,6 @@ function isUnitBatchApproval(approval: PendingApproval): boolean {
   return approval.kind === "unit-install-review";
 }
 
-/** A client app part, in the install review's own vocabulary. */
-function appParts(approval: PendingApproval) {
-  return approval.kind === "unit-install-review"
-    ? (approval.parts ?? []).filter((part) => part.kind === "app")
-    : [];
-}
-
-function isElectronHostAppApproval(approval: PendingApproval): boolean {
-  return appParts(approval).some((part) => part.target === "electron");
-}
-
 function describeApproval(approval: PendingApproval): string {
   const parts =
     approval.kind === "unit-install-review"
@@ -1141,51 +1131,9 @@ function describeApproval(approval: PendingApproval): string {
   return `${approval.kind}:${approval.title ?? ""}:${parts}`;
 }
 
-async function reachHostedShellAndDrainStartupApprovals(testApp: TestApp): Promise<string[]> {
-  const observedInstallReviews = new Set<string>();
-  const startupState: { current: "approval" | "ready" | "waiting" } = { current: "waiting" };
+async function reachHostedShellAndDrainStartupApprovals(testApp: TestApp): Promise<void> {
   try {
-    await expect
-      .poll(
-        async () => {
-          const pending = await listPendingApprovals(testApp);
-          for (const approval of pending.filter(isUnitBatchApproval)) {
-            observedInstallReviews.add(describeApproval(approval));
-          }
-          if (pending.some(isElectronHostAppApproval) && (await shellHasApprovalUi(testApp))) {
-            startupState.current = "approval";
-            return startupState.current;
-          }
-          if (await hostedShellHasChrome(testApp)) {
-            startupState.current = "ready";
-            return startupState.current;
-          }
-          startupState.current = "waiting";
-          return startupState.current;
-        },
-        { timeout: 90_000, intervals: [500, 1000, 2000] }
-      )
-      .not.toBe("waiting");
-  } catch (error) {
-    await attachStartupDiagnostics(testApp);
-    throw error;
-  }
-
-  if (startupState.current === "approval") {
-    // `startupState` is "approval" for either surface: the launch gate window
-    // (accept label "Start"), or the workspace shell already up and showing the
-    // in-app install review. Accept whichever is actually on screen — the same
-    // decision is reachable from both, and which one appears depends on how far
-    // startup got before the review was queued.
-    expect(
-      await clickShellButton(
-        testApp,
-        /^(Start|Add to workspace|Add template|Update|Use the new version|Trust and start|Approve and start)$/
-      )
-    ).toBe(true);
-  }
-
-  try {
+    await approvePendingStartupUnits(testApp);
     await expect
       .poll(() => hostedShellHasChrome(testApp), {
         timeout: 180_000,
@@ -1208,28 +1156,17 @@ async function reachHostedShellAndDrainStartupApprovals(testApp: TestApp): Promi
     // including shared and deferred host-target batches. Leaving those cards
     // pending keeps panel/agent capabilities behind the creation-review gate.
     const pendingInstallReviews = pending.filter(isUnitBatchApproval);
-    for (const approval of pendingInstallReviews) {
-      observedInstallReviews.add(describeApproval(approval));
-    }
-    const pendingUnitBatchCount = pendingInstallReviews.length;
-    const pendingTargetCount = pendingUnitBatchCount;
-    if (pendingTargetCount === 0) break;
-    if (pendingUnitBatchCount > 0) {
-      // The install review's real click path is covered by the desktop pairing
-      // smoke. This launch-gate spec is about the subsequent agent lifecycle;
-      // resolve the one-time workspace adoption through the typed host helper
-      // so a large full-surface render cannot make this fixture race its own
-      // startup transition.
-      for (const workspaceId of new Set(
-        pendingInstallReviews.map((approval) => approval.workspaceId)
-      )) {
-        await approvePendingWorkspaceCreationReview(
-          { app: testApp.app, workspaceId: workspaceId },
-          pendingInstallReviews
-            .filter((approval) => approval.workspaceId === workspaceId)
-            .map(({ approvalId }) => approvalId)
-        );
-      }
+    if (pendingInstallReviews.length === 0) break;
+    // Use the exact one-time workspace review for this agent lifecycle fixture.
+    for (const workspaceId of new Set(
+      pendingInstallReviews.map((approval) => approval.workspaceId)
+    )) {
+      await approvePendingWorkspaceCreationReview(
+        { app: testApp.app, workspaceId },
+        pendingInstallReviews
+          .filter((approval) => approval.workspaceId === workspaceId)
+          .map(({ approvalId }) => approvalId)
+      );
     }
     await expect
       .poll(
@@ -1239,7 +1176,7 @@ async function reachHostedShellAndDrainStartupApprovals(testApp: TestApp): Promi
         },
         { timeout: 10_000, intervals: [500, 1000, 2000] }
       )
-      .toBeLessThan(pendingTargetCount);
+      .toBeLessThan(pendingInstallReviews.length);
   }
 
   await expect
@@ -1249,7 +1186,6 @@ async function reachHostedShellAndDrainStartupApprovals(testApp: TestApp): Promi
     })
     .toBe(0);
   await declineFirstRunReporting(testApp);
-  return [...observedInstallReviews];
 }
 
 /** Ordinary declared service access is covered by the accepted installation.

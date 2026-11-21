@@ -1,3 +1,4 @@
+import { mkdtemp } from "node:fs/promises";
 import path from "node:path";
 import { Ownership } from "@vibestudio/shared/ownership";
 import { prepareWorkspaceRelease } from "../../scripts/prepare-workspace-release.mjs";
@@ -10,8 +11,11 @@ export async function prepareE2eLaunchSources(input: {
   testRoot: string;
   env: NodeJS.ProcessEnv;
 }): Promise<void> {
+  // Each process launch owns a new source projection. Warm launches preserve
+  // workspace data, while the immutable source cache supplies identical pins.
+  const launchRoot = await mkdtemp(path.join(input.testRoot, "launch-sources-"));
   const ownership = await Ownership.open({
-    profileDir: path.join(input.testRoot, "source-profile"),
+    profileDir: path.join(launchRoot, "profile"),
     lifetime: "leased",
     meta: { kind: "e2e-workspace-sources" },
   });
@@ -27,8 +31,8 @@ export async function prepareE2eLaunchSources(input: {
         executable: process.execPath,
         entry: path.join(input.hostGeneration, "prepare-workspace-templates.mjs"),
         appRoot: input.projectRoot,
-        output: path.join(input.testRoot, "workspace-sources"),
-        scratch: path.join(input.testRoot, "source-preparation"),
+        output: path.join(launchRoot, "prepared"),
+        scratch: path.join(launchRoot, "scratch"),
         env: input.env,
       });
       await preparation.completed;
