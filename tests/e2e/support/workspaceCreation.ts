@@ -57,58 +57,65 @@ export async function settleWorkspaceInstallReviews(
   }
 }
 
-async function presentApprovalCardOnPage(page: Page, approvalId: string): Promise<Locator> {
-  const requested = page.locator(`[data-approval-id=${JSON.stringify(approvalId)}]`);
-  const pill = page.locator("[data-approval-pill]");
-  if (!(await page.locator("[data-approval-id]:visible").count())) {
-    await expect(pill).toBeVisible({ timeout: 30_000 });
-    await pill.click();
-  }
-  await expect(page.locator("[data-approval-id]:visible")).toHaveCount(1, { timeout: 30_000 });
-  for (const direction of ["Next approval", "Previous approval"] as const) {
-    const navigation = page.getByRole("button", { name: direction, exact: true });
-    for (let index = 0; index < 100 && !(await requested.isVisible()); index += 1) {
-      if (!(await navigation.count())) break;
-      if (!(await navigation.isEnabled())) break;
-      const prior = await page
-        .locator("[data-approval-id]:visible")
-        .getAttribute("data-approval-id");
-      await navigation.click();
-      await expect
-        .poll(() => page.locator("[data-approval-id]:visible").getAttribute("data-approval-id"))
-        .not.toBe(prior);
-    }
-  }
-  await expect(requested).toBeVisible({ timeout: 30_000 });
-  return requested;
-}
-
 /** Present one exact approval on the surface that currently owns its UI. */
 export async function presentApprovalCard(page: Page, approvalId: string): Promise<Locator> {
-  const approvalSurface = () =>
-    page
+  const candidates = () => [
+    page,
+    ...page
       .context()
       .pages()
-      .find(
+      .filter(
         (candidate) =>
-          !candidate.isClosed() && candidate.url().endsWith("#overlaySurface=approval-card")
-      );
-  const surface = approvalSurface();
-  const candidates = surface && surface !== page ? [page, surface] : [page];
+          candidate !== page &&
+          candidate.url().includes("#overlaySurface=approval")
+      ),
+  ].filter((candidate) => !candidate.isClosed());
+  const cardSelector = "[data-approval-id]";
+  const requestedSelector = `[data-approval-id=${JSON.stringify(approvalId)}]`;
+  const visible = async (selector: string) => {
+    for (const surface of candidates()) {
+      const locator = surface.locator(`${selector}:visible`).first();
+      if (await locator.isVisible()) return { surface, locator };
+    }
+    return null;
+  };
+  const exact = await visible(requestedSelector);
+  if (exact) return exact.locator;
 
-  // A request may already be expanded in the shell's inline queue or in the
-  // dedicated approval surface. Use the exact visible card before opening or
-  // navigating another queue.
-  for (const candidate of candidates) {
-    const requested = candidate.locator(`[data-approval-id=${JSON.stringify(approvalId)}]`);
-    if (await requested.isVisible()) return requested;
-  }
-  for (const candidate of candidates) {
-    if ((await candidate.locator("[data-approval-id]:visible").count()) > 0) {
-      return presentApprovalCardOnPage(candidate, approvalId);
+  // A collapsed queue and its expanded card may be on different native
+  // surfaces. Rediscover the live owner after opening or switching cards.
+  let opened = false;
+  await expect
+    .poll(
+      async () => {
+        if (await visible(cardSelector)) return true;
+        const pill = opened ? null : await visible("[data-approval-pill]");
+        if (pill) {
+          await pill.locator.click();
+          opened = true;
+        }
+        return false;
+      },
+      { timeout: 30_000 }
+    )
+    .toBe(true);
+  for (const direction of ["Next approval", "Previous approval"] as const) {
+    for (let index = 0; index < 100; index += 1) {
+      const requested = await visible(requestedSelector);
+      if (requested) return requested.locator;
+      const current = await visible(cardSelector);
+      if (!current) break;
+      const navigation = current.surface.getByRole("button", { name: direction, exact: true });
+      if (!(await navigation.count()) || !(await navigation.isEnabled())) break;
+      const prior = await current.locator.getAttribute("data-approval-id");
+      await navigation.click();
+      const advanceSelector = `${cardSelector}:not([data-approval-id=${JSON.stringify(prior)}])`;
+      await expect
+        .poll(async () => Boolean(await visible(advanceSelector)), { timeout: 30_000 })
+        .toBe(true);
     }
   }
-  return presentApprovalCardOnPage(surface ?? page, approvalId);
+  throw new Error(`Approval ${approvalId} is missing from the visible queue`);
 }
 
 /** Complete the product's reviewed creation flow and wait for its workspace to become active. */
