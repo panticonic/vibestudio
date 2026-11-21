@@ -48,6 +48,7 @@ export async function resolveDevelopmentTemplateSet(input: {
   checkpointRoot: string;
   explicitRoot?: string;
   productionTemplates?: boolean;
+  includeDevelopmentAddons?: boolean;
   baseline?: { id: string; commit: string };
 }): Promise<DevelopmentTemplateSet | null> {
   const selected = selectDevelopmentTemplateCheckouts(input.repoRoot, {
@@ -59,7 +60,7 @@ export async function resolveDevelopmentTemplateSet(input: {
   fs.mkdirSync(input.checkpointRoot, { recursive: true });
   const declareDependencies = new Map<string, string[]>();
   for (const source of selected.sources) {
-    if (source.role !== "development") continue;
+    if (source.role !== "development" || input.includeDevelopmentAddons === false) continue;
     for (const consumer of source.consumers ?? []) {
       const checkout = fs.realpathSync(
         path.resolve(requiredEntry(selected.checkouts, consumer, "checkout"))

@@ -2398,6 +2398,8 @@ async function runSmoke(
       checkpointRoot: path.join(tempRoot, "template-checkpoints"),
       productionTemplates: options.productionTemplates,
       explicitRoot: options.templateCheckouts,
+      // Exercise the shipped install graph using the exact selected source pins.
+      includeDevelopmentAddons: false,
     });
     if (developmentTemplates) {
       Object.assign(serverEnv, developmentTemplateSetEnv(developmentTemplates));

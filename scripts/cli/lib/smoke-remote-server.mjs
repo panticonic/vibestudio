@@ -30,6 +30,7 @@ export async function resolveDevelopmentTemplates({
   checkpointRoot,
   productionTemplates = false,
   explicitRoot = null,
+  includeDevelopmentAddons = true,
 }) {
   const stdout = await runCommandBuffer(
     process.execPath,
@@ -41,6 +42,7 @@ export async function resolveDevelopmentTemplates({
       checkpointRoot,
       ...(explicitRoot ? ["--root", explicitRoot] : []),
       ...(productionTemplates ? ["--production-templates"] : []),
+      ...(!includeDevelopmentAddons ? ["--without-development-addons"] : []),
     ],
     { cwd: repoRoot }
   );
