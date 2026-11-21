@@ -10,6 +10,15 @@ import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
 
 const sharedProgram = "skills/vibestudio-workflows/runWorkflow.nl";
 const templateGoalDomains = {
+  "demo-portfolio": {
+    namespace: "vibestudio:examples:paired-demo",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-portfolio-managed.ts" },
+    callable: "workOnDemoPortfolio",
+    skill: "demoPortfolio",
+    checks: ["exactOwnedPair", "independentlyReadPortfolioCards", "settledPortfolioGarden", "settledPortfolioRealm",
+      "exactCurrentPortfolioPlan", "exactPortfolioForecast", "exactInstalledGardenCriteria", "exactInstalledRealmCriteria",
+      "groundedPortfolioDecision", "verifiedPrivatePortfolioHandoff", "preservedPortfolioWorkspace", "rejectedPortfolioRetarget"],
+  },
   "regency-briefing": {
     namespace: "vibestudio:regency:open-council",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-regency-managed.ts" },
@@ -1458,14 +1467,14 @@ export async function loadLiveTeacherCases(checkouts) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
     const distinctGoals = new Set();
-    const { openGoalWorlds, openDesktopReadinessWorlds = [], openPanelSourceMigrationWorlds = [], openWorkspaceShareWorlds = [], openNotificationStateWorlds = [], openAgentCapabilityWorlds = [], openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openRegencyWorlds = [], openImageCandidateWorlds = [], openApiReadinessWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
+    const { openGoalWorlds, openDesktopReadinessWorlds = [], openPanelSourceMigrationWorlds = [], openWorkspaceShareWorlds = [], openNotificationStateWorlds = [], openAgentCapabilityWorlds = [], openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openPortfolioWorlds = [], openRegencyWorlds = [], openImageCandidateWorlds = [], openApiReadinessWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
       spectroliteGoalWorlds = [], openGoalGoogleWorlds = [], openGoalPersonalWorlds = [],
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
       openTerminalWorlds = [], openOwnedResearchWorlds = [], personalWelcomeWorlds = [], dictationHandoffWorlds = [], specialistHandoffWorlds = [], providerHandoffWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
     for (const assignment of [...openGoalWorlds, ...openDesktopReadinessWorlds, ...openPanelSourceMigrationWorlds, ...openWorkspaceShareWorlds, ...openNotificationStateWorlds, ...openAgentCapabilityWorlds, ...openMobileContinuityWorlds, ...openInstalledPackageWorlds, ...openAssetIntegrityWorlds, ...openTendrilRouteWorlds, ...openExtensionDossierWorlds, ...openDeployedInterfaceWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
-      ...openApiReadinessWorlds, ...openRegencyWorlds, ...openImageCandidateWorlds, ...openNewsEvidenceWorlds, ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
+      ...openApiReadinessWorlds, ...openPortfolioWorlds, ...openRegencyWorlds, ...openImageCandidateWorlds, ...openNewsEvidenceWorlds, ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
       ...openGoalCalendarWorlds, ...openPersonalArtifactWorlds, ...openPersonalHistoryWorlds,
@@ -7711,6 +7720,73 @@ function verifyRegencyBriefing(exercise, world, proof, skill) {
   );
 }
 
+function verifyDemoPortfolio(exercise, world, proof, skill) {
+  const report = exercise.report.outcome;
+  const {index,frames,plan,projection,garden,realm,decision,note} = proof;
+  const [opening,current] = frames;
+  const records = exercise.calls.map(({record}) => record);
+  const children = (parent, name) => records.filter(record => record.parent_call_id === parent.call_id &&
+    record.definition?.name === name && record.outcome === "done");
+  const call = name => children(skill,name);
+  const effects = (name, service, method) => call(name).flatMap(record => (record.effects ?? [])
+    .filter(effect => effect.service === service && effect.method === method && !effect.error));
+  const list = effects("findPortfolio","demoPortfolioIndex","list");
+  const read = effects("readPortfolioFrame","demoPortfolioState","read");
+  const preview = effects("readPortfolioForecast","demoPortfolioForecast","preview");
+  const writes = effects("stagePortfolioHandoff","demoPortfolioHandoff","stage");
+  const planCalls = call("choosePortfolioCriteria");
+  const decisions = call("decidePortfolioDelivery");
+  const artifact = typeof proof.artifact === "string" ? JSON.parse(proof.artifact) : null;
+  function review(wrapper, installed, checks) {
+    const wrappers = call(wrapper);
+    if (wrappers.length !== 1) return false;
+    const [parent] = wrappers;
+    const invoked = children(parent,installed);
+    const active = checks.filter(item => item.request);
+    return matchesValue(parent.inputs?.criteria, checks.map(item => item.result.criterion)) &&
+      matchesValue(parent.inputs?.opening,opening) && matchesValue(parent.inputs?.current,current) &&
+      (installed === "reviewGarden" || matchesValue(parent.inputs?.projection,projection)) &&
+      matchesValue(parent.output,checks.map(item => item.result)) && invoked.length === active.length &&
+      active.every(({request,result},i) => {
+        const leaf = installed === "reviewGarden" ?
+          request.kind === "habitat" ? "inspectHabitat" : "compareGarden" :
+          request.kind === "settlement" ? "inspectSettlement" : "compareEconomy";
+        return matchesValue(invoked[i].inputs?.review,request) && matchesValue(invoked[i].output,result.review) &&
+          children(invoked[i],leaf).length === 1;
+      });
+  }
+  requireEvidence(
+    list.length===1 && matchesValue(list[0].args,[]) && matchesValue(list[0].result,index) &&
+      read.length===2 && frames.length===2 && frames.every((frame,i) => frame.portfolio===index.id &&
+        matchesValue(read[i].args,[index.id]) && matchesValue(read[i].result,frame)) &&
+      isDeepStrictEqual(report.opening,opening) && isDeepStrictEqual(report.current,current) &&
+      planCalls.length===1 && matchesValue(planCalls[0].inputs?.goal,world.goal) &&
+      matchesValue(planCalls[0].inputs?.opening,opening) && matchesValue(planCalls[0].inputs?.current,current) &&
+      matchesValue(planCalls[0].output,plan) && isDeepStrictEqual(report.plan,plan) &&
+      plan.criteriaBasis===(current.card?.digest??null) && [opening,current].every(frame =>
+        !frame.card || hash(frame.card.text)===frame.card.digest) &&
+      isDeepStrictEqual(report.projection,projection) && preview.length===Number(Boolean(plan.months)) &&
+      (projection ? preview.length===1 && matchesValue(preview[0].args,[index.id,current.id,plan.months]) &&
+        matchesValue(preview[0].result,projection) && projection.basis===current.id &&
+        projection.accounts.month===current.realm.month+plan.months : preview.length===0) &&
+      isDeepStrictEqual(report.garden,garden.map(item=>item.result)) && isDeepStrictEqual(report.realm,realm.map(item=>item.result)) &&
+      review("reviewPortfolioGarden","reviewGarden",garden) && review("reviewPortfolioRealm","reviewRealm",realm) &&
+      decisions.length===1 && matchesValue(decisions[0].inputs?.goal,world.goal) && matchesValue(decisions[0].inputs?.current,current) &&
+      matchesValue(decisions[0].inputs?.plan,plan) && matchesValue(decisions[0].inputs?.garden,report.garden) &&
+      matchesValue(decisions[0].inputs?.realm,report.realm) && matchesValue(decisions[0].output,decision) &&
+      isDeepStrictEqual(report.decision,decision) && decision.status===world.status &&
+      writes.length===Number(decision.write) && isDeepStrictEqual(report.note,note) &&
+      (note ? artifact && writes.length===1 && matchesValue(writes[0].args,[{...report,note:null}]) &&
+        matchesValue(writes[0].result,note) && note.digest===hash(proof.artifact) &&
+        note.portfolio===index.id && note.basis===current.id && artifact.scope==="private-local" &&
+        artifact.portfolio===index.id && artifact.current===current.id && artifact.opening===opening.id &&
+        isDeepStrictEqual(artifact.acceptedCard,current.card) &&
+        isDeepStrictEqual(artifact.readings,{garden:report.garden,realm:report.realm}) :
+        writes.length===0 && artifact===null),
+    "Expected exact paired Grimoire and Regency evidence, installed review calls and authorized delivery"
+  );
+}
+
 export function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
   const proof = execution.diagnostics.openGoalVerification;
   const world = workflow.assignment;
@@ -7733,7 +7809,9 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
     "Expected a verified live goal and its actual installed Natlang skill call"
   );
   const evidence = { workspace: { proof } };
-  if (world.kind === "regency-briefing") {
+  if (world.kind === "demo-portfolio") {
+    verifyDemoPortfolio(exercise, world, proof, skill);
+  } else if (world.kind === "regency-briefing") {
     verifyRegencyBriefing(exercise, world, proof, skill);
   } else if (world.kind === "image-candidate") {
     retainedImageCandidateEvidence(exercise, world, proof, skill);
