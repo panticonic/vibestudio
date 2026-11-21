@@ -49,8 +49,8 @@ test.describe("agentic DX contracts", () => {
     const workspacePath = await createManagedTestWorkspace();
     const testApp = await launchTestApp({ workspace: workspacePath, launchTimeout: 180_000 });
     try {
-      await approvePendingStartupUnits(testApp);
       await approvePendingWorkspaceCreationReview(testApp);
+      await approvePendingStartupUnits(testApp);
       await declineFirstRunReporting(testApp);
       await ensureHostedShellReady(testApp, {
         panelSource: "panels/chat",
@@ -120,8 +120,8 @@ test.describe("agentic DX contracts", () => {
     });
     const testApp = await launchTestApp({ workspace: workspacePath, launchTimeout: 180_000 });
     try {
-      await approvePendingStartupUnits(testApp);
       await approvePendingWorkspaceCreationReview(testApp);
+      await approvePendingStartupUnits(testApp);
       await declineFirstRunReporting(testApp);
       await ensureHostedShellReady(testApp, {
         panelSource: "panels/chat",
