@@ -7,10 +7,24 @@ import { test } from "node:test";
 import { pathToFileURL } from "node:url";
 import templateConfig from "../src/dev/developmentTemplateConfig.cjs";
 import {
+  effectsInGraphOrder,
   exportLiveTeacherWorkflow,
   loadLiveTeacherCases,
   workflowSourceGroups,
 } from "./export-live-workflow-teacher.mjs";
+
+test("orders native effects across calls by their recorded execution order", () => {
+  const first = { service: "programRunCatalog", graph_order: 0 };
+  const later = { service: "programExecution", graph_order: 2 };
+  const middle = { service: "programExecution", graph_order: 1 };
+  const records = [{ effects: [middle] }, { effects: [first, later] }];
+  assert.deepEqual(effectsInGraphOrder(records), [first, middle, later]);
+  assert.deepEqual(records[1].effects, [first, later]);
+
+  const legacy = { service: "programReceiptSigner" };
+  assert.deepEqual(effectsInGraphOrder([{ effects: [legacy] }, ...records]),
+    [legacy, middle, first, later]);
+});
 
 test("authored template worlds flow into the collector without losing original split lineage", async (t) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "live-teacher-inventory-"));

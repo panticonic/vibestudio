@@ -3973,6 +3973,15 @@ function hostLogAuditEvidence(execution, exercise, _scenario, workflow) {
   };
 }
 
+export function effectsInGraphOrder(records) {
+  const effects = records.flatMap(record => record.effects ?? []);
+  const orders = effects.map(effect => effect.graph_order);
+  if (orders.every(order => Number.isSafeInteger(order) && order >= 0) && new Set(orders).size === orders.length) {
+    effects.sort((left, right) => left.graph_order - right.graph_order);
+  }
+  return effects;
+}
+
 function matchesValue(ref, value) {
   if (!ref?.complete || value === undefined) return false;
   const bytes = JSON.stringify(value);
@@ -4278,7 +4287,7 @@ function clientAdmissionEvidence(execution, exercise, _scenario, workflow) {
       capabilityListsMatch &&
       Array.isArray(observation.host.capabilities) &&
       (!addedCapability || !observation.host.capabilities.includes(addedCapability.name)) &&
-      calls.flatMap(({ effects }) => effects ?? []).length === 1 &&
+      effectsInGraphOrder(calls).length === 1 &&
       matchesValue(review?.inputs?.request, request) &&
       matchesValue(review.output, report) &&
       matchesValue(read?.output, observation) &&
@@ -4415,7 +4424,7 @@ function managedDeploymentEvidence(execution, exercise, _name, { assignment }) {
         return links(node, parameter, input, output) && node.effects.length === 1 &&
           effect?.service === service && effect.method === method && !effect.error &&
           matchesValue(effect.args, [input]) && matchesValue(effect.result, output);
-      }) && records.flatMap(({ effects }) => effects ?? []).length === native.length &&
+      }) && effectsInGraphOrder(records).length === native.length &&
       sequence.every((node, index) => !index ||
         Date.parse(sequence[index - 1].ended_at) <= Date.parse(node.started_at)),
     "Deployment requires the ordered nested native observe, apply and readiness calls",
@@ -4510,7 +4519,7 @@ function remoteCommissionEvidence(execution, exercise, _name, { assignment }) {
           effect.service === service && effect.method === method && !effect.error &&
           matchesValue(effect.args, [input]) && matchesValue(effect.result, output);
       }) &&
-      records.flatMap(({ effects }) => effects ?? []).length === native.length &&
+      effectsInGraphOrder(records).length === native.length &&
       sequence.every((node, index) => !index ||
         Date.parse(sequence[index - 1].ended_at) <= Date.parse(node.started_at)),
     "Commissioning requires the ordered nested deployment, profile pairing and verified route calls",
@@ -4560,7 +4569,7 @@ function remoteRouteEvidence(execution, exercise, _scenario, { assignment }, exa
   requireEvidence(
     matchesValue(review?.inputs?.request, request) && matchesValue(review.output, report) &&
       matchesValue(read?.inputs?.operationId, request.operationId) && matchesValue(read.output, native) &&
-      records.flatMap(({ effects }) => effects ?? []).length === exactEffectCount &&
+      effectsInGraphOrder(records).length === exactEffectCount &&
       effect?.service === "remoteGatewayIdentity" && effect.method === "observe" && !effect.error &&
       matchesValue(effect.args, [request.operationId]) && matchesValue(effect.result, native) &&
       matchesValue(layer?.inputs?.diagnosis, diagnostic) && matchesValue(layer.output, assignment.layer) &&
@@ -4674,7 +4683,7 @@ function notificationLifecycleEvidence(execution, exercise, _scenario, { assignm
         actionLabels: assignment.actionLabels,
         interaction: "unobserved",
       }) &&
-      records.flatMap(({ effects }) => effects ?? []).length === 2 &&
+      effectsInGraphOrder(records).length === 2 &&
       showEffect?.service === "temporaryNotificationShow" && showEffect.method === "show" &&
       !showEffect.error && matchesValue(showEffect.args, [request.operationId]) &&
       matchesValue(showEffect.result, accepted) &&
@@ -4739,7 +4748,7 @@ function retainedTriageEvidence(execution, exercise, _scenario, { assignment }) 
   requireEvidence(
     matchesValue(review?.inputs?.request, request) && matchesValue(review.output, report) &&
       matchesValue(read?.inputs?.operationId, request.operationId) && matchesValue(read.output, packet) &&
-      records.flatMap(({ effects }) => effects ?? []).length === 1 &&
+      effectsInGraphOrder(records).length === 1 &&
       effect?.service === "retainedTestFailure" && effect.method === "inspect" && !effect.error &&
       matchesValue(effect.args, [request.operationId]) && matchesValue(effect.result, packet) &&
       matchesValue(decide?.inputs?.request, {kind: "triage", goal: request.goal, failure: native}) &&
@@ -4776,7 +4785,7 @@ function personalResumeEvidence(execution, exercise, _scenario, { assignment }) 
   const reports = result?.report;
   const bound = assignment.ownerAction !== "skip";
   const operationId = work?.input?.operationId;
-  const effects = records.flatMap(({ effects }) => effects ?? []);
+  const effects = effectsInGraphOrder(records);
   const before = (earlier, later) =>
     Date.parse(earlier?.ended_at) <= Date.parse(later?.started_at);
   const effectMatches = (call, service, method, args, value) => {
@@ -4867,7 +4876,7 @@ function gitHubDiagnosisEvidence(execution, exercise, _scenario, { assignment })
   const handoff = child(setup, "chooseSetupHandoff");
   const report = exercise.report;
   const operationId = request?.operationId;
-  const effects = records.flatMap(({ effects: used }) => used ?? []);
+  const effects = effectsInGraphOrder(records);
   const before = (earlier, later) => Date.parse(earlier?.ended_at) <= Date.parse(later?.started_at);
   const effectMatches = (call, service, method, args, value) => {
     const [effect] = call?.effects ?? [];
@@ -4968,7 +4977,7 @@ function githubSetupEvidence(execution, exercise, _scenario, { assignment }) {
       matchesValue(resolve.inputs?.accessLevel, accessLevel) && matchesValue(resolve.output, route) &&
       matchesValue(handoff?.inputs?.route, route) && matchesValue(handoff.inputs?.interactive, request.interactive) &&
       matchesValue(handoff.output, assignment.handoff) &&
-      records.flatMap(({ effects }) => effects ?? []).length === 2 &&
+      effectsInGraphOrder(records).length === 2 &&
       checkEffect(read, "githubSetupRead", "inspect", [request.operationId], status) &&
       checkEffect(resolve, "githubSetupRoute", "resolve", [request.operationId, accessLevel], route) &&
       Date.parse(read.ended_at) <= Date.parse(level.started_at) &&
@@ -5038,7 +5047,7 @@ function templateReleaseEvidence(execution, exercise, _scenario, { assignment, p
   requireEvidence(
     matchesValue(release?.inputs?.request, request) && matchesValue(release.output, report) &&
       matchesValue(read?.inputs?.operationId, request.operationId) && matchesValue(read.output, actual) &&
-      records.flatMap(({ effects }) => effects ?? []).length === 1 &&
+      effectsInGraphOrder(records).length === 1 &&
       effect?.service === "templateAuthoringRead" && effect.method === "inspect" && !effect.error &&
       matchesValue(effect.args, [request.operationId]) && matchesValue(effect.result, actual) &&
       matchesValue(template?.inputs?.request, reviewInput) && matchesValue(template.output, report.review) &&
@@ -5161,7 +5170,7 @@ function templateCandidateEvidence(execution, exercise, _scenario, { assignment 
     ? "git+https://github.com/panticonic/vibestudio-template-examples.git"
     : "git+https://github.com/panticonic/vibestudio-base.git";
   const records = exercise.calls.map(({ record }) => record);
-  const effects = records.flatMap(({ effects }) => effects ?? []);
+  const effects = effectsInGraphOrder(records);
   const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
   const child = (parent, name) => parent && records.find(
     (record) => record.parent_call_id === parent.call_id && record.definition.name === name,
@@ -5265,7 +5274,7 @@ function publicationRevisionEvidence(execution, exercise, _scenario, workflow) {
   const target = child(review, "matchPublicationTarget");
   const impact = child(review, "assessRevisionChange");
   const critical = child(impact, "checkCriticalPaths");
-  const effects = records.flatMap(({ effects }) => effects ?? []);
+  const effects = effectsInGraphOrder(records);
   const effect = review?.effects?.[0];
   const validSite = (site) => typeof site?.sourceHash === "string" && !!site.sourceHash &&
     /^sha256:[0-9a-f]{64}$/u.test(site.artifactDigest) &&
@@ -5545,7 +5554,7 @@ function androidPairEvidence(execution, exercise, _scenario, workflow) {
       matchesValue(select?.inputs?.devices, inventory.devices) &&
       matchesValue(select.inputs?.requested, target) &&
       matchesValue(select.output, decision) &&
-      records.flatMap(({ effects }) => effects ?? []).length ===
+      effectsInGraphOrder(records).length ===
         (shouldPair ? 3 : 1),
     "Android pairing needs the exact desktop discovery and assigned-device decision",
   );
@@ -5718,7 +5727,7 @@ function androidInstallEvidence(execution, exercise, _scenario, workflow) {
           matchesValue(select.inputs?.requested, target) &&
           matchesValue(select.output, expectedDevice)
         : !select) &&
-      records.flatMap(({ effects }) => effects ?? []).length ===
+      effectsInGraphOrder(records).length ===
         (shouldInstall ? 3 : 1),
     "Android installation needs the exact workspace, inventory and assigned-device decision",
   );
@@ -5847,7 +5856,7 @@ function androidAuditEvidence(execution, exercise, _scenario, workflow) {
       matchesValue(targetReview.output, verdict) &&
       audit.effects?.length === 1 &&
       effectMatches(audit.effects[0], "observeTarget", observed) &&
-      records.flatMap(({ effects }) => effects ?? []).length ===
+      effectsInGraphOrder(records).length ===
         (inspectApplication ? 2 : 1),
     "Android audit needs a native observation and decision for the assigned emulator",
   );
@@ -5962,7 +5971,7 @@ function deliveryHistoryEvidence(execution, exercise, _scenario, workflow) {
         browser ? { goal: request.goal, operationId: request.operationId } : request,
       ) &&
       matchesValue(review.output, report) &&
-      records.flatMap(({ effects }) => effects ?? []).length === (browser && matched ? 2 : 1) &&
+      effectsInGraphOrder(records).length === (browser && matched ? 2 : 1) &&
       effect?.service === "deliveryHistory" &&
       effect.method === "inspect" &&
       !effect.error &&
@@ -6083,7 +6092,7 @@ function transcriptCursorEvidence(execution, exercise, _scenario, workflow) {
   const [finish] = children(resume, "finishTranscript");
   const available = assignment.cursor === "start";
   const admitOutcome = available ? "read" : assignment.outcome;
-  const effects = records.flatMap(({ effects }) => effects ?? []);
+  const effects = effectsInGraphOrder(records);
   const effectMatches = (effect, method, args, result) =>
     effect?.service === "transcriptCursor" && effect.method === method && !effect.error &&
     matchesValue(effect.args, args) && matchesValue(effect.result, result);
@@ -6171,7 +6180,7 @@ function unitIdentityEvidence(execution, exercise, _scenario, workflow) {
   const assess = child(identity, "assessIcon");
   const choose = child(assess, "chooseIconAction");
   const verify = child(identity, "verifyUnitIdentity");
-  const effects = records.flatMap(({ effects }) => effects ?? []);
+  const effects = effectsInGraphOrder(records);
   const isEffect = (effect, method, args, value) =>
     effect?.service === "unitIdentity" && effect.method === method && !effect.error &&
     matchesValue(effect.args, args) && matchesValue(effect.result, value);
@@ -6249,7 +6258,7 @@ function gmailComposeHistoryEvidence(execution, exercise, _scenario, workflow, a
       }
     }
   }
-  const effects = effectRecords.flatMap(({ effects }) => effects ?? []);
+  const effects = effectsInGraphOrder(effectRecords);
   const effect = history?.effects?.[0];
   requireEvidence(
     fixture?.passed === true &&
@@ -6350,7 +6359,7 @@ function explorerTextEvidence(execution, exercise, _scenario, workflow) {
   const planning = child(probe, "planProbe");
   const classify = child(probe, "classifyProbe");
   const followup = child(probe, "chooseNext");
-  const effects = records.flatMap(({ effects }) => effects ?? []);
+  const effects = effectsInGraphOrder(records);
   const read = probe?.effects?.[0];
   const run = probe?.effects?.[1];
   requireEvidence(
@@ -6409,7 +6418,7 @@ function tourRehearsalEvidence(execution, exercise, _scenario, workflow) {
   const [planning] = children(rehearsal, "planRehearsal");
   const [route] = children(rehearsal, "reviewStops");
   const [restoration] = children(rehearsal, "verifyRestoration");
-  const effects = records.flatMap(({ effects }) => effects ?? []);
+  const effects = effectsInGraphOrder(records);
   const effectMatches = (effect, method, args, result) =>
     effect?.service === "tourRehearsal" && effect.method === method && !effect.error &&
     matchesValue(effect.args, args) && matchesValue(effect.result, result);
@@ -6499,7 +6508,7 @@ function buildPerformanceEvidence(execution, exercise, _scenario, workflow) {
   const assess = child(review, "assessBuildRun");
   const payloadReview = child(review, "reviewPayload");
   const followup = child(review, "chooseFollowup");
-  const effects = records.flatMap(({ effects }) => effects ?? []);
+  const effects = effectsInGraphOrder(records);
   const effect = review?.effects?.[0];
   const runtime = receipt?.targets?.find(({ target }) => target === "runtime");
   const payload = runtime?.payload;
@@ -6585,7 +6594,7 @@ function logCursorEvidence(execution, exercise, _scenario, workflow) {
   const classifications = records.filter(
     ({ definition }) => definition.name === "classifyHostLogGroup"
   );
-  const effects = records.flatMap(({ effects }) => effects ?? []);
+  const effects = effectsInGraphOrder(records);
   const effect = review?.effects?.[0];
   requireEvidence(
     fixture?.passed === true &&
@@ -6821,7 +6830,7 @@ function evalRecoveryEvidence(execution, exercise, _scenario, workflow) {
   const confirm = child(review, "verifyEffect");
   const assessment = child(confirm, "assessReadback");
   const decision = child(review, "chooseRecovery");
-  const effects = records.flatMap(({ effects }) => effects ?? []);
+  const effects = effectsInGraphOrder(records);
   const observed = review?.effects?.[0];
   const read = confirm?.effects?.[0];
   requireEvidence(
@@ -6909,7 +6918,7 @@ function pdfLayoutEvidence(execution, exercise, _scenario, workflow) {
   const classification = child(layout, "classifyLayout");
   const reading = child(review, "resolveReadingOrder");
   const arrangement = child(reading, "arrangeFragments");
-  const effects = records.flatMap(({ effects }) => effects ?? []);
+  const effects = effectsInGraphOrder(records);
   const inspected = review?.effects?.[0];
   requireEvidence(
     fixture?.passed === true &&
@@ -6996,7 +7005,7 @@ function dictationEvidence(execution, exercise, _scenario, workflow) {
   const capture = child(review, "reviewCapture");
   const condition = child(capture, "reviewRecording");
   const readiness = child(capture, "chooseReadiness");
-  const effects = records.flatMap(({ effects }) => effects ?? []);
+  const effects = effectsInGraphOrder(records);
   const inspected = review?.effects?.[0];
   requireEvidence(
     fixture?.passed === true &&
@@ -7074,7 +7083,7 @@ function nativeSuiteEvidence(execution, exercise, _scenario, workflow) {
   const receiptCheck = child(result, "checkReceipt");
   const outcome = child(result, "interpretOutcome");
   const followUp = child(result, "planFollowUp");
-  const effects = records.flatMap(({ effects }) => effects ?? []);
+  const effects = effectsInGraphOrder(records);
   const resolved = review?.effects?.find(
     ({ service, method }) => service === "testSuitePlanRead" && method === "resolve"
   );
@@ -7186,7 +7195,7 @@ function gitBridgeReviewEvidence(execution, exercise, _scenario, workflow) {
   const basis = child(semantic, "reviewPublicationBasis");
   const integration = child(semantic, "reviewCandidate");
   const decision = child(review, "chooseBridgeStep");
-  const effects = records.flatMap(({ effects }) => effects ?? []);
+  const effects = effectsInGraphOrder(records);
   const effect = review?.effects?.[0];
   requireEvidence(
     fixture?.passed === true &&
@@ -7289,7 +7298,7 @@ function vcsDeliveryEvidence(execution, exercise, _scenario, workflow) {
   const interpretation = child(change, "interpretFile");
   const focused = child(change, "planChecks");
   const decision = child(delivery, "chooseDeliveryStep");
-  const effects = records.flatMap(({ effects }) => effects ?? []);
+  const effects = effectsInGraphOrder(records);
   const effect = delivery?.effects?.[0];
   requireEvidence(
     fixture?.passed === true &&
@@ -7420,7 +7429,7 @@ function researchIntakeEvidence(execution, exercise, _scenario, { assignment }) 
           normalize(first.head + (first.reads[0]?.text ?? "")).includes(normalize(cite.quote)) &&
           normalize(cite.quote).toLowerCase().includes(assignment.quotePattern)
         : finding.citations?.length === 0) &&
-      records.flatMap(({ effects }) => effects ?? []).length === 1 &&
+      effectsInGraphOrder(records).length === 1 &&
       effect?.service === "assignedResearchIntake" && effect.method === "read" && !effect.error &&
       matchesValue(effect.args, [request.operationId]) && matchesValue(effect.result, projection) &&
       matchesValue(live.inputs?.request, request) && matchesValue(live.output, report) &&
@@ -7490,8 +7499,8 @@ function researchHandoffEvidence(execution, exercise, scenario, workflow) {
     }
     return [page.id, `${page.finalUrl} — ${excerpt}\nCached digest: ${page.digest}\n`];
   }));
-  const effects = exerciseSubtree(exercise, stage, scratchReport).calls
-    .filter(({ callId }) => callId !== rootId).flatMap(({ record }) => record.effects ?? []);
+  const effects = effectsInGraphOrder(exerciseSubtree(exercise, stage, scratchReport).calls
+    .filter(({ callId }) => callId !== rootId).map(({ record }) => record));
   const write = effects.find(({ service }) => service === "scratchHandoffWrite");
   const staged = assignment.status === "staged";
   requireEvidence(
@@ -7564,9 +7573,8 @@ function retainedProviderHandoffEvidence(exercise, world, proof, skill) {
   const { card, snapshots, listedCards, outputs, expectedTransition } = proof;
   const [earlier, current] = snapshots;
   const records = exercise.calls.map(({ record }) => record);
-  const observed = (lambda, service, method) => records.flatMap(record =>
-    record.definition?.name === lambda ? (record.effects ?? []).filter(effect =>
-      effect.service === service && effect.method === method && !effect.error) : []);
+  const observed = (lambda, service, method) => effectsInGraphOrder(records.filter(record => record.definition?.name === lambda))
+    .filter(effect => effect.service === service && effect.method === method && !effect.error);
   const listed = observed("discoverRetainedConversations", "retainedConversationIndex", "list");
   const read = observed("readProviderConversation", "retainedConversationState", "read")
     .filter(effect => matchesValue(effect.args, [card.channelId]));
@@ -7655,9 +7663,8 @@ function retainedDictationHandoffEvidence(exercise, world, proof, skill) {
   const { plan, review, handoff } = exercise.report.outcome;
   const { explanation, ...facts } = plan;
   const records = exercise.calls.map(({ record }) => record);
-  const observed = (name, service, method) => records.flatMap(record =>
-    record.definition?.name === name ? (record.effects ?? []).filter(effect =>
-      effect.service === service && effect.method === method && !effect.error) : []);
+  const observed = (name, service, method) => effectsInGraphOrder(records.filter(record => record.definition?.name === name))
+    .filter(effect => effect.service === service && effect.method === method && !effect.error);
   const listed = observed("discoverDictationThreads", "retainedDictationIndex", "list");
   const read = observed("readDictationThread", "retainedDictationState", "read")
     .filter(effect => matchesValue(effect.args, [proof.thread.threadId]));
@@ -7724,8 +7731,8 @@ function retainedSpecialistHandoffEvidence(exercise, world, proof, skill) {
   const records = exercise.calls.map(({ record }) => record);
   const select = (name, parent) => records.filter(record => record.definition?.name === name &&
     record.outcome === "done" && (!parent || record.parent_call_id === parent.call_id));
-  const effects = (name, service, method) => select(name).flatMap(record =>
-    (record.effects ?? []).filter(effect => effect.service === service && effect.method === method && !effect.error));
+  const effects = (name, service, method) => effectsInGraphOrder(select(name))
+    .filter(effect => effect.service === service && effect.method === method && !effect.error);
   const inventory = effects("discoverCurrentSpecialists", "ownedSpecialistIndex", "list");
   const read = effects("readRetainedSpecialistRun", "ownedSpecialistRun", "read");
   const original = effects("readOriginalSpecialistArtifact", "ownedSpecialistArtifact", "read");
@@ -7792,9 +7799,8 @@ function personalWelcomeEvidence(exercise, world, proof, skill) {
   const records = exercise.calls.map(({ record }) => record);
   const child = (parent, name) => records.filter(record => record.parent_call_id === parent.call_id &&
     record.definition?.name === name && record.outcome === "done");
-  const effects = (name, service, method) => records.flatMap(record =>
-    record.definition?.name === name && record.outcome === "done" ? (record.effects ?? [])
-      .filter(effect => effect.service === service && effect.method === method && !effect.error) : []);
+  const effects = (name, service, method) => effectsInGraphOrder(records.filter(record => record.definition?.name === name && record.outcome === "done"))
+    .filter(effect => effect.service === service && effect.method === method && !effect.error);
   const listed = effects("discoverWelcomeResources", "welcomeResourceIndex", "list");
   const read = effects("readWelcomeFrontier", "welcomeReceiptStore", "read");
   const routed = effects("resolveWelcomeResource", "welcomeResourceResolution", "resolve");
@@ -7861,9 +7867,8 @@ function retainedNewsEvidence(exercise, world, proof, skill) {
   const records = exercise.calls.map(({ record }) => record);
   const child = (parent, name) => records.filter(record => record.parent_call_id === parent.call_id &&
     record.definition?.name === name && record.outcome === "done");
-  const effects = (name, service, method) => records.flatMap(record =>
-    record.definition?.name === name && record.outcome === "done" ? (record.effects ?? [])
-      .filter(effect => effect.service === service && effect.method === method && !effect.error) : []);
+  const effects = (name, service, method) => effectsInGraphOrder(records.filter(record => record.definition?.name === name && record.outcome === "done"))
+    .filter(effect => effect.service === service && effect.method === method && !effect.error);
   const listed = effects("discoverOwnedNewsEvidence", "newsEvidenceIndex", "list");
   const frontiers = effects("readNewsEvidenceFrontier", "newsEvidenceJournal", "read");
   const windows = effects("readNewsEvidenceView", "newsEvidenceReader", "read");
@@ -7923,9 +7928,8 @@ function quietApiReadinessEvidence(exercise, world, proof, skill) {
   const records = exercise.calls.map(({ record }) => record);
   const child = (parent, name) => records.filter(record => record.parent_call_id === parent.call_id &&
     record.definition?.name === name && record.outcome === "done");
-  const effects = (name, service, method) => records.flatMap(record =>
-    record.definition?.name === name && record.outcome === "done" ? (record.effects ?? [])
-      .filter(effect => effect.service === service && effect.method === method && !effect.error) : []);
+  const effects = (name, service, method) => effectsInGraphOrder(records.filter(record => record.definition?.name === name && record.outcome === "done"))
+    .filter(effect => effect.service === service && effect.method === method && !effect.error);
   const listed = effects("discoverIntegrationReview", "quietIntegrationIndex", "list");
   const reads = effects("readIntegrationSelection", "quietIntegrationJournal", "read");
   const opened = effects("openQuietIntegrationPlan", "quietIntegrationProtocol", "open");
@@ -7980,8 +7984,8 @@ function retainedImageCandidateEvidence(exercise, world, proof, skill) {
   const records = exercise.calls.map(({ record }) => record);
   const child = name => records.filter(record => record.parent_call_id === skill.call_id &&
     record.definition?.name === name && record.outcome === "done");
-  const operations = (name, service, method) => child(name).flatMap(record => (record.effects ?? [])
-    .filter(effect => effect.service === service && effect.method === method && !effect.error));
+  const operations = (name, service, method) => effectsInGraphOrder(child(name))
+    .filter(effect => effect.service === service && effect.method === method && !effect.error);
   const list = operations("discoverImageBriefs", "imageCandidateBriefs", "list");
   const journal = operations("readImageJournal", "imageCandidateJournal", "read");
   const originals = operations("readImageOriginal", "imageCandidateOriginal", "read");
@@ -8029,8 +8033,8 @@ function verifyRegencyBriefing(exercise, world, proof, skill) {
   const child = (parent, name) => records.filter(record => record.parent_call_id === parent.call_id &&
     record.definition?.name === name && record.outcome === "done");
   const steps = name => child(skill, name);
-  const effects = (name, service, method) => steps(name).flatMap(record => (record.effects ?? [])
-    .filter(effect => effect.service === service && effect.method === method && !effect.error));
+  const effects = (name, service, method) => effectsInGraphOrder(steps(name))
+    .filter(effect => effect.service === service && effect.method === method && !effect.error);
   const assignment = effects("findRegencyRealm", "regencyAssignment", "list");
   const saved = effects("readRegencyAccounts", "regencySaved", "read");
   const previews = effects("previewRegencySettlement", "regencyForecast", "preview");
@@ -8093,8 +8097,8 @@ function verifyDemoPortfolio(exercise, world, proof, skill) {
   const children = (parent, name) => records.filter(record => record.parent_call_id === parent.call_id &&
     record.definition?.name === name && record.outcome === "done");
   const call = name => children(skill,name);
-  const effects = (name, service, method) => call(name).flatMap(record => (record.effects ?? [])
-    .filter(effect => effect.service === service && effect.method === method && !effect.error));
+  const effects = (name, service, method) => effectsInGraphOrder(call(name))
+    .filter(effect => effect.service === service && effect.method === method && !effect.error);
   const list = effects("findPortfolio","demoPortfolioIndex","list");
   const read = effects("readPortfolioFrame","demoPortfolioState","read");
   const preview = effects("readPortfolioForecast","demoPortfolioForecast","preview");
@@ -8207,8 +8211,8 @@ function verifyAudienceResponse(exercise, world, proof, skill) {
     const rows=children(parent,name);
     return rows.length===1?rows[0]:null;
   };
-  const effects=(name,method)=>children(skill,name).flatMap(row=>(row.effects??[])
-    .filter(effect=>effect.service==="nativeAudienceResponse"&&effect.method===method&&!effect.error));
+  const effects=(name,method)=>effectsInGraphOrder(children(skill,name))
+    .filter(effect => effect.service==="nativeAudienceResponse"&&effect.method===method&&!effect.error);
   const bound=(rows,args,result)=>rows.length===1&&matchesValue(rows[0].args,args)&&matchesValue(rows[0].result,result);
   const input=(row,name,value)=>matchesValue(row.inputs?.[name],value);
   const selected=one(skill,"decideAudienceFormat");
@@ -8243,8 +8247,8 @@ function verifyCoordinatedRevision(exercise, world, proof, skill) {
     const found=children(parent,name);
     return found.length===1?found[0]:null;
   };
-  const effects=(name,method)=>children(skill,name).flatMap(record=>
-    (record.effects??[]).filter(effect=>effect.service==="nativeCoordinatedRevision"&&effect.method===method&&!effect.error));
+  const effects=(name,method)=>effectsInGraphOrder(children(skill,name))
+    .filter(effect => effect.service==="nativeCoordinatedRevision"&&effect.method===method&&!effect.error);
   const same=(record,name,expected)=>matchesValue(record.inputs?.[name],expected);
   const bound=(effect,args,value)=>effect&&matchesValue(effect.args,args)&&matchesValue(effect.result,value);
   const reviews=children(skill,"assessRevisionAuthority");
@@ -8350,8 +8354,8 @@ function verifyScopedIntentDiscovery(exercise, world, proof, skill) {
   const child=(parent,name)=>records.filter(record=>record.parent_call_id===parent?.call_id&&
     record.definition?.name===name&&record.outcome==="done");
   const step=name=>child(skill,name);
-  const effects=(records,service,method)=>records.flatMap(record=>(record.effects??[])
-    .filter(effect=>effect.service===service&&effect.method===method&&!effect.error));
+  const effects=(records,service,method)=>effectsInGraphOrder(records)
+    .filter(effect => effect.service===service&&effect.method===method&&!effect.error);
   const bound=(rows,args,result)=>rows.length===1&&matchesValue(rows[0].args,args)&&matchesValue(rows[0].result,result);
   const noticeCall=effects(step("readIntentNotice"),"nativeIntentDiscovery","notice");
   const [sought]=step("searchRelevantIntent");
@@ -8396,8 +8400,8 @@ function verifyOwnedRouteAuthority(exercise, world, proof, skill) {
   const child=(parent,name)=>records.filter(record=>record.parent_call_id===parent?.call_id&&
     record.definition?.name===name&&record.outcome==="done");
   const step=name=>child(skill,name);
-  const effects=(rows,service,method)=>rows.flatMap(record=>(record.effects??[])
-    .filter(effect=>effect.service===service&&effect.method===method&&!effect.error));
+  const effects=(rows,service,method)=>effectsInGraphOrder(rows)
+    .filter(effect => effect.service===service&&effect.method===method&&!effect.error);
   const bound=(rows,args,value)=>rows.length===1&&matchesValue(rows[0].args,args)&&matchesValue(rows[0].result,value);
   const discovered=effects(step("discoverEvidenceRoutes"),"routeEvidenceRead","discover");
   const read=effects(step("readSelectedEvidenceRoute"),"routeEvidenceRead","inspect");
@@ -8463,8 +8467,8 @@ function verifyPanelLaunchState(exercise, world, proof, skill) {
   const child=(parent,name)=>records.filter(record=>record.parent_call_id===parent?.call_id&&
     record.definition?.name===name&&record.outcome==="done");
   const step=name=>child(skill,name);
-  const effects=(rows,service,method)=>rows.flatMap(record=>(record.effects??[])
-    .filter(effect=>effect.service===service&&effect.method===method&&!effect.error));
+  const effects=(rows,service,method)=>effectsInGraphOrder(rows)
+    .filter(effect => effect.service===service&&effect.method===method&&!effect.error);
   const bound=(rows,args,value)=>rows.length===1&&matchesValue(rows[0].args,args)&&matchesValue(rows[0].result,value);
   const listed=effects(step("listLaunchSlots"),"launchStateRead","enumerate");
   const reads=effects(step("readLaunchSlot"),"launchStateRead","read");
@@ -8520,8 +8524,8 @@ function verifyWorkspaceClaimAudit(exercise, world, proof, skill) {
   const child=(parent,name)=>exercise.calls.filter(({record})=>record.parent_call_id===parent?.call_id&&
     record.definition?.name===name&&record.outcome==="done");
   const step=name=>child(skill,name);
-  const effects=(name,service,method)=>step(name).flatMap(({record})=>(record.effects??[])
-    .filter(effect=>effect.service===service&&effect.method===method&&!effect.error));
+  const effects=(name,service,method)=>effectsInGraphOrder(step(name).map(({ record }) => record))
+    .filter(effect => effect.service === service && effect.method === method && !effect.error);
   const bound=(rows,args,value)=>rows.length===1&&matchesValue(rows[0].args,args)&&matchesValue(rows[0].result,value);
   const list=effects("listClaimScopes","workspaceClaimRead","list");
   const read=effects("readClaimPacket","workspaceClaimRead","read");
@@ -8572,8 +8576,8 @@ function verifyBridgeDelivery(exercise, world, proof, skill) {
   const child=(owner,name)=>records.filter(record=>record.parent_call_id===owner?.call_id&&
     record.definition?.name===name&&record.outcome==="done");
   const step=name=>child(skill,name);
-  const effects=(records,service,method)=>records.flatMap(record=>(record.effects??[])
-    .filter(effect=>effect.service===service&&effect.method===method&&!effect.error));
+  const effects=(records,service,method)=>effectsInGraphOrder(records)
+    .filter(effect => effect.service===service&&effect.method===method&&!effect.error);
   const exactEffect=(effects,args,result)=>effects.length===1&&matchesValue(effects[0].args,args)&&matchesValue(effects[0].result,result);
   const discovery=effects(step("discover"),"branchDeliveryRead","discover");
   const inspection=effects(step("inspect"),"branchDeliveryRead","inspect");
@@ -8638,8 +8642,8 @@ function verifyEditorialPacket(exercise, world, proof, skill) {
   const child=(parent,name)=>records.filter(record=>record.parent_call_id===parent.call_id&&
     record.definition?.name===name&&record.outcome==="done");
   const step=name=>child(skill,name);
-  const effects=(rows,service,method)=>rows.flatMap(record=>(record.effects??[])
-    .filter(effect=>effect.service===service&&effect.method===method&&!effect.error));
+  const effects=(rows,service,method)=>effectsInGraphOrder(rows)
+    .filter(effect => effect.service===service&&effect.method===method&&!effect.error);
   const list=effects(step("listPacketMissions"),"editorialMission","list");
   const reads=effects(step("readPacketSnapshot"),"editorialWorkspace","read");
   const writes=effects(step("applyPacketRevision"),"editorialRevision","apply");
@@ -8705,9 +8709,8 @@ function verifyTestkitCloseout(exercise, world, proof, skill) {
   const records = exercise.calls.map(({ record }) => record);
   const children = (parent, name) => records.filter(record =>
     record.parent_call_id === parent.call_id && record.definition?.name === name && record.outcome === "done");
-  const effects = (parent, name, service, method) => children(parent, name)
-    .flatMap(record => (record.effects ?? []).filter(effect =>
-      effect.service === service && effect.method === method && !effect.error));
+  const effects = (parent, name, service, method) => effectsInGraphOrder(children(parent, name))
+    .filter(effect => effect.service === service && effect.method === method && !effect.error);
   const outcome = exercise.report.outcome;
   const { pair, decision, handoff } = outcome;
   const nominate = effects(skill, "discoverCloseoutAttempts", "testkitCloseout", "nominate");
@@ -8764,8 +8767,8 @@ function verifyChatContinuity(exercise, world, proof, skill) {
   const child=(parent,name)=>records.filter(record=>record.parent_call_id===parent.call_id&&
     record.definition?.name===name&&record.outcome==="done");
   const step=name=>child(skill,name);
-  const effects=(name,service,method)=>step(name).flatMap(record=>(record.effects??[])
-    .filter(effect=>effect.service===service&&effect.method===method&&!effect.error));
+  const effects=(name,service,method)=>effectsInGraphOrder(step(name))
+    .filter(effect => effect.service===service&&effect.method===method&&!effect.error);
   const list=effects("discoverChatContinuity","chatContinuityIndex","list");
   const reads=effects("observeChatContinuity","chatContinuityState","read");
   const notes=effects("stageChatContinuityNote","chatContinuityHandoff","stage");
@@ -9097,7 +9100,7 @@ function verifyOpenAndroidAudit(exercise, world, proof, skill) {
     matchesValue(targetRead[0].result, native.observed) &&
     matchesValue(targetReview[0].output, outcome?.report?.targetReview),
     "Expected the exact scoped Android request and native connection observation");
-  const auditReadEffects = records.flatMap(record => record.effects ?? []).filter(effect =>
+  const auditReadEffects = effectsInGraphOrder(records).filter(effect =>
     effect.service === "androidRuntimeAudit" || effect.service === "androidGoalAudit");
   requireEvidence(runtimeReview.length === Number(observeApp) && appRead.length === Number(observeApp) &&
     auditReadEffects.length === (observeApp ? 3 : 2) &&
@@ -9141,7 +9144,7 @@ function verifyOpenAndroidDelivery(exercise, world, proof, skill) {
     matchesValue(installed[0].inputs?.request, request) && matchesValue(installed[0].output, outcome.actual) &&
     matchesValue(inventory[0].result, native.inventory) && operation.length === Number(executes),
     "Expected the exact Android scope, installed mobile scenario and independently observed inventory");
-  const mutated = records.flatMap(record => record.effects ?? []).filter(effect =>
+  const mutated = effectsInGraphOrder(records).filter(effect =>
     effect.service === "mobileDevelopment" || effect.service === "mobilePairing");
   if (executes) {
     const pairing = world.route === "pair";
@@ -9170,7 +9173,7 @@ function verifyPreparedContentProject(exercise, world, proof, skill) {
   const child = (parent, name) => parent && exercise.calls.find(({record}) =>
     record.parent_call_id === parent && record.definition?.name === name && record.outcome === "done");
   const names = new Set(["contentProjectSources","contentProjectScope","contentProjectDraft","contentProjectCommit"]);
-  const traced = exercise.calls.flatMap(({record}) => record.effects ?? []).filter(effect => names.has(effect.service));
+  const traced = effectsInGraphOrder(exercise.calls.map(({ record }) => record)).filter(effect => names.has(effect.service));
   const journal = native?.journal ?? [];
   const trace = (owner, service, method, args, result) => {
     const onOwner = (owner?.record.effects ?? []).filter(effect => effect.service === service && effect.method === method);
@@ -9335,7 +9338,7 @@ function verifyOwnedAutomationActivation(exercise, world, proof, skill) {
   const {evidence,plan,decision,activation,readback}=exercise.report.outcome;
   const names=new Set(["automationActivationEvidence","automationActivationCommit","automationActivationReadback"]);
   const journal=proof.journal;
-  const traced=exercise.calls.flatMap(({record})=>record.effects ?? []).filter(effect=>names.has(effect.service));
+  const traced=effectsInGraphOrder(exercise.calls.map(({ record }) => record)).filter(effect=>names.has(effect.service));
   const trace=(call,service,method,args,result)=>{
     const effects=(call?.record.effects ?? []).filter(effect=>effect.service===service&&effect.method===method);
     return effects.length===1 && !effects[0].error && matchesValue(effects[0].args,args) &&
@@ -9495,7 +9498,7 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
   const root = exercise.calls.find(({ callId }) => callId === rootId)?.record;
   const skill = exercise.calls.map(({ record }) => record).find(record =>
     record.parent_call_id === rootId && record.definition?.name === callable && record.outcome === "done");
-  const effects = exercise.calls.flatMap(({ record }) => record.effects ?? []);
+  const effects = effectsInGraphOrder(exercise.calls.map(({ record }) => record));
   const performed = (service, method) => effects.some(effect =>
     effect.service === service && effect.method === method && !effect.error);
   requireEvidence(
@@ -12142,7 +12145,7 @@ export function openOwnedResearchEvidence(execution, exercise, _scenario, workfl
     record.parent_call_id === root?.call_id && record.definition?.name === "investigatePublicQuestion");
   const revisions = exercise.calls.map(({ record }) => record).filter(record =>
     record.parent_call_id === root?.call_id && record.definition?.name === "reviseWorkspaceDocument");
-  const effects = exercise.calls.flatMap(({ record }) => record.effects ?? []);
+  const effects = effectsInGraphOrder(exercise.calls.map(({ record }) => record));
   const searches = effects.filter(effect => effect.service === "goalDiscovery" && effect.method === "search" && !effect.error);
   const fetches = effects.filter(effect => effect.service === "web" && effect.method === "fetch" && !effect.error);
   const cacheReads = effects.filter(effect => effect.service === "web" && effect.method === "read" && !effect.error);
@@ -12254,7 +12257,7 @@ export function openGoalEvidence(execution, exercise, _scenario, workflow) {
   const proof = execution.diagnostics.openGoalVerification;
   const { id, goal, kind } = workflow.assignment;
   const root = exercise.calls.find(({ callId }) => callId === exercise.rootCallIds[0])?.record;
-  const effects = exercise.calls.flatMap(({ record }) => record.effects ?? []);
+  const effects = effectsInGraphOrder(exercise.calls.map(({ record }) => record));
   const researchChecks = ["discoveredSources", "attestedSearchProvider", "exactPageReadback", "answeredGoal", "groundedCitations", "requiredEvidence", "supportedConclusion"];
   const editChecks = ["discoveredWorkspace", "recoveredConcurrentEdit", "exactDocumentReadback", "preservedOtherDocuments", "reportedStoredRevision"];
   const browser = kind === "browser";
@@ -12359,7 +12362,7 @@ function webBriefEvidence(execution, exercise, _scenario, workflow) {
     (record) =>
       record.parent_call_id === assigned?.call_id && record.definition.name === "researchBrief"
   );
-  const effects = records.flatMap(({ effects }) => effects ?? []);
+  const effects = effectsInGraphOrder(records);
   const collapse = (text) => text.replace(/\s+/gu, " ").trim();
   requireEvidence(
     caseId === id &&
@@ -12551,7 +12554,7 @@ function architectureBoundaryEvidence(execution, exercise, _scenario, workflow) 
       isDeepStrictEqual(report?.provider, { route, declaration, consistent: true }) &&
       isDeepStrictEqual(report.ownership, { owner: expectedOwner, proposedOwner, aligned }) &&
       report.decision === decision &&
-      records.flatMap(({ effects }) => effects ?? []).length === 2 &&
+      effectsInGraphOrder(records).length === 2 &&
       matchesValue(review?.inputs?.request, request) &&
       matchesValue(review.output, report) &&
       matchesValue(provider?.inputs?.operationId, request.operationId) &&
@@ -12655,9 +12658,7 @@ function releaseReviewHandoffEvidence(execution, exercise, scenario, workflow) {
     authority: `Authority disposition: ${scopeReport.status}.\nHeld operations: ${scopeReport.held.join(", ") || "none"}.\n`,
   };
   const scratchTrace = subtree("assembleHandoff", scratchReport);
-  const scratchEffects = scratchTrace.calls
-    .filter(({ callId }) => callId !== rootId)
-    .flatMap(({ record }) => record.effects ?? []);
+  const scratchEffects = effectsInGraphOrder(scratchTrace.calls.filter(({ callId }) => callId !== rootId).map(({ record }) => record));
   const write = scratchEffects.find(({ service }) => service === "scratchHandoffWrite");
   const scratchInput = request.work[2].input;
   requireEvidence(
@@ -12706,7 +12707,7 @@ function terminalReceiptEvidence(execution, exercise, _scenario, { assignment })
   const inspect = child(live, "reviewTerminal");
   const invocation = child(inspect, "inspectInvocation");
   const result = child(inspect, "inspectExecution");
-  const effects = records.flatMap(({ effects: used }) => used ?? []);
+  const effects = effectsInGraphOrder(records);
   const effect = read?.effects?.[0];
   const operationId = request?.operationId;
   const foreign = assignment.mode === "foreign";
@@ -12789,7 +12790,7 @@ function unitDesignEvidence(execution, exercise, _scenario, { assignment }) {
   const extensions = children(live, "reviewExtension");
   const [publication] = children(live, "reviewManifestPublication");
   const [combine] = children(live, "combineWork");
-  const effects = records.flatMap(({ effects: used }) => used ?? []);
+  const effects = effectsInGraphOrder(records);
   const effect = read?.effects?.[0];
   const operationId = request?.operationId;
   const invalid = assignment.mode === "invalid-local";
@@ -12961,7 +12962,7 @@ function extensionReleaseEvidence(execution, exercise, _scenario, workflow) {
       report.decision === decision &&
       matchesValue(review?.inputs?.request, request) &&
       matchesValue(review.output, report) &&
-      calls.flatMap(({ effects }) => effects ?? []).length === 2 &&
+      effectsInGraphOrder(calls).length === 2 &&
       verifiedRead(sourceReview, "readSource", "assessSource", "source", source, report.source) &&
       verifiedRead(
         runtimeReview,
@@ -13022,7 +13023,7 @@ function authorityReviewEvidence(execution, exercise, _scenario, workflow) {
       Array.isArray(report?.reviews) &&
       report.reviews.length === operations.length &&
       operationCalls.length === operations.length &&
-      calls.flatMap(({ effects }) => effects ?? []).length === operations.length &&
+      effectsInGraphOrder(calls).length === operations.length &&
       isDeepStrictEqual(report.protectedLeaves, protectedLeaves) &&
       matchesValue(combination?.inputs?.reviews, report.reviews) &&
       matchesValue(collection?.inputs?.reviews, report.reviews) &&
@@ -13178,7 +13179,7 @@ function problemDraftEvidence(execution, exercise, _scenario, workflow) {
         created === null &&
         result.saved === null &&
         source.draft?.revision > source.review.draft?.basisRevision &&
-        records.flatMap(({ effects }) => effects ?? []).length === 1 &&
+        effectsInGraphOrder(records).length === 1 &&
         !open &&
         !compose &&
         !append &&
@@ -13214,7 +13215,7 @@ function problemDraftEvidence(execution, exercise, _scenario, workflow) {
         sections.at(-1)?.claims === "unverified" &&
         sections.at(-1)?.section === "verification" &&
         sections.at(-1)?.markdown.includes(account.expected) &&
-        records.flatMap(({ effects }) => effects ?? []).length === (mode === "new" ? 4 : 3) &&
+        effectsInGraphOrder(records).length === (mode === "new" ? 4 : 3) &&
         (mode === "new"
           ? source.draft === null &&
             matchesValue(child(compose, "writeSymptom")?.output, sections[0]) &&
@@ -13722,7 +13723,7 @@ function driveCheckpointHandoffEvidence(execution, exercise, scenario, workflow)
     },
   }, scratchTrace, scenario, { caseId, expectedStatus: "staged" });
   const source = workflow.projectDriveCheckpointSource(checkpoint);
-  const effects = scratchTrace.calls.filter(({ callId }) => callId !== rootId).flatMap(({ record }) => record.effects ?? []);
+  const effects = effectsInGraphOrder(scratchTrace.calls.filter(({ callId }) => callId !== rootId).map(({ record }) => record));
   const read = effects.find(({ service }) => service === "scratchHandoffRead");
   const write = effects.find(({ service }) => service === "scratchHandoffWrite");
   requireEvidence(
@@ -13777,7 +13778,7 @@ function driveCheckpointEvidence(execution, exercise, _scenario, { assignment })
   const [saved] = read?.record.effects ?? [];
   const changes = continuation?.record.effects ?? [];
   const [write] = commit?.record.effects ?? [];
-  const effects = exercise.calls.flatMap(({ record }) => record.effects ?? []);
+  const effects = effectsInGraphOrder(exercise.calls.map(({ record }) => record));
   const latest = new Map();
   requireEvidence(
     matchesValue(review?.record.inputs?.request, request) &&
@@ -13861,7 +13862,7 @@ function driveSharingEvidence(execution, exercise, _scenario, { assignment }) {
   const before = (earlier, later) =>
     Date.parse(earlier?.record.ended_at) <= Date.parse(later?.record.started_at);
   const [readiness] = guide?.record.effects ?? [];
-  const effects = exercise.calls.flatMap(({ record }) => record.effects ?? []);
+  const effects = effectsInGraphOrder(exercise.calls.map(({ record }) => record));
   const folderEffects = listing?.record.effects ?? [];
   const sharingEffects = audit?.record.effects ?? [];
 
@@ -14488,7 +14489,7 @@ function regencyReviewEvidence(execution, exercise, _scenario, { assignment }, p
   const [read] = children(inspect, "readSettlement");
   const [combined] = children(inspect, "combineFindings");
   const claims = children(inspect, "qualifyClaim");
-  const effects = exercise.calls.flatMap(({ record }) => record.effects ?? []);
+  const effects = effectsInGraphOrder(exercise.calls.map(({ record }) => record));
   const [observation] = read?.record.effects ?? [];
   requireEvidence(
     (portfolio
@@ -14560,7 +14561,7 @@ function examplesPortfolioEvidence(execution, exercise, scenario, { assignment }
   const gardenClaims = children(gardenReview, "qualifyClaim");
   const [decide] = children(portfolio, "decideReadiness");
   const [combine] = children(decide, "combineFindings");
-  const effects = exercise.calls.flatMap(({ record }) => record.effects ?? []);
+  const effects = effectsInGraphOrder(exercise.calls.map(({ record }) => record));
   const [gardenRead] = readGarden?.record.effects ?? [];
   const observed = gardenEvidence.observed;
   requireEvidence(
@@ -14653,7 +14654,7 @@ function programmedAdventureEvidence(execution, exercise, _scenario, { assignmen
   const [repaintReview] = children(transition, "inspectRepaint");
   const [reloadReview] = children(transition, "inspectReload");
   const [combined] = children(transition, "combineFindings");
-  const effects = exercise.calls.flatMap(({ record }) => record.effects ?? []);
+  const effects = effectsInGraphOrder(exercise.calls.map(({ record }) => record));
   const [observation] = effects;
   const branches = (parent, name) => children(parent, "reviewAdventure")
     .flatMap((call) => children(call, name));
@@ -14728,7 +14729,7 @@ function adventureReviewEvidence(execution, exercise, _scenario, { assignment })
   const [read] = children(inspect, "readJourney");
   const [combined] = children(inspect, "combineFindings");
   const claims = children(inspect, "qualifyClaim");
-  const effects = exercise.calls.flatMap(({ record }) => record.effects ?? []);
+  const effects = effectsInGraphOrder(exercise.calls.map(({ record }) => record));
   const [observation] = effects;
   const leafFor = {
     access: "inspectAccess",
@@ -14849,7 +14850,7 @@ function grimoireHandoffEvidence(execution, exercise, scenario, workflow) {
   const [inspect] = children(review, "inspectLiveGarden");
   const [readGarden] = children(inspect, "readGarden");
   const claimCalls = children(inspect, "qualifyClaim");
-  const effects = exercise.calls.flatMap(({ record }) => record.effects ?? []);
+  const effects = effectsInGraphOrder(exercise.calls.map(({ record }) => record));
   const effect = (service) => effects.find((effect) => effect.service === service);
   const gardenRead = effect("gardenRead");
   const read = effect("scratchHandoffRead");
@@ -15225,7 +15226,7 @@ function missionFacilityEvidence(execution, exercise, _scenario, { assignment })
   const review = child(live, "reviewMission");
   const gate = child(review, "establishMissionCard");
   const boundary = child(review, "inspectMissionBoundary");
-  const effects = records.flatMap(({ effects: used }) => used ?? []);
+  const effects = effectsInGraphOrder(records);
   const effect = read?.effects?.[0];
   const operationId = request?.operationId;
   const card = observed?.card;
@@ -15512,7 +15513,7 @@ function browserImportEvidence(execution, exercise, _scenario, { assignment }) {
   const preview = stages[reads.indexOf("preview")];
   const start = stages[reads.indexOf("start")];
   const history = stages[reads.indexOf("history")];
-  const effects = exercise.calls.flatMap(({ record }) => record.effects ?? []);
+  const effects = effectsInGraphOrder(exercise.calls.map(({ record }) => record));
   const before = (earlier, later) =>
     Date.parse(earlier?.record.ended_at) <= Date.parse(later?.record.started_at);
   requireEvidence(
@@ -16015,7 +16016,7 @@ function automationPlanningEvidence(execution, exercise, _scenario, { assignment
       matchesValue(handoff?.inputs?.plan, report.plan) &&
       matchesValue(handoff.inputs?.before, before) && matchesValue(handoff.inputs?.after, after) &&
       matchesValue(handoff.output, assignment.planning) &&
-      reads.length === 2 && records.flatMap(({ effects }) => effects ?? []).length === 2 &&
+      reads.length === 2 && effectsInGraphOrder(records).length === 2 &&
       reads.every((read, index) => {
         const expected = [before, after][index];
         const effect = read.effects?.[0];
