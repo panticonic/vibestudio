@@ -31,6 +31,20 @@ const templates =
         ...(withTesting ? ["system-testing"] : []),
       ];
 const directories = templates.map((name) => checkouts[name]);
+if (templates.includes("system-testing")) {
+  const root = checkouts["system-testing"];
+  const [runner, manifest] = await Promise.all([
+    readFile(path.join(root, "workers/system-test-runner/index.ts"), "utf8"),
+    readFile(path.join(root, "skills/system-testing/package.json"), "utf8").then(JSON.parse),
+  ]);
+  // The managed runner emits Eval code as template strings, outside TS import resolution.
+  const subpaths = new Set(Array.from(
+    runner.matchAll(/["']@workspace-skills\/system-testing\/([^"'$\s]+)["']/gu),
+    ([, name]) => `./${name}`
+  ));
+  const missing = [...subpaths].filter(name => !Object.hasOwn(manifest.exports, name));
+  if (missing.length) throw new Error(`Managed System tests import unexported bindings: ${missing.sort().join(", ")}`);
+}
 const serviceSource = pathToFileURL(
   path.join(base, "packages/natlang-services/src/serviceDeclarations.generated.ts")
 );
