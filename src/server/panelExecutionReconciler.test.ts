@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { WorkspacePanelDetail } from "@vibestudio/shared/panel/workspaceStateSnapshot";
 import type {
   EntityRecord,
@@ -221,8 +222,9 @@ describe("PanelExecutionReconciler", () => {
     );
   });
 
-  it("does not reread durable slot state on the committed execution handoff", async () => {
+  it("uses the verified source caller without rereading the committed slot", async () => {
     const { reconciler, activate, getDetail } = harness();
+    const sourceCaller = createVerifiedCaller("agent:private-panel", "do");
 
     reconciler.observe({
       kind: "current-entity",
@@ -235,10 +237,16 @@ describe("PanelExecutionReconciler", () => {
         key: entity.key,
         contextId: entity.contextId,
         stateArgs: { mode: "inspect" },
+        ref: `ctx:${entity.contextId}`,
+        sourceCaller,
       },
     });
 
     await vi.waitFor(() => expect(activate).toHaveBeenCalledOnce());
+    expect(activate).toHaveBeenCalledWith(
+      expect.objectContaining({ execution: expect.objectContaining({ ref: `ctx:${entity.contextId}` }) }),
+      sourceCaller
+    );
     expect(getDetail).not.toHaveBeenCalled();
   });
 

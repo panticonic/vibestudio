@@ -33,7 +33,7 @@ import type {
   PanelAccessPermissionTarget,
 } from "./panelAccessPermission.js";
 import { preparePanelAccessAuthority } from "./panelAccessPermission.js";
-import { verifiedInitiatingUserId } from "@vibestudio/shared/serviceDispatcher";
+import { verifiedInitiatingUserId, type VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { doTargetId } from "@vibestudio/shared/workspaceServiceRpc";
 
 export const WORKSPACE_DO_CLASS = "WorkspaceStateDO";
@@ -59,6 +59,8 @@ export type SlotStateChange =
         stateArgs: unknown;
         ref?: string;
         artifact?: { buildKey: string; executionDigest: string };
+        /** Verified caller for the in-process private source handoff. */
+        sourceCaller?: VerifiedCaller;
       };
     }
   | { kind: "tree" }
@@ -404,6 +406,11 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
         // `title` is presentation, not slot state: it travels with the binding
         // below and never reaches the state engine.
         const { title, ...slotInput } = input;
+        const requestedRef = input.initialEntry?.options?.ref;
+        const ref = typeof requestedRef === "string" ? requestedRef : undefined;
+        const sourceCaller = ref?.startsWith("ctx:") || ref?.startsWith("state:")
+          ? ctx.caller
+          : undefined;
         await receiver.slotCreate({ ...slotInput, ...(ownerUserId ? { ownerUserId } : {}) });
         if (input.title) observeTitle(input.slotId, input.title);
         // The reservation and slot binding above are the durable execution
@@ -426,10 +433,8 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
                         key: input.initialEntry.entryKey,
                         contextId: input.initialEntry.contextId,
                         stateArgs: input.initialEntry.stateArgs ?? {},
-                        ...(typeof input.initialEntry.options?.ref === "string" &&
-                        input.initialEntry.options.ref.length > 0
-                          ? { ref: input.initialEntry.options.ref }
-                          : {}),
+                        ...(ref ? { ref } : {}),
+                        ...(sourceCaller ? { sourceCaller } : {}),
                         ...(input.initialEntry.options?.artifact
                           ? { artifact: input.initialEntry.options.artifact }
                           : {}),

@@ -230,7 +230,7 @@ export interface RuntimeServiceInternal {
     trusted?: { agentBinding?: RuntimeAgentBinding }
   ): Promise<RuntimeEntityHandle>;
   /** Complete a durable code reservation from the server-owned reconciler. */
-  activateReservedEntity(spec: RuntimeCodeEntityCreateSpec): Promise<RuntimeEntityHandle>;
+  activateReservedEntity(spec: RuntimeCodeEntityCreateSpec, caller?: VerifiedCaller): Promise<RuntimeEntityHandle>;
   /** Preparing panel reservations that must be resumed after server startup. */
   listPreparingPanels(): Promise<EntityRecord[]>;
   retireEntity(id: string): Promise<void>;
@@ -3098,7 +3098,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
           },
           spec
         ),
-      activateReservedEntity: (spec) => activateReservedEntity(null, spec),
+      activateReservedEntity: (spec, caller) => activateReservedEntity(caller ?? null, spec),
       listPreparingPanels: () => store.listPreparing("panel"),
       retireEntity: (id) => retireEntity(id),
       createContext,

@@ -1,3 +1,4 @@
+import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { WorkspacePanelDetail } from "@vibestudio/shared/panel/workspaceStateSnapshot";
 import type {
   EntityRecord,
@@ -10,7 +11,7 @@ export interface PanelExecutionReconcilerDeps {
   getDetail(slotId: string): Promise<WorkspacePanelDetail | null>;
   resolveSlotByEntity(entityId: string): Promise<string | null>;
   listPreparingPanels(): Promise<EntityRecord[]>;
-  activate(spec: RuntimeCodePanelEntityCreateSpec): Promise<RuntimeEntityHandle>;
+  activate(spec: RuntimeCodePanelEntityCreateSpec, caller?: VerifiedCaller): Promise<RuntimeEntityHandle>;
   onError(error: unknown, slotId: string, entityId: string): void;
 }
 
@@ -56,7 +57,8 @@ export class PanelExecutionReconciler {
             contextId: change.desiredExecution.contextId,
             stateArgs: change.desiredExecution.stateArgs,
           }
-        : undefined
+        : undefined,
+      change.desiredExecution?.sourceCaller
     ).catch(() => {
       // The activation owner has published the failure; event delivery has no caller.
     });
@@ -103,12 +105,13 @@ export class PanelExecutionReconciler {
   private resume(
     slotId: string,
     entityId: string,
-    desiredSpec?: RuntimeCodePanelEntityCreateSpec
+    desiredSpec?: RuntimeCodePanelEntityCreateSpec,
+    sourceCaller?: VerifiedCaller
   ): Promise<void> {
     const existing = this.executions.get(slotId);
     if (existing?.entityId === entityId) return existing.promise;
     let failed = false;
-    const work = this.activateCurrent(slotId, entityId, desiredSpec)
+    const work = this.activateCurrent(slotId, entityId, desiredSpec, sourceCaller)
       .then(() => undefined)
       .catch((error) => {
         failed = true;
@@ -129,14 +132,15 @@ export class PanelExecutionReconciler {
   private async activateCurrent(
     slotId: string,
     entityId: string,
-    desiredSpec?: RuntimeCodePanelEntityCreateSpec
+    desiredSpec?: RuntimeCodePanelEntityCreateSpec,
+    sourceCaller?: VerifiedCaller
   ): Promise<void> {
     // slot.create has already committed both the reservation and its durable
     // slot binding before it emits the in-process handoff. That exact intent
     // can enter execution directly; querying it back first adds no validation
     // and lets unrelated WorkspaceDO traffic head-of-line block first paint.
     if (desiredSpec) {
-      await this.activate(slotId, entityId, desiredSpec, "committed handoff");
+      await this.activate(slotId, entityId, desiredSpec, "committed handoff", sourceCaller);
       return;
     }
     const detail = await this.deps.getDetail(slotId);
@@ -189,11 +193,13 @@ export class PanelExecutionReconciler {
     slotId: string,
     entityId: string,
     spec: RuntimeCodePanelEntityCreateSpec,
-    why: "committed handoff" | "durable recovery"
+    why: "committed handoff" | "durable recovery",
+    sourceCaller?: VerifiedCaller
   ): Promise<void> {
     const startedAt = performance.now();
     console.info(`[PanelExecution] Activating ${entityId} for ${slotId} (${why})`);
-    await this.deps.activate(spec);
+    if (sourceCaller) await this.deps.activate(spec, sourceCaller);
+    else await this.deps.activate(spec);
     console.info(
       `[PanelExecution] Activated ${entityId} for ${slotId} in ${Math.round(performance.now() - startedAt)}ms`
     );

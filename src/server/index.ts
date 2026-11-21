@@ -5579,9 +5579,9 @@ async function main() {
       if (!runtimeServiceInternal) throw new Error("Runtime service is not available");
       return runtimeServiceInternal.listPreparingPanels();
     },
-    activate: (spec) => {
+    activate: (spec, caller) => {
       if (!runtimeServiceInternal) throw new Error("Runtime service is not available");
-      return runtimeServiceInternal.activateReservedEntity(spec);
+      return runtimeServiceInternal.activateReservedEntity(spec, caller);
     },
     onError: (error, slotId, entityId) => {
       const message = error instanceof Error ? error.message : String(error);
