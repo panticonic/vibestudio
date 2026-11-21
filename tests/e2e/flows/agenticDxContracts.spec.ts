@@ -1,5 +1,7 @@
 import type { TestApp } from "../../setup/electronSetup";
 import { expect, test } from "@playwright/test";
+import { appendFileSync } from "node:fs";
+import path from "node:path";
 import type {
   DiagnoseInvocationInput,
   InvocationDiagnosticPacket,
@@ -22,7 +24,13 @@ import {
 
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 
-async function waitForPanelRuntime(owner: TestApp, panelId: string): Promise<void> {
+const INSPECTION_RUNTIME = "__vibestudioInspectionRuntimeForTest";
+
+async function waitForPanelRuntime(
+  owner: TestApp,
+  panelId: string,
+  exportName = "__vibestudioRequireAsync__"
+): Promise<void> {
   await expect
     .poll(
       async () => {
@@ -30,7 +38,7 @@ async function waitForPanelRuntime(owner: TestApp, panelId: string): Promise<voi
           return await executePanelScript<boolean>(
             owner,
             panelId,
-            `typeof globalThis.__vibestudioRequireAsync__ === "function"`
+            `typeof globalThis[${JSON.stringify(exportName)}] === "function"`
           );
         } catch {
           return false;
@@ -116,7 +124,17 @@ test.describe("agentic DX contracts", () => {
   test("Electron captures hosted-panel pixels and historical console diagnostics end to end", async () => {
     const workspacePath = await createManagedTestWorkspace({
       workspaceKind: "project",
-      configureSource: (sourceRoot) => configureInspectionFixture(sourceRoot, "about/new"),
+      configureSource: (sourceRoot) => {
+        configureInspectionFixture(sourceRoot, "about/new");
+        // Declare the inspection dependency in the reviewed panel bundle.
+        // About/New does not otherwise generate a dynamic runtime loader.
+        appendFileSync(
+          path.join(sourceRoot, "about/new/index.tsx"),
+          `\nObject.defineProperty(globalThis, ${JSON.stringify(INSPECTION_RUNTIME)}, {
+  value: () => import("@workspace/runtime"),
+});\n`
+        );
+      },
     });
     const testApp = await launchTestApp({ workspace: workspacePath, launchTimeout: 180_000 });
     try {
@@ -127,7 +145,7 @@ test.describe("agentic DX contracts", () => {
         panelSource: "about/new",
         timeoutMs: 75_000,
       });
-      await waitForPanelRuntime(testApp, panelId);
+      await waitForPanelRuntime(testApp, panelId, INSPECTION_RUNTIME);
 
       await callTestApi(testApp, "focusPanel", [panelId]);
       const result = await executePanelScript<{
@@ -167,7 +185,7 @@ test.describe("agentic DX contracts", () => {
           ]);
           const { blobstore, openPanel } = await bounded(
             "runtime module load",
-            () => globalThis.__vibestudioRequireAsync__("@workspace/runtime"),
+            () => globalThis[${JSON.stringify(INSPECTION_RUNTIME)}](),
           );
           const handle = await bounded(
             "hosted panel open",
