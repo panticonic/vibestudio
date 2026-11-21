@@ -41,6 +41,14 @@ const templateGoalDomains = {
     checks: ["exactConfigBrief", "scopedConfigLens", "exactLiveWorkspaceConfig", "exactProtectedConfigHistory",
       "exactProtectedTemplateDependencies", "exactConfigDisposition", "preservedProtectedConfig", "constrainedConfigEvidence", "exactPrivateConfigNote"],
   },
+  "audience-response": {
+    namespace: "vibestudio:audience-response",
+    validator: { template:"system-testing", path:"skills/system-testing/open-goal-audience-response-managed.ts" },
+    callable: "chooseAudienceResponse",
+    skill: "audienceResponse",
+    checks: ["exactAudienceRecord", "appropriateAudienceFormat", "boundedGroundedAudienceAnswer",
+      "verifiedNativeAudienceRendering", "verifiedAudienceInteraction", "preservedAudienceState"],
+  },
   "coordinated-revision": {
     namespace: "vibestudio:coordinated-revision",
     validator: { template:"system-testing", path:"skills/system-testing/open-goal-coordinated-revision-managed.ts" },
@@ -1755,14 +1763,14 @@ export async function loadLiveTeacherCases(checkouts) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
     const distinctGoals = new Set();
-    const { openGoalWorlds, openAndroidDeliveryWorlds = [], openDeliveryWakeWorlds = [], openLiveLocalInventoryWorlds = [], openPhoneFirstRunWorlds = [], openSkillMaintenanceWorlds = [], openWebhookAdmissionWorlds = [], openDevelopmentAuditWorlds = [], openDesktopReadinessWorlds = [], openContentArchiveWorlds = [], openSystemReleaseWorlds = [], openTestkitCloseoutWorlds = [], openPanelSourceMigrationWorlds = [], openWorkspaceShareWorlds = [], openNotificationStateWorlds = [], openAgentCapabilityWorlds = [], openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], terminalAppRepairWorlds = [], preparedContentProjectWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openChatContinuityWorlds = [], openWorkspaceConfigWorlds = [], gadDurableQuestionWorlds = [], openBoardMigrationWorlds = [], openLiveTendrilBoardWorlds = [], openSourceAttributionWorlds = [], openWorkspaceSmokeWorlds = [], openSameTurnEvalWorlds = [], openCliRouteWorlds = [], openIntentDiscoveryWorlds = [], openRetainedMemoryWorlds = [], openCoordinatedRevisionWorlds = [], openRouteAuthorityWorlds = [], openLogFollowerWorlds = [], openLaunchStateWorlds = [], openScaffoldWorlds = [], openOwnedOperationsWorlds = [], openPtyContinuityWorlds = [], openSystemCandidateWorlds = [], openWorkspaceClaimWorlds = [], openExamplesAdoptionWorlds = [], openGrimoireSceneWorlds = [], openBridgeDeliveryWorlds = [], openEditorialWorlds = [], openPortfolioWorlds = [], openRegencyWorlds = [], openImageCandidateWorlds = [], openApiReadinessWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
+    const { openGoalWorlds, openAndroidDeliveryWorlds = [], openDeliveryWakeWorlds = [], openLiveLocalInventoryWorlds = [], openPhoneFirstRunWorlds = [], openSkillMaintenanceWorlds = [], openWebhookAdmissionWorlds = [], openDevelopmentAuditWorlds = [], openDesktopReadinessWorlds = [], openContentArchiveWorlds = [], openSystemReleaseWorlds = [], openTestkitCloseoutWorlds = [], openPanelSourceMigrationWorlds = [], openWorkspaceShareWorlds = [], openNotificationStateWorlds = [], openAgentCapabilityWorlds = [], openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], terminalAppRepairWorlds = [], preparedContentProjectWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openChatContinuityWorlds = [], openWorkspaceConfigWorlds = [], gadDurableQuestionWorlds = [], openBoardMigrationWorlds = [], openLiveTendrilBoardWorlds = [], openSourceAttributionWorlds = [], openWorkspaceSmokeWorlds = [], openSameTurnEvalWorlds = [], openCliRouteWorlds = [], openIntentDiscoveryWorlds = [], openRetainedMemoryWorlds = [], openCoordinatedRevisionWorlds = [], openAudienceResponseWorlds = [], openRouteAuthorityWorlds = [], openLogFollowerWorlds = [], openLaunchStateWorlds = [], openScaffoldWorlds = [], openOwnedOperationsWorlds = [], openPtyContinuityWorlds = [], openSystemCandidateWorlds = [], openWorkspaceClaimWorlds = [], openExamplesAdoptionWorlds = [], openGrimoireSceneWorlds = [], openBridgeDeliveryWorlds = [], openEditorialWorlds = [], openPortfolioWorlds = [], openRegencyWorlds = [], openImageCandidateWorlds = [], openApiReadinessWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
       spectroliteGoalWorlds = [], openGoalGoogleWorlds = [], openGoalPersonalWorlds = [],
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
       openTerminalWorlds = [], openOwnedResearchWorlds = [], personalWelcomeWorlds = [], dictationHandoffWorlds = [], specialistHandoffWorlds = [], providerHandoffWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalMethodWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
     for (const assignment of [...openGoalWorlds, ...openAndroidDeliveryWorlds, ...openDeliveryWakeWorlds, ...openLiveLocalInventoryWorlds, ...openPhoneFirstRunWorlds, ...openSkillMaintenanceWorlds, ...openWebhookAdmissionWorlds, ...openDevelopmentAuditWorlds, ...openDesktopReadinessWorlds, ...openContentArchiveWorlds, ...openSystemReleaseWorlds, ...openTestkitCloseoutWorlds, ...openPanelSourceMigrationWorlds, ...openWorkspaceShareWorlds, ...openNotificationStateWorlds, ...openAgentCapabilityWorlds, ...openMobileContinuityWorlds, ...openInstalledPackageWorlds, ...openAssetIntegrityWorlds, ...openTendrilRouteWorlds, ...openExtensionDossierWorlds, ...openDeployedInterfaceWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...terminalAppRepairWorlds, ...preparedContentProjectWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
-      ...openExamplesAdoptionWorlds, ...openGrimoireSceneWorlds, ...openApiReadinessWorlds, ...openChatContinuityWorlds, ...openWorkspaceConfigWorlds, ...gadDurableQuestionWorlds, ...openBoardMigrationWorlds, ...openLiveTendrilBoardWorlds, ...openSourceAttributionWorlds, ...openWorkspaceSmokeWorlds, ...openSameTurnEvalWorlds, ...openCliRouteWorlds, ...openIntentDiscoveryWorlds, ...openRetainedMemoryWorlds, ...openCoordinatedRevisionWorlds, ...openRouteAuthorityWorlds, ...openLogFollowerWorlds, ...openLaunchStateWorlds, ...openScaffoldWorlds, ...openOwnedOperationsWorlds, ...openPtyContinuityWorlds, ...openSystemCandidateWorlds, ...openWorkspaceClaimWorlds, ...openBridgeDeliveryWorlds, ...openEditorialWorlds, ...openPortfolioWorlds, ...openRegencyWorlds, ...openImageCandidateWorlds, ...openNewsEvidenceWorlds, ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
+      ...openExamplesAdoptionWorlds, ...openGrimoireSceneWorlds, ...openApiReadinessWorlds, ...openChatContinuityWorlds, ...openWorkspaceConfigWorlds, ...gadDurableQuestionWorlds, ...openBoardMigrationWorlds, ...openLiveTendrilBoardWorlds, ...openSourceAttributionWorlds, ...openWorkspaceSmokeWorlds, ...openSameTurnEvalWorlds, ...openCliRouteWorlds, ...openIntentDiscoveryWorlds, ...openRetainedMemoryWorlds, ...openCoordinatedRevisionWorlds, ...openAudienceResponseWorlds, ...openRouteAuthorityWorlds, ...openLogFollowerWorlds, ...openLaunchStateWorlds, ...openScaffoldWorlds, ...openOwnedOperationsWorlds, ...openPtyContinuityWorlds, ...openSystemCandidateWorlds, ...openWorkspaceClaimWorlds, ...openBridgeDeliveryWorlds, ...openEditorialWorlds, ...openPortfolioWorlds, ...openRegencyWorlds, ...openImageCandidateWorlds, ...openNewsEvidenceWorlds, ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
       ...openGoalCalendarWorlds, ...openPersonalArtifactWorlds, ...openPersonalHistoryWorlds,
@@ -8122,6 +8130,41 @@ function verifyWorkspaceConfigEvidence(exercise, world, proof, skill) {
   );
 }
 
+function verifyAudienceResponse(exercise, world, proof, skill) {
+  const report=exercise.report.outcome;
+  const {record,choice,answer,prepared,receipt}=proof.report;
+  const records=exercise.calls.map(({record})=>record);
+  const children=(parent,name)=>records.filter(row=>row.parent_call_id===parent?.call_id&&row.definition?.name===name&&row.outcome==="done");
+  const one=(parent,name)=>{
+    const rows=children(parent,name);
+    return rows.length===1?rows[0]:null;
+  };
+  const effects=(name,method)=>children(skill,name).flatMap(row=>(row.effects??[])
+    .filter(effect=>effect.service==="nativeAudienceResponse"&&effect.method===method&&!effect.error));
+  const bound=(rows,args,result)=>rows.length===1&&matchesValue(rows[0].args,args)&&matchesValue(rows[0].result,result);
+  const input=(row,name,value)=>matchesValue(row.inputs?.[name],value);
+  const selected=one(skill,"decideAudienceFormat");
+  const grounded=one(skill,"answerFromRecord");
+  const stage=one(skill,"prepareAudienceVisual");
+  const installed=one(stage,"preparePresentation");
+  const writes=effects("renderAudienceVisual","render");
+  requireEvidence(
+    isDeepStrictEqual(report,proof.report)&&choice.mode===world.mode&&bound(effects("readAudienceRecord","readRecord"),[],record)&&
+    selected&&input(selected,"goal",world.goal)&&input(selected,"record",record)&&matchesValue(selected.output,choice)&&
+    grounded&&input(grounded,"goal",world.goal)&&input(grounded,"record",record)&&input(grounded,"choice",choice)&&matchesValue(grounded.output,answer)&&
+    (choice.mode==="plain"?children(skill,"prepareAudienceVisual").length===0&&prepared===null&&receipt===null&&writes.length===0&&
+      proof.observed?.rendered?.ids?.length===0&&proof.observed?.rendered?.revision===null:
+      stage&&prepared&&receipt&&installed&&input(stage,"goal",world.goal)&&input(stage,"record",record)&&input(stage,"choice",choice)&&
+      matchesValue(stage.output,prepared)&&input(installed,"request",{goal:world.goal,sections:record.sections})&&
+      matchesValue(installed.output,prepared.presentation)&&bound(writes,[record.id,record.revision,prepared],receipt)&&
+      receipt.revision===record.revision&&isDeepStrictEqual(proof.observed?.rendered?.ids,receipt.ids)&&
+      isDeepStrictEqual(proof.observed?.mdxDigests,receipt.mdxDigests)&&
+      (choice.mode==="calculator"?prepared.modelId===record.model?.id&&!!receipt.interaction:
+        prepared.modelId===null&&receipt.interaction===null)),
+    "Expected an appropriate grounded audience answer and exact native presentation effects"
+  );
+}
+
 function verifyCoordinatedRevision(exercise, world, proof, skill) {
   const report=exercise.report.outcome;
   const {initial,initialAuthority,plan,first,updated,updatedAuthority,reconciled,final,readback}=proof.report;
@@ -9159,6 +9202,8 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
     verifyOwnedRouteAuthority(exercise, world, proof, skill);
   } else if (world.kind === "workspace-config") {
     verifyWorkspaceConfigEvidence(exercise, world, proof, skill);
+  } else if (world.kind === "audience-response") {
+    verifyAudienceResponse(exercise, world, proof, skill);
   } else if (world.kind === "coordinated-revision") {
     verifyCoordinatedRevision(exercise, world, proof, skill);
   } else if (world.kind === "retained-memory") {
