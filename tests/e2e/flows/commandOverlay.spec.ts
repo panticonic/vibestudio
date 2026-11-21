@@ -49,7 +49,8 @@ test.describe("command overlay", () => {
   // takes ~35s in a cold run — and the conversation's harness worker is built
   // the first time anyone opens the agent scope. The budget is generous on
   // purpose: a slow build is not the failure this spec is looking for.
-  test.describe.configure({ timeout: 420_000 });
+  // Reopen and promotion exercise the conversation created by the earlier cases.
+  test.describe.configure({ mode: "serial", timeout: 420_000 });
 
   let testApp: TestApp;
 
