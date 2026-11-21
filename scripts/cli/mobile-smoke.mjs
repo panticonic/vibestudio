@@ -1779,13 +1779,13 @@ function unescapeXmlAttribute(value) {
     .replace(/&amp;/g, "&");
 }
 
-/** Resolve the mounted chat's exact immutable Personal designation. */
-async function resolvePersonalStateDir(ready, onboarding) {
+/** Verify the mounted chat belongs to the designated Personal workspace. */
+async function assertPersonalOnboarding(serverInstanceRoot, onboarding) {
   if (typeof onboarding.workspaceId !== "string" || !onboarding.workspaceId) {
     throw new Error("The automatic onboarding chat did not expose its workspace identity");
   }
   const rows = await sqliteJson(
-    path.join(path.dirname(ready.workspacesRoot), "server-auth", "identity.db"),
+    path.join(serverInstanceRoot, "server-auth", "identity.db"),
     `SELECT w.name FROM user_workspaces AS u
      JOIN workspaces AS w ON w.workspace_id = u.workspace_id
      WHERE u.role = 'personal' AND u.workspace_id = ${sqlString(onboarding.workspaceId)}`
@@ -1795,141 +1795,6 @@ async function resolvePersonalStateDir(ready, onboarding) {
       "The automatic onboarding chat is not owned by the designated Personal workspace"
     );
   }
-  return path.join(ready.workspacesRoot, rows[0].name, "state");
-}
-
-/** Probe only the workspace that owns the visibly rendered onboarding chat. */
-function createAgentTurnProbe(ready) {
-  if (typeof ready?.personalStateDir !== "string" || !ready.personalStateDir) {
-    throw new Error("Agent completion requires the verified Personal onboarding workspace");
-  }
-  return {
-    stateDir: ready.personalStateDir,
-    sqliteFiles: null,
-    tableDbs: new Map(),
-    warned: false,
-  };
-}
-
-async function probeInitialAgentTurn(probe) {
-  const turnDbs = await getDatabasesWithTable(probe, "trajectory_turns");
-  if (!turnDbs.length) {
-    return { kind: "pending", summary: "trajectory_turns table not found yet" };
-  }
-
-  let first = null;
-  for (const dbPath of turnDbs) {
-    const rows = await sqliteJson(
-      dbPath,
-      `SELECT turn_id, opened_at, closed_at, summary
-       FROM trajectory_turns
-       WHERE opened_at IS NOT NULL
-       ORDER BY opened_at ASC
-       LIMIT 1`
-    ).catch(() => []);
-    for (const row of rows) {
-      const openedAt = Date.parse(String(row.opened_at ?? "")) || 0;
-      if (!first || openedAt < first.openedAt) {
-        first = { ...row, openedAt };
-      }
-    }
-  }
-
-  if (!first?.turn_id) {
-    return { kind: "pending", summary: "no agent turn run has started yet" };
-  }
-
-  const messageSummary = await countCompletedAssistantMessages(probe, first.turn_id);
-  if (messageSummary.failedAssistant > 0) {
-    return {
-      kind: "failed",
-      summary: `${first.turn_id} failedAssistant=${messageSummary.failedAssistant}`,
-    };
-  }
-
-  const closed = first.closed_at != null;
-  if (closed && messageSummary.completedAssistant > 0) {
-    return {
-      kind: "completed",
-      summary: `${first.turn_id} closed completedAssistant=${messageSummary.completedAssistant}`,
-    };
-  }
-  if (closed) {
-    return {
-      kind: "failed",
-      summary:
-        `${first.turn_id} closed without a completed assistant message` +
-        (first.summary ? ` summary=${first.summary}` : ""),
-    };
-  }
-
-  return {
-    kind: "pending",
-    summary: `${first.turn_id} open completedAssistant=${messageSummary.completedAssistant}`,
-  };
-}
-
-async function countCompletedAssistantMessages(probe, turnId) {
-  const messageDbs = await getDatabasesWithTable(probe, "trajectory_messages");
-  let completedAssistant = 0;
-  let failedAssistant = 0;
-  for (const dbPath of messageDbs) {
-    const rows = await sqliteJson(
-      dbPath,
-      `SELECT
-         SUM(CASE WHEN role = 'assistant' AND status = 'completed' THEN 1 ELSE 0 END) AS completed_assistant,
-         SUM(CASE WHEN role = 'assistant' AND status = 'failed' THEN 1 ELSE 0 END) AS failed_assistant
-       FROM trajectory_messages
-       WHERE turn_id = ${sqlString(turnId)}`
-    ).catch(() => []);
-    for (const row of rows) {
-      completedAssistant += Number(row.completed_assistant ?? 0);
-      failedAssistant += Number(row.failed_assistant ?? 0);
-    }
-  }
-  return { completedAssistant, failedAssistant };
-}
-
-async function getDatabasesWithTable(probe, table) {
-  const cached = probe.tableDbs.get(table);
-  if (cached?.length) return cached;
-  const files = await getSqliteFiles(probe);
-  const matches = [];
-  for (const dbPath of files) {
-    const rows = await sqliteJson(
-      dbPath,
-      `SELECT name FROM sqlite_master WHERE type = 'table' AND name = ${sqlString(table)} LIMIT 1`
-    ).catch(() => []);
-    if (rows.length > 0) matches.push(dbPath);
-  }
-  if (matches.length) probe.tableDbs.set(table, matches);
-  return matches;
-}
-
-async function getSqliteFiles(probe) {
-  if (probe.sqliteFiles?.length) return probe.sqliteFiles;
-  const files = [];
-  files.push(...(await listSqliteFiles(path.join(probe.stateDir, ".databases")).catch(() => [])));
-  probe.sqliteFiles = [...new Set(files)];
-  return probe.sqliteFiles;
-}
-
-async function listSqliteFiles(root) {
-  const files = [];
-  const pending = [root];
-  while (pending.length) {
-    const dir = pending.pop();
-    const entries = await fsp.readdir(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        pending.push(fullPath);
-      } else if (entry.isFile() && entry.name.endsWith(".sqlite")) {
-        files.push(fullPath);
-      }
-    }
-  }
-  return files;
 }
 
 async function sqliteJson(dbPath, sql) {
@@ -1980,16 +1845,12 @@ async function assertNoVisiblePanelCrash(device, xml, context) {
 // panel load. The harness was producing the
 // failure it was there to detect.
 //
-// So this is deliberately slow. The authoritative turn signals are the durable
-// state probe and the logcat phases, which cost the device nothing; the dump
-// only catches a visible crash and taps approval buttons, and a turn budget is
-// minutes, so tens of seconds of latency on those is free.
+// Poll slowly and wait for stable final output in the actual chat. The
+// device's startup logs carry its independent transport and panel readiness.
 const AGENT_TURN_VISUAL_POLL_MS = 20_000;
 
-async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options = {}) {
+async function waitForInitialAgentTurn(device, deadlineMs, realModel) {
   let lastLabels = [];
-  let lastAgentState = "not checked";
-  let nextProbeAt = 0;
   let stableVisualAgentFingerprint = "";
   let stableVisualAgentPolls = 0;
   const requestedRemaining = new Set();
@@ -2006,7 +1867,6 @@ async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options =
     }
     if (approval.surface.visible) {
       // A submitted decision can remain busy while its install landing runs.
-      // Durable agent completion does not supersede that live UI owner.
       await sleep(AGENT_TURN_VISUAL_POLL_MS);
       continue;
     }
@@ -2026,22 +1886,14 @@ async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options =
 
     const visualAgentTurn = visibleAgentTurnState(labels);
     if (visualAgentTurn.hasCredentialSetupPrompt) {
-      const mode = options.realModel ? "Real-model" : "Deterministic-mode";
+      const mode = realModel ? "Real-model" : "Deterministic-mode";
       throw new Error(
         `${mode} smoke reached model credential setup instead of an agent response. ` +
           `Visible labels: ${summarizeLabels(labels)}`
       );
     }
 
-    if (
-      options.requireNoUnresolvedApproval &&
-      visualAgentTurn.hasUnresolvedApproval &&
-      visualAgentTurn.hasAgentOutput &&
-      !visualAgentTurn.isTyping
-    ) {
-      stableVisualAgentFingerprint = "";
-      stableVisualAgentPolls = 0;
-    } else if (visualAgentTurn.hasFinalVisibleOutput) {
+    if (visualAgentTurn.hasFinalVisibleOutput) {
       if (visualAgentTurn.fingerprint === stableVisualAgentFingerprint) {
         stableVisualAgentPolls += 1;
       } else {
@@ -2049,10 +1901,7 @@ async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options =
         stableVisualAgentPolls = 1;
       }
       if (stableVisualAgentPolls >= 3) {
-        const suffix = options.requireNoUnresolvedApproval ? " with no pending approvals" : "";
-        console.log(
-          `[mobile-smoke] Initial agent turn completed by stable final visible output${suffix}`
-        );
+        console.log("[mobile-smoke] Initial agent turn completed by stable final visible output");
         return;
       }
     } else {
@@ -2060,44 +1909,12 @@ async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options =
       stableVisualAgentPolls = 0;
     }
 
-    if (Date.now() >= nextProbeAt) {
-      nextProbeAt = Date.now() + 2_000;
-      const agentState = await probeInitialAgentTurn(agentProbe).catch((error) => ({
-        kind: "unavailable",
-        summary: error instanceof Error ? error.message : String(error),
-      }));
-      const nextAgentState = `${agentState.kind}: ${agentState.summary}`;
-      if (nextAgentState !== lastAgentState) {
-        console.log(`[mobile-smoke] Initial agent turn: ${nextAgentState}`);
-      }
-      lastAgentState = nextAgentState;
-      if (agentState.kind === "failed") {
-        throw new Error(`Initial agent turn failed in durable state: ${agentState.summary}`);
-      }
-      if (agentState.kind === "completed") {
-        if (!options.requireVisibleAgentOutput) {
-          console.log(`[mobile-smoke] Initial agent turn completed: ${agentState.summary}`);
-          return;
-        }
-        lastAgentState = `completed but waiting for visible output: ${agentState.summary}`;
-      }
-      if (
-        (agentState.kind === "unavailable" ||
-          /trajectory_turns table not found yet/i.test(agentState.summary)) &&
-        !agentProbe.warned
-      ) {
-        agentProbe.warned = true;
-        console.warn(`[mobile-smoke] Durable agent-state probe unavailable: ${agentState.summary}`);
-      }
-    }
-
     await sleep(AGENT_TURN_VISUAL_POLL_MS);
   }
 
   throw new Error(
     `Timed out waiting for the initial onboarding agent turn to finish. ` +
-      `Last visible labels: ${summarizeLabels(lastLabels)}. ` +
-      `Last durable state: ${lastAgentState}`
+      `Last visible labels: ${summarizeLabels(lastLabels)}`
   );
 }
 
@@ -2117,16 +1934,12 @@ function summarizeLabels(labels) {
   return compact || "(none)";
 }
 
-async function captureAndAssertPanelVisible(device, agentTimeoutMs, readyInfo, options = {}) {
-  const agentProbe = createAgentTurnProbe(readyInfo);
+async function captureAndAssertPanelVisible(device, agentTimeoutMs, options = {}) {
   await ensureDeviceInteractive(device);
   await sleep(2_000);
   let agentTurnCompleted = false;
   if (options.checkAgentTurn !== false) {
-    const waitOptions = options.realModel
-      ? { requireVisibleAgentOutput: true, requireNoUnresolvedApproval: true }
-      : {};
-    await waitForInitialAgentTurn(device, Date.now() + agentTimeoutMs, agentProbe, waitOptions);
+    await waitForInitialAgentTurn(device, Date.now() + agentTimeoutMs, options.realModel);
     agentTurnCompleted = true;
   }
   // Agent completion and approval completion are independent. A review that
@@ -2449,7 +2262,6 @@ async function runSmoke(
   const ownerSignal = own.signal;
   ownerSignal.throwIfAborted();
   let emulatorChild = null;
-  let readyInfo = null;
   let workspacePreparation = null;
   let preparationStopPromise = null;
   let workspacePreparationJoined = false;
@@ -2631,15 +2443,11 @@ async function runSmoke(
     let serverChild = server.child;
     await waitForSpawn(serverChild, process.execPath, serverArgs);
 
-    const ready = await waitForServerReady(
+    await waitForServerReady(
       readyFilePath,
       serverChild,
       Math.max(0, serverReadyDeadlineMs - Date.now())
     );
-    readyInfo = {
-      ...ready,
-      workspacesRoot: path.join(serverInstanceRoot, "workspaces"),
-    };
 
     const invite = await waitForRootInvite({
       readyFile: readyFilePath,
@@ -2751,21 +2559,16 @@ async function runSmoke(
       options.packageName,
       managedPanelDeadlineMs
     );
-    readyInfo.personalStateDir = await resolvePersonalStateDir(readyInfo, onboarding);
+    await assertPersonalOnboarding(serverInstanceRoot, onboarding);
     console.log("[mobile-smoke] Automatic Personal onboarding prompt rendered");
     if (await dismissNavigationDrawerIfOpen(options.device)) {
       console.log("[mobile-smoke] Dismissed the native panel drawer before visual validation");
     }
-    const panelResult = await captureAndAssertPanelVisible(
-      options.device,
-      options.agentTimeoutMs,
-      readyInfo,
-      {
-        packageName: options.packageName,
-        realModel: options.realModel,
-        checkAgentTurn: !options.skipAgentTurn,
-      }
-    );
+    const panelResult = await captureAndAssertPanelVisible(options.device, options.agentTimeoutMs, {
+      packageName: options.packageName,
+      realModel: options.realModel,
+      checkAgentTurn: !options.skipAgentTurn,
+    });
 
     if (!options.noTap) {
       await assertWorkspaceBrowserPermission(
@@ -2866,16 +2669,7 @@ async function runSmoke(
       options.pairingTimeoutMs,
       "the panel Iroh session to reconnect after server restart"
     );
-    const restartedReady = await waitForServerReady(
-      readyFilePath,
-      serverChild,
-      options.pairingTimeoutMs
-    );
-    readyInfo = {
-      ...restartedReady,
-      personalStateDir: readyInfo.personalStateDir,
-      workspacesRoot: path.join(serverInstanceRoot, "workspaces"),
-    };
+    await waitForServerReady(readyFilePath, serverChild, options.pairingTimeoutMs);
     await logcat.waitForPhaseAfter(
       "workspace-recovery-complete",
       serverRestartRecoveryCount,
@@ -2886,24 +2680,24 @@ async function runSmoke(
     // document lifecycle signals and correctly do not recur here. Await the
     // explicit shell recovery signal, then assert the still-rendered chat.
     await panelSessionRecovered;
-    await waitForOnboardingChatRendered(
+    const recoveredOnboarding = await waitForOnboardingChatRendered(
       options.device,
       options.packageName,
       Date.now() + options.pairingTimeoutMs
     );
+    if (recoveredOnboarding.workspaceId !== onboarding.workspaceId) {
+      throw new Error("Server restart opened a different onboarding workspace");
+    }
     if (
       logcat.phaseCount("workspace-panel-cacheable-asset-pipe-miss") !==
       serverRestartCacheablePipeMissCount
     ) {
       throw new Error("Warm server recovery fetched panel artifact bytes over the Iroh pipe");
     }
-    await captureAndAssertPanelVisible(options.device, options.agentTimeoutMs, readyInfo, {
+    await captureAndAssertPanelVisible(options.device, options.agentTimeoutMs, {
       packageName: options.packageName,
       realModel: false,
-      // If the deliberately bounded initial probe moved on while a turn was
-      // still running, the server restart can durably close that turn as a
-      // recoverable interruption. Recovery is a connectivity/rendering check;
-      // do not misreport that old turn as a new recovery failure.
+      // Recheck the completed reply when this run requested an initial agent turn.
       checkAgentTurn: panelResult.agentTurnCompleted,
     });
     console.log(
