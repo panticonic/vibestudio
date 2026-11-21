@@ -26,7 +26,7 @@ export function writeNativeApprovalModelProvider(sourceRoot: string): string {
           extension: {
             activationEvents: ["onInvoke"],
             methodAuthority: Object.fromEntries(
-              ["listModels", "ensureLoaded", "getLoopbackAuth", "requestLog"].map((name) => [
+              ["listModels", "ensureLoaded", "attestRuntime", "requestLog"].map((name) => [
                 name,
                 {
                   effect: { kind: "open" },
@@ -181,7 +181,14 @@ export async function activate(ctx) {
   return {
     listModels() { return [{ slug, displayName: 'Native Approval Fixture', baseUrl, server: 'utility', contextWindow: 65536, maxTokens: 4096, toolsCapable: true, reasoningCapable: false, fit: { fit: 'cpu-only', estTokensPerSec: null, contextLength: 65536, gpuLayers: 0, notes: [] }, measuredTokensPerSec: null, state: 'ready', download: null, errorMessage: null }]; },
     ensureLoaded(modelId) { if (modelId !== slug) throw new Error('Foreign fixture model'); return { baseUrl }; },
-    getLoopbackAuth() { if (sealed) throw new Error('Fixture provider is retired'); return { apiKey: key, origins: [origin] }; },
+    attestRuntime(modelId) {
+      if (ctx.invocation?.current()?.caller.callerKind !== 'server') {
+        throw new Error('Only the trusted host can attest the fixture runtime');
+      }
+      if (sealed) throw new Error('Fixture provider is retired');
+      if (modelId !== slug && modelId !== 'local:' + slug) throw new Error('Foreign fixture model');
+      return { baseUrl, apiKey: key };
+    },
     requestLog() { return log.map(item => ({ ...item })); },
   };
 }

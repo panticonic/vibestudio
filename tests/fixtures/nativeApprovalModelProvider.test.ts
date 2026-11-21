@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import { parseUnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 import {
   extensionUnitManifestDescriptor,
@@ -9,6 +10,7 @@ import {
 import { expect, it } from "vitest";
 import { discoverPackageGraph } from "../../src/server/buildV2/packageGraph.js";
 import {
+  NATIVE_APPROVAL_MODEL,
   writeNativeApprovalModelProvider,
   writeNativeApprovalReviewExtension,
 } from "./nativeApprovalModelProvider.js";
@@ -74,6 +76,33 @@ it("refuses to overwrite an existing local-model extension", () => {
     expect(fs.readFileSync(path.join(extensionRoot, "package.json"), "utf8")).toBe(original);
     expect(fs.readdirSync(extensionRoot)).toEqual(["package.json"]);
   } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it("attests only the live model to the trusted host", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "native-approval-runtime-"));
+  const subscriptions: Array<{ dispose(): Promise<void> }> = [];
+  try {
+    const repoPath = writeNativeApprovalModelProvider(root);
+    const entry = pathToFileURL(path.join(root, repoPath, "index.js")).href;
+    const { activate } = await import(entry);
+    let callerKind = "client";
+    const provider = await activate({
+      invocation: { current: () => ({ caller: { callerKind } }) },
+      subscriptions,
+    });
+
+    expect(() => provider.attestRuntime(NATIVE_APPROVAL_MODEL)).toThrow("trusted host");
+    callerKind = "server";
+    const model = provider.ensureLoaded("native-approval-fixture");
+    expect(provider.attestRuntime(NATIVE_APPROVAL_MODEL)).toEqual({
+      baseUrl: model.baseUrl,
+      apiKey: expect.any(String),
+    });
+    expect(() => provider.attestRuntime("local:foreign")).toThrow("Foreign fixture model");
+  } finally {
+    await Promise.all(subscriptions.map((subscription) => subscription.dispose()));
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
