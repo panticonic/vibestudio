@@ -247,6 +247,9 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     permitAttachment();
     const [first, second] = await Promise.all([pending, bind(2)]);
     expect(first.sourceRoot).not.toBe(second.sourceRoot);
+    const callsBeforeRebind = dispatch.mock.calls.length;
+    await expect(bind(1)).resolves.toMatchObject({ sourceRoot: first.sourceRoot });
+    expect(dispatch).toHaveBeenCalledTimes(callsBeforeRebind);
     const { vcs: restarted, refs: restartedRefs } = await harness();
     vi.spyOn(restartedRefs, "readMainSemanticState").mockReturnValue({ kind: "event", eventId: "main-event" });
     await restarted.attachParticipantHistory({ dispatch: { dispatch }, canonical });

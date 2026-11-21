@@ -389,6 +389,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   private protectedMainMutationTail: Promise<void> = Promise.resolve();
   private readonly protectedMainMutationScope = new AsyncLocalStorage<boolean>();
   private readonly retiredContexts = new Set<string>();
+  private readonly filesystemHistoryOwners = new Map<string, Map<string, WorkspaceSourceProviderRef>>();
   private readonly semanticStateByContent = new Map<string, VcsStateNodeRef>();
   /**
    * Exact immutable build-source entries established during this host
@@ -1706,13 +1707,25 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }): Promise<{ bridge: FsVcsBridge; sourceRoot: string }> {
     const { caller, contextId, isTracked } = input;
     if (!this.participantHistorySource) await this.whenSemanticReady(input.signal);
-    const scope = await this.openParticipantScope({
-      caller,
-      contextId,
-      ownerContextId: contextId,
-      ...(input.signal ? { signal: input.signal } : {}),
+    const source = this.participantHistorySource;
+    if (!source) throw new Error("Participant workspace history is unavailable");
+    const participantId = workspaceParticipantIdentity(caller, contextId);
+    const scope = await this.lockParticipantContexts(contextId, contextId, async () => {
+      input.signal?.throwIfAborted();
+      if (this.retiredContexts.has(contextId)) throw new Error("Workspace participant context has retired");
+      const owners = this.filesystemHistoryOwners.get(contextId) ?? new Map<string, WorkspaceSourceProviderRef>();
+      let owner = owners.get(participantId);
+      if (!owner) {
+        ({ owner } = await this.openAdmittedParticipantScope(source, {
+          caller, contextId, ownerContextId: contextId, ...(input.signal ? { signal: input.signal } : {}),
+        }));
+        // Retain the immutable, admitted owner. Each filesystem operation
+        // still takes its current head and exact invocation from its caller.
+        owners.set(participantId, owner);
+        this.filesystemHistoryOwners.set(contextId, owners);
+      }
+      return { dispatch: source.dispatch, canonical: source.canonical, owner, caller, contextId, ownerContextId: contextId };
     });
-    if (!scope) throw new Error("Participant workspace history is unavailable");
     const { owner, dispatch } = scope;
     const catalog = workspaceParticipantCatalog(scope);
     const { disk, materializer } = this.participantProjection(owner);
@@ -2004,6 +2017,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     if (!source) throw new Error("Participant workspace history is unavailable");
     await this.locked(`context-lifecycle:${contextId}`, async () => {
       this.retiredContexts.add(contextId);
+      this.filesystemHistoryOwners.delete(contextId);
       const retired = await retireWorkspaceParticipantContext({ ...source, contextId });
       for (const owner of retired.owners) {
         await source.destroyRetiredStorage?.(owner);
