@@ -557,6 +557,13 @@ const templateGoalDomains = {
     checks: ["exactIndividualPublications", "exactRetainedRoster", "exactQuestionDisposition",
       "exactParticipantDisposition", "derivedReadOnlyHandoff"],
   },
+  preparedContentProject: {
+    namespace: "vibestudio:prepared-content-project",
+    validator: { template:"system-testing", path:"skills/system-testing/open-goal-prepared-content-project-managed.ts" },
+    callable: "prepareContentProject",
+    checks: ["exactOwnedSourceDiscovery","genuineEvidenceDisposition","exactScopedAuthorization",
+      "exactArtifactOrReadOnlyHold","protectedPrivateBoundary","correctOutcomeReport"],
+  },
   terminalAppRepair: {
     namespace: "vibestudio:terminal-app-repair",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-terminal-app-repair-managed.ts" },
@@ -1748,13 +1755,13 @@ export async function loadLiveTeacherCases(checkouts) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
     const distinctGoals = new Set();
-    const { openGoalWorlds, openAndroidDeliveryWorlds = [], openDeliveryWakeWorlds = [], openLiveLocalInventoryWorlds = [], openPhoneFirstRunWorlds = [], openSkillMaintenanceWorlds = [], openWebhookAdmissionWorlds = [], openDevelopmentAuditWorlds = [], openDesktopReadinessWorlds = [], openContentArchiveWorlds = [], openSystemReleaseWorlds = [], openTestkitCloseoutWorlds = [], openPanelSourceMigrationWorlds = [], openWorkspaceShareWorlds = [], openNotificationStateWorlds = [], openAgentCapabilityWorlds = [], openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], terminalAppRepairWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openChatContinuityWorlds = [], openWorkspaceConfigWorlds = [], gadDurableQuestionWorlds = [], openBoardMigrationWorlds = [], openLiveTendrilBoardWorlds = [], openSourceAttributionWorlds = [], openWorkspaceSmokeWorlds = [], openSameTurnEvalWorlds = [], openCliRouteWorlds = [], openIntentDiscoveryWorlds = [], openRetainedMemoryWorlds = [], openCoordinatedRevisionWorlds = [], openRouteAuthorityWorlds = [], openLogFollowerWorlds = [], openLaunchStateWorlds = [], openScaffoldWorlds = [], openOwnedOperationsWorlds = [], openPtyContinuityWorlds = [], openSystemCandidateWorlds = [], openWorkspaceClaimWorlds = [], openExamplesAdoptionWorlds = [], openGrimoireSceneWorlds = [], openBridgeDeliveryWorlds = [], openEditorialWorlds = [], openPortfolioWorlds = [], openRegencyWorlds = [], openImageCandidateWorlds = [], openApiReadinessWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
+    const { openGoalWorlds, openAndroidDeliveryWorlds = [], openDeliveryWakeWorlds = [], openLiveLocalInventoryWorlds = [], openPhoneFirstRunWorlds = [], openSkillMaintenanceWorlds = [], openWebhookAdmissionWorlds = [], openDevelopmentAuditWorlds = [], openDesktopReadinessWorlds = [], openContentArchiveWorlds = [], openSystemReleaseWorlds = [], openTestkitCloseoutWorlds = [], openPanelSourceMigrationWorlds = [], openWorkspaceShareWorlds = [], openNotificationStateWorlds = [], openAgentCapabilityWorlds = [], openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], terminalAppRepairWorlds = [], preparedContentProjectWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openChatContinuityWorlds = [], openWorkspaceConfigWorlds = [], gadDurableQuestionWorlds = [], openBoardMigrationWorlds = [], openLiveTendrilBoardWorlds = [], openSourceAttributionWorlds = [], openWorkspaceSmokeWorlds = [], openSameTurnEvalWorlds = [], openCliRouteWorlds = [], openIntentDiscoveryWorlds = [], openRetainedMemoryWorlds = [], openCoordinatedRevisionWorlds = [], openRouteAuthorityWorlds = [], openLogFollowerWorlds = [], openLaunchStateWorlds = [], openScaffoldWorlds = [], openOwnedOperationsWorlds = [], openPtyContinuityWorlds = [], openSystemCandidateWorlds = [], openWorkspaceClaimWorlds = [], openExamplesAdoptionWorlds = [], openGrimoireSceneWorlds = [], openBridgeDeliveryWorlds = [], openEditorialWorlds = [], openPortfolioWorlds = [], openRegencyWorlds = [], openImageCandidateWorlds = [], openApiReadinessWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
       spectroliteGoalWorlds = [], openGoalGoogleWorlds = [], openGoalPersonalWorlds = [],
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
       openTerminalWorlds = [], openOwnedResearchWorlds = [], personalWelcomeWorlds = [], dictationHandoffWorlds = [], specialistHandoffWorlds = [], providerHandoffWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalMethodWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
-    for (const assignment of [...openGoalWorlds, ...openAndroidDeliveryWorlds, ...openDeliveryWakeWorlds, ...openLiveLocalInventoryWorlds, ...openPhoneFirstRunWorlds, ...openSkillMaintenanceWorlds, ...openWebhookAdmissionWorlds, ...openDevelopmentAuditWorlds, ...openDesktopReadinessWorlds, ...openContentArchiveWorlds, ...openSystemReleaseWorlds, ...openTestkitCloseoutWorlds, ...openPanelSourceMigrationWorlds, ...openWorkspaceShareWorlds, ...openNotificationStateWorlds, ...openAgentCapabilityWorlds, ...openMobileContinuityWorlds, ...openInstalledPackageWorlds, ...openAssetIntegrityWorlds, ...openTendrilRouteWorlds, ...openExtensionDossierWorlds, ...openDeployedInterfaceWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...terminalAppRepairWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
+    for (const assignment of [...openGoalWorlds, ...openAndroidDeliveryWorlds, ...openDeliveryWakeWorlds, ...openLiveLocalInventoryWorlds, ...openPhoneFirstRunWorlds, ...openSkillMaintenanceWorlds, ...openWebhookAdmissionWorlds, ...openDevelopmentAuditWorlds, ...openDesktopReadinessWorlds, ...openContentArchiveWorlds, ...openSystemReleaseWorlds, ...openTestkitCloseoutWorlds, ...openPanelSourceMigrationWorlds, ...openWorkspaceShareWorlds, ...openNotificationStateWorlds, ...openAgentCapabilityWorlds, ...openMobileContinuityWorlds, ...openInstalledPackageWorlds, ...openAssetIntegrityWorlds, ...openTendrilRouteWorlds, ...openExtensionDossierWorlds, ...openDeployedInterfaceWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...terminalAppRepairWorlds, ...preparedContentProjectWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
       ...openExamplesAdoptionWorlds, ...openGrimoireSceneWorlds, ...openApiReadinessWorlds, ...openChatContinuityWorlds, ...openWorkspaceConfigWorlds, ...gadDurableQuestionWorlds, ...openBoardMigrationWorlds, ...openLiveTendrilBoardWorlds, ...openSourceAttributionWorlds, ...openWorkspaceSmokeWorlds, ...openSameTurnEvalWorlds, ...openCliRouteWorlds, ...openIntentDiscoveryWorlds, ...openRetainedMemoryWorlds, ...openCoordinatedRevisionWorlds, ...openRouteAuthorityWorlds, ...openLogFollowerWorlds, ...openLaunchStateWorlds, ...openScaffoldWorlds, ...openOwnedOperationsWorlds, ...openPtyContinuityWorlds, ...openSystemCandidateWorlds, ...openWorkspaceClaimWorlds, ...openBridgeDeliveryWorlds, ...openEditorialWorlds, ...openPortfolioWorlds, ...openRegencyWorlds, ...openImageCandidateWorlds, ...openNewsEvidenceWorlds, ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
@@ -8992,6 +8999,113 @@ function verifyOpenAndroidDelivery(exercise, world, proof, skill) {
   }
 }
 
+function verifyPreparedContentProject(exercise, world, proof, skill) {
+  const native = proof.preparedContentProject;
+  const outcome = exercise.report.outcome;
+  const skillId = exercise.calls.find(({record}) => record === skill)?.callId;
+  const child = (parent, name) => parent && exercise.calls.find(({record}) =>
+    record.parent_call_id === parent && record.definition?.name === name && record.outcome === "done");
+  const names = new Set(["contentProjectSources","contentProjectScope","contentProjectDraft","contentProjectCommit"]);
+  const traced = exercise.calls.flatMap(({record}) => record.effects ?? []).filter(effect => names.has(effect.service));
+  const journal = native?.journal ?? [];
+  const trace = (owner, service, method, args, result) => {
+    const onOwner = (owner?.record.effects ?? []).filter(effect => effect.service === service && effect.method === method);
+    const recorded = journal.filter(row => row.service === service && row.method === method);
+    return onOwner.length === 1 && recorded.length === 1 && !onOwner[0].error &&
+      matchesValue(onOwner[0].args,args) && matchesValue(onOwner[0].result,result) &&
+      isDeepStrictEqual(recorded[0].args,args) && isDeepStrictEqual(recorded[0].result,result);
+  };
+  const decide = child(skillId, "reviewProjectEvidence");
+  const read = child(decide?.callId, "readOwnedProjectSources");
+  const select = child(decide?.callId, "chooseProjectDisposition");
+  const confirm = child(skillId, "confirmProjectScope");
+  const author = child(skillId, "authorProjectDocuments");
+  const finish = child(skillId, "finishPrivateProject");
+  const { evidence: owned, decision, scope, draft, final } = outcome;
+  const { before, actual, artifact } = native ?? {};
+  const created = world.profile === "commit" || world.profile === "draft";
+  const moved = world.profile === "moved";
+  const committed = world.profile === "commit";
+  const expected = committed ? "committed" : created ? "draft" : moved ? "held-moved" : "held";
+  const basis = created || moved ? "authorized" : world.profile;
+  const selected = basis === "authorized" ? owned.records.filter(row=>row.edition === "current").flatMap(row =>
+    row.facts.map(fact=>({source:row.id,digest:row.digest,fact:fact.id}))) : [];
+  requireEvidence(
+    native?.contextId === proof.contextId && native.caseId === world.id && native.sourceGroup === world.sourceGroup &&
+      native.expectedOutcome === expected && native.repoPath === owned.repoPath && owned.title === world.title &&
+      owned.audience === world.audience && isDeepStrictEqual(owned.documentRoles,world.roles) &&
+      before?.clean === true && before.mainEventId === actual?.mainEventId &&
+      isDeepStrictEqual(owned,native.sourceReadback) && owned.revision === JSON.stringify(before.workingHead) &&
+      owned.records.every(row=>row.path.startsWith(native.sourcesPath+"/") && row.fileId && /^[a-f0-9]{64}$/u.test(row.digest)) &&
+      owned.records.some(row=>row.edition==="retired") &&
+      matchesValue(decide?.record.inputs?.goal,world.goal) && matchesValue(decide?.record.output,{evidence:owned,decision}) &&
+      matchesValue(select?.record.inputs?.goal,world.goal) && matchesValue(select?.record.inputs?.evidence,owned) &&
+      matchesValue(select?.record.output,decision) && trace(read,"contentProjectSources","observe",[],owned) &&
+      matchesValue(read?.record.output,owned) && decision.basis===basis && isDeepStrictEqual(decision.selected,selected) &&
+      decision.action===(committed || moved ? "commit" : created ? "draft" : "hold") && final.outcome===expected &&
+      journal.length===1+Number(created||moved)+2*Number(created)+Number(committed) && traced.length===journal.length &&
+      (created || moved ? matchesValue(confirm?.record.inputs?.evidence,owned) &&
+        matchesValue(confirm?.record.inputs?.decision,decision) && matchesValue(confirm?.record.output,scope) &&
+        trace(confirm,"contentProjectScope","confirm",[owned.revision,decision],scope) : !confirm && scope===null) &&
+      (created ? scope?.status==="admitted" && scope.initialHead===owned.revision && typeof scope.receipt==="string" &&
+        isDeepStrictEqual(scope.request,{goal:world.goal,audience:world.audience,documentRoles:world.roles,
+          facts:owned.records.filter(row=>row.edition==="current").flatMap(row=>row.facts)}) :
+        !author && !finish && draft===null && final.candidate===null && final.event===null && artifact===null &&
+        before.committed.eventId===actual.committed.eventId &&
+        (moved ? !actual.clean && scope?.status==="moved" && scope.receipt===null &&
+          scope.initialHead===JSON.stringify(actual.workingHead) && owned.revision!==scope.initialHead &&
+          native.sourceNow.find(row=>row.purpose==="approval" && row.edition==="current")?.localApproval==="pending" &&
+          actual.workingCounts?.applications===1 && actual.workingCounts?.changes===1 :
+          actual.clean && isDeepStrictEqual(before.workingHead,actual.workingHead) && isDeepStrictEqual(owned.records,native.sourceNow))),
+    "Expected exact owned content provenance, source selection, and retained local authorization"
+  );
+  if (!created) return undefined;
+  const write = child(author.callId,"writeInitialProject");
+  const analyze = child(author.callId,"analyzeRequest");
+  const plan = child(author.callId,"planDocuments");
+  const drafts = child(author.callId,"draftDocuments");
+  const navigate = child(author.callId,"completeNavigation");
+  const review = child(author.callId,"reviewCandidate");
+  const commit = child(finish.callId,"commitReviewedProject");
+  const initial = journal.find(row=>row.service==="contentProjectDraft" && row.method==="prepare")?.result;
+  const documents = journal.find(row=>row.service==="contentProjectDraft" && row.method==="write")?.args[2];
+  const commitMessage = journal.find(row=>row.service==="contentProjectCommit")?.args[2];
+  const pages = exercise.calls.filter(({record}) => record.parent_call_id===drafts?.callId &&
+    record.definition?.name==="writePage" && record.outcome==="done");
+  const input = artifact?.semanticReviewInput;
+  requireEvidence(
+    draft?.review?.ready===true && draft.review.blockers?.length===0 && draft.review.unsupportedClaims?.length===0 &&
+      world.roles.every(role=>draft.review.coveredRoles?.includes(role)) &&
+      isDeepStrictEqual(final.candidate,draft.snapshot) && draft.snapshot.repoPath===native.repoPath &&
+      matchesValue(author?.record.inputs?.scope,scope) && matchesValue(author?.record.output,draft) &&
+      matchesValue(analyze?.record.inputs?.request,scope.request) && matchesValue(plan?.record.inputs?.request,scope.request) &&
+      matchesValue(drafts?.record.inputs?.request,scope.request) && matchesValue(navigate?.record.output,documents) &&
+      pages.length>=world.roles.length && pages.every(({record})=>matchesValue(record.inputs?.request,scope.request)) &&
+      matchesValue(write?.record.inputs?.scope,scope) && matchesValue(write?.record.inputs?.documents,documents) &&
+      matchesValue(write?.record.output,draft.snapshot) &&
+      trace(write,"contentProjectDraft","prepare",[scope.receipt,scope.initialHead],initial) &&
+      trace(write,"contentProjectDraft","write",[scope.receipt,initial?.head,documents],draft.snapshot) &&
+      matchesValue(review?.record.inputs?.request,scope.request) && matchesValue(review?.record.inputs?.documents,draft.snapshot.files) &&
+      matchesValue(review?.record.output,draft.review) && matchesValue(finish?.record.inputs?.draft,draft) &&
+      matchesValue(finish?.record.output,final) &&
+      artifact?.passed===true && artifact.reasons?.length===0 && artifact.semanticReviewRequired===true &&
+      input?.actual?.contextId===proof.contextId && isDeepStrictEqual(input.actual.state,actual.workingHead) &&
+      isDeepStrictEqual(input.actual.committedEvent,actual.committed) && isDeepStrictEqual(input.expected,scope.request) &&
+      isDeepStrictEqual(input.actual.documents?.slice().sort((a,b)=>a.path.localeCompare(b.path)),
+        draft.snapshot.files.slice().sort((a,b)=>a.path.localeCompare(b.path))) &&
+      input.actual.documents.filter(file=>file.path.startsWith("docs/")).length>=world.roles.length &&
+      typeof input.rubric==="string" &&
+      (committed ? actual.clean && final.event?.eventId===actual.committed.eventId &&
+        final.event.head===JSON.stringify(actual.workingHead) && typeof commitMessage==="string" &&
+        trace(commit,"contentProjectCommit","commit",[scope.receipt,draft.snapshot.head,commitMessage],final.event) &&
+        matchesValue(commit?.record.output,final.event) :
+        !actual.clean && draft.snapshot.head===JSON.stringify(actual.workingHead) && !commit && final.event===null &&
+        actual.committed.eventId===before.committed.eventId),
+    "Expected actual installed project authoring calls, exact private artifact and independently verified state"
+  );
+  return input;
+}
+
 export function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
   const proof = execution.diagnostics.openGoalVerification;
   const world = workflow.assignment;
@@ -9014,7 +9128,10 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
     "Expected a verified live goal and its actual installed Natlang skill call"
   );
   const evidence = { workspace: { proof } };
-  if (world.kind === "board-migration") {
+  let reviewInput;
+  if (world.kind === "preparedContentProject") {
+    reviewInput = verifyPreparedContentProject(exercise, world, proof, skill);
+  } else if (world.kind === "board-migration") {
     verifyOwnedBoardMigration(exercise, world, proof, skill);
   } else if (world.kind === "android-delivery") {
     verifyOpenAndroidDelivery(exercise, world, proof, skill);
@@ -11510,6 +11627,7 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
     world: { context_id: proof.contextId, ...(proof.panelId ? { panel_id: proof.panelId } : {}) },
     checks: Object.fromEntries(checks.map(check => [check, true])),
     evidence,
+    ...(reviewInput ? { reviewInput } : {}),
   };
 }
 
