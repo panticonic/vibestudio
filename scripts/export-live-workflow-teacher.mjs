@@ -25,6 +25,12 @@ const templateGoalDomains = {
     checks: ["scopedOwnedScaffoldBrief", "observedInstalledScaffoldChoices", "selectedOutcomeAppropriateStarter",
       "exactNativeScaffoldDraft", "independentVcsReadbackAndMain"],
   },
+  localMethodExchange: {
+    namespace: "vibestudio:local-method",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-local-method-managed.ts" },
+    callable: "reconcileOwnedMethodCall",
+    checks: ["exactOwnedMethodLane", "groundedMethodDisposition", "exactDispatchOrRetainedRead", "exactNativeTerminalAndExecution"],
+  },
   systemCandidateTriage: {
     namespace: "vibestudio:system-candidate",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-system-candidate-managed.ts" },
@@ -1629,13 +1635,13 @@ export async function loadLiveTeacherCases(checkouts) {
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
-      openTerminalWorlds = [], openOwnedResearchWorlds = [], personalWelcomeWorlds = [], dictationHandoffWorlds = [], specialistHandoffWorlds = [], providerHandoffWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
+      openTerminalWorlds = [], openOwnedResearchWorlds = [], personalWelcomeWorlds = [], dictationHandoffWorlds = [], specialistHandoffWorlds = [], providerHandoffWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalMethodWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
     for (const assignment of [...openGoalWorlds, ...openPhoneFirstRunWorlds, ...openSkillMaintenanceWorlds, ...openWebhookAdmissionWorlds, ...openDevelopmentAuditWorlds, ...openDesktopReadinessWorlds, ...openContentArchiveWorlds, ...openSystemReleaseWorlds, ...openTestkitCloseoutWorlds, ...openPanelSourceMigrationWorlds, ...openWorkspaceShareWorlds, ...openNotificationStateWorlds, ...openAgentCapabilityWorlds, ...openMobileContinuityWorlds, ...openInstalledPackageWorlds, ...openAssetIntegrityWorlds, ...openTendrilRouteWorlds, ...openExtensionDossierWorlds, ...openDeployedInterfaceWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
       ...openExamplesAdoptionWorlds, ...openGrimoireSceneWorlds, ...openApiReadinessWorlds, ...openChatContinuityWorlds, ...openRouteAuthorityWorlds, ...openLogFollowerWorlds, ...openLaunchStateWorlds, ...openScaffoldWorlds, ...openOwnedOperationsWorlds, ...openPtyContinuityWorlds, ...openSystemCandidateWorlds, ...openWorkspaceClaimWorlds, ...openBridgeDeliveryWorlds, ...openEditorialWorlds, ...openPortfolioWorlds, ...openRegencyWorlds, ...openImageCandidateWorlds, ...openNewsEvidenceWorlds, ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
       ...openGoalCalendarWorlds, ...openPersonalArtifactWorlds, ...openPersonalHistoryWorlds,
-      ...openTerminalWorlds, ...openOwnedResearchWorlds, ...personalWelcomeWorlds, ...dictationHandoffWorlds, ...specialistHandoffWorlds, ...providerHandoffWorlds, ...openGoalEvalHandoffWorlds, ...openGoalProgramRunWorlds, ...openGoalAuthoringWorlds, ...openGoalGoogleHandoffWorlds, ...openPersonalAutomationWorlds, ...openGoalOwnedPreviewWorlds, ...openDiagnosticWorlds, ...openLocalDeliveryWorlds, ...openGoalPanelRecoveryWorlds, ...openBrowserMigrationWorlds]) {
+      ...openTerminalWorlds, ...openOwnedResearchWorlds, ...personalWelcomeWorlds, ...dictationHandoffWorlds, ...specialistHandoffWorlds, ...providerHandoffWorlds, ...openGoalEvalHandoffWorlds, ...openGoalProgramRunWorlds, ...openGoalAuthoringWorlds, ...openGoalGoogleHandoffWorlds, ...openPersonalAutomationWorlds, ...openGoalOwnedPreviewWorlds, ...openDiagnosticWorlds, ...openLocalMethodWorlds, ...openLocalDeliveryWorlds, ...openGoalPanelRecoveryWorlds, ...openBrowserMigrationWorlds]) {
       const split = assignment.split ?? "train";
       const sourceGroups = [assignment.sourceGroup, assignment.relatedSourceGroup].filter(Boolean);
       const scenario = `open-goal-${assignment.id}`;
@@ -10184,6 +10190,68 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
           matchesValue(stages[0].args, [outcome.finding]) && matchesValue(stages[0].result, proof.handoff)
           : proof.handoff === null && proof.handoffReadback === null),
       "Expected observed native Host windows, exact report evidence and the authorized scratch result"
+    );
+  } else if (world.kind === "localMethodExchange") {
+    const { card, evidence: lane, attempt, terminal, journal = [] } = proof;
+    const outcome = exercise.report.outcome;
+    const skillId = exercise.calls.find(({ record }) => record === skill)?.callId;
+    const child = (parent, name) => parent && exercise.calls.find(({ record }) =>
+      record.parent_call_id === parent && record.definition?.name === name && record.outcome === "done");
+    const inspect = child(skillId, "readMethodLane");
+    const locate = child(inspect?.callId, "findOwnedMethodCard");
+    const current = child(inspect?.callId, "inspectOwnedMethodLane");
+    const plan = child(skillId, "planMethodExchange");
+    const choose = child(plan?.callId, "chooseMethodDisposition");
+    const dispatch = child(skillId, "dispatchOwnedLocalMethod");
+    const settle = child(skillId, "readExactMethodTerminal");
+    const read = "localMethodRead";
+    const write = "localMethodDispatch";
+    const row = (service, method) => journal.find(entry => entry.service === service && entry.method === method);
+    const trace = (entry, service, method, args, result) => {
+      const performed = entry?.record.effects ?? [];
+      const [effect] = performed;
+      const declared = row(service, method);
+      return Boolean(entry && performed.length === 1 && effect?.service === service && effect.method === method &&
+        !effect.error && matchesValue(effect.args, args) && matchesValue(effect.result, result) &&
+        isDeepStrictEqual(declared?.args, args) && isDeepStrictEqual(declared?.result, result));
+    };
+    const expected = {
+      fresh: "request", interrupted: "request", refused: "request", retained: "recover", "retained-refusal": "recover",
+      "no-grant": "hold-authority", "no-provider": "hold-route", moved: "hold-moved",
+    }[world.profile];
+    const requests = expected === "request";
+    const recovers = expected === "recover";
+    const observed = effects.filter(effect => effect.service === read || effect.service === write);
+    const cards = row(read, "discover")?.result;
+    const transport = terminal?.transport ?? null;
+    requireEvidence(
+      journal.length === (requests ? 4 : 3) && observed.length === journal.length &&
+        Array.isArray(cards) && cards.length === 2 && isDeepStrictEqual(cards[0], card) &&
+        cards[1]?.edition === "retired" && cards[1]?.id !== card?.id &&
+        card?.title === world.title && card?.edition === "current" && card.method === world.method &&
+        trace(locate, read, "discover", [], cards) && matchesValue(locate.record.inputs?.goal, world.goal) &&
+        matchesValue(locate.record.output, card) && trace(current, read, "inspect", [card.id], lane) &&
+        lane.cardId === card.id && lane.channel.startsWith("owned-method-") && /^[a-f0-9]{64}$/u.test(lane.basis) &&
+        lane.permitted === (world.profile !== "no-grant") && lane.current === (world.profile !== "moved") &&
+        Boolean(lane.provider) === !["moved", "no-provider"].includes(world.profile) &&
+        matchesValue(inspect?.record.inputs?.goal, world.goal) && matchesValue(inspect?.record.output, { card, evidence: lane }) &&
+        matchesValue(plan?.record.inputs?.goal, world.goal) && matchesValue(plan?.record.inputs?.card, card) &&
+        matchesValue(plan?.record.inputs?.evidence, lane) && matchesValue(plan?.record.output, outcome.plan) &&
+        matchesValue(choose?.record.inputs?.evidence, lane) && matchesValue(choose?.record.output, expected) &&
+        (requests ? attempt?.transport === transport && attempt.invocation === terminal?.invocation &&
+          attempt.disposition === (world.profile === "interrupted" ? "interrupted" : "submitted") &&
+          trace(dispatch, write, "request", [card.id, lane.basis, world.method], attempt)
+          : !dispatch && attempt === null) &&
+        (recovers ? isDeepStrictEqual(lane.retained, terminal) && terminal !== null : lane.retained === null) &&
+        trace(settle, read, "settle", [card.id, lane.basis, transport], terminal) &&
+        ((requests || recovers) ? terminal?.channel === lane.channel && terminal.method === world.method &&
+          terminal.detail === world.detail && terminal.executed === 1 && terminal.terminal > terminal.start &&
+          terminal.outcome === (["refused", "retained-refusal"].includes(world.profile) ? "error" : "success")
+          : terminal === null) &&
+        outcome.scope === "owned-local-method-exchange" && outcome.plan.action === expected && outcome.plan.method === world.method &&
+        isDeepStrictEqual(outcome.card, card) && isDeepStrictEqual(outcome.evidence, lane) &&
+        isDeepStrictEqual(outcome.attempt, attempt) && isDeepStrictEqual(outcome.terminal, terminal),
+      "Expected exact native local method admission and its retained terminal in the owned channel"
     );
   } else if (world.kind === "local-delivery") {
     const outcome = exercise.report.outcome;
