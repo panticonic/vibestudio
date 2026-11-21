@@ -25,7 +25,12 @@ export function typecheckDependencyGraph(
     const source = pending.pop()!;
     if (graph.has(source.name)) continue;
     const dependencies = { ...source.dependencies };
-    mergeExternalDependencySpecs(dependencies, source.devDependencies ?? {});
+    const development = Object.entries(source.devDependencies ?? {}).filter(
+      ([name]) => name !== "typescript" || !Object.hasOwn(workspacePackages, source.name)
+    );
+    // The host SDK's development compiler belongs to the SDK checkout. An
+    // imported adapter can still declare TypeScript as a runtime dependency.
+    mergeExternalDependencySpecs(dependencies, Object.fromEntries(development));
     const node = { ...source, dependencies, internalDeps: [] as string[] };
     graph.addNode(node);
     for (const [name, version] of Object.entries({ ...source.peerDependencies, ...dependencies })) {
