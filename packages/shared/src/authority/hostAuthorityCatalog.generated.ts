@@ -4053,6 +4053,27 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "fs.readProgramSources": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.read",
+      rationale:
+        "Read from the caller's exact semantic workspace head within selected source folders.",
+    },
+    capability: "filesystem.read",
+    presentation: {
+      title: "Read workspace files",
+      action: "read file contents",
+      description: "Read the selected workspace files or folders.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "files",
+        verb: "see",
+      },
+    },
+  },
   "fs.readText": {
     tier: {
       tier: "open",

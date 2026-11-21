@@ -44,6 +44,8 @@ import {
   type RepoPath,
 } from "@vibestudio/shared/runtime/entitySpec";
 import { WORKSPACE_SOURCE_DIRS } from "@vibestudio/workspace-contracts/sourceDirs";
+import { fsProgramSourcesRequestSchema } from "@vibestudio/service-schemas/fs";
+import { mapConcurrent } from "../hostCore/mapConcurrent.js";
 
 /**
  * Narrow semantic-VCS port required by FsService. The service depends on this
@@ -317,6 +319,19 @@ export interface PreparedFsFileAuthority {
   accesses: WorkspaceFileAccess[];
 }
 
+/** Match the compiler's input inventory; generated declarations and test code
+ * are excluded before read admission, as are hidden and dependency folders. */
+function isNatlangSourcePath(workspacePath: string): boolean {
+  const segments = workspacePath.split("/");
+  const leaf = segments.pop()!;
+  return (
+    !leaf.startsWith(".") &&
+    !segments.some((part) => part.startsWith(".") || part === "node_modules" || part === "dist") &&
+    /\.(?:nl|tsx?|jsx?|json|md|ya?ml)$/u.test(leaf) &&
+    !/(?:\.(?:test|spec)\.[cm]?[jt]sx?$|^suite\.[cm]?tsx?$|\.d\.nl\.ts$)/u.test(leaf)
+  );
+}
+
 function codedError(code: string, message: string): NodeJS.ErrnoException {
   const error = new Error(message) as NodeJS.ErrnoException;
   error.code = code;
@@ -501,8 +516,14 @@ interface ManagedWorkspaceSnapshot {
 interface ManagedCorpus {
   files: ReadonlyArray<Readonly<{ path: string; content: string }>>;
   ingestion: readonly ContextIngestionDescriptor[];
+  directories?: readonly string[];
 }
 
+const PROGRAM_SOURCE_BYTES = 8 * 1024 * 1024;
+const PROGRAM_SOURCE_FILES = 6000;
+const PROGRAM_SOURCE_BATCH_FILES = 64;
+const PROGRAM_SOURCE_BATCH_BYTES = 512 * 1024;
+const SEMANTIC_PROGRAM_CONCURRENCY = 2;
 const SEMANTIC_READ_CONCURRENCY = 8;
 // Capacity governs memory retention, never semantic freshness. Every read first
 // resolves the caller's current exact state, including reads of cached corpora.
@@ -951,6 +972,19 @@ export class FsService {
     }
     const state = (await bridge.status({ contextId: scope.contextId })).workingHead;
     const key = JSON.stringify([state, [...new Set(patterns)].sort(compareUtf16CodeUnits)]);
+    const corpus = await this.managedCorpus(key, () =>
+      this.loadManagedCorpus(bridge, scope.contextId!, state, patterns)
+    );
+    // Resource data can be shared; authority acquisition and durable lineage
+    // cannot. Each caller records the exact descriptors before receiving bytes.
+    await this.recordProjectedIngestion(ctx, "fs-managed-corpus-read", corpus.ingestion);
+    return corpus.files.map(({ path, content }) => ({ path, content }));
+  }
+
+  private async managedCorpus(
+    key: string,
+    load: () => Promise<ManagedCorpus>
+  ): Promise<ManagedCorpus> {
     let corpus = this.managedCorpora.get(key)?.corpus;
     if (corpus) {
       const cached = this.managedCorpora.get(key)!;
@@ -959,7 +993,7 @@ export class FsService {
     } else {
       let loading = this.loadingManagedCorpora.get(key);
       if (!loading) {
-        loading = this.loadManagedCorpus(bridge, scope.contextId, state, patterns);
+        loading = load();
         this.loadingManagedCorpora.set(key, loading);
         void loading.then(
           (loaded) => {
@@ -984,10 +1018,175 @@ export class FsService {
       }
       corpus = await loading;
     }
-    // Resource data can be shared; authority acquisition and durable lineage
-    // cannot. Each caller records the exact descriptors before receiving bytes.
+    return corpus;
+  }
+
+  private async readProgramSources(ctx: ServiceContext, scope: FsCallScope, input: unknown) {
+    const { roots, expectedSnapshot } = fsProgramSourcesRequestSchema.parse(input);
+    const bridge = this.semanticBridge(scope);
+    if (!bridge || !scope.contextId)
+      throw codedError(
+        "ESEMANTICAUTHORITY",
+        "Program sources require an exact semantic workspace context"
+      );
+    const state = (await bridge.status({ contextId: scope.contextId })).workingHead;
+    const snapshot = createHash("sha256").update(JSON.stringify(state)).digest("hex");
+    if (expectedSnapshot !== undefined && expectedSnapshot !== snapshot)
+      throw codedError("ESTALE", "Workspace changed while reading the Natlang program sources");
+    const selected = [...new Set(roots)].sort(compareUtf16CodeUnits);
+    const corpus = await this.managedCorpus(
+      JSON.stringify(["natlang-program", snapshot, selected]),
+      () => this.loadProgramSources(bridge, state, selected)
+    );
     await this.recordProjectedIngestion(ctx, "fs-managed-corpus-read", corpus.ingestion);
-    return corpus.files.map(({ path, content }) => ({ path, content }));
+    return {
+      snapshot,
+      directories: [...(corpus.directories ?? [])],
+      files: corpus.files.map(({ path, content }) => ({ path, content })),
+    };
+  }
+
+  private async loadProgramSources(
+    bridge: FsVcsBridge,
+    state: VcsStateNodeRef,
+    roots: readonly string[]
+  ): Promise<ManagedCorpus> {
+    const visible = await listAllDirectoryEntries(bridge, state, "skills");
+    const contains = (directory: string, entry: string) => entry.startsWith(`${directory}/`);
+    const directories = new Set<string>();
+    const repositories = visible.flatMap((entry) => {
+      if (
+        entry.kind !== "directory" ||
+        !entry.repositoryRoot ||
+        !entry.repositoryId ||
+        !contains("skills", entry.path)
+      )
+        return [];
+      const repository: ManagedWorkspaceRepository = {
+        repositoryId: entry.repositoryId,
+        repoPath: entry.path as RepoPath,
+      };
+      const relevant = roots.filter(
+        (root) =>
+          root === repository.repoPath ||
+          contains(root, repository.repoPath) ||
+          contains(repository.repoPath, root)
+      );
+      for (const root of relevant)
+        if (root === repository.repoPath || contains(root, repository.repoPath))
+          directories.add(root);
+      return relevant.length ? [{ repository, relevant }] : [];
+    });
+    type Selected = VcsFileListEntry & ManagedWorkspaceRepository;
+    const files: Selected[] = [];
+    let bytes = 0;
+    await mapConcurrent(
+      repositories,
+      SEMANTIC_PROGRAM_CONCURRENCY,
+      "Selecting Natlang program sources failed",
+      async ({ repository, relevant }) => {
+        let cursor: string | undefined;
+        do {
+          const page = await bridge.listFiles({
+            state,
+            repositoryId: repository.repositoryId,
+            limit: 500,
+            ...(cursor ? { cursor } : {}),
+          });
+          for (const file of page.files) {
+            const workspacePath = `${repository.repoPath}/${file.path}`;
+            const containingRoots = relevant.filter((root) => contains(root, workspacePath));
+            if (!containingRoots.length) continue;
+            for (const root of containingRoots) directories.add(root);
+            if (!isNatlangSourcePath(workspacePath)) continue;
+            bytes += file.byteLength;
+            if (files.length >= PROGRAM_SOURCE_FILES || bytes > PROGRAM_SOURCE_BYTES)
+              throw codedError(
+                "EFBIG",
+                "Natlang program sources exceed the bounded workspace read"
+              );
+            files.push({ ...file, ...repository });
+          }
+          cursor = page.nextCursor ?? undefined;
+        } while (cursor);
+      }
+    );
+    const batches: Selected[][] = [];
+    let batch: Selected[] = [];
+    let batchBytes = 0;
+    for (const file of files) {
+      if (
+        batch.length &&
+        (batch.length >= PROGRAM_SOURCE_BATCH_FILES ||
+          batchBytes + file.byteLength > PROGRAM_SOURCE_BATCH_BYTES)
+      ) {
+        batches.push(batch);
+        batch = [];
+        batchBytes = 0;
+      }
+      batch.push(file);
+      batchBytes += file.byteLength;
+    }
+    if (batch.length) batches.push(batch);
+    const ingestion = new Map<string, ContextIngestionDescriptor>();
+    const resolved = (
+      await mapConcurrent(
+        batches,
+        SEMANTIC_PROGRAM_CONCURRENCY,
+        "Reading Natlang program sources failed",
+        async (selected) => {
+          const results = await bridge.readFiles({
+            state,
+            files: selected.map(({ repositoryId, fileId }) => ({
+              repositoryId,
+              file: { kind: "id" as const, fileId },
+            })),
+          });
+          if (results.length !== selected.length)
+            throw codedError(
+              "EINTEGRITY",
+              "Semantic program source batch changed its selector count"
+            );
+          return results.map((result, index) => {
+            const file = selected[index]!;
+            if (
+              !result ||
+              result.repositoryId !== file.repositoryId ||
+              result.fileId !== file.fileId ||
+              result.path !== file.path ||
+              result.contentHash !== file.contentHash
+            )
+              throw codedError(
+                "EINTEGRITY",
+                "Semantic program source batch changed its selector identity"
+              );
+            for (const descriptor of ingestionDescriptorsForVcsRead(result))
+              retainStrongestIngestionDescriptor(ingestion, descriptor);
+            return {
+              path: `${file.repoPath}/${file.path}`,
+              content:
+                result.content.kind === "text"
+                  ? result.content.text
+                  : Buffer.from(result.content.base64, "base64").toString("utf8"),
+            };
+          });
+        }
+      )
+    )
+      .flat()
+      .sort((left, right) => compareUtf16CodeUnits(left.path, right.path));
+    if (
+      resolved.reduce((total, { content }) => total + Buffer.byteLength(content), 0) >
+      PROGRAM_SOURCE_BYTES
+    )
+      throw codedError(
+        "EFBIG",
+        "Decoded Natlang program sources exceed the bounded workspace read"
+      );
+    return Object.freeze({
+      ...this.freezeManagedCorpus(resolved, [...ingestion.values()]),
+      directories: Object.freeze(roots.filter((root) => directories.has(root))),
+    });
   }
 
   private async loadManagedCorpus(
@@ -2057,6 +2256,9 @@ export class FsService {
         path: handle.path,
         kind: "file",
       });
+    } else if (method === "readProgramSources") {
+      const { roots } = fsProgramSourcesRequestSchema.parse(args[0]);
+      for (const path of roots) accesses.push({ effect: "read", path, kind: "folder" });
     } else if (method === "grep" || method === "glob") {
       const options = { ...(args[1] as { path?: string } | undefined) };
       const searchPath = options.path ?? "/";
@@ -2120,6 +2322,7 @@ export class FsService {
       ...(scope.contextId ? { contextId: scope.contextId } : {}),
     });
     const { panelId } = scope;
+    if (method === "readProgramSources") return this.readProgramSources(ctx, scope, args[0]);
     const bridge = this.semanticBridge(scope);
     this.assertScratchOnlyCall(scope, method, args);
 

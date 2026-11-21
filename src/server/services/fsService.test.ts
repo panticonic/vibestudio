@@ -1637,6 +1637,113 @@ describe("FsService", () => {
       ).toBe(true);
       expect(existsSync(path.join(tmpRoot, "ctx-corpus", "skills"))).toBe(false);
     });
+    it("batches literal skill roots at one exact snapshot and records each caller's lineage", async () => {
+      const { bridge, files } = makeCanonicalSemanticBridge([
+        "meta",
+        "skills/core",
+        "skills/empty",
+        "skills/unrelated",
+      ]);
+      for (let index = 0; index < 130; index++) {
+        files.set(`ctx-program/skills/core/nested/call${index}.nl`, {
+          kind: "text",
+          text: "program",
+        });
+      }
+      for (const file of [
+        "nested/a.test.ts",
+        "nested/noise.d.nl.ts",
+        "nested/dist/a.ts",
+        "nested/.hidden/a.ts",
+        "nested/node_modules/a.ts",
+        "nested/picture.png",
+      ]) {
+        files.set(`ctx-program/skills/core/${file}`, { kind: "text", text: "excluded" });
+      }
+      files.set("ctx-program/skills/core/ignored-only/.keep", { kind: "text", text: "" });
+      files.set("ctx-program/skills/unrelated/program.nl", { kind: "text", text: "different" });
+      let eventId = "event:ctx-program";
+      vi.spyOn(bridge, "status").mockImplementation(async () => ({
+        workingHead: { kind: "event", eventId } as const,
+      }));
+      const batches = vi.spyOn(bridge, "readFiles");
+      const listings = vi.spyOn(bridge, "listFiles");
+      const folders = makeStubFolderManager(tmpRoot);
+      const project = vi
+        .spyOn(folders, "ensureContextFolder")
+        .mockRejectedValue(new Error("unneeded disk"));
+      const lineage = vi.fn(async (_ctx: ServiceContext, _inputs: readonly unknown[]) => {});
+      const service = new FsService(folders, entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
+        contextAuthority: { kind: "semantic", bridge },
+        recordContextIngestion: vi.fn(async () => {}),
+        recordContextIngestionBatch: lineage,
+      });
+      const first = makeAgentCtx("program1", "ctx-program1");
+      const second = makeAgentCtx("program2", "ctx-program2");
+      const request = {
+        roots: [
+          "skills/core/nested",
+          "skills/empty",
+          "skills/core/ignored-only",
+          "skills/absent",
+          "skills/core/nested/call0.nl",
+        ],
+      };
+      const [a, b] = (await Promise.all(
+        [first, second].map((ctx) => service.handleCall(ctx, "readProgramSources", [request]))
+      )) as [
+        {
+          snapshot: string;
+          files: Array<{ path: string; content: string }>;
+          directories: string[];
+        },
+        unknown,
+      ];
+      expect(a).toEqual(b);
+      expect(a.snapshot).toMatch(/^[a-f0-9]{64}$/u);
+      expect(a.directories).toEqual([
+        "skills/core/ignored-only",
+        "skills/core/nested",
+        "skills/empty",
+      ]);
+      expect(a.files).toHaveLength(130);
+      expect(a.files[0]).toEqual({ path: "skills/core/nested/call0.nl", content: "program" });
+      expect(batches.mock.calls.map(([input]) => input.files.length)).toEqual([64, 64, 2]);
+      expect(
+        batches.mock.calls.every(
+          ([input]) => input.state.kind === "event" && input.state.eventId === eventId
+        )
+      ).toBe(true);
+      expect(listings.mock.calls.map(([input]) => input.repositoryId).sort()).toEqual([
+        "repository:skills/core",
+        "repository:skills/empty",
+      ]);
+      expect(lineage.mock.calls.map(([ctx]) => ctx)).toEqual([first, second]);
+      expect(project).not.toHaveBeenCalled();
+
+      await expect(
+        service.handleCall(first, "readProgramSources", [
+          { roots: ["skills/core/ignored-only"], expectedSnapshot: a.snapshot },
+        ])
+      ).resolves.toEqual({
+        snapshot: a.snapshot,
+        directories: ["skills/core/ignored-only"],
+        files: [],
+      });
+      eventId = "event:changed";
+      await expect(
+        service.handleCall(first, "readProgramSources", [
+          { ...request, expectedSnapshot: a.snapshot },
+        ])
+      ).rejects.toMatchObject({ code: "ESTALE" });
+      await expect(
+        service.handleCall(first, "readProgramSources", [{ roots: ["skills/core/../../meta"] }])
+      ).rejects.toThrow();
+      expect(batches).toHaveBeenCalledTimes(3);
+      expect(lineage).toHaveBeenCalledTimes(2);
+    });
+
     it("shares exact resource snapshots across fresh agents while latching lineage for each caller", async () => {
       const { bridge, files } = makeCanonicalSemanticBridge(["meta", "skills/one"]);
       files.set("ctx-snapshot/meta/AGENTS.md", { kind: "text", text: "instructions" });

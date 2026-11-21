@@ -96,6 +96,12 @@ interface RuntimeFs {
   readFile(path: string): Promise<Uint8Array>;
   /** Read file as string (with encoding) */
   readFile(path: string, encoding: BufferEncoding): Promise<string>;
+  /** Read a bounded set of Natlang program sources at one semantic workspace snapshot. */
+  readProgramSources(input: { roots: string[]; expectedSnapshot?: string }): Promise<{
+    snapshot: string;
+    directories: string[];
+    files: Array<{ path: string; content: string }>;
+  }>;
   writeFile(path: string, data: string | Uint8Array): Promise<void>;
   readdir(path: string): Promise<string[]>;
   readdir(path: string, options: { withFileTypes: true }): Promise<Dirent[]>;

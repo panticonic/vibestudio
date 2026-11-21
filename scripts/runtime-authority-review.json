@@ -1,5 +1,5 @@
 {
-  "censusDigest": "sha256:8a68c7f58598676edcc428bbf658086b4cf9b9408d91b1e06e179ad222468366",
+  "censusDigest": "sha256:59699cfe86c017e5b6a9353c27ec0344a50f9c55a77b85f4d1c197c1077a508f",
   "decisions": {
     "host:terminalApps.launch": {
       "review": "single-prepared-terminal-program-consent",
@@ -832,6 +832,14 @@
     "host:fs.readFile#capability:filesystem.read": {
       "review": "repository-file-consent",
       "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
+    },
+    "host:fs.readProgramSources": {
+      "review": "semantic-program-source-snapshot",
+      "change": "The receiver accepts bounded literal skills roots, applies existing workspace read consent to every selected folder, and reads exactly the caller's current semantic state with per-caller lineage. Follow-up batches may assert that same state but cannot select another state or context."
+    },
+    "host:fs.readProgramSources#capability:filesystem.read": {
+      "review": "semantic-program-source-snapshot",
+      "change": "Reuse filesystem.read for each requested literal skill folder. The host response is a bounded read with no writes or external effects."
     },
     "host:fs.readText": {
       "review": "repository-file-consent",

@@ -67,7 +67,7 @@ import {
 import type { EvalNatlang } from "@vibestudio/service-schemas/evalNatlang";
 import { evalEventIngressMethods } from "@vibestudio/service-schemas/evalEventIngress";
 import { evalExecutionRootsMethods } from "@vibestudio/service-schemas/evalExecutionRoots";
-import { fsMethods } from "@vibestudio/service-schemas/fs";
+import { fsMethods, fsProgramSourcesRequestSchema } from "@vibestudio/service-schemas/fs";
 import { blobstoreMethods } from "@vibestudio/service-schemas/blobstore";
 import { docsMethods } from "@vibestudio/service-schemas/docs";
 import {
@@ -909,6 +909,11 @@ export class EvalDO extends DurableObjectBase {
         typeof args[0] === "string"
       ) {
         operationJournal.append({ type: "fs.read", method, path: args[0] });
+      } else if (targetId === "main" && method === "fs.readProgramSources") {
+        const input = fsProgramSourcesRequestSchema.safeParse(args[0]);
+        if (input.success)
+          for (const path of new Set(input.data.roots))
+            operationJournal.append({ type: "fs.read", method, path });
       }
       let rpcReceiptRecorded = false;
       try {

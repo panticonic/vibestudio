@@ -20196,6 +20196,96 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:fs.readProgramSources",
+      "rpcPlane": "host-service",
+      "owner": "fs",
+      "method": "readProgramSources",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "fs.read",
+      "reviewRationale": "Read from the caller's exact semantic workspace head within selected source folders.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "fs.files.readProgramSources"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session",
+        "user",
+        "website"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:fs.readProgramSources\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:fs.readProgramSources\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:fs.readProgramSources\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:fs.readProgramSources\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"service:fs.readProgramSources\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "semantic-program-source-snapshot",
+        "change": "The receiver accepts bounded literal skills roots, applies existing workspace read consent to every selected folder, and reads exactly the caller's current semantic state with per-caller lineage. Follow-up batches may assert that same state but cannot select another state or context."
+      },
+      "capability": "service:fs.readProgramSources",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:fs.readProgramSources#capability:filesystem.read",
+      "rpcPlane": "host-service",
+      "owner": "fs",
+      "method": "readProgramSources",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "fs.read",
+      "reviewRationale": "Read from the caller's exact semantic workspace head within selected source folders.",
+      "capability": "filesystem.read",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "fs.files.readProgramSources"
+      },
+      "authorityPrincipals": [
+        "website"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"filesystem.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}",
+      "r3b": {
+        "review": "semantic-program-source-snapshot",
+        "change": "Reuse filesystem.read for each requested literal skill folder. The host response is a bounded read with no writes or external effects."
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:fs.readText",
       "rpcPlane": "host-service",
       "owner": "fs",

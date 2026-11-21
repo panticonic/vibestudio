@@ -269,6 +269,35 @@ function fileAuthority(effect: WorkspaceFileEffect, method: string) {
   };
 }
 
+export const fsProgramSourcesRequestSchema = z
+  .object({
+    roots: z
+      .array(
+        z
+          .string()
+          .max(512)
+          .regex(/^skills(?:\/[A-Za-z0-9_-][A-Za-z0-9_.-]*)*$/u)
+      )
+      .min(1)
+      .max(256),
+    expectedSnapshot: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/u)
+      .optional(),
+  })
+  .strict();
+
+const fsProgramSourcesResultSchema = z
+  .object({
+    snapshot: z.string().regex(/^[a-f0-9]{64}$/u),
+    directories: z.array(z.string()),
+    files: z.array(z.object({ path: z.string(), content: z.string() }).strict()),
+  })
+  .strict();
+
+export type FsProgramSourcesRequest = z.infer<typeof fsProgramSourcesRequestSchema>;
+export type FsProgramSourcesResult = z.infer<typeof fsProgramSourcesResultSchema>;
+
 export const fsMethods = defineServiceMethods({
   // File content
   readFile: {
@@ -298,6 +327,29 @@ export const fsMethods = defineServiceMethods({
       { args: ["/notes/todo.md", { encoding: "utf8" }] },
       { args: ["/assets/logo.png"] },
     ],
+  },
+  readProgramSources: {
+    ...fileAuthority("read", "readProgramSources"),
+    website: {
+      kind: "eligible",
+      rationale: "Source folders require the website’s ordinary scoped workspace file consent.",
+    } as const,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.read",
+      rationale:
+        "Read from the caller's exact semantic workspace head within selected source folders.",
+    },
+    description:
+      "Read bounded Natlang program inputs under literal workspace-relative skill roots from one exact semantic snapshot. An expected snapshot fences a subsequent read against workspace edits. Returns the existing requested directories, files with their workspace-relative paths, and the snapshot identity.",
+    args: z.union([
+      z.tuple([fsProgramSourcesRequestSchema]),
+      z.tuple([z.string(), fsProgramSourcesRequestSchema]),
+    ]),
+    returns: fsProgramSourcesResultSchema,
+    access: READ_ACCESS,
   },
   readText: {
     ...fileAuthority("read", "readText"),
