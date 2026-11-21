@@ -454,6 +454,20 @@ const templateGoalDomains = {
     checks: ["retainedExactMachineScope", "appliedInstalledReadiness", "boundActualProviderAndWidth",
       "exactEvidenceDisposition", "verifiedExactLocalHandoff", "preservedWorkspaceState"],
   },
+  "google-runbook": {
+    namespace: "vibestudio:google-runbook",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-product-owned-managed.ts" },
+    callable: "reconcileGoogleRunbook",
+    skill: "googleRunbook",
+    checks: ["current_calendar", "runbook_authority", "exact_basis_attribution", "exact_runbook_result", "preserved_workspace"],
+  },
+  "news-edition-review": {
+    namespace: "vibestudio:news-edition-review",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-product-owned-managed.ts" },
+    callable: "prepareNewsEditionReview",
+    skill: "newsEditionReview",
+    checks: ["current_news_edition", "exact_desk_authority", "exact_basis_attribution", "verified_editor_packet", "preserved_workspace"],
+  },
   "unit-handoff": {
     namespace: "vibestudio:unit-handoff",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-unit-handoff-managed.ts" },
@@ -1808,13 +1822,13 @@ export async function loadLiveTeacherCases(checkouts) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
     const distinctGoals = new Set();
-    const { openGoalWorlds, openAndroidAuditWorlds = [], openAndroidDeliveryWorlds = [], openDeliveryWakeWorlds = [], openLiveLocalInventoryWorlds = [], openPhoneFirstRunWorlds = [], openSkillMaintenanceWorlds = [], openWebhookAdmissionWorlds = [], openDevelopmentAuditWorlds = [], openDesktopReadinessWorlds = [], openContentArchiveWorlds = [], openSystemReleaseWorlds = [], openTestkitCloseoutWorlds = [], openPanelSourceMigrationWorlds = [], openWorkspaceShareWorlds = [], openNotificationStateWorlds = [], openAgentCapabilityWorlds = [], openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openUnitHandoffWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], automationActivationWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], terminalAppRepairWorlds = [], preparedContentProjectWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openChatContinuityWorlds = [], openWorkspaceConfigWorlds = [], gadDurableQuestionWorlds = [], openBoardMigrationWorlds = [], openLiveTendrilBoardWorlds = [], openNativeImageWorlds = [], openProvenanceQuestionWorlds = [], openTranscriptSurfaceWorlds = [], openSourceAttributionWorlds = [], openWorkspaceSmokeWorlds = [], openSameTurnEvalWorlds = [], openCliRouteWorlds = [], openIntentDiscoveryWorlds = [], openRetainedMemoryWorlds = [], openCoordinatedRevisionWorlds = [], openAudienceResponseWorlds = [], openRouteAuthorityWorlds = [], openLogFollowerWorlds = [], openLaunchStateWorlds = [], openScaffoldWorlds = [], openOwnedOperationsWorlds = [], openPtyContinuityWorlds = [], openSystemCandidateWorlds = [], openWorkspaceClaimWorlds = [], openExamplesAdoptionWorlds = [], openGrimoireSceneWorlds = [], openBridgeDeliveryWorlds = [], openEditorialWorlds = [], openPortfolioWorlds = [], openRegencyWorlds = [], openImageCandidateWorlds = [], openApiReadinessWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
+    const { openGoalWorlds, openAndroidAuditWorlds = [], openAndroidDeliveryWorlds = [], openDeliveryWakeWorlds = [], openLiveLocalInventoryWorlds = [], openPhoneFirstRunWorlds = [], openSkillMaintenanceWorlds = [], openWebhookAdmissionWorlds = [], openDevelopmentAuditWorlds = [], openDesktopReadinessWorlds = [], openContentArchiveWorlds = [], openSystemReleaseWorlds = [], openTestkitCloseoutWorlds = [], openPanelSourceMigrationWorlds = [], openWorkspaceShareWorlds = [], openNotificationStateWorlds = [], openAgentCapabilityWorlds = [], openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openUnitHandoffWorlds = [], googleRunbookWorlds = [], newsEditionReviewWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], automationActivationWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], terminalAppRepairWorlds = [], preparedContentProjectWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openChatContinuityWorlds = [], openWorkspaceConfigWorlds = [], gadDurableQuestionWorlds = [], openBoardMigrationWorlds = [], openLiveTendrilBoardWorlds = [], openNativeImageWorlds = [], openProvenanceQuestionWorlds = [], openTranscriptSurfaceWorlds = [], openSourceAttributionWorlds = [], openWorkspaceSmokeWorlds = [], openSameTurnEvalWorlds = [], openCliRouteWorlds = [], openIntentDiscoveryWorlds = [], openRetainedMemoryWorlds = [], openCoordinatedRevisionWorlds = [], openAudienceResponseWorlds = [], openRouteAuthorityWorlds = [], openLogFollowerWorlds = [], openLaunchStateWorlds = [], openScaffoldWorlds = [], openOwnedOperationsWorlds = [], openPtyContinuityWorlds = [], openSystemCandidateWorlds = [], openWorkspaceClaimWorlds = [], openExamplesAdoptionWorlds = [], openGrimoireSceneWorlds = [], openBridgeDeliveryWorlds = [], openEditorialWorlds = [], openPortfolioWorlds = [], openRegencyWorlds = [], openImageCandidateWorlds = [], openApiReadinessWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
       spectroliteGoalWorlds = [], openGoalGoogleWorlds = [], openGoalPersonalWorlds = [],
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
       openTerminalWorlds = [], openOwnedResearchWorlds = [], personalWelcomeWorlds = [], dictationHandoffWorlds = [], specialistHandoffWorlds = [], providerHandoffWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalMethodWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
-    for (const assignment of [...openGoalWorlds, ...openAndroidAuditWorlds, ...openAndroidDeliveryWorlds, ...openDeliveryWakeWorlds, ...openLiveLocalInventoryWorlds, ...openPhoneFirstRunWorlds, ...openSkillMaintenanceWorlds, ...openWebhookAdmissionWorlds, ...openDevelopmentAuditWorlds, ...openDesktopReadinessWorlds, ...openContentArchiveWorlds, ...openSystemReleaseWorlds, ...openTestkitCloseoutWorlds, ...openPanelSourceMigrationWorlds, ...openWorkspaceShareWorlds, ...openNotificationStateWorlds, ...openAgentCapabilityWorlds, ...openMobileContinuityWorlds, ...openInstalledPackageWorlds, ...openAssetIntegrityWorlds, ...openTendrilRouteWorlds, ...openExtensionDossierWorlds, ...openUnitHandoffWorlds, ...openDeployedInterfaceWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...automationActivationWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...terminalAppRepairWorlds, ...preparedContentProjectWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
+    for (const assignment of [...openGoalWorlds, ...openAndroidAuditWorlds, ...openAndroidDeliveryWorlds, ...openDeliveryWakeWorlds, ...openLiveLocalInventoryWorlds, ...openPhoneFirstRunWorlds, ...openSkillMaintenanceWorlds, ...openWebhookAdmissionWorlds, ...openDevelopmentAuditWorlds, ...openDesktopReadinessWorlds, ...openContentArchiveWorlds, ...openSystemReleaseWorlds, ...openTestkitCloseoutWorlds, ...openPanelSourceMigrationWorlds, ...openWorkspaceShareWorlds, ...openNotificationStateWorlds, ...openAgentCapabilityWorlds, ...openMobileContinuityWorlds, ...openInstalledPackageWorlds, ...openAssetIntegrityWorlds, ...openTendrilRouteWorlds, ...openExtensionDossierWorlds, ...openUnitHandoffWorlds, ...googleRunbookWorlds, ...newsEditionReviewWorlds, ...openDeployedInterfaceWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...automationActivationWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...terminalAppRepairWorlds, ...preparedContentProjectWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
       ...openExamplesAdoptionWorlds, ...openGrimoireSceneWorlds, ...openApiReadinessWorlds, ...openChatContinuityWorlds, ...openWorkspaceConfigWorlds, ...gadDurableQuestionWorlds, ...openBoardMigrationWorlds, ...openLiveTendrilBoardWorlds, ...openNativeImageWorlds, ...openProvenanceQuestionWorlds, ...openTranscriptSurfaceWorlds, ...openSourceAttributionWorlds, ...openWorkspaceSmokeWorlds, ...openSameTurnEvalWorlds, ...openCliRouteWorlds, ...openIntentDiscoveryWorlds, ...openRetainedMemoryWorlds, ...openCoordinatedRevisionWorlds, ...openAudienceResponseWorlds, ...openRouteAuthorityWorlds, ...openLogFollowerWorlds, ...openLaunchStateWorlds, ...openScaffoldWorlds, ...openOwnedOperationsWorlds, ...openPtyContinuityWorlds, ...openSystemCandidateWorlds, ...openWorkspaceClaimWorlds, ...openBridgeDeliveryWorlds, ...openEditorialWorlds, ...openPortfolioWorlds, ...openRegencyWorlds, ...openImageCandidateWorlds, ...openNewsEvidenceWorlds, ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
@@ -9360,6 +9374,79 @@ function verifyOwnedAutomationActivation(exercise, world, proof, skill) {
   );
 }
 
+function verifiedProductReview(exercise, skill, effects, proof, world) {
+  const witness = proof.productReview;
+  const report = exercise.report.outcome;
+  if (!witness || !isDeepStrictEqual(report, witness.report) || !Array.isArray(witness.calls)) return false;
+  const idOf = record => exercise.calls.find(({ record: candidate }) => candidate === record)?.callId;
+  const children = (parent, name) => {
+    const id = idOf(parent);
+    return id === undefined ? [] : exercise.calls.filter(({ record }) => record.parent_call_id === id &&
+      record.definition?.name === name && record.outcome === "done").map(({ record }) => record);
+  };
+  const exactly = (parent, name, output) => {
+    const entries = children(parent, name);
+    return entries.length === 1 && matchesValue(entries[0].output, output) ? entries[0] : null;
+  };
+  const google = world.kind === "google-runbook";
+  const service = google ? "googleRunbook" : "newsEditionReview";
+  const traced = effects.filter(effect => effect.service === service);
+  const receipts = witness.calls.slice();
+  if (traced.length !== receipts.length || !traced.every(effect => {
+    const index = receipts.findIndex(item => item.service === effect.service && item.method === effect.method &&
+      !effect.error && matchesValue(effect.args, item.args) && matchesValue(effect.result, item.result));
+    if (index < 0) return false;
+    receipts.splice(index, 1);
+    return true;
+  })) return false;
+  const authored = exactly(skill, "attributeBasis", report.attribution);
+  if (!authored || !exactly(authored, "reviewProvenance", report.attribution)) return false;
+
+  if (google) {
+    const calendar = exactly(skill, "reviewCalendar", report.calendar);
+    const child = calendar && exactly(calendar, "workOnCalendarGoal", report.calendar);
+    const basis = witness.bases?.[0];
+    const approve = exactly(skill, "reconcileApproval", report.decision);
+    if (!child || !basis || !approve || witness.calendar?.passed !== true ||
+        !matchesValue(calendar.inputs?.local, basis) || !matchesValue(approve.inputs?.calendar, report.calendar) ||
+        !matchesValue(approve.inputs?.local, basis) || !matchesValue(authored.inputs?.local, basis) ||
+        !effects.some(effect => effect.service === "calendarGoalCatalog" && effect.method === "discover" &&
+          !effect.error && matchesValue(effect.result, witness.calendar.catalog)) ||
+        !effects.some(effect => effect.service === "calendarGoalReadback" && effect.method === "verify" &&
+          !effect.error && matchesValue(effect.args, [witness.calendar.readback?.requested]) &&
+          matchesValue(effect.result, witness.calendar.readback?.observed))) return false;
+    const attempts = witness.calls.filter(call => call.method === "apply");
+    const revisions = children(skill, "reviseRunbook");
+    if (report.write === null) return !revisions.length && !attempts.length;
+    if (revisions.length !== 1 || !matchesValue(revisions[0].output, report.write) ||
+        !matchesValue(revisions[0].inputs?.decision, report.decision)) return false;
+    const choices = children(revisions[0], "chooseRevision");
+    return choices.length === attempts.length && attempts.length > 0 &&
+      attempts.every((attempt, index) => isDeepStrictEqual(attempt.args[0], report.calendar) &&
+        matchesValue(choices[index].output, attempt.args[1])) && isDeepStrictEqual(attempts.at(-1).result, report.write);
+  }
+
+  const news = exactly(skill, "workOnNewsEvidenceGoal", report.news);
+  const plan = exactly(skill, "choosePacket", report.plan);
+  const briefing = report.news.briefing?.result?.status === "ready";
+  const reads = witness.news?.sources ?? [];
+  const native = effects.filter(effect => effect.service === "newsEvidenceSource" && effect.method === "read" && !effect.error);
+  if (!news || !plan || witness.news?.passed !== true || !exactly(skill, "reviewBriefing", briefing) ||
+      !matchesValue(plan.inputs?.news, report.news) || !matchesValue(plan.inputs?.desk, report.desk) ||
+      !matchesValue(authored.inputs?.news, report.news) || reads.length !== native.length ||
+      !reads.every(({ message, value }) => native.some(effect =>
+        matchesValue(effect.args, [report.news.plan.channelId, message]) && matchesValue(effect.result, value)))) return false;
+  const stages = witness.calls.filter(call => call.method === "stage");
+  const design = children(skill, "designEditorPacket");
+  if (report.artifact === null) return !stages.length && !design.length && report.presentation === null;
+  return design.length === 1 && matchesValue(design[0].output, report.presentation) &&
+    matchesValue(design[0].inputs?.news, report.news) &&
+    !!exactly(design[0], "preparePresentation", report.presentation) && stages.length === 1 &&
+    isDeepStrictEqual(stages[0].args, [report.desk, report.plan, report.news, report.presentation]) &&
+    isDeepStrictEqual(stages[0].result, report.artifact) && typeof witness.body === "string" &&
+    Buffer.byteLength(witness.body) === report.artifact.bytes && hash(witness.body) === report.artifact.sha256;
+}
+
 export function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
   const proof = execution.diagnostics.openGoalVerification;
   const world = workflow.assignment;
@@ -10866,6 +10953,9 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
         receipts.splice(index, 1);
         return true;
       }), "Expected exact interface evidence, installed ownership decisions and authorized local handoff effects");
+  } else if (world.kind === "google-runbook" || world.kind === "news-edition-review") {
+    requireEvidence(verifiedProductReview(exercise, skill, effects, proof, world),
+      "Expected exact product-owned evidence, installed shared review calls, and verified local outcome");
   } else if (world.kind === "unit-handoff") {
     requireEvidence(verifyUnitHandoffTrajectory(exercise, skill, effects, proof),
       "Expected the assigned unit, exact working/protected manifests, installed icon review and authorized local readback");
