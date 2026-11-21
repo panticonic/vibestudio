@@ -257,7 +257,8 @@ test("opens the selected local checkout as a separate workspace after exact revi
     });
     const expectedPanelSource = process.env["VIBESTUDIO_E2E_EXPECTED_PANEL_SOURCE"] ?? "about/new";
     const expectedPanelText =
-      process.env["VIBESTUDIO_E2E_EXPECTED_PANEL_TEXT"] ?? "Jump to a panel";
+      process.env["VIBESTUDIO_E2E_EXPECTED_PANEL_TEXT"] ??
+      "Open a website, search the web, revisit a page, or ask an agent.";
     const loadingPanelText = process.env["VIBESTUDIO_E2E_LOADING_PANEL_TEXT"];
     const settledPanelText = process.env["VIBESTUDIO_E2E_SETTLED_PANEL_TEXT"];
     const panelActionLabel = process.env["VIBESTUDIO_E2E_PANEL_ACTION_LABEL"];
