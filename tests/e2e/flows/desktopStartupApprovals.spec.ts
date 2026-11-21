@@ -16,6 +16,7 @@ import { RuntimeSupervisionDescriptionSchema } from "@vibestudio/service-schemas
 import {
   createManagedTestWorkspace,
   callTestApi,
+  clickPanelSelector,
   ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE,
   getPanelDiagnostics,
   getPanelHtml,
@@ -1289,6 +1290,7 @@ test.describe("Desktop Startup Approvals", () => {
             ?.openingRequest === configuredInitialPrompt
       );
       if (!onboardingPanel) throw new Error("The automatic onboarding panel disappeared");
+      const setupOverview = '.inline-ui-content[data-inline-ui-id="onboarding-setup-overview"]';
       await expect
         .poll(
           () =>
@@ -1296,33 +1298,27 @@ test.describe("Desktop Startup Approvals", () => {
               testApp!,
               onboardingPanel.id,
               `(() => {
-                const overview = document.querySelector(
-                  '[data-inline-ui-id="onboarding-setup-overview"]'
-                );
+                const overview = document.querySelector(${JSON.stringify(setupOverview)});
                 if (!(overview instanceof HTMLElement)) return false;
-                overview.scrollIntoView({ block: "start" });
-                const bounds = overview.getBoundingClientRect();
-                return bounds.width > 0 && bounds.height > 0 && bounds.top < innerHeight && bounds.bottom > 0
+                return overview.getClientRects().length > 0
                   && overview.innerText.includes("Your Vibestudio")
                   && Boolean(overview.querySelector('[aria-label="Refresh setup overview"]'));
               })()`
             ),
-          { timeout: 30_000, intervals: [250, 500, 1000] }
+          {
+            message: "The shipped onboarding overview renders in the initial chat",
+            timeout: 30_000,
+            intervals: [250, 500, 1000],
+          }
         )
         .toBe(true);
       expect(
-        await executePanelScript<boolean>(
+        await clickPanelSelector(
           testApp,
           onboardingPanel.id,
-          `(() => {
-            const link = Array.from(document.querySelectorAll('a')).find(
-              (candidate) => candidate.textContent?.trim() === 'Add workspace'
-            );
-            if (!(link instanceof HTMLAnchorElement)) return false;
-            link.click();
-            return true;
-          })()`
-        )
+          `${setupOverview} a[href^="vibestudio://surface?"][href*="kind=workspace-chooser"]`
+        ),
+        "The Add workspace link receives a native pointer click"
       ).toBe(true);
       let chooserPage: import("@playwright/test").Page | undefined;
       await expect
@@ -1340,7 +1336,7 @@ test.describe("Desktop Startup Approvals", () => {
             }
             return false;
           },
-          { timeout: 30_000 }
+          { message: "The onboarding link opens the workspace chooser", timeout: 30_000 }
         )
         .toBe(true);
       await chooserPage!
@@ -1371,7 +1367,7 @@ test.describe("Desktop Startup Approvals", () => {
         getPanelTree(testApp).catch(() => []),
       ]);
       throw new Error(
-        `Initial chat did not complete: ${JSON.stringify({
+        `The initial chat or onboarding workflow failed: ${JSON.stringify({
           completion: lastCompletion,
           pending: pending.map((approval) => ({
             approvalId: approval.approvalId,
@@ -1384,7 +1380,8 @@ test.describe("Desktop Startup Approvals", () => {
             title: panel.title,
             snapshot: panel.snapshot,
           })),
-        })}\n${error instanceof Error ? error.message : String(error)}`
+        })}`,
+        { cause: error }
       );
     }
   });
