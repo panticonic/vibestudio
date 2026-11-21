@@ -12,6 +12,7 @@ import { nativeUiRead, nativeUiServiceInvoker } from "../support/nativeUiRead";
 import {
   ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE,
   getNativePanelSlotDebugInfo,
+  getPanelReadiness,
   getPanelTree,
   hasElectronDisplay,
   launchTestApp,
@@ -516,6 +517,20 @@ test.describe("Desktop Shell Chrome", () => {
       expect(contextId).toMatch(/^file-copy-/);
       const status = await targetVcs.status({ contextId });
       expect(status.workingHead).not.toEqual(targetMain);
+      await page.getByRole("button", { name: "Review with an agent", exact: true }).click();
+      const targetOwner = { app: testApp.app, workspaceId: system.workspaceId };
+      await expect
+        .poll(
+          async () => {
+            const panel = (await getPanelTree(targetOwner)).find(
+              ({ snapshot }) =>
+                snapshot?.source === "panels/chat" && snapshot.contextId === contextId
+            );
+            return panel ? (await getPanelReadiness(targetOwner, panel.id)).presentation.state : null;
+          },
+          { timeout: 60_000 }
+        )
+        .toBe("ready");
       const targetFs = createTypedServiceClient(
         "fs",
         fsMethods,
