@@ -10,6 +10,13 @@ import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
 
 const sharedProgram = "skills/vibestudio-workflows/runWorkflow.nl";
 const templateGoalDomains = {
+  examplesAdoption: {
+    namespace: "vibestudio:examples-adoption",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-examples-adoption-managed.ts" },
+    callable: "reviewExamplesAdoption",
+    checks: ["exactStagedAndInstalledSource", "exactNativeComposition", "currentOwnedFrontier",
+      "actualPrivateDisposition", "independentReadbackAndPreservedMain"],
+  },
   "bridge-delivery": {
     namespace: "vibestudio:bridge:local-release-delivery",
     validator: { template:"system-testing", path:"skills/system-testing/open-goal-bridge-delivery-managed.ts" },
@@ -1545,14 +1552,14 @@ export async function loadLiveTeacherCases(checkouts) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
     const distinctGoals = new Set();
-    const { openGoalWorlds, openPhoneFirstRunWorlds = [], openSkillMaintenanceWorlds = [], openWebhookAdmissionWorlds = [], openDesktopReadinessWorlds = [], openContentArchiveWorlds = [], openSystemReleaseWorlds = [], openTestkitCloseoutWorlds = [], openPanelSourceMigrationWorlds = [], openWorkspaceShareWorlds = [], openNotificationStateWorlds = [], openAgentCapabilityWorlds = [], openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openChatContinuityWorlds = [], openGrimoireSceneWorlds = [], openBridgeDeliveryWorlds = [], openEditorialWorlds = [], openPortfolioWorlds = [], openRegencyWorlds = [], openImageCandidateWorlds = [], openApiReadinessWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
+    const { openGoalWorlds, openPhoneFirstRunWorlds = [], openSkillMaintenanceWorlds = [], openWebhookAdmissionWorlds = [], openDesktopReadinessWorlds = [], openContentArchiveWorlds = [], openSystemReleaseWorlds = [], openTestkitCloseoutWorlds = [], openPanelSourceMigrationWorlds = [], openWorkspaceShareWorlds = [], openNotificationStateWorlds = [], openAgentCapabilityWorlds = [], openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openChatContinuityWorlds = [], openExamplesAdoptionWorlds = [], openGrimoireSceneWorlds = [], openBridgeDeliveryWorlds = [], openEditorialWorlds = [], openPortfolioWorlds = [], openRegencyWorlds = [], openImageCandidateWorlds = [], openApiReadinessWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
       spectroliteGoalWorlds = [], openGoalGoogleWorlds = [], openGoalPersonalWorlds = [],
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
       openTerminalWorlds = [], openOwnedResearchWorlds = [], personalWelcomeWorlds = [], dictationHandoffWorlds = [], specialistHandoffWorlds = [], providerHandoffWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
     for (const assignment of [...openGoalWorlds, ...openPhoneFirstRunWorlds, ...openSkillMaintenanceWorlds, ...openWebhookAdmissionWorlds, ...openDesktopReadinessWorlds, ...openContentArchiveWorlds, ...openSystemReleaseWorlds, ...openTestkitCloseoutWorlds, ...openPanelSourceMigrationWorlds, ...openWorkspaceShareWorlds, ...openNotificationStateWorlds, ...openAgentCapabilityWorlds, ...openMobileContinuityWorlds, ...openInstalledPackageWorlds, ...openAssetIntegrityWorlds, ...openTendrilRouteWorlds, ...openExtensionDossierWorlds, ...openDeployedInterfaceWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
-      ...openGrimoireSceneWorlds, ...openApiReadinessWorlds, ...openChatContinuityWorlds, ...openBridgeDeliveryWorlds, ...openEditorialWorlds, ...openPortfolioWorlds, ...openRegencyWorlds, ...openImageCandidateWorlds, ...openNewsEvidenceWorlds, ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
+      ...openExamplesAdoptionWorlds, ...openGrimoireSceneWorlds, ...openApiReadinessWorlds, ...openChatContinuityWorlds, ...openBridgeDeliveryWorlds, ...openEditorialWorlds, ...openPortfolioWorlds, ...openRegencyWorlds, ...openImageCandidateWorlds, ...openNewsEvidenceWorlds, ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
       ...openGoalCalendarWorlds, ...openPersonalArtifactWorlds, ...openPersonalHistoryWorlds,
@@ -8517,6 +8524,78 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
           isDeepStrictEqual(stage.result, proof.handoff) && isDeepStrictEqual(outcome.handoff, proof.handoff) :
           !stage && outcome.handoff === null && proof.handoff === null),
       "Expected exact owned client transitions, matching durable GAD records, and verified local handoff"
+    );
+  } else if (world.kind === "examplesAdoption") {
+    const { card, installed, composition, gate, receipt, readback, journal = [] } = proof;
+    const outcome = exercise.report.outcome;
+    const skillId = exercise.calls.find(({ record }) => record === skill)?.callId;
+    const child = (parent, name) => parent && exercise.calls.find(({ record }) =>
+      record.parent_call_id === parent && record.definition?.name === name && record.outcome === "done");
+    const choose = child(skillId, "findStagedComposition");
+    const inspect = child(skillId, "inspectComposition");
+    const plan = child(skillId, "planAdoptionHandoff");
+    const decide = child(plan?.callId, "chooseAdoptionDisposition");
+    const select = child(plan?.callId, "selectAdoptionProof");
+    const confirm = child(skillId, "confirmAdoptionFrontier");
+    const revise = child(skillId, "holdChangedReview");
+    const record = child(skillId, "recordPrivateAdoption");
+    const reread = child(skillId, "readAdoptionHandoff");
+    const read = "adoptionReview";
+    const write = "adoptionHandoff";
+    const row = (service, method) => journal.find(entry => entry.service === service && entry.method === method);
+    const trace = (entry, service, method, args, result) => {
+      const observed = entry?.record.effects ?? [];
+      const [effect] = observed;
+      const declared = row(service, method);
+      return Boolean(entry && observed.length === 1 && effect?.service === service &&
+        effect.method === method && !effect.error && matchesValue(effect.args, args) &&
+        matchesValue(effect.result, result) && isDeepStrictEqual(declared?.args, args) &&
+        isDeepStrictEqual(declared?.result, result));
+    };
+    const cards = row(read, "discover")?.result;
+    const writes = world.disposition === "record-private";
+    const proofItems = world.during ? [gate?.event] : world.proof ?? [composition?.issue];
+    const observed = effects.filter(effect => effect.service === read || effect.service === write);
+    const evidence = { installed, composition };
+    const path = receipt?.path ?? null;
+    requireEvidence(
+      journal.length === (writes ? 6 : 5) && observed.length === journal.length &&
+        Array.isArray(cards) && cards.length === 2 && isDeepStrictEqual(cards[0], card) &&
+        cards[1]?.edition === "retired" && cards[1]?.event !== card?.event &&
+        card?.title === world.name && card?.edition === "staged" && card?.mayRecord === world.mayRecord &&
+        trace(choose, read, "discover", [], cards) && matchesValue(choose.record.inputs?.goal, world.goal) &&
+        matchesValue(choose.record.output, card) &&
+        matchesValue(inspect?.record.inputs?.card, card) && matchesValue(inspect?.record.output, evidence) &&
+        trace(child(inspect?.callId, "readInstalledExamples"), read, "installed", [card.id], installed) &&
+        trace(child(inspect?.callId, "simulateOwnedComposition"), read, "compose", [card.id, card.event], composition) &&
+        installed?.repository === world.unit && Boolean(installed?.main && installed?.packageName) &&
+        /^[a-f0-9]{64}$/u.test(installed.manifestDigest) && /^[a-f0-9]{64}$/u.test(installed.templateDigest) &&
+        composition.id === card.id && composition.event === card.event && composition.status === world.status &&
+        (world.status === "composed" ? Boolean(composition.owner) && /^[a-f0-9]{64}$/u.test(composition.digest) :
+          composition.owner === null && composition.digest === null && Boolean(composition.issue)) &&
+        matchesValue(plan?.record.inputs?.goal, world.goal) && matchesValue(plan?.record.inputs?.card, card) &&
+        matchesValue(plan?.record.inputs?.evidence, evidence) &&
+        matchesValue(decide?.record.inputs?.goal, world.goal) &&
+        matchesValue(decide?.record.inputs?.card, card) && matchesValue(decide?.record.inputs?.evidence, evidence) &&
+        matchesValue(decide?.record.output, world.during ? "record-private" : world.disposition) &&
+        matchesValue(select?.record.inputs?.goal, world.goal) && matchesValue(select?.record.inputs?.evidence, evidence) &&
+        (world.during ? select.record.output?.complete === true : matchesValue(select.record.output, outcome.plan.proof)) &&
+        trace(confirm, read, "confirm", [card.id, card.event], gate) &&
+        (world.during ? gate.status === "changed" && gate.event !== card.event &&
+          matchesValue(revise?.record.inputs?.gate, gate) && isDeepStrictEqual(revise.record.inputs?.plan, plan.record.output) &&
+          matchesValue(revise.record.output, outcome.plan)
+          : gate.status === "current" && gate.event === card.event && !revise && matchesValue(plan.record.output, outcome.plan)) &&
+        (writes ? receipt?.event === gate.event && /^[a-f0-9]{64}$/u.test(receipt.digest) &&
+          trace(record, write, "record", [card.id, card.event, outcome.plan], receipt) :
+          !record && receipt === null) &&
+        trace(reread, read, "readback", [card.id, path], readback) &&
+        readback.main === installed.main && readback.event === gate.event && readback.digest === (receipt?.digest ?? null) &&
+        outcome.scope === "owned-examples-composition-rehearsal" && outcome.plan.disposition === world.disposition &&
+        isDeepStrictEqual([...outcome.plan.proof].sort(), [...proofItems].sort()) &&
+        isDeepStrictEqual(outcome.card, card) && isDeepStrictEqual(outcome.evidence, evidence) &&
+        isDeepStrictEqual(outcome.gate, gate) && isDeepStrictEqual(outcome.receipt, receipt) &&
+        isDeepStrictEqual(outcome.readback, readback),
+      "Expected exact staged Examples composition, current ownership and private adoption readback"
     );
   } else if (world.kind === "grimoireScene") {
     const { docket, view, scope, gate, receipt, readback, journal = [] } = proof;
