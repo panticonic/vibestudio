@@ -350,7 +350,12 @@ function configureTerminalOnlySource(sourceRoot: string): void {
 }
 
 function createTerminalOnlyWorkspace(): Promise<string> {
-  return createManagedTestWorkspace({ configureSource: configureTerminalOnlySource });
+  // A private bootstrap workspace can already have its bundled grants when
+  // the desktop connects. A freshly added project has its own review.
+  return createManagedTestWorkspace({
+    workspaceKind: "project",
+    configureSource: configureTerminalOnlySource,
+  });
 }
 
 type TerminalSession = {
