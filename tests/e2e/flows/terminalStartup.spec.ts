@@ -11,6 +11,7 @@ import { expect, test, type Page } from "@playwright/test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import YAML from "yaml";
+import { TERMINAL_APPS_RUN_CAPABILITY } from "@vibestudio/service-schemas/terminalApps";
 import {
   approvePendingStartupUnits,
   approvePendingWorkspaceCreationReview,
@@ -297,7 +298,7 @@ async function approvePendingTerminalWork(
     await resolveApproval(owner, approval);
     resolved?.push(approval);
   }
-  if (window) {
+  if (window && !resolved) {
     await window
       .getByRole("button", {
         name: /Start|Add to workspace|Add template|Update|Use the new version|Trust and start|Approve and start|Approve all|Approve push|Approve|Dev session|Install and run|Allow|Run once|Allow for session|Use this session/i,
@@ -731,7 +732,9 @@ test.describe("Terminal Startup", () => {
     test.setTimeout(360_000);
     workspacePath = await createTerminalOnlyWorkspace();
     testApp = await launchTestApp({ workspace: workspacePath, launchTimeout: 90_000 });
-    await approvePendingWorkspaceCreationReview(testApp);
+    // Leave the launch permission unchecked so the initial registry request
+    // exercises the interactive approval while the terminal panel waits.
+    await approvePendingWorkspaceCreationReview(testApp, undefined, [TERMINAL_APPS_RUN_CAPABILITY]);
     await approvePendingStartupUnits(testApp);
     await declineFirstRunReporting(testApp);
     const shell = await findWorkspaceShellPage(testApp);
@@ -772,10 +775,12 @@ test.describe("Terminal Startup", () => {
     expect(
       resolvedApprovals.some(
         (approval) =>
+          approval.workspaceId === testApp?.workspaceId &&
           approval.kind === "capability" &&
-          approval.capability?.includes("native.shell.execute") === true
+          approval.capability === TERMINAL_APPS_RUN_CAPABILITY &&
+          (approval.resource as { value?: string } | undefined)?.value === "terminal-app:shell"
       ),
-      `Expected terminal startup to exercise its native-shell approval, observed ${JSON.stringify(
+      `Expected terminal startup to exercise its launch approval, observed ${JSON.stringify(
         resolvedApprovals.map(({ kind, capability, title }) => ({ kind, capability, title }))
       )}`
     ).toBe(true);

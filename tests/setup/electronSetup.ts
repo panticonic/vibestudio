@@ -716,11 +716,13 @@ export async function approvePendingStartupUnits(
  * Resolve the first-run workspace adoption review for tests whose assertions
  * exercise ordinary panel/runtime APIs. Startup-unit approval intentionally
  * remains separate because launch-gate tests need to inspect that review in
- * the product UI.
+ * the product UI. A fixture may leave selected capabilities for a later
+ * interactive approval in the target workspace.
  */
 export async function approvePendingWorkspaceCreationReview(
   owner: TestWorkspaceOwner,
-  approvalIds?: readonly string[]
+  approvalIds?: readonly string[],
+  deferCapabilities: readonly string[] = []
 ): Promise<void> {
   // A desktop fixture adopts both System and the selected workspace. Leaving
   // System's review pending keeps a blocking native card above the test target.
@@ -766,6 +768,13 @@ export async function approvePendingWorkspaceCreationReview(
         }
       }
 
+      type PermissionRow = {
+        key: string;
+        selectable: boolean;
+        selectedByDefault: boolean;
+        row?: { capability?: string };
+      };
+      const deferred = new Set(request.deferCapabilities);
       const pending = (await testApi.rpcCall("shellApproval", "listPending", [])) as Array<{
         approvalId: string;
         kind: string;
@@ -773,8 +782,8 @@ export async function approvePendingWorkspaceCreationReview(
         parts?: Array<{
           identityKey: string;
           change?: string;
-          notableRows?: Array<{ key: string; selectable: boolean; selectedByDefault: boolean }>;
-          everydayRows?: Array<{ key: string; selectable: boolean; selectedByDefault: boolean }>;
+          notableRows?: PermissionRow[];
+          everydayRows?: PermissionRow[];
         }>;
       }>;
       for (const approval of pending) {
@@ -791,7 +800,12 @@ export async function approvePendingWorkspaceCreationReview(
           .map((part) => ({
             identityKey: part.identityKey,
             permissions: [...(part.notableRows ?? []), ...(part.everydayRows ?? [])]
-              .filter((row) => row.selectable && row.selectedByDefault)
+              .filter(
+                (row) =>
+                  row.selectable &&
+                  row.selectedByDefault &&
+                  !deferred.has(row.row?.capability ?? "")
+              )
               .map((row) => row.key),
           }));
         await testApi.rpcCall("shellApproval", "resolveInstallReview", [
@@ -800,7 +814,11 @@ export async function approvePendingWorkspaceCreationReview(
         ]);
       }
     },
-    { approvalIds: approvalIds ? [...approvalIds] : null, workspaceId: owner.workspaceId }
+    {
+      approvalIds: approvalIds ? [...approvalIds] : null,
+      workspaceId: owner.workspaceId,
+      deferCapabilities: [...deferCapabilities],
+    }
   );
 }
 
