@@ -2680,8 +2680,6 @@ async function runSmoke(
     await cli.json("remote", "pair", invite.pairUrl);
     console.log("[mobile-smoke] Paired command-line bootstrap device");
     const systemWorkspace = systemWorkspaceName(await cli.json("remote", "workspaces"));
-    await cli.json("agent", "attach", "default", "--workspace", systemWorkspace);
-    console.log("[mobile-smoke] Attached the command-line session to System");
     const phoneInvite = (await cli.json("remote", "pair-device")).pairing;
     const link = buildConnectLinkFromLog(phoneInvite.pairUrl);
     const parsedLink = parseConnectLink(link);
@@ -2931,6 +2929,10 @@ async function runSmoke(
     // Back to the first client's task (its approval surface is where a publication is
     // reviewed), then the client dev loop on this running host.
     await adb(options.device, ...ingressIntentArgs(options.packageName, clientLink("browser")));
+    // The device invite only needs the paired account. Attach when the
+    // phone has approved startup and the CLI is about to run workspace code.
+    await cli.json("agent", "attach", "default", "--workspace", systemWorkspace);
+    console.log("[mobile-smoke] Attached the command-line session to System");
     await runClientDevLoop({
       options,
       logcat,
