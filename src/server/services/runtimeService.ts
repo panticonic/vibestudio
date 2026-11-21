@@ -739,9 +739,11 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
             await preparedResourceBindings?.bind(record);
             if (spec.kind !== "do" || !spec.agentInitialization) return undefined;
             if (!deps.hooks.initializeAgent) throw new Error("Agent initialization is unavailable");
+            // Channel membership is a routed operation by the authenticated
+            // creator. The initiating account still owns the admitted entity.
             const result = await deps.hooks.initializeAgent({
               record,
-              caller: actors.initiatingCaller,
+              caller: actors.lifecycleCaller,
               signal: actors.signal,
               initialization: spec.agentInitialization,
             });

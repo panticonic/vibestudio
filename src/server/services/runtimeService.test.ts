@@ -5232,6 +5232,35 @@ describe("runtimeService agent initialization admission", () => {
     });
   });
 
+  it("initializes the agent through its authenticated creator while retaining the initiating account", async () => {
+    const creator = evalDoCaller("do:workers/quickfire-service:QuickfireSessionsDO:service");
+    const initiator = createVerifiedCaller("shell:quickfire-test", "shell", null, null, {
+      userId: "usr_quickfire_test",
+    });
+    const initializeAgent = vi.fn<NonNullable<RuntimeEntityHooks["initializeAgent"]>>(
+      async ({ record }) => ({ ok: true, participantId: record.id })
+    );
+    const { service } = await buildDeps({ initializeAgent });
+
+    await service.handler({ caller: creator, authorizingCaller: initiator }, "createEntity", [
+      {
+        kind: "do",
+        execution: { surface: "code", source: "workers/test-agent" },
+        className: "Agent",
+        key: "quickfire-initializing",
+        agentInitialization: { channelId: "quickfire-review" },
+      },
+    ]);
+
+    expect(initializeAgent).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        caller: creator,
+        record: expect.objectContaining({ ownerUserId: "usr_quickfire_test" }),
+        initialization: { channelId: "quickfire-review" },
+      })
+    );
+  });
+
   it("keeps the exact admitted identity while review is unresolved and resumes its initial relationship", async () => {
     const pending = Object.assign(new Error("Waiting on workspace review"), {
       code: "EREVIEWPENDING",

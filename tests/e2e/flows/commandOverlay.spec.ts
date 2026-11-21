@@ -281,9 +281,11 @@ test.describe("command overlay", () => {
       .poll(
         async () => {
           const resumed = await probeCommandOverlay(testApp);
-          if (resumed?.error) return resumed.error;
-          return resumed?.durableTranscript.some((message) =>
-            message.includes("why is this panel laid out this way?")
+          return Boolean(
+            resumed?.error ||
+            resumed?.durableTranscript.some((message) =>
+              message.includes("why is this panel laid out this way?")
+            )
           );
         },
         { timeout: 120_000, intervals: [500, 1000, 2000] }
