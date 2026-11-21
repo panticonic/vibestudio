@@ -266,18 +266,11 @@ test.describe("Desktop Shell Chrome", () => {
       });
       await expect(browserDataDetail).toBeVisible();
       expect(await browserDataDetail.innerText()).not.toContain("doesn't recognize");
-      const screenshot = await testApp.app.evaluate(async ({ webContents }) => {
-        const chrome = webContents
-          .getAllWebContents()
-          .find(
-            (contents) =>
-              !contents.isDestroyed() &&
-              contents.getURL().includes("/_a/") &&
-              contents.getURL().endsWith("/index.html")
-          );
-        if (!chrome) throw new Error("System desktop chrome disappeared");
+      const screenshot = await testApp.app.evaluate(async ({ webContents }, id) => {
+        const chrome = webContents.fromId(id);
+        if (!chrome || chrome.isDestroyed()) throw new Error("System desktop chrome disappeared");
         return (await chrome.capturePage()).toPNG().toString("base64");
-      });
+      }, chromeId);
       expect(Buffer.from(screenshot, "base64").length).toBeGreaterThan(0);
       await test.info().attach("workspace-desktop.png", {
         body: Buffer.from(screenshot, "base64"),
@@ -294,23 +287,7 @@ test.describe("Desktop Shell Chrome", () => {
   test("presents every private workspace review before using the workspace catalog", async () => {
     testApp = await launchTestApp({ launchTimeout: 240_000 });
     await approveStartupUnitsAndDeclineReporting(testApp);
-    let page: Page | undefined;
-    await expect
-      .poll(
-        () => {
-          page = testApp!.app
-            .context()
-            .pages()
-            .find(
-              (candidate) =>
-                candidate.url().includes("/_a/") && candidate.url().endsWith("/index.html")
-            );
-          return Boolean(page);
-        },
-        { timeout: 120_000 }
-      )
-      .toBe(true);
-    const chrome = page!;
+    const chrome = await findWorkspaceShellPage(testApp);
     const rendererDiagnostics: string[] = [];
     chrome.on("console", (message) => {
       if (message.type() === "error" || message.type() === "warning")
@@ -477,20 +454,7 @@ test.describe("Desktop Shell Chrome", () => {
   test("copies one selected file between workspaces into an unpublished review branch", async () => {
     testApp = await launchTestApp({ launchTimeout: 240_000 });
     await approveStartupUnitsAndDeclineReporting(testApp);
-    let chrome: Page | undefined;
-    await expect
-      .poll(
-        () => {
-          chrome = testApp!.app
-            .context()
-            .pages()
-            .find((page) => page.url().includes("/_a/") && page.url().endsWith("/index.html"));
-          return Boolean(chrome);
-        },
-        { timeout: 120_000 }
-      )
-      .toBe(true);
-    const page = chrome!;
+    const page = await findWorkspaceShellPage(testApp);
     const rendererDiagnostics: string[] = [];
     page.on("console", (message) => {
       if (message.type() === "warning" || message.type() === "error") {
