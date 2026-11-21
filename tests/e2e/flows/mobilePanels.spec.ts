@@ -13,6 +13,7 @@ import YAML from "yaml";
 import {
   ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE,
   ensureHostedShellReady,
+  callTestApi,
   callTerminalPanel,
   clickPanelText,
   createManagedTestWorkspace,
@@ -403,7 +404,8 @@ async function waitForPanelReady(
   try {
     await expect
       .poll(async () => {
-        if (await isPanelReady(owner, panelId).catch(() => false)) return true;
+        const state = await getPanelReadiness(owner, panelId).catch(() => null);
+        if (state?.source === source && state.terminal && state.contentReady) return true;
         await approveShellPrompts(owner);
         return false;
       }, {
@@ -773,7 +775,9 @@ test.describe("Phone-width desktop panels", () => {
     expect(testApp).toBeDefined();
     await setMobileWindow(testApp!);
     await collapsePanelSidebar(testApp!);
-    const panelId = await ensurePanelSource(testApp!, "panels/terminal");
+    const panelId = await ensurePanelSource(testApp!, "about/new");
+    await callTestApi(testApp!, "navigatePanel", [panelId, "panels/terminal"]);
+    await waitForPanelReady(testApp!, panelId, "panels/terminal");
     await startPanelDiagnostics(testApp!, panelId);
 
     try {
