@@ -12,6 +12,7 @@
     "./jsonSchemaNumericType": "./src/jsonSchemaNumericType.ts",
     "./problemReportingConversation": "./src/problemReportingConversation.ts",
     "./mediaRecording": "./src/mediaRecording.ts",
+    "./mobileWorkspaceReadiness": "./src/mobileWorkspaceReadiness.ts",
     "./webAddress": "./src/webAddress.ts",
     "./webSearch": "./src/webSearch.ts",
     "./terminalSessions": "./src/terminalSessions.ts",

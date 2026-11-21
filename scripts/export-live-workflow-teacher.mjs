@@ -18,6 +18,12 @@ const templateGoalDomains = {
     checks: ["exactOwnedEditorialMission", "exactEditorialFrontiers", "exactApprovedPdfEvidence", "minimalEditorialProposal",
       "preservedCoeditorBoundary", "verifiedEditorialReadback", "groundedEditorialDisposition", "verifiedPrivateEditorialNote",
       "protectedEditorialSources", "rejectedEditorialRetarget"],
+  phoneFirstRun: {
+    namespace: "vibestudio:phone-first-run",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-phone-first-run-managed.ts" },
+    callable: "planPhoneFirstRun",
+    checks: ["exactPhoneDesktopEligibility", "preservedOwnedPairing", "exactScopedMobileDebugPhases",
+      "exactInstalledReactNativeDeclaration", "matchedReadOnlyPhoneDisposition"],
   },
   "demo-portfolio": {
     namespace: "vibestudio:examples:paired-demo",
@@ -1506,13 +1512,13 @@ export async function loadLiveTeacherCases(checkouts) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
     const distinctGoals = new Set();
-    const { openGoalWorlds, openSkillMaintenanceWorlds = [], openDesktopReadinessWorlds = [], openContentArchiveWorlds = [], openSystemReleaseWorlds = [], openTestkitCloseoutWorlds = [], openPanelSourceMigrationWorlds = [], openWorkspaceShareWorlds = [], openNotificationStateWorlds = [], openAgentCapabilityWorlds = [], openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openEditorialWorlds = [], openPortfolioWorlds = [], openRegencyWorlds = [], openImageCandidateWorlds = [], openApiReadinessWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
+    const { openGoalWorlds, openPhoneFirstRunWorlds = [], openSkillMaintenanceWorlds = [], openDesktopReadinessWorlds = [], openContentArchiveWorlds = [], openSystemReleaseWorlds = [], openTestkitCloseoutWorlds = [], openPanelSourceMigrationWorlds = [], openWorkspaceShareWorlds = [], openNotificationStateWorlds = [], openAgentCapabilityWorlds = [], openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openEditorialWorlds = [], openPortfolioWorlds = [], openRegencyWorlds = [], openImageCandidateWorlds = [], openApiReadinessWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
       spectroliteGoalWorlds = [], openGoalGoogleWorlds = [], openGoalPersonalWorlds = [],
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
       openTerminalWorlds = [], openOwnedResearchWorlds = [], personalWelcomeWorlds = [], dictationHandoffWorlds = [], specialistHandoffWorlds = [], providerHandoffWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
-    for (const assignment of [...openGoalWorlds, ...openSkillMaintenanceWorlds, ...openDesktopReadinessWorlds, ...openContentArchiveWorlds, ...openSystemReleaseWorlds, ...openTestkitCloseoutWorlds, ...openPanelSourceMigrationWorlds, ...openWorkspaceShareWorlds, ...openNotificationStateWorlds, ...openAgentCapabilityWorlds, ...openMobileContinuityWorlds, ...openInstalledPackageWorlds, ...openAssetIntegrityWorlds, ...openTendrilRouteWorlds, ...openExtensionDossierWorlds, ...openDeployedInterfaceWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
+    for (const assignment of [...openGoalWorlds, ...openPhoneFirstRunWorlds, ...openSkillMaintenanceWorlds, ...openDesktopReadinessWorlds, ...openContentArchiveWorlds, ...openSystemReleaseWorlds, ...openTestkitCloseoutWorlds, ...openPanelSourceMigrationWorlds, ...openWorkspaceShareWorlds, ...openNotificationStateWorlds, ...openAgentCapabilityWorlds, ...openMobileContinuityWorlds, ...openInstalledPackageWorlds, ...openAssetIntegrityWorlds, ...openTendrilRouteWorlds, ...openExtensionDossierWorlds, ...openDeployedInterfaceWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
       ...openApiReadinessWorlds, ...openEditorialWorlds, ...openPortfolioWorlds, ...openRegencyWorlds, ...openImageCandidateWorlds, ...openNewsEvidenceWorlds, ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
@@ -8363,6 +8369,67 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
           isDeepStrictEqual(stage.result, proof.handoff) && isDeepStrictEqual(outcome.handoff, proof.handoff) :
           !stage && outcome.handoff === null && proof.handoff === null),
       "Expected exact owned client transitions, matching durable GAD records, and verified local handoff"
+    );
+  } else if (world.kind === "phoneFirstRun") {
+    const outcome = exercise.report.outcome;
+    const skillId = exercise.calls.find(({ record }) => record === skill)?.callId;
+    const child = (parent, name) => parent && exercise.calls.find(({ record }) =>
+      record.parent_call_id === parent && record.definition?.name === name && record.outcome === "done");
+    const select = child(skillId, "locatePhoneRehearsal");
+    const read = child(skillId, "readPhoneEvidence");
+    const decide = child(skillId, "decidePhoneFirstRun");
+    const setup = child(skillId, "setUpPhone");
+    const checkWorkspace = child(setup?.callId, "checkWorkspace");
+    const { card, assignment, phases: startup, build, resume, journal = [] } = proof;
+    const row = (service, method) => journal.find(entry => entry.service === service && entry.method === method);
+    const trace = (entry, service, method, args, result) => {
+      const performed = entry?.record.effects ?? [];
+      const [effect] = performed;
+      const declared = row(service, method);
+      return Boolean(entry && performed.length === 1 && effect?.service === service &&
+        effect.method === method && !effect.error && matchesValue(effect.args, args) &&
+        matchesValue(effect.result, result) && isDeepStrictEqual(declared?.args, args) &&
+        isDeepStrictEqual(declared?.result, result));
+    };
+    const cards = row("phoneFirstRun", "discover")?.result;
+    const start = row("phoneSetupRead", "start")?.result;
+    const current = row("phoneSetupRead", "readiness")?.result;
+    const paired = assignment?.paired === "owned";
+    const observed = effects.filter(effect => effect.service === "phoneFirstRun" ||
+      ["phoneSetupRead", "phoneSetupPrepare", "phoneSetupPair"].includes(effect.service));
+    const acquisition = { assignment, startup, build };
+    requireEvidence(
+      journal.length === (paired ? 6 : 4) && observed.length === journal.length &&
+        proof.unwantedOperations === 0 && Array.isArray(cards) && cards.length === 2 &&
+        isDeepStrictEqual(cards[0], card) && cards[1]?.edition === "archive" &&
+        cards[1]?.id !== card?.id && card?.edition === "current" && card?.title === world.name &&
+        trace(select, "phoneFirstRun", "discover", [], cards) &&
+        matchesValue(select.record.inputs?.goal, world.goal) && matchesValue(select.record.output, card) &&
+        matchesValue(read?.record.inputs?.id, card.id) && matchesValue(read?.record.output, acquisition) &&
+        trace(child(read?.callId, "readSetupAssignment"), "phoneFirstRun", "inspect", [card.id], assignment) &&
+        trace(child(read?.callId, "readStartupPhases"), "phoneFirstRun", "phases", [card.id], startup) &&
+        trace(child(read?.callId, "readBuildProvider"), "phoneFirstRun", "provider", [card.id], build) &&
+        assignment?.id === card.id && startup?.id === card.id && build?.id === card.id &&
+        isDeepStrictEqual(assignment?.desktops?.map(desktop => desktop.providerId), world.expected.eligible ?? []) &&
+        startup.status === (world.expected.phases ?? "unavailable") &&
+        build?.client === "clients/mobile-browser" && build?.runtime === "react-native" &&
+        build?.provider === "extensions/react-native" && build?.providerPackage === "@workspace-extensions/react-native" &&
+        build?.abi === build?.expectedAbi && Boolean(build?.revision && build?.manifestDigest && build?.clientDigest) &&
+        (paired ? assignment.setupRequest && start && current && resume &&
+          matchesValue(setup?.record.inputs?.request, assignment.setupRequest) &&
+          matchesValue(setup?.record.output, resume) &&
+          trace(child(setup?.callId, "readAssignment"), "phoneSetupRead", "start", [assignment.setupRequest.operationId], start) &&
+          trace(child(checkWorkspace?.callId, "observeWorkspace"), "phoneSetupRead", "readiness", [start.receipt], current) &&
+          current.state === world.expected.ready && resume.status === "workspace-" + current.state &&
+          start.pairedDeviceId === assignment.targetId && resume.pairedDeviceId === assignment.targetId &&
+          isDeepStrictEqual(resume.evidenceIds, [start.receipt, current.receipt])
+          : !setup && !start && !current && resume === null && assignment?.setupRequest === null) &&
+        outcome.scope === "owned-phone-eligibility-rehearsal" &&
+        isDeepStrictEqual(outcome.evidence, { card, ...acquisition, resume }) &&
+        matchesValue(decide?.record.inputs?.goal, world.goal) &&
+        matchesValue(decide?.record.inputs?.evidence, outcome.evidence) &&
+        matchesValue(decide?.record.output, outcome.decision) && outcome.decision?.action === world.expected.action,
+      "Expected exact installed phone resume, scoped debug evidence, provider declaration and a read-only next step"
     );
   } else if (world.kind === "skillMaintenance") {
     const skillId = exercise.calls.find(({ record }) => record === skill)?.callId;
