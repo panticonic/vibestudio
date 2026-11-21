@@ -20,6 +20,7 @@ import {
   typePanelText,
   type TestApp,
 } from "../../setup/electronSetup";
+import { declineFirstRunReporting, findWorkspaceShellPage } from "../support/workspaceCreation";
 
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 
@@ -38,13 +39,17 @@ test.describe("Server Logs navigation", () => {
   test("opens from About/New without leaving a stuck pending spinner", async () => {
     test.setTimeout(240_000);
     const workspacePath = await createManagedTestWorkspace({
+      workspaceKind: "system",
       configureSource: configureInitialPanel,
     });
     let testApp: TestApp | null = null;
     try {
       testApp = await launchTestApp({ workspace: workspacePath, launchTimeout: 180_000 });
-      await approvePendingStartupUnits(testApp);
       await approvePendingWorkspaceCreationReview(testApp);
+      await approvePendingStartupUnits(testApp);
+      await declineFirstRunReporting(testApp);
+      const shell = await findWorkspaceShellPage(testApp);
+      await shell.getByRole("button", { name: "Open System", exact: true }).click();
 
       const readiness = await ensureHostedShellReady(testApp, { panelSource: "about/new" });
       const panelId = readiness.panelId;

@@ -23,7 +23,7 @@ import {
   typePanelText,
   type TestApp,
 } from "../../setup/electronSetup";
-import { findWorkspaceShellPage } from "../support/workspaceCreation";
+import { declineFirstRunReporting, findWorkspaceShellPage } from "../support/workspaceCreation";
 
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 
@@ -124,6 +124,7 @@ test.describe("Panel navigation convergence", () => {
   test("same-panel navigation converges without leaked failures or stuck build state", async () => {
     test.setTimeout(240_000);
     const workspacePath = await createManagedTestWorkspace({
+      workspaceKind: "system",
       configureSource: (sourceRoot) => configureInitialPanel(sourceRoot, "about/new"),
     });
     let testApp: TestApp | null = null;
@@ -132,8 +133,11 @@ test.describe("Panel navigation convergence", () => {
         workspace: workspacePath,
         launchTimeout: 180_000,
       });
-      await approvePendingStartupUnits(testApp);
       await approvePendingWorkspaceCreationReview(testApp);
+      await approvePendingStartupUnits(testApp);
+      await declineFirstRunReporting(testApp);
+      const shell = await findWorkspaceShellPage(testApp);
+      await shell.getByRole("button", { name: "Open System", exact: true }).click();
       const initialReadiness = await ensureHostedShellReady(testApp, {
         panelSource: "about/new",
       });
