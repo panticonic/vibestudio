@@ -1112,7 +1112,7 @@ test("open suite goal export requires the recorded current suite receipt", async
   );
 });
 
-test("open Drive goal export requires the actual mounted skill and its read-only evidence", async (t) => {
+test("open Drive goal export accepts a different callable and requires verified read-only scope", async (t) => {
   const { options, diagnostics, entry, save } = await fixture(t);
   const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(path.resolve(import.meta.dirname, ".."));
   const cases = await loadLiveTeacherCases(checkouts);
@@ -1132,7 +1132,7 @@ test("open Drive goal export requires the actual mounted skill and its read-only
   const outcome = { status: "complete", directAccess: "reviewed" };
   root.record.definition.name = "runUserGoal";
   root.record.inputs = { goal: valueRef(goal) };
-  child.record.definition.name = "workOnDriveGoal";
+  child.record.definition.name = "reviewOwnedDrivePermissions";
   child.record.outcome = "done";
   child.record.inputs = { goal: valueRef(goal) };
   child.record.output = valueRef(outcome);
@@ -1148,11 +1148,11 @@ test("open Drive goal export requires the actual mounted skill and its read-only
   };
   await save();
   await exportLiveTeacherWorkflow({ ...options, cases });
-  child.record.output = valueRef({ ...outcome, directAccess: "blocked" });
+  diagnostics.openGoalVerification.checks.preservedReadOnlyScope = false;
   await save();
   await assert.rejects(
     exportLiveTeacherWorkflow({ ...options, cases, out: path.join(path.dirname(options.out), "replaced") }),
-    /actual installed Natlang skill call/u
+    /independently verified outcomes/u
   );
 });
 

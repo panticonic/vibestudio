@@ -92,6 +92,11 @@ Live workflow collection executes the authored Natlang root against real caller-
 
 List the available open goals, then select cases from the Vibestudio host checkout with the development templates configured. Use a new output directory and a model enabled on the collection machine. Use `--assignments` for the historical workflow catalog and its cases.
 
+The managed workspace verifier determines whether an open goal succeeded. Export binds that result to
+the original goal, workspace context, validator revision and recorded Natlang calls. Browser generation,
+suite receipts and independent content review remain part of the evidence when applicable. The model's
+choice of callable and the serialization of its intermediate objects can vary across successful executions.
+
 ```sh
 pnpm --silent natlang:teacher --list
 pnpm natlang:teacher --preflight

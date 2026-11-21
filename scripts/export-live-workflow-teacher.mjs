@@ -1891,7 +1891,7 @@ export async function loadLiveTeacherCases(checkouts) {
         ...(assignment.kind === "preparedContentProject" &&
           (assignment.profile === "commit" || assignment.profile === "draft") ? { requiresReview:true } : {}),
         ...(assignment.workspaceBaseline ? { workspaceBaseline: assignment.workspaceBaseline } : {}),
-        evidence: domain?.evidence ?? (domain ? openTemplateGoalEvidence : ownedResearch ? openOwnedResearchEvidence : openGoalEvidence),
+        evidence: openOutcomeGoalEvidence,
       });
     }
   }
@@ -9507,7 +9507,52 @@ export function openOutcomeGoalEvidence(execution, exercise, _scenario, workflow
       Object.keys(root?.inputs ?? {}).length === 1 && matchesValue(root.inputs.goal, world.goal),
     "Expected independently verified outcomes bound to the actual workspace and original user goal"
   );
-  return { world: { context_id: proof.contextId, case_id: proof.caseId }, checks, evidence: { workspace: { proof } } };
+  const evidence = { workspace: { proof } };
+  const worldBinding = { context_id: proof.contextId, case_id: proof.caseId };
+  if (world.kind === "browser") {
+    const { panelId, inspections, attempts, after } = proof;
+    const bound = (binding) => binding?.generation?.protocol === "panel-cdp-generation.v1" &&
+      binding.generation.panelId === panelId && binding.generation.attemptId === after?.attemptId &&
+      binding.generation.buildKey === after?.buildKey;
+    requireEvidence(
+      typeof panelId === "string" && bound(after?.binding) &&
+        inspections?.length > 0 && inspections.every((snapshot) =>
+          bound(snapshot.binding) && snapshot.attemptId === after.attemptId) &&
+        Array.isArray(attempts) && attempts.every((attempt) =>
+          attempt.result !== "activated" || bound(attempt.binding)),
+      "Expected retained CDP bindings for the verified workspace outcome"
+    );
+    evidence.cdp = { panelId, inspections, attempts, after };
+  }
+  if (world.kind === "suite") {
+    const { choice, runtime, status } = world.expected;
+    const runs = choice.mode === "verify";
+    requireEvidence(
+      isDeepStrictEqual(proof.selected, choice) && isDeepStrictEqual(exercise.report?.selection, proof.selected) &&
+        proof.plan?.contextId === proof.contextId && proof.plan.runtime === runtime &&
+        proof.routes?.some((route) => route.id === choice.routeId && route.stateHash === proof.plan.stateHash) &&
+        (runs ? proof.runAttempts === 1 && proof.execution?.status === status &&
+          proof.execution?.receipt?.stateHash === proof.plan.stateHash &&
+          isDeepStrictEqual(exercise.report?.review?.execution, proof.execution) : proof.runAttempts === 0),
+      "Expected a current suite receipt or an inspection without execution"
+    );
+  }
+  if (!workflow.requiresReview) return { world: worldBinding, checks, evidence };
+  const project = proof.preparedContentProject;
+  const artifact = project?.artifact;
+  const reviewInput = artifact?.semanticReviewInput;
+  requireEvidence(
+    project?.contextId === proof.contextId && project.caseId === world.id &&
+      project.sourceGroup === world.sourceGroup && artifact?.passed === true &&
+      artifact.semanticReviewRequired === true && artifact.reasons?.length === 0 &&
+      reviewInput?.actual?.contextId === proof.contextId &&
+      isDeepStrictEqual(reviewInput.actual.state, project.actual?.workingHead) &&
+      isDeepStrictEqual(reviewInput.actual.committedEvent, project.actual?.committed) &&
+      Array.isArray(reviewInput.actual.documents) && reviewInput.actual.documents.length > 0 &&
+      typeof reviewInput.rubric === "string" && reviewInput.rubric.length > 0,
+    "Expected the independently read back project and its bound semantic review input"
+  );
+  return { world: worldBinding, checks: { ...checks }, evidence, reviewInput };
 }
 
 export function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
