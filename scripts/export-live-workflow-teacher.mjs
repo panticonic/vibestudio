@@ -10,6 +10,13 @@ import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
 
 const sharedProgram = "skills/vibestudio-workflows/runWorkflow.nl";
 const templateGoalDomains = {
+  "android-delivery": {
+    namespace: "vibestudio:android-delivery",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-android-delivery-managed.ts" },
+    callable: "verifyAndroidDelivery",
+    skill: "androidDelivery",
+    checks: ["boundExactAndroidDelivery", "exactNativeAndroidInventory", "independentlyVerifiedAndroidResult", "matchedAndroidDeliveryReport"],
+  },
   "delivery-wake": {
     namespace: "vibestudio:delivery-wake",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-delivery-wake-managed.ts" },
@@ -1693,13 +1700,13 @@ export async function loadLiveTeacherCases(checkouts) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
     const distinctGoals = new Set();
-    const { openGoalWorlds, openDeliveryWakeWorlds = [], openLiveLocalInventoryWorlds = [], openPhoneFirstRunWorlds = [], openSkillMaintenanceWorlds = [], openWebhookAdmissionWorlds = [], openDevelopmentAuditWorlds = [], openDesktopReadinessWorlds = [], openContentArchiveWorlds = [], openSystemReleaseWorlds = [], openTestkitCloseoutWorlds = [], openPanelSourceMigrationWorlds = [], openWorkspaceShareWorlds = [], openNotificationStateWorlds = [], openAgentCapabilityWorlds = [], openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openChatContinuityWorlds = [], openWorkspaceConfigWorlds = [], gadDurableQuestionWorlds = [], openLiveTendrilBoardWorlds = [], openSameTurnEvalWorlds = [], openCliRouteWorlds = [], openIntentDiscoveryWorlds = [], openRouteAuthorityWorlds = [], openLogFollowerWorlds = [], openLaunchStateWorlds = [], openScaffoldWorlds = [], openOwnedOperationsWorlds = [], openPtyContinuityWorlds = [], openSystemCandidateWorlds = [], openWorkspaceClaimWorlds = [], openExamplesAdoptionWorlds = [], openGrimoireSceneWorlds = [], openBridgeDeliveryWorlds = [], openEditorialWorlds = [], openPortfolioWorlds = [], openRegencyWorlds = [], openImageCandidateWorlds = [], openApiReadinessWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
+    const { openGoalWorlds, openAndroidDeliveryWorlds = [], openDeliveryWakeWorlds = [], openLiveLocalInventoryWorlds = [], openPhoneFirstRunWorlds = [], openSkillMaintenanceWorlds = [], openWebhookAdmissionWorlds = [], openDevelopmentAuditWorlds = [], openDesktopReadinessWorlds = [], openContentArchiveWorlds = [], openSystemReleaseWorlds = [], openTestkitCloseoutWorlds = [], openPanelSourceMigrationWorlds = [], openWorkspaceShareWorlds = [], openNotificationStateWorlds = [], openAgentCapabilityWorlds = [], openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openChatContinuityWorlds = [], openWorkspaceConfigWorlds = [], gadDurableQuestionWorlds = [], openLiveTendrilBoardWorlds = [], openSameTurnEvalWorlds = [], openCliRouteWorlds = [], openIntentDiscoveryWorlds = [], openRouteAuthorityWorlds = [], openLogFollowerWorlds = [], openLaunchStateWorlds = [], openScaffoldWorlds = [], openOwnedOperationsWorlds = [], openPtyContinuityWorlds = [], openSystemCandidateWorlds = [], openWorkspaceClaimWorlds = [], openExamplesAdoptionWorlds = [], openGrimoireSceneWorlds = [], openBridgeDeliveryWorlds = [], openEditorialWorlds = [], openPortfolioWorlds = [], openRegencyWorlds = [], openImageCandidateWorlds = [], openApiReadinessWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
       spectroliteGoalWorlds = [], openGoalGoogleWorlds = [], openGoalPersonalWorlds = [],
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
       openTerminalWorlds = [], openOwnedResearchWorlds = [], personalWelcomeWorlds = [], dictationHandoffWorlds = [], specialistHandoffWorlds = [], providerHandoffWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalMethodWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
-    for (const assignment of [...openGoalWorlds, ...openDeliveryWakeWorlds, ...openLiveLocalInventoryWorlds, ...openPhoneFirstRunWorlds, ...openSkillMaintenanceWorlds, ...openWebhookAdmissionWorlds, ...openDevelopmentAuditWorlds, ...openDesktopReadinessWorlds, ...openContentArchiveWorlds, ...openSystemReleaseWorlds, ...openTestkitCloseoutWorlds, ...openPanelSourceMigrationWorlds, ...openWorkspaceShareWorlds, ...openNotificationStateWorlds, ...openAgentCapabilityWorlds, ...openMobileContinuityWorlds, ...openInstalledPackageWorlds, ...openAssetIntegrityWorlds, ...openTendrilRouteWorlds, ...openExtensionDossierWorlds, ...openDeployedInterfaceWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
+    for (const assignment of [...openGoalWorlds, ...openAndroidDeliveryWorlds, ...openDeliveryWakeWorlds, ...openLiveLocalInventoryWorlds, ...openPhoneFirstRunWorlds, ...openSkillMaintenanceWorlds, ...openWebhookAdmissionWorlds, ...openDevelopmentAuditWorlds, ...openDesktopReadinessWorlds, ...openContentArchiveWorlds, ...openSystemReleaseWorlds, ...openTestkitCloseoutWorlds, ...openPanelSourceMigrationWorlds, ...openWorkspaceShareWorlds, ...openNotificationStateWorlds, ...openAgentCapabilityWorlds, ...openMobileContinuityWorlds, ...openInstalledPackageWorlds, ...openAssetIntegrityWorlds, ...openTendrilRouteWorlds, ...openExtensionDossierWorlds, ...openDeployedInterfaceWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
       ...openExamplesAdoptionWorlds, ...openGrimoireSceneWorlds, ...openApiReadinessWorlds, ...openChatContinuityWorlds, ...openWorkspaceConfigWorlds, ...gadDurableQuestionWorlds, ...openLiveTendrilBoardWorlds, ...openSameTurnEvalWorlds, ...openCliRouteWorlds, ...openIntentDiscoveryWorlds, ...openRouteAuthorityWorlds, ...openLogFollowerWorlds, ...openLaunchStateWorlds, ...openScaffoldWorlds, ...openOwnedOperationsWorlds, ...openPtyContinuityWorlds, ...openSystemCandidateWorlds, ...openWorkspaceClaimWorlds, ...openBridgeDeliveryWorlds, ...openEditorialWorlds, ...openPortfolioWorlds, ...openRegencyWorlds, ...openImageCandidateWorlds, ...openNewsEvidenceWorlds, ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
@@ -1745,6 +1752,7 @@ export async function loadLiveTeacherCases(checkouts) {
         assignment,
         ...(graph ? { verifiesKnowledgeGraph: graph } : {}),
         ...(assignment.devices ? { devices: assignment.devices } : {}),
+        ...(assignment.requiresAndroidEmulator ? { requiresAndroidEmulator: true } : {}),
         ...(assignment.requiresDeploymentPackage ? { requiresDeploymentPackage: true } : {}),
         ...(assignment.workspaceBaseline ? { workspaceBaseline: assignment.workspaceBaseline } : {}),
         evidence: domain ? openTemplateGoalEvidence : ownedResearch ? openOwnedResearchEvidence : openGoalEvidence,
@@ -8743,6 +8751,57 @@ function verifyOpenLiveLocalInventory(exercise, world, proof, skill) {
   }
 }
 
+function verifyOpenAndroidDelivery(exercise, world, proof, skill) {
+  const records = exercise.calls.map(({ record }) => record);
+  const children = (parent, name) => records.filter(record =>
+    record.parent_call_id === parent?.call_id && record.definition?.name === name && record.outcome === "done");
+  const effects = (call, service, method) => call?.effects?.filter(effect =>
+    effect.service === service && effect.method === method && !effect.error) ?? [];
+  const scopeCall = children(skill, "readAndroidDeliveryScope");
+  const planning = children(skill, "planAndroidDelivery");
+  const installed = children(skill, "runMobileScenario");
+  const reviewed = children(installed[0], "reviewSetup");
+  const inventoryCall = children(reviewed[0], "readInventory");
+  const boundScope = effects(scopeCall[0], "androidDeliveryScope", "read");
+  const inventory = effects(inventoryCall[0], "mobileInventory", "read");
+  const { outcome, scope, native } = proof;
+  const request = native?.request;
+  const executes = world.mode === "install" || world.mode === "pair";
+  const scenario = world.route === "pair" ? "exercisePairing" : "exerciseDevelopment";
+  const operation = children(installed[0], scenario);
+  requireEvidence(isDeepStrictEqual(exercise.report.outcome, outcome) && isDeepStrictEqual(outcome?.request, request) &&
+    isDeepStrictEqual(outcome?.scope, scope) && scope?.deviceKind === "disposable-emulator" &&
+    request?.goal === world.goal && request.workspace === scope.workspace && request.deviceId === scope.deviceId &&
+    scopeCall.length === 1 && planning.length === 1 && installed.length === 1 && reviewed.length === 1 &&
+    inventoryCall.length === 1 && boundScope.length === 1 && inventory.length === 1 &&
+    matchesValue(boundScope[0].args, [world.goal]) && matchesValue(boundScope[0].result, scope) &&
+    matchesValue(scopeCall[0].output, scope) && matchesValue(planning[0].inputs?.goal, world.goal) &&
+    matchesValue(planning[0].inputs?.scope, scope) && matchesValue(planning[0].output, request) &&
+    matchesValue(installed[0].inputs?.request, request) && matchesValue(installed[0].output, outcome.actual) &&
+    matchesValue(inventory[0].result, native.inventory) && operation.length === Number(executes),
+    "Expected the exact Android scope, installed mobile scenario and independently observed inventory");
+  const mutated = records.flatMap(record => record.effects ?? []).filter(effect =>
+    effect.service === "mobileDevelopment" || effect.service === "mobilePairing");
+  if (executes) {
+    const pairing = world.route === "pair";
+    const mutationService = pairing ? "mobilePairing" : "mobileDevelopment";
+    const method = pairing ? "pair" : "install";
+    const action = children(operation[0], pairing ? "pairDevice" : "installApp");
+    const changed = effects(action[0], mutationService, method);
+    const retrieval = children(operation[0], pairing ? "readWorkspace" : "readInstalledApp");
+    const readbacks = effects(retrieval[0], pairing ? "mobileWorkspace" : "mobileApp", pairing ? "read" : "verify");
+    const receipt = pairing ? native.receipt : native.install;
+    const found = pairing ? native.observed : native.readback;
+    const argument = pairing ? [receipt?.pairedDevice] : [request.deviceId, receipt?.packageName];
+    requireEvidence(action.length === 1 && retrieval.length === 1 && changed.length === 1 && readbacks.length === 1 &&
+      mutated.length === 1 && matchesValue(changed[0].args, [request.deviceId]) && matchesValue(changed[0].result, receipt) &&
+      matchesValue(readbacks[0].args, argument) && matchesValue(readbacks[0].result, found),
+      "Expected the single authorized Android operation and exact device readback");
+  } else {
+    requireEvidence(mutated.length === 0, "The read-only or held Android goal issued a mutation");
+  }
+}
+
 export function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
   const proof = execution.diagnostics.openGoalVerification;
   const world = workflow.assignment;
@@ -8765,7 +8824,9 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
     "Expected a verified live goal and its actual installed Natlang skill call"
   );
   const evidence = { workspace: { proof } };
-  if (world.kind === "live-local-inventory") {
+  if (world.kind === "android-delivery") {
+    verifyOpenAndroidDelivery(exercise, world, proof, skill);
+  } else if (world.kind === "live-local-inventory") {
     verifyOpenLiveLocalInventory(exercise, world, proof, skill);
   } else if (world.kind === "live-tendril-board") {
     verifyOpenLiveTendril(exercise, world, proof, skill);

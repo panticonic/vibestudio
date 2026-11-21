@@ -90,6 +90,7 @@ if (list) {
         requiresReview: Boolean(workflow.requiresReview),
         ...(workflow.workspaceBaseline ? { workspaceBaseline: workflow.workspaceBaseline } : {}),
         ...(workflow.devices ? { devices: workflow.devices } : {}),
+        ...(workflow.requiresAndroidEmulator ? { requiresAndroidEmulator: true } : {}),
         ...(workflow.requiresDeploymentPackage ? { requiresDeploymentPackage: true } : {}),
       })
     );
