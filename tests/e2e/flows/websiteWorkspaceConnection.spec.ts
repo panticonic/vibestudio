@@ -213,14 +213,18 @@ test("website SDK requires explicit connection and retires access on document re
     await expect.poll(text).toContain("tree:");
     await clickPanelSelector(app, panel.id, "#read");
     const readApproval = await visibleConnectionApproval("filesystem.read");
-    await expect(readApproval).toContainText("/meta/vibestudio.yml");
+    await expect(readApproval).toContainText("Read /meta/?");
+    await expect(readApproval).toContainText("all files in this repository");
     await clickApproval(
       readApproval.getByRole("button", { name: "Allow for this page", exact: true })
     );
     await expect.poll(text).toContain("read:string");
     await clickPanelSelector(app, panel.id, "#write");
     const writeApproval = await visibleConnectionApproval("filesystem.write");
-    await expect(writeApproval).toContainText("/meta/vibestudio.yml");
+    await expect(writeApproval).toContainText("Change /meta/?");
+    await expect(writeApproval).toContainText(
+      "create, change, and delete all files in this repository"
+    );
     await clickApproval(writeApproval.getByRole("button", { name: "Don't allow", exact: true }));
     await expect.poll(text).toContain("error:");
     expect(await text()).not.toContain("unexpected write");
