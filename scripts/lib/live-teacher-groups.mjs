@@ -3,9 +3,10 @@ import { randomUUID } from "node:crypto";
 export function groupLiveTeacherCases(scenarios, workflows, casesPerInstance) {
   const groups = new Map();
   for (const scenario of scenarios) {
-    const { workspace = "system", workspaceBaseline } = workflows.get(scenario);
-    const scope = workspaceBaseline ? `${workspace}@${workspaceBaseline}` : workspace;
-    if (!groups.has(scope)) groups.set(scope, { workspace, workspaceBaseline, cases: [] });
+    const { workspace = "system", workspaceBaseline, devices = [] } = workflows.get(scenario);
+    const drivers = [...new Set(devices)].sort();
+    const scope = [workspace, workspaceBaseline, drivers.join("+")].filter(Boolean).join("@");
+    if (!groups.has(scope)) groups.set(scope, { workspace, workspaceBaseline, devices: drivers, cases: [] });
     groups.get(scope).cases.push(scenario);
   }
   return [...groups.entries()].flatMap(([scope, { cases, ...context }]) => {

@@ -23,6 +23,13 @@ test("a batch reuses each workspace instance and retains successes across failur
     new URL("review-live-workflow-teacher.mjs", import.meta.url),
     path.join(root, "scripts/review-live-workflow-teacher.mjs")
   );
+  await mkdir(path.join(root, "scripts/lib"));
+  await copyFile(
+    new URL("lib/live-teacher-groups.mjs", import.meta.url),
+    path.join(root, "scripts/lib/live-teacher-groups.mjs")
+  );
+  await put("src/dev/cliWorkspaceSelection.js",
+    'exports.isSystemTestWorkspace = value => ["system", "personal"].includes(value);');
   const sourceCommit = "a".repeat(40);
   const runId = "st_" + "1".repeat(32);
   await put(
@@ -45,7 +52,7 @@ test("a batch reuses each workspace instance and retains successes across failur
     `import { mkdir, readFile, writeFile } from 'node:fs/promises';
     import path from 'node:path';
     export const liveTeacherCases = new Map(['passing', 'failing', 'personal'].map(caseId =>
-      [caseId, { family: 'fixture', group: 'group', workspace: caseId === 'personal' ? 'personal' : undefined, validator: {template:'system-testing',path:'skills/system-testing/oracle.ts'} }]
+      [caseId, { family: 'fixture', group: 'group', workspace: caseId === 'personal' ? 'personal' : undefined, devices: caseId === 'personal' ? ['desktop'] : undefined, validator: {template:'system-testing',path:'skills/system-testing/oracle.ts'} }]
     ));
     liveTeacherCases.set('open-café', {
       family: 'open', group: 'open', interaction: 'open-user-goal', split: 'train',
@@ -75,9 +82,15 @@ exit 0
     const path = require('node:path');
     const words = process.argv.slice(2);
     if (words[0] === '--silent') words.shift();
-    const [launcher, , instance, , workspace, command, ...args] = words;
+    const [launcher, , instance, , workspace, ...remaining] = words;
+    const devices = [];
+    while (remaining[0] === '--device') {
+      remaining.shift();
+      devices.push(remaining.shift());
+    }
+    const [command, ...args] = remaining;
     if (launcher === 'natlang:vendor') process.exit(0);
-    fs.appendFileSync('commands.jsonl', JSON.stringify({ instance, workspace, command, args }) + '\\n');
+    fs.appendFileSync('commands.jsonl', JSON.stringify({ instance, workspace, devices, command, args }) + '\\n');
     if (command === 'list') {
       const names = workspace === 'personal' ? ['personal'] : ['passing', 'failing'];
       console.log(JSON.stringify(names.map(name => ({
@@ -149,6 +162,9 @@ exit 0
   assert.equal(new Set(commands.slice(0, 7).map(({ instance }) => instance)).size, 1);
   assert.equal(new Set(commands.slice(7).map(({ instance }) => instance)).size, 1);
   assert.notEqual(commands[0].instance, commands[7].instance);
+  assert.ok(commands.slice(0, 7).every(({ devices }) => !devices.length));
+  assert.ok(commands.slice(7).every(({ devices }) => devices.length === 1 && devices[0] === "desktop"));
+
   const pathFor = (kind, name) => path.join(out, "cases", kind, name);
   const admitted = JSON.parse(await readFile(pathFor("passing", "verified/manifest.json"), "utf8"));
   assert.deepEqual(JSON.parse(await readFile(
@@ -160,6 +176,7 @@ exit 0
     await readFile(pathFor("personal", "verified/manifest.json"), "utf8")
   );
   assert.equal(personal.source.workspace, "personal");
+  assert.deepEqual(personal.source.devices, ["desktop"]);
   assert.equal(personal.source.instance, commands.find(({ workspace }) => workspace === "personal").instance);
   assert.equal(JSON.parse(await readFile(pathFor("failing", "source.json"), "utf8")).run_id, runId);
   await assert.rejects(readFile(pathFor("failing", "verified/manifest.json")), { code: "ENOENT" });
@@ -175,7 +192,7 @@ exit 0
   assert.equal(preflight.status, 1, preflight.stderr);
   assert.deepEqual(preflight.stdout.trim().split("\n").map(JSON.parse), [
     { workspace: "system", checked: 2, unavailable: [] },
-    { workspace: "personal", checked: 1, unavailable: [
+    { workspace: "personal", devices: ["desktop"], checked: 1, unavailable: [
       { scenario: "personal", reason: "requires installed units: skills/fixture" },
     ] },
   ]);
@@ -184,4 +201,5 @@ exit 0
   assert.deepEqual(preflightCommands.map(({ command }) => command), [
     "doctor", "list", "stop", "doctor", "list", "stop",
   ]);
+  assert.ok(preflightCommands.slice(3).every(({ devices }) => devices[0] === "desktop"));
 });

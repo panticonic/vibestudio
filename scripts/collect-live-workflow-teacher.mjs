@@ -115,10 +115,11 @@ function command(args, stdout = "inherit") {
   return result.status ?? 1;
 }
 
-function systemTestArgs({ instance, workspace, workspaceBaseline }, args) {
+function systemTestArgs({ instance, workspace, workspaceBaseline, devices }, args) {
   return [
     "system-test", "--instance", instance, "--workspace", workspace,
     ...(workspaceBaseline ? ["--workspace-baseline", workspaceBaseline] : []),
+    ...devices.flatMap((device) => ["--device", device]),
     ...args,
   ];
 }
@@ -169,7 +170,8 @@ function unavailableCase(catalog, scenario) {
 if (preflight) {
   let unavailableCount = 0;
   for (const group of groups) {
-    const { workspace, workspaceBaseline, cases } = group;
+    const { workspace, workspaceBaseline, devices, cases } = group;
+    const placement = { workspace, workspaceBaseline, ...(devices.length ? { devices } : {}) };
     let stopStatus;
     try {
       if (command(systemTestArgs(group, ["doctor", "--approve-startup", "--model", values.model]), "ignore") !== 0) {
@@ -181,10 +183,10 @@ if (preflight) {
         return reason ? [{ scenario, reason }] : [];
       });
       unavailableCount += unavailable.length;
-      console.log(JSON.stringify({ workspace, workspaceBaseline, checked: cases.length, unavailable }));
+      console.log(JSON.stringify({ ...placement, checked: cases.length, unavailable }));
     } catch (error) {
       unavailableCount += cases.length;
-      console.log(JSON.stringify({ workspace, workspaceBaseline, checked: 0, error: String(error) }));
+      console.log(JSON.stringify({ ...placement, checked: 0, error: String(error) }));
     } finally {
       stopStatus = command(systemTestArgs(group, ["stop"]), "ignore");
     }
@@ -268,7 +270,7 @@ if (!single) {
 const failures = [];
 const unavailableScopes = new Set();
 for (const group of groups) {
-  const { instance, workspace, workspaceBaseline } = group;
+  const { instance, workspace, workspaceBaseline, devices } = group;
   if (unavailableScopes.has(group.scope)) continue;
   const systemTest = (args, stdout) =>
     command(systemTestArgs(group, args), stdout);
@@ -281,6 +283,7 @@ for (const group of groups) {
       instance,
       workspace,
       ...(workspaceBaseline ? { workspace_baseline_commit: workspaceBaseline } : {}),
+      ...(devices.length ? { devices } : {}),
       validator_sha256: pinned.validators[scenario],
     };
     writePins(pins, caseSource);
@@ -304,9 +307,7 @@ for (const group of groups) {
         if (reason) throw new Error(reason);
         if (JSON.stringify(pinSources()) !== JSON.stringify(pinned))
           throw new Error("Source pins changed before starting the case");
-        const devices = liveTeacherCases.get(scenario).devices ?? [];
         const status = systemTest([
-          ...devices.flatMap((device) => ["--device", device]),
           "run",
           scenario,
           "--model",

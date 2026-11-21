@@ -21,6 +21,22 @@ test("teacher groups recycle bounded instances and preserve historical baseline 
 });
 
 
+test("teacher groups keep independent managed device profiles apart", () => {
+  const defaultWorkspace = { workspace: "examples" };
+  const groups = groupLiveTeacherCases(["local", "desktop", "pair", "reversed"], new Map([
+    ["local", defaultWorkspace],
+    ["desktop", { ...defaultWorkspace, devices: ["desktop"] }],
+    ["pair", { ...defaultWorkspace, devices: ["terminal", "desktop"] }],
+    ["reversed", { ...defaultWorkspace, devices: ["desktop", "terminal"] }],
+  ]), 12);
+  assert.deepEqual(groups.map(({ devices, cases, scope }) => [devices, cases, scope]), [
+    [[], ["local"], "examples"],
+    [["desktop"], ["desktop"], "examples@desktop"],
+    [["desktop", "terminal"], ["pair", "reversed"], "examples@desktop+terminal"],
+  ]);
+  assert.equal(new Set(groups.map(({ instance }) => instance)).size, 3);
+});
+
 test("only an explicit terminal startup error suppresses a repeated workspace boot", () => {
   assert.equal(terminalStartupFailure('[system-test] Created workspace\n{"error":"Missing immutable dependency","recoverable":false}'), true);
   assert.equal(terminalStartupFailure('{"error":"Timeout","recoverable":true}'), false);
