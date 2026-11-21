@@ -1,6 +1,7 @@
 import type { TestApp } from "../../setup/electronSetup";
 import { expect, test } from "@playwright/test";
 import { configureInspectionFixture } from "../support/inspectionFixture";
+import { declineFirstRunReporting } from "../support/workspaceCreation";
 import {
   ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE,
   approvePendingWorkspaceCreationReview,
@@ -45,11 +46,12 @@ test.describe("agentic DX contracts", () => {
     const testApp = await launchTestApp({ workspace: workspacePath, launchTimeout: 180_000 });
     try {
       await approvePendingStartupUnits(testApp);
+      await approvePendingWorkspaceCreationReview(testApp);
+      await declineFirstRunReporting(testApp);
       await ensureHostedShellReady(testApp, {
         panelSource: "panels/chat",
         timeoutMs: 75_000,
       });
-      await approvePendingWorkspaceCreationReview(testApp);
       const panel = (await getPanelTree(testApp))[0];
       expect(panel).toBeTruthy();
       await waitForPanelRuntime(testApp, panel!.id);
@@ -137,11 +139,12 @@ test.describe("agentic DX contracts", () => {
     const testApp = await launchTestApp({ workspace: workspacePath, launchTimeout: 180_000 });
     try {
       await approvePendingStartupUnits(testApp);
+      await approvePendingWorkspaceCreationReview(testApp);
+      await declineFirstRunReporting(testApp);
       await ensureHostedShellReady(testApp, {
         panelSource: "panels/chat",
         timeoutMs: 75_000,
       });
-      await approvePendingWorkspaceCreationReview(testApp);
       const panel = (await getPanelTree(testApp))[0];
       expect(panel).toBeTruthy();
       await waitForPanelRuntime(testApp, panel!.id);

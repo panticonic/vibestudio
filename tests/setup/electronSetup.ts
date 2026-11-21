@@ -535,6 +535,21 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
         await desktop.close();
       } catch (error) {
         cleanupErrors.push(error);
+        try {
+          await playwrightTest.info().attach(`electron-shutdown-${workspaceInfo.workspaceName}.log`, {
+            body: output.join("").slice(-40_000),
+            contentType: "text/plain",
+          });
+          const shutdownLog = readLogTail(hubLogPath, 40_000);
+          if (shutdownLog) {
+            await playwrightTest.info().attach(`hub-shutdown-${workspaceInfo.workspaceName}.log`, {
+              body: shutdownLog,
+              contentType: "text/plain",
+            });
+          }
+        } catch (diagnosticError) {
+          cleanupErrors.push(diagnosticError);
+        }
       }
       // Retained independently of logical close errors: only actual Electron
       // exit makes its detached children orphans of its own ownership.

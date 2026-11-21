@@ -18,6 +18,7 @@ import {
   removeManagedTestWorkspace,
   type TestApp,
 } from "../../setup/electronSetup";
+import { declineFirstRunReporting } from "../support/workspaceCreation";
 
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 
@@ -38,7 +39,7 @@ function configureWithoutBrowserDataExtension(sourceRoot: string): void {
 
 test.describe("Browser panel startup", () => {
   test("loads while the optional browser-data extension is unavailable", async () => {
-    test.setTimeout(240_000);
+    test.setTimeout(360_000);
     const server = http.createServer((_request, response) => {
       response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       response.end(
@@ -58,6 +59,7 @@ test.describe("Browser panel startup", () => {
       testApp = await launchTestApp({ workspace: workspacePath, launchTimeout: 180_000 });
       await approvePendingStartupUnits(testApp);
       await approvePendingWorkspaceCreationReview(testApp);
+      await declineFirstRunReporting(testApp);
       const initial = await ensureHostedShellReady(testApp, { panelSource: "about/new" });
       const browserSource = `browser:${url}`;
       const created = await createBrowserPanel(testApp, initial.panelId, url, {

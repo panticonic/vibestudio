@@ -14,13 +14,7 @@
  * main process, the server, and a userland worker. Only a real app run crosses
  * all three.
  */
-import { expect } from "@playwright/test";
-
-import {
-  readPanelInitializationFailure,
-  panelInitializationFailureError,
-  type TestApp,
-} from "../../setup/electronSetup";
+import { approvePendingStartupUnits, type TestApp } from "../../setup/electronSetup";
 import { retryIdempotentAutomationRead } from "../../setup/automationContext";
 import { clickWindowPointThroughNativeInput } from "../../setup/nativeInput";
 
@@ -50,51 +44,9 @@ export interface CommandOverlaySnapshot {
   text: string;
 }
 
-/** Wait for the hosted shell chrome, approving the bootstrap launch gate if shown. */
+/** Wait for the actual hosted client, including when a first-run dialog is open. */
 export async function waitHostedShellReady(testApp: TestApp): Promise<void> {
-  await expect
-    .poll(
-      async () => {
-        const failure = panelInitializationFailureError(
-          await readPanelInitializationFailure(testApp)
-        );
-        if (failure) throw failure;
-        return testApp.app.evaluate(async ({ webContents }) => {
-          const candidates = webContents.getAllWebContents().filter((contents) => {
-            if (contents.isDestroyed()) return false;
-            const title = contents.getTitle();
-            return contents.getURL().startsWith("vs-client://") || title === "Vibestudio Launch";
-          });
-          for (const contents of candidates) {
-            try {
-              const result = await Promise.race([
-                contents.executeJavaScript(
-                  `(() => {
-                    if (document.querySelector(".titlebar-breadcrumb-scroll")
-                      || document.querySelector('[aria-label="Menu"]')) return "ready";
-                    const approve = Array.from(document.querySelectorAll("button"))
-                      .find((b) => /^(Start|Add to workspace|Add template|Update|Use the new version|Trust and start|Approve and start)$/.test((b.textContent ?? "").trim()));
-                    if (approve) { approve.click(); return "approved"; }
-                    return "waiting";
-                  })()`,
-                  true
-                ),
-                new Promise<"waiting">((resolve) => setTimeout(() => resolve("waiting"), 2_000)),
-              ]);
-              if (result === "ready") return true;
-            } catch {
-              // Non-DOM webContents.
-            }
-          }
-          return false;
-        });
-      },
-      // A cold workspace builds every unit before the chrome is usable, and on a
-      // loaded machine single units have taken 50-95s each. The budget is for
-      // that startup, not for anything this spec asserts.
-      { timeout: 300_000, intervals: [500, 1000, 2000] }
-    )
-    .toBe(true);
+  await approvePendingStartupUnits(testApp, 300_000);
 }
 
 /**
