@@ -28,58 +28,6 @@ test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 const hubControlRpcMethods = createRpcMethods("hubControl", hubControlMethods);
 const shellApprovalRpcMethods = createRpcMethods("shellApproval", shellApprovalMethods);
 
-type WebContentsSnapshot = {
-  id: number;
-  url: string;
-  title: string;
-  text: string;
-  hasTitlebar: boolean;
-  hasApprovalBar: boolean;
-  workspaceLabels: string[];
-};
-
-async function listWebContents(testApp: TestApp): Promise<WebContentsSnapshot[]> {
-  return testApp.app.evaluate(async ({ webContents }) => {
-    const snapshots: WebContentsSnapshot[] = [];
-    for (const contents of webContents.getAllWebContents()) {
-      if (contents.isDestroyed()) continue;
-      const url = contents.getURL();
-      const title = contents.getTitle();
-      let dom: {
-        text: string;
-        hasTitlebar: boolean;
-        hasApprovalBar: boolean;
-        workspaceLabels: string[];
-      } | null = null;
-      try {
-        dom = await contents.executeJavaScript(
-          `({
-            text: document.body?.innerText ?? "",
-            hasTitlebar: !!document.querySelector('[data-shell-top-chrome="titlebar"]')
-              || !!document.querySelector(".titlebar-breadcrumb-scroll")
-              || !!document.querySelector('[aria-label="Menu"]'),
-            hasApprovalBar: !!document.querySelector(".approval-card, .approval-pill"),
-            workspaceLabels: [...document.querySelectorAll(".workspace-stack section")].map(node => node.getAttribute("aria-label") ?? ""),
-          })`,
-          true
-        );
-      } catch {
-        dom = null;
-      }
-      snapshots.push({
-        id: contents.id,
-        url,
-        title,
-        text: dom?.text ?? "",
-        hasTitlebar: dom?.hasTitlebar ?? false,
-        hasApprovalBar: dom?.hasApprovalBar ?? false,
-        workspaceLabels: dom?.workspaceLabels ?? [],
-      });
-    }
-    return snapshots;
-  });
-}
-
 async function getPanelSurfaceLayout(shellPage: Page): Promise<{
   surfaces: Array<{
     nativeSlotId: string;
@@ -218,42 +166,24 @@ test.describe("Desktop Shell Chrome", () => {
     testApp = await launchTestApp({ launchTimeout: 240_000 });
     await approveStartupUnitsAndDeclineReporting(testApp);
 
-    let lastSnapshots: WebContentsSnapshot[] = [];
+    const shellPage = await findWorkspaceShellPage(testApp);
     try {
-      await expect
-        .poll(
-          async () => {
-            lastSnapshots = await listWebContents(testApp!);
-            return lastSnapshots.some((snapshot) => {
-              let pathname = "";
-              try {
-                pathname = new URL(snapshot.url).pathname;
-              } catch {
-                return false;
-              }
-              return (
-                pathname.includes("/_a/") &&
-                pathname.endsWith("/index.html") &&
-                snapshot.hasTitlebar &&
-                snapshot.workspaceLabels.includes("Personal workspace") &&
-                snapshot.workspaceLabels.includes("System workspace")
-              );
-            });
-          },
-          { timeout: 120_000, intervals: [500, 1000, 2000] }
-        )
-        .toBe(true);
-      const chromeId = await testApp.app.evaluate(
-        ({ webContents }) =>
-          webContents
-            .getAllWebContents()
-            .find(
-              (contents) =>
-                !contents.isDestroyed() &&
-                contents.getURL().includes("/_a/") &&
-                contents.getURL().endsWith("/index.html")
-            )!.id
-      );
+      const titlebar = shellPage.locator(
+        '[data-shell-top-chrome="titlebar"], .titlebar-breadcrumb-scroll, [aria-label="Menu"]'
+      ).first();
+      await expect(titlebar).toBeVisible({ timeout: 120_000 });
+      for (const workspace of ["Personal", "System"]) {
+        await expect(
+          shellPage.locator(`.workspace-stack section[aria-label="${workspace} workspace"]`)
+        ).toBeVisible({ timeout: 60_000 });
+      }
+      const chromeId = await testApp.app.evaluate(({ webContents }, url) => {
+        const chrome = webContents
+          .getAllWebContents()
+          .find((contents) => !contents.isDestroyed() && contents.getURL() === url);
+        if (!chrome) throw new Error("System desktop chrome disappeared");
+        return chrome.id;
+      }, shellPage.url());
       for (const workspace of ["Personal", "System", "Personal"]) {
         await testApp.app.evaluate(
           async ({ webContents }, { chromeId, workspace }) => {
@@ -285,7 +215,6 @@ test.describe("Desktop Shell Chrome", () => {
       }
       // Personal's startup review consumes a worker receiver declaration even
       // though the worker itself does not require privileged-code admission.
-      const shellPage = await findWorkspaceShellPage(testApp);
       const workspaces = await nativeUiRead(
         shellPage,
         { kind: "hub" },
@@ -355,8 +284,9 @@ test.describe("Desktop Shell Chrome", () => {
         contentType: "image/png",
       });
     } catch (error) {
+      const shellText = await shellPage.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
       throw new Error(
-        `${error instanceof Error ? error.message : String(error)}\nLast WebContents snapshots: ${JSON.stringify(lastSnapshots)}\nElectron output tail:\n${testApp.getOutput().slice(-20_000)}`
+        `${error instanceof Error ? error.message : String(error)}\nShell text: ${shellText}\nElectron output tail:\n${testApp.getOutput().slice(-20_000)}`
       );
     }
   });
