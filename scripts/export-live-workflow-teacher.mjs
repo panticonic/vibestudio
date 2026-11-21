@@ -28,6 +28,13 @@ const templateGoalDomains = {
       "exactInstalledRegencyFindings", "groundedRegencyAction", "verifiedRegencyAdvance",
       "verifiedPrivateRegencyNote", "preservedRegencyWorkspace", "rejectedRegencyRetarget"],
   },
+  skillMaintenance: {
+    namespace: "vibestudio:skill-maintenance",
+    validator: { template: "system-testing", path: "skills/system-testing/open-goal-skill-maintenance-managed.ts" },
+    callable: "maintainWorkspaceSkill",
+    checks: ["exactSkillSourceAndOriginalWitness", "exactInstalledAuthoringReview", "matchedSkillMaintenanceDecision",
+      "exactScopedSemanticSkillPatch", "exactSkillCompilerReadback"],
+  },
   "image-candidate": {
     namespace: "vibestudio:retained-image-candidate",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-image-candidate-managed.ts" },
@@ -1467,13 +1474,13 @@ export async function loadLiveTeacherCases(checkouts) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
     const distinctGoals = new Set();
-    const { openGoalWorlds, openDesktopReadinessWorlds = [], openPanelSourceMigrationWorlds = [], openWorkspaceShareWorlds = [], openNotificationStateWorlds = [], openAgentCapabilityWorlds = [], openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openPortfolioWorlds = [], openRegencyWorlds = [], openImageCandidateWorlds = [], openApiReadinessWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
+    const { openGoalWorlds, openSkillMaintenanceWorlds = [], openDesktopReadinessWorlds = [], openPanelSourceMigrationWorlds = [], openWorkspaceShareWorlds = [], openNotificationStateWorlds = [], openAgentCapabilityWorlds = [], openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openPortfolioWorlds = [], openRegencyWorlds = [], openImageCandidateWorlds = [], openApiReadinessWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
       spectroliteGoalWorlds = [], openGoalGoogleWorlds = [], openGoalPersonalWorlds = [],
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
       openTerminalWorlds = [], openOwnedResearchWorlds = [], personalWelcomeWorlds = [], dictationHandoffWorlds = [], specialistHandoffWorlds = [], providerHandoffWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
-    for (const assignment of [...openGoalWorlds, ...openDesktopReadinessWorlds, ...openPanelSourceMigrationWorlds, ...openWorkspaceShareWorlds, ...openNotificationStateWorlds, ...openAgentCapabilityWorlds, ...openMobileContinuityWorlds, ...openInstalledPackageWorlds, ...openAssetIntegrityWorlds, ...openTendrilRouteWorlds, ...openExtensionDossierWorlds, ...openDeployedInterfaceWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
+    for (const assignment of [...openGoalWorlds, ...openSkillMaintenanceWorlds, ...openDesktopReadinessWorlds, ...openPanelSourceMigrationWorlds, ...openWorkspaceShareWorlds, ...openNotificationStateWorlds, ...openAgentCapabilityWorlds, ...openMobileContinuityWorlds, ...openInstalledPackageWorlds, ...openAssetIntegrityWorlds, ...openTendrilRouteWorlds, ...openExtensionDossierWorlds, ...openDeployedInterfaceWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
       ...openApiReadinessWorlds, ...openPortfolioWorlds, ...openRegencyWorlds, ...openImageCandidateWorlds, ...openNewsEvidenceWorlds, ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
@@ -8193,6 +8200,70 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
           isDeepStrictEqual(stage.result, proof.handoff) && isDeepStrictEqual(outcome.handoff, proof.handoff) :
           !stage && outcome.handoff === null && proof.handoff === null),
       "Expected exact owned client transitions, matching durable GAD records, and verified local handoff"
+    );
+  } else if (world.kind === "skillMaintenance") {
+    const skillId = exercise.calls.find(({ record }) => record === skill)?.callId;
+    const child = (parent, name) => exercise.calls.find(({ record }) =>
+      record.parent_call_id === parent && record.definition?.name === name && record.outcome === "done");
+    const select = child(skillId, "locateMaintenanceSkill");
+    const inspect = child(skillId, "inspectMaintenanceEvidence");
+    const scoped = child(inspect?.callId, "readScopedSkill");
+    const review = child(skillId, "reviewProgram");
+    const readCompiler = child(child(review?.callId, "inspectRevisions")?.callId, "readAssignedProgram");
+    const confirm = child(skillId, "confirmSkillFrontier");
+    const decide = child(skillId, "decideSkillMaintenance");
+    const repair = child(skillId, "prepareSkillRepair");
+    const draft = child(repair?.callId, "draftSkillChanges");
+    const stage = child(repair?.callId, "stageSkillChanges");
+    const readback = child(skillId, "checkSkillReadback");
+    const outcome = exercise.report.outcome;
+    const { journal = [], observation, authoring, gate, proof: patch, final } = proof;
+    const { card, revision, check, authoringRequest } = observation;
+    const row = (service, method) => journal.find(entry => entry.service === service && entry.method === method);
+    const matches = (entry, service, method, args, result) => {
+      const performed = entry?.record.effects ?? [];
+      const [effect] = performed;
+      const declared = row(service, method);
+      return performed.length === 1 && effect?.service === service && effect.method === method && !effect.error &&
+        matchesValue(effect.args, args) && matchesValue(effect.result, result) &&
+        isDeepStrictEqual(declared?.args, args) && isDeepStrictEqual(declared?.result, result);
+    };
+    const evidence = "skillMaintenanceEvidence";
+    const cards = row(evidence, "discover")?.result;
+    const compiler = row("authoringCompiler", "inspect")?.result;
+    const proposed = row("skillMaintenanceEdit", "stage")?.args[2];
+    const withPatch = world.action === "stage-local-patch";
+    const traced = effects.filter(effect =>
+      [evidence, "skillMaintenanceEdit", "authoringCompiler"].includes(effect.service));
+    requireEvidence(
+      journal.length === (withPatch ? 6 : 5) && traced.length === journal.length &&
+        matches(select, evidence, "discover", [], cards) && cards.length === 2 &&
+        isDeepStrictEqual(cards[0], card) && card.edition === "working" && card.label === world.name &&
+        matchesValue(select.record.inputs?.goal, world.goal) && matchesValue(select.record.output, card) &&
+        matches(scoped, evidence, "inspect", [card.id], observation) &&
+        matches(readCompiler, "authoringCompiler", "inspect", ["candidate"], compiler) &&
+        compiler?.revision === revision && matchesValue(review.record.inputs?.request, authoringRequest) &&
+        matchesValue(review.record.output, authoring) &&
+        matches(confirm, evidence, "confirm", [card.id, revision], gate) &&
+        matchesValue(decide?.record.inputs?.goal, world.goal) &&
+        matchesValue(decide?.record.inputs?.observation, observation) &&
+        matchesValue(decide?.record.inputs?.gate, gate) &&
+        matchesValue(decide?.record.output, outcome.decision) &&
+        (withPatch ? patch?.disposition === "staged" && patch.before === revision &&
+          patch.after === final?.revision && gate?.status === "current" &&
+          check.path === observation.path && check.revision === revision && check.satisfied === false &&
+          matchesValue(draft?.record.output, proposed) &&
+          matches(stage, "skillMaintenanceEdit", "stage", [card.id, revision, proposed], patch)
+          : !repair && !stage && patch === null) &&
+        matches(readback, evidence, "readback", [card.id], final) &&
+        final.path === observation.path && final.runId !== check.runId &&
+        /^[a-f0-9]{64}$/u.test(check.runDigest) && /^[a-f0-9]{64}$/u.test(final.resultDigest) &&
+        final.satisfied === (withPatch || world.action === "keep-current") &&
+        outcome.scope === "owned-working-skill" && outcome.decision?.action === world.action &&
+        isDeepStrictEqual(outcome.observation, observation) && isDeepStrictEqual(outcome.authoring, authoring) &&
+        isDeepStrictEqual(outcome.gate, gate) && isDeepStrictEqual(outcome.receipt, patch) &&
+        isDeepStrictEqual(outcome.final, final),
+      "Expected exact retained skill source, nested compiler proof and scoped semantic patch or hold"
     );
   } else if (world.kind === "desktopReadiness") {
     const outcome = exercise.report.outcome;
