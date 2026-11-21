@@ -735,25 +735,26 @@ async function collectStartupAgentCompletion(
   expectedInitialPrompt: string
 ): Promise<StartupAgentCompletionState> {
   const panels = await getPanelTree(testApp).catch(() => []);
-  const firstPanelId = panels[0]?.id;
-  const channelNames = new Set<string>();
+  const channelPanels = new Map<string, string>();
   for (const panel of panels) {
-    const stateArgs = panel.snapshot?.stateArgs as Record<string, unknown> | undefined;
-    const channelName =
-      typeof stateArgs?.["channelName"] === "string"
-        ? stateArgs["channelName"]
-        : (await getPanelText(testApp, panel.id).catch(() => "")).match(/\bchat-[a-z0-9]+\b/)?.[0];
-    if (channelName) channelNames.add(channelName);
-  }
-  if (!firstPanelId) {
-    return { complete: false, channels: [], errors: ["No panel is available for RPC inspection"] };
+    if (panel.snapshot?.source !== "panels/chat") continue;
+    const channelName = await executePanelScript<string | null>(
+      testApp,
+      panel.id,
+      `(async () => {
+        const { panel } = await globalThis.__vibestudioRequireAsync__("@workspace/runtime");
+        const { channelName } = panel.stateArgs.get() ?? {};
+        return typeof channelName === "string" ? channelName : null;
+      })()`
+    ).catch(() => null);
+    if (channelName) channelPanels.set(channelName, panel.id);
   }
   const channels: StartupAgentCompletionState["channels"] = [];
   const errors: string[] = [];
-  for (const channelName of channelNames) {
+  for (const [channelName, panelId] of channelPanels) {
     const resolved = await resolveWorkspaceServiceFromPanel(
       testApp,
-      firstPanelId,
+      panelId,
       "vibestudio.channel.v1",
       channelName
     ).catch((error: unknown) => {
@@ -791,7 +792,7 @@ async function collectStartupAgentCompletion(
     const snapshotBundle = await getChannelRpcReadBundle();
     const snapshot = await executePanelScript(
       testApp,
-      firstPanelId,
+      panelId,
       `${snapshotBundle}
       ;(async () => {
         const { rpc, services } = await globalThis.__vibestudioRequireAsync__("@workspace/runtime");
