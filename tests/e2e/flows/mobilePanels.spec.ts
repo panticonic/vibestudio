@@ -682,11 +682,14 @@ test.describe("Phone-width desktop panels", () => {
   test("panel titlebar toggles the address bar without overflow", async () => {
     await setMobileWindow(testApp!);
     await collapsePanelSidebar(testApp!);
-    await ensurePanelSource(testApp!, "about/help");
+    const helpPanelId = await ensurePanelSource(testApp!, "about/help");
 
     const shell = await findWorkspaceShellPage(testApp!);
     const address = shell.getByRole("textbox", { name: "Panel path" });
-    await shell.getByTitle("Edit address", { exact: true }).click();
+    const activeHelpBreadcrumb = shell
+      .getByTitle("Edit address", { exact: true })
+      .and(shell.locator(`[data-breadcrumb-id=${JSON.stringify(helpPanelId)}]`));
+    await activeHelpBreadcrumb.click();
     await expect(address).toBeVisible();
     await expectShellFitsMobileViewport(testApp!);
 
