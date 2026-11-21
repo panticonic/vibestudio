@@ -85,6 +85,7 @@ import {
   extensionRuntimeDependencyKey,
   prepareExternalDependencyEnvironment,
   type ExternalDependencyPatch,
+  type ExternalDependencyTraversalOptions,
 } from "./externalDeps.js";
 import { collectTransitiveInternalDeps, type BuildSourceProvider } from "./buildSource.js";
 import { assertUnitIconSize, declaredUnitIconPath } from "./unitIcon.js";
@@ -2998,7 +2999,8 @@ async function prepareBuildEnv(
   workspaceRoot: string,
   sourceRoot: string,
   composition: BuildComposition,
-  signal: AbortSignal
+  signal: AbortSignal,
+  dependencyTraversal?: ExternalDependencyTraversalOptions
 ): Promise<BuildEnv> {
   const outdir = createBuildScratchDir(`build-${buildKey}`);
 
@@ -3010,7 +3012,8 @@ async function prepareBuildEnv(
     sourceRoot,
     session.processOwner.appRoot,
     [...session.processOwner.appNodeModules],
-    signal
+    signal,
+    dependencyTraversal
   );
   const {
     externalDeps,
@@ -4763,7 +4766,8 @@ async function buildReactNativeClient(input: ClientBuildInput): Promise<StoredBu
     workspaceRoot,
     sourceRoot,
     "runtime-root",
-    signal
+    signal,
+    { hostWorkspacePackageManifests: session.processOwner.hostWorkspacePackageManifests }
   );
   let dependencies: Awaited<ReturnType<typeof acquireExternalDeps>> | undefined;
   let resources: Awaited<ReturnType<typeof prepareBuildProviderResources>> | undefined;

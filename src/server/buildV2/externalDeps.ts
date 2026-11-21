@@ -93,6 +93,8 @@ export interface ExternalDependencyClosure {
 export interface ExternalDependencyTraversalOptions {
   /** Stop at workspace package edges so each package keeps its own npm realm. */
   traverseWorkspaceDependencies?: boolean;
+  /** Native providers bundle host workspace source and need its complete declared npm closure. */
+  hostWorkspacePackageManifests?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -106,6 +108,7 @@ export function collectExternalDependencyClosure(
   packageRoots: string[] = [],
   options: ExternalDependencyTraversalOptions = {}
 ): ExternalDependencyClosure {
+  const hostWorkspacePackageManifests = options.hostWorkspacePackageManifests;
   const traverseWorkspaceDependencies = options.traverseWorkspaceDependencies ?? true;
   const dependencies: Record<string, string> = {};
   const peers: Record<string, string> = {};
@@ -173,7 +176,12 @@ export function collectExternalDependencyClosure(
         traverseWorkspaceDependencies
       ) {
         const pkg = workspaceRoot
-          ? readWorkspacePackageJson(workspaceRoot, name, packageRoots)
+          ? readWorkspacePackageJson(
+              workspaceRoot,
+              name,
+              packageRoots,
+              hostWorkspacePackageManifests
+            )
           : null;
         if (pkg) {
           // Attribute by package name, not by the path it was found at: the
@@ -202,9 +210,10 @@ export function collectExternalDependencyClosure(
   ) {
     if (visitedPackageJson.has(packageJsonPath)) return;
     visitedPackageJson.add(packageJsonPath);
-    walkDeps(packageDependencies, dependencies, { walkWorkspaceDeps: false });
+    const walkWorkspaceDeps = hostWorkspacePackageManifests !== undefined;
+    walkDeps(packageDependencies, dependencies, { walkWorkspaceDeps });
     walkDeps(packagePeers, peers, {
-      walkWorkspaceDeps: false,
+      walkWorkspaceDeps,
       owner: packageName,
       optional: packageOptionalPeers,
     });
@@ -274,6 +283,7 @@ export function collectTransitiveDependencyOverrides(
   packageRoots: string[] = [],
   options: ExternalDependencyTraversalOptions = {}
 ): Record<string, string> {
+  const hostWorkspacePackageManifests = options.hostWorkspacePackageManifests;
   const traverseWorkspaceDependencies = options.traverseWorkspaceDependencies ?? true;
   const overrides: Record<string, string> = {};
   const owners = new Map<string, string>();
@@ -308,7 +318,12 @@ export function collectTransitiveDependencyOverrides(
         traverseWorkspaceDependencies
       ) {
         const pkg = workspaceRoot
-          ? readWorkspacePackageJson(workspaceRoot, name, packageRoots)
+          ? readWorkspacePackageJson(
+              workspaceRoot,
+              name,
+              packageRoots,
+              hostWorkspacePackageManifests
+            )
           : null;
         if (pkg) {
           walkPackageJson(
@@ -329,7 +344,9 @@ export function collectTransitiveDependencyOverrides(
     if (visitedPackageJson.has(packageJsonPath)) return;
     visitedPackageJson.add(packageJsonPath);
     record(dependencyOverrides, packageJsonPath);
-    walkDeps(dependencies, { walkWorkspaceDeps: false });
+    walkDeps(dependencies, {
+      walkWorkspaceDeps: hostWorkspacePackageManifests !== undefined,
+    });
   }
 
   function walkNode(node: GraphNode) {
@@ -572,8 +589,11 @@ function readWorkspacePackageDeclarations(
 function readWorkspacePackageJson(
   workspaceRoot: string,
   packageName: string,
-  packageRoots: string[] = []
+  packageRoots: string[] = [],
+  hostWorkspacePackageManifests?: ReadonlyMap<string, string>
 ): WorkspacePackageDeclarations | null {
+  const hostManifest = hostWorkspacePackageManifests?.get(packageName);
+  if (hostManifest) return readWorkspacePackageDeclarations(hostManifest, packageName);
   for (const pkgJsonPath of workspacePackageJsonCandidates(
     workspaceRoot,
     packageName,
@@ -1292,13 +1312,15 @@ export async function prepareExternalDependencyEnvironment(
   sourceRoot: string,
   appRoot: string,
   appNodeModules: string[] = [],
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options: ExternalDependencyTraversalOptions = {}
 ): Promise<ExternalDependencyEnvironment> {
   const requirements = await resolveExternalDependencyRequirements(
     unit,
     graph,
     sourceRoot,
-    appNodeModules
+    appNodeModules,
+    options
   );
   const { closure, dependencyOverrides, dependencyPatches } = requirements;
   const externalDeps = closure.installSet;

@@ -80,6 +80,7 @@ vi.mock("./dependencyContentMaintenance.js", async (importOriginal) => ({
 }));
 
 import { PackageGraph, type GraphNode } from "./packageGraph.js";
+import { discoverHostWorkspacePackageManifests } from "./hostWorkspacePackages.js";
 import {
   collectTransitiveDependencyOverrides,
   collectTransitiveDependencyPatches,
@@ -638,6 +639,44 @@ describe("collectExternalDependencyClosure", () => {
       expect(deps).toEqual({
         "@silvia-odwyer/photon-node": "^0.3.4",
       });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("walks the declared npm dependencies of projected host packages without workspace links", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-native-deps-"));
+    try {
+      const appRoot = path.join(root, "app");
+      const workspaceRoot = path.join(root, "workspace");
+      const manifests = {
+        "native-api": {
+          name: "@vibestudio/native-api",
+          dependencies: { "@vibestudio/codec": "workspace:*", "web-streams-polyfill": "^3.3.3" },
+        },
+        codec: {
+          name: "@vibestudio/codec",
+          dependencies: { "@kayahr/text-encoding": "2.2.0" },
+          vibestudio: { dependencyResolution: { overrides: { "@kayahr/text-encoding": "2.2.0" } } },
+        },
+      };
+      for (const [name, manifest] of Object.entries(manifests)) {
+        const directory = path.join(appRoot, "packages", name);
+        fs.mkdirSync(directory, { recursive: true });
+        fs.writeFileSync(path.join(directory, "package.json"), JSON.stringify(manifest));
+      }
+      const graph = new PackageGraph();
+      const client = makeNode("@workspace-clients/browser", {
+        "@vibestudio/native-api": "workspace:*",
+      });
+      graph.addNode(client);
+      const options = {
+        hostWorkspacePackageManifests: discoverHostWorkspacePackageManifests(appRoot),
+      };
+      expect(collectExternalDependencyClosure(client, graph, workspaceRoot, [], options).installSet)
+        .toEqual({ "@kayahr/text-encoding": "2.2.0", "web-streams-polyfill": "^3.3.3" });
+      expect(collectTransitiveDependencyOverrides(client, graph, workspaceRoot, [], options))
+        .toEqual({ "@kayahr/text-encoding": "2.2.0" });
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
