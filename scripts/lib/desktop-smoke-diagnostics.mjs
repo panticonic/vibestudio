@@ -53,6 +53,15 @@ export function isUnexpectedDesktopDiagnostic(diagnostic) {
   }
   if (diagnostic.type !== "console") return true;
   if (!ACTIONABLE_CONSOLE_LEVELS.has(diagnostic.level)) return false;
+  // The public landing page delegates Web Share to its video embed. Chromium
+  // builds without Web Share report this warning before applying the iframe policy.
+  if (
+    diagnostic.level === "warning" &&
+    diagnostic.url === "https://vibestudio.app/" &&
+    diagnostic.message === "Unrecognized feature: 'web-share'."
+  ) {
+    return false;
+  }
   // Attribute console output to its emitting document. A cross-origin embed
   // owns its console; a CDN script executing in our document still belongs to us.
   // Missing or opaque frame identity remains actionable.
