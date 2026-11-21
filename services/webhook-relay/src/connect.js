@@ -5,7 +5,7 @@ import {
   workspaceConnection,
   runtime,
   rpc,
-  fs,
+  vcs,
   contextId,
   createConversationClient,
   launchAgentIntoChannel,
@@ -25,6 +25,7 @@ const make = $("lab-generate");
 const status = $("lab-status");
 const preview = $("lab-invention");
 const conversation = createConversationClient(rpc);
+const INVENTIONS_REPO = "projects/impossible-inventions";
 let invention;
 let subscription;
 let busy = false;
@@ -131,13 +132,17 @@ function append(text, who = "Inventor") {
 async function refreshArtifact(expected = invention) {
   if (!expected || expected !== invention || !workspaceConnection.connected) return;
   const operation = generation;
-  let html;
-  try {
-    html = await fs.readFile(`${expected.directory}/index.html`, "utf8");
-  } catch (error) {
-    if (/ENOENT|not found|does not exist/i.test(String(error))) return;
-    throw error;
-  }
+  // The inventor writes in its own working copy. Read the preview from one
+  // published workspace event so it also works after reconnecting.
+  const state = await vcs.mainState();
+  const repo = await vcs.resolveRepository({ state, repoPath: INVENTIONS_REPO });
+  if (!repo) return;
+  const file = await vcs.readFile({
+    state,
+    repositoryId: repo.repositoryId,
+    file: { kind: "path", path: `${expected.id}/index.html` },
+  });
+  const html = file?.content.kind === "text" ? file.content.text : null;
   if (
     operation !== generation ||
     !workspaceConnection.connected ||
@@ -243,7 +248,9 @@ async function restore() {
   const candidate = JSON.parse(saved);
   if (
     candidate.contextId !== contextId ||
-    !/^projects\/impossible-inventions\/[a-z0-9-]+$/.test(candidate.directory)
+    typeof candidate.id !== "string" ||
+    !/^[a-z0-9-]+$/.test(candidate.id) ||
+    candidate.directory !== `${INVENTIONS_REPO}/${candidate.id}`
   )
     return;
   invention = candidate;
@@ -330,7 +337,7 @@ make.addEventListener("click", async () => {
         id,
         contextId,
         prompt: idea,
-        directory: `projects/impossible-inventions/${id}`,
+        directory: `${INVENTIONS_REPO}/${id}`,
         channelId: `invention-${id}`,
         seedId: `invention-seed-${id}`,
       };
@@ -378,7 +385,7 @@ The invention MUST use a real AI or agent action triggered by its own UI: for ex
 
 For image generation use workspace.images.generate({requestId,prompt}), await workspace.images.wait(job.id), then read the succeeded asset through workspace.images.getBytes(job.asset) and show a Blob URL. Persist asset IDs, not Blob URLs. Use the configured workspace model and image provider. Do not ask for provider credentials or call providers directly. You can use the full public SDK and ordinary RPC as needed; credential administration, workspace-state administration, and system/native operations remain private. Don't deploy or message people.
 
-Verification: this deliverable is a static HTML document embedded by the website, not a workspace panel or a compiled application. Save the usable UI promptly. Check its saved HTML and exercise its public SDK integration with a small real request, inspecting the resulting conversation or image job. Content-only projects have no build targets, so build/verify is not a useful check for this HTML. Private workspace-state APIs, including panelTree search, cannot inspect the host page and remain unavailable to website-started agents. Workspace eval runs workspace code; it is not the browser DOM or a JavaScript syntax-checking service. Finish with a short invitation to try the AI interaction, accurately noting any checks you could not perform. Future requests revise the same file.`,
+Verification: this deliverable is a static HTML document embedded by the website, not a workspace panel or a compiled application. Save the usable UI promptly. Commit and publish the invention through the usual workspace review so this website can load it from shared history. Confirm that publication succeeded. Check its saved HTML and exercise its public SDK integration with a small real request, inspecting the resulting conversation or image job. Content-only projects have no build targets, so build/verify is not a useful check for this HTML. Private workspace-state APIs, including panelTree search, cannot inspect the host page and remain unavailable to website-started agents. Workspace eval runs workspace code; it is not the browser DOM or a JavaScript syntax-checking service. Finish with a short invitation to try the AI interaction, accurately noting any checks you could not perform. Future requests revise the same file.`,
       {
         idempotencyKey: work.seedId,
         to: [{ kind: "participant", participantId: work.participantId }],
@@ -405,7 +412,7 @@ async function revise(text) {
     seen.add(`ik:${id}`);
     await conversation.send(
       invention.channelTarget,
-      `${text}\nRevise ${invention.directory}/index.html and preserve its live workspace-powered AI interactions.`,
+      `${text}\nRevise ${invention.directory}/index.html and preserve its live workspace-powered AI interactions. Commit and publish the revision through the usual workspace review so it appears on this page.`,
       { idempotencyKey: id, to: [{ kind: "participant", participantId: invention.participantId }] }
     );
     delete invention.pendingRevision;

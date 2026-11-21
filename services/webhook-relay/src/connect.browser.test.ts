@@ -37,7 +37,9 @@ const connectedRuntime = String.raw`
     };
     return visit(error);
   };
-  const files = new Map();
+  const repository = "projects/impossible-inventions";
+  const publications = [new Map()];
+  const currentPublication = () => publications.at(-1);
   let notify;
   window.emitInventionEvent = event => notify({kind:"message",payload:{message:{kind:"log",event:{payload:event}}}});
   window.inventionCalls = [];
@@ -53,9 +55,19 @@ const connectedRuntime = String.raw`
     window.inventionCalls.push({ method: "docs.listSurfaces" });
     return [];
   } } };
-  export const fs = {
-    async mkdir() {}, async writeFile(path, text) { files.set(path, text); },
-    async readFile(path) { if (!files.has(path)) throw new Error("ENOENT"); return files.get(path); }
+  // This website's own working copy does not contain the inventor's files.
+  export const fs = { async readFile() { throw new Error("ENOENT"); } };
+  export const vcs = {
+    async mainState() { return { kind: "event", eventId: String(publications.length - 1) }; },
+    async resolveRepository({ state, repoPath }) {
+      if (repoPath !== repository) throw new Error("Unexpected invention repository");
+      return publications[Number(state.eventId)]?.size ? { repositoryId: repository, state } : null;
+    },
+    async readFile({ state, repositoryId, file }) {
+      if (repositoryId !== repository || file.kind !== "path") throw new Error("Unexpected invention file");
+      const text = publications[Number(state.eventId)]?.get(repository + "/" + file.path);
+      return text ? { content: { kind: "text", text } } : null;
+    }
   };
   export async function launchAgentIntoChannel(rpc, input) {
     window.inventionCalls.push({ method: "launchAgentIntoChannel", input });
@@ -67,7 +79,9 @@ const connectedRuntime = String.raw`
     async send(target, text, options) {
       window.inventionCalls.push({ method: "send", text, options });
       const path = text.match(/projects\/impossible-inventions\/[a-z0-9-]+\/index.html/)[0];
-      files.set(path, '<!doctype html><button id="ask">Consult the moon</button><output></output><script>document.getElementById("ask").onclick=async()=>{await parent.inventionWorkspace.services.docs.listSurfaces();document.querySelector("output").textContent="Connected to the real SDK instance"}<\/script>');
+      const publication = new Map(currentPublication());
+      publication.set(path, '<!doctype html><button id="ask">Consult the moon</button><output></output><script>document.getElementById("ask").onclick=async()=>{await parent.inventionWorkspace.services.docs.listSurfaces();document.querySelector("output").textContent="Connected to the real SDK instance"}<\/script>');
+      publications.push(publication);
       const complete = () => notify({ kind: "message", payload: { message: { kind: "log", event: { payload: { kind: "message.completed", causality: { messageId: crypto.randomUUID() }, payload: { role: "assistant", blocks: [{ type: "text", content: "Turn the moon dial." }] } } } } } });
       window.finishInvention = complete;
       if (!location.search.includes("hold")) setTimeout(complete, 30);
