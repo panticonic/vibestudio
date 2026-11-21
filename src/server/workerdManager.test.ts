@@ -70,8 +70,8 @@ vi.mock("child_process", () => ({
       emit: (event: string, ...args: unknown[]) => {
         for (const fn of listeners.get(event) ?? []) fn(...args);
       },
-      emitOutput: (stream: "stdout" | "stderr", data: string) => {
-        const output = Buffer.from(data);
+      emitOutput: (stream: "stdout" | "stderr", data: string | Buffer) => {
+        const output = typeof data === "string" ? Buffer.from(data) : data;
         for (const listener of stream === "stderr" ? stderrListeners : stdoutListeners) {
           listener(output);
         }
@@ -3026,10 +3026,13 @@ describe("WorkerdManager", () => {
       const initialGeneration = mgr.getBootGeneration();
       const crashed = vi.mocked(spawn).mock.results.at(-1)?.value as {
         emit(event: string, ...args: unknown[]): void;
-        emitOutput(stream: "stdout" | "stderr", data: string): void;
+        emitOutput(stream: "stdout" | "stderr", data: string | Buffer): void;
       };
 
-      crashed.emitOutput("stderr", "fatal fixture diagnostic");
+      const output = Buffer.from("fatal fixture diagnostic\nencoded café\r\nfinal line\n");
+      const split = output.indexOf(Buffer.from("é")) + 1;
+      crashed.emitOutput("stderr", output.subarray(0, split));
+      crashed.emitOutput("stderr", output.subarray(split));
       crashed.emit("exit", 1, null);
 
       await vi.waitFor(() => {
@@ -3056,7 +3059,11 @@ describe("WorkerdManager", () => {
             startedAt: expect.any(Number),
             code: 1,
             signal: null,
-            recentOutput: expect.arrayContaining(["stderr: fatal fixture diagnostic"]),
+            recentOutput: [
+              "stderr: fatal fixture diagnostic",
+              "stderr: encoded café",
+              "stderr: final line",
+            ],
           }),
         })
       );

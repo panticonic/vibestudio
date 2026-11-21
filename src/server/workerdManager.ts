@@ -25,6 +25,7 @@ import { createRequire } from "module";
 import * as path from "path";
 import * as os from "os";
 import { backup, DatabaseSync } from "node:sqlite";
+import { StringDecoder } from "node:string_decoder";
 import { stateLayout } from "./stateLayout.js";
 import { pathToFileURL } from "url";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
@@ -83,6 +84,43 @@ const log = createDevLogger("WorkerdManager");
 const DEFAULT_WORKERD_SIGTERM_TIMEOUT_MS = 60_000;
 const DEFAULT_WORKERD_SIGKILL_TIMEOUT_MS = 30_000;
 const WORKERD_STARTUP_OUTPUT_LINES = 40;
+const MAX_WORKERD_OUTPUT_LINE_LENGTH = 64 * 1024;
+
+function captureWorkerdOutput(
+  stream: NodeJS.ReadableStream | null,
+  emit: (line: string) => void
+): void {
+  if (!stream) return;
+  const decoder = new StringDecoder("utf8");
+  let line = "";
+  let truncated = false;
+  function extend(fragment: string): void {
+    const room = MAX_WORKERD_OUTPUT_LINE_LENGTH - line.length;
+    truncated ||= fragment.length > room;
+    line += fragment.slice(0, room);
+  }
+  function flush(): void {
+    const trimmed = line.trim();
+    if (trimmed || truncated) emit(truncated ? trimmed + " … [truncated]" : trimmed);
+    line = "";
+    truncated = false;
+  }
+  function receive(text: string): void {
+    const fragments = text.split("\n");
+    const tail = fragments.pop()!;
+    for (const fragment of fragments) {
+      extend(fragment);
+      flush();
+    }
+    extend(tail);
+  }
+  stream.on("data", (chunk: Buffer) => receive(decoder.write(chunk)));
+  stream.on("end", () => {
+    receive(decoder.end());
+    flush();
+  });
+}
+
 interface WorkerdProcessReceipt {
   pid: number | undefined;
   port: number | null;
@@ -3335,20 +3373,14 @@ export class WorkerdManager {
     this.startWorkerdMemorySampling(spawnedPid);
     this.lastWorkerdStartupOutput = receipt.output;
 
-    spawnedProcess.stdout?.on("data", (data: Buffer) => {
-      const line = data.toString().trim();
-      if (line) {
-        this.rememberWorkerdStartupOutput(`stdout: ${line}`, receipt.output);
-        log.verbose(`[workerd] ${line}`);
-      }
+    captureWorkerdOutput(spawnedProcess.stdout, (line) => {
+      this.rememberWorkerdStartupOutput(`stdout: ${line}`, receipt.output);
+      log.verbose(`[workerd] ${line}`);
     });
 
-    spawnedProcess.stderr?.on("data", (data: Buffer) => {
-      const line = data.toString().trim();
-      if (line) {
-        this.rememberWorkerdStartupOutput(`stderr: ${line}`, receipt.output);
-        log.warn(`[workerd] ${line}`);
-      }
+    captureWorkerdOutput(spawnedProcess.stderr, (line) => {
+      this.rememberWorkerdStartupOutput(`stderr: ${line}`, receipt.output);
+      log.warn(`[workerd] ${line}`);
     });
 
     // Wait for startup readiness, detecting early failures (ENOENT, bind
