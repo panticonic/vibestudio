@@ -735,7 +735,21 @@ test.describe("Terminal Startup", () => {
     // Leave the launch permission unchecked so the initial registry request
     // exercises the interactive approval while the terminal panel waits.
     await approvePendingWorkspaceCreationReview(testApp, undefined, [TERMINAL_APPS_RUN_CAPABILITY]);
-    await approvePendingStartupUnits(testApp);
+    const startupShellClearances: string[] = [];
+    await approvePendingStartupUnits(testApp, 180_000, (review) => {
+      for (const part of review.parts) {
+        for (const row of [...part.notableRows, ...part.everydayRows]) {
+          if (
+            row.kind === "permission" &&
+            row.row.capability === TERMINAL_APPS_RUN_CAPABILITY &&
+            row.selectable &&
+            row.selectedByDefault
+          ) {
+            startupShellClearances.push(part.identityKey);
+          }
+        }
+      }
+    });
     await declineFirstRunReporting(testApp);
     const shell = await findWorkspaceShellPage(testApp);
     const { app } = testApp;
@@ -782,7 +796,7 @@ test.describe("Terminal Startup", () => {
       ),
       `Expected terminal startup to exercise its launch approval, observed ${JSON.stringify(
         resolvedApprovals.map(({ kind, capability, title }) => ({ kind, capability, title }))
-      )}`
+      )}. Launch review selected terminal permission for ${JSON.stringify(startupShellClearances)}`
     ).toBe(true);
     const sessionRef: TerminalSessionRef = { sessionId: session.sessionId };
 

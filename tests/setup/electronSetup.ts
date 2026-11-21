@@ -752,7 +752,12 @@ export async function approvePendingWorkspaceCreationReview(
             | { status: "preparing" | "not-required" | "resolved" | "unresolved" }
             | { status: "pending"; approvalId: string }
             | { status: "failed"; error: string };
-          if (state.status === "not-required" || state.status === "resolved") return;
+          if (state.status === "not-required" || state.status === "resolved") {
+            if (request.deferCapabilities.length > 0) {
+              throw new Error(`Cannot defer test permissions from a ${state.status} creation review`);
+            }
+            return;
+          }
           if (state.status === "failed") {
             throw new Error(`Workspace creation review failed: ${state.error}`);
           }
@@ -788,6 +793,7 @@ export async function approvePendingWorkspaceCreationReview(
           everydayRows?: PermissionRow[];
         }>;
       }>;
+      const deferredRows = new Set<string>();
       for (const approval of pending) {
         if (!requested.has(approval.approvalId)) continue;
         if (approval.kind !== "unit-install-review" || !approval.mode || !approval.parts) continue;
@@ -802,18 +808,24 @@ export async function approvePendingWorkspaceCreationReview(
           .map((part) => ({
             identityKey: part.identityKey,
             permissions: [...(part.notableRows ?? []), ...(part.everydayRows ?? [])]
-              .filter(
-                (row) =>
-                  row.selectable &&
-                  row.selectedByDefault &&
-                  !deferred.has(row.row?.capability ?? "")
-              )
+              .filter((row) => {
+                const capability = row.row?.capability;
+                if (capability && deferred.has(capability)) {
+                  deferredRows.add(capability);
+                  return false;
+                }
+                return row.selectable && row.selectedByDefault;
+              })
               .map((row) => row.key),
           }));
         await testApi.rpcCall("shellApproval", "resolveInstallReview", [
           approval.approvalId,
           { decision, allowNow },
         ]);
+      }
+      const missing = [...deferred].filter((capability) => !deferredRows.has(capability));
+      if (missing.length > 0) {
+        throw new Error(`Test permissions absent from the creation review: ${missing.join(", ")}`);
       }
     },
     {
