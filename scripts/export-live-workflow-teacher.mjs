@@ -10,6 +10,14 @@ import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
 
 const sharedProgram = "skills/vibestudio-workflows/runWorkflow.nl";
 const templateGoalDomains = {
+  "bridge-delivery": {
+    namespace: "vibestudio:bridge:local-release-delivery",
+    validator: { template:"system-testing", path:"skills/system-testing/open-goal-bridge-delivery-managed.ts" },
+    callable: "workOnBridgeDelivery",
+    skill: "bridgeDelivery",
+    checks: ["exactBranchProject", "exactLiveLocalBridge", "exactSemanticFileChain", "retainedBranchAuthority",
+      "groundedBranchDecision", "exactLocalBranchCommit", "exactPrivateBranchHandoff", "protectedBranchMain", "rejectedBranchRetarget"],
+  },
   "chat-continuity": {
     namespace: "vibestudio:chat:owned-continuity",
     validator: { template: "system-testing", path: "skills/system-testing/open-goal-chat-continuity-managed.ts" },
@@ -1537,14 +1545,14 @@ export async function loadLiveTeacherCases(checkouts) {
     const imported = await import(pathToFileURL(openGoalFile).href);
     const splitByGroup = new Map();
     const distinctGoals = new Set();
-    const { openGoalWorlds, openPhoneFirstRunWorlds = [], openSkillMaintenanceWorlds = [], openWebhookAdmissionWorlds = [], openDesktopReadinessWorlds = [], openContentArchiveWorlds = [], openSystemReleaseWorlds = [], openTestkitCloseoutWorlds = [], openPanelSourceMigrationWorlds = [], openWorkspaceShareWorlds = [], openNotificationStateWorlds = [], openAgentCapabilityWorlds = [], openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openChatContinuityWorlds = [], openGrimoireSceneWorlds = [], openEditorialWorlds = [], openPortfolioWorlds = [], openRegencyWorlds = [], openImageCandidateWorlds = [], openApiReadinessWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
+    const { openGoalWorlds, openPhoneFirstRunWorlds = [], openSkillMaintenanceWorlds = [], openWebhookAdmissionWorlds = [], openDesktopReadinessWorlds = [], openContentArchiveWorlds = [], openSystemReleaseWorlds = [], openTestkitCloseoutWorlds = [], openPanelSourceMigrationWorlds = [], openWorkspaceShareWorlds = [], openNotificationStateWorlds = [], openAgentCapabilityWorlds = [], openMobileContinuityWorlds = [], openInstalledPackageWorlds = [], openAssetIntegrityWorlds = [], openTendrilRouteWorlds = [], openExtensionDossierWorlds = [], openDeployedInterfaceWorlds = [], openLocalPresentationWorlds = [], openAdventureJourneyWorlds = [], openLocalWidthWorlds = [], openTemplateMigrationWorlds = [], openBuildIncidentWorlds = [], openProblemReportWorlds = [], openCompoundRecoveryWorlds = [], openScheduledRecoveryWorlds = [], openAssemblyWorlds = [], openGoalGitHubWorlds = [], openClientDiagnosticsWorlds = [], openOwnedTaskWorlds = [], capabilityPlanWorlds = [], openGoalGoogleSetupWorlds = [], openUnitRolloutWorlds = [], openVaultKnowledgeWorlds = [], openReconciliationWorlds = [], browserGoalWorlds = [], suiteGoalWorlds = [], openChatContinuityWorlds = [], openGrimoireSceneWorlds = [], openBridgeDeliveryWorlds = [], openEditorialWorlds = [], openPortfolioWorlds = [], openRegencyWorlds = [], openImageCandidateWorlds = [], openApiReadinessWorlds = [], openNewsEvidenceWorlds = [], newsGoalWorlds = [],
       spectroliteGoalWorlds = [], openGoalGoogleWorlds = [], openGoalPersonalWorlds = [],
       operatorGoalWorlds = [], openGoalRecoveryWorlds = [], publicationGoalWorlds = [], openGoalPdfWorlds = [],
       openGoalGmailWorlds = [], openGoalPdfVaultWorlds = [], openGoalCalendarWorlds = [],
       openPersonalArtifactWorlds = [], openPersonalHistoryWorlds = [], openGoalGoogleHandoffWorlds = [],
       openTerminalWorlds = [], openOwnedResearchWorlds = [], personalWelcomeWorlds = [], dictationHandoffWorlds = [], specialistHandoffWorlds = [], providerHandoffWorlds = [], openGoalEvalHandoffWorlds = [], openGoalProgramRunWorlds = [], openGoalAuthoringWorlds = [], openPersonalAutomationWorlds = [], openGoalOwnedPreviewWorlds = [], openDiagnosticWorlds = [], openLocalDeliveryWorlds = [], openGoalPanelRecoveryWorlds = [], openBrowserMigrationWorlds = [] } = imported.default ?? imported;
     for (const assignment of [...openGoalWorlds, ...openPhoneFirstRunWorlds, ...openSkillMaintenanceWorlds, ...openWebhookAdmissionWorlds, ...openDesktopReadinessWorlds, ...openContentArchiveWorlds, ...openSystemReleaseWorlds, ...openTestkitCloseoutWorlds, ...openPanelSourceMigrationWorlds, ...openWorkspaceShareWorlds, ...openNotificationStateWorlds, ...openAgentCapabilityWorlds, ...openMobileContinuityWorlds, ...openInstalledPackageWorlds, ...openAssetIntegrityWorlds, ...openTendrilRouteWorlds, ...openExtensionDossierWorlds, ...openDeployedInterfaceWorlds, ...openLocalPresentationWorlds, ...openAdventureJourneyWorlds, ...openLocalWidthWorlds, ...openBuildIncidentWorlds, ...openProblemReportWorlds, ...openCompoundRecoveryWorlds, ...openScheduledRecoveryWorlds, ...openAssemblyWorlds, ...openTemplateMigrationWorlds, ...openGoalGitHubWorlds, ...openClientDiagnosticsWorlds, ...openOwnedTaskWorlds, ...capabilityPlanWorlds, ...openGoalGoogleSetupWorlds, ...openUnitRolloutWorlds, ...openVaultKnowledgeWorlds, ...openReconciliationWorlds, ...browserGoalWorlds, ...suiteGoalWorlds,
-      ...openGrimoireSceneWorlds, ...openApiReadinessWorlds, ...openChatContinuityWorlds, ...openEditorialWorlds, ...openPortfolioWorlds, ...openRegencyWorlds, ...openImageCandidateWorlds, ...openNewsEvidenceWorlds, ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
+      ...openGrimoireSceneWorlds, ...openApiReadinessWorlds, ...openChatContinuityWorlds, ...openBridgeDeliveryWorlds, ...openEditorialWorlds, ...openPortfolioWorlds, ...openRegencyWorlds, ...openImageCandidateWorlds, ...openNewsEvidenceWorlds, ...newsGoalWorlds, ...spectroliteGoalWorlds, ...openGoalGoogleWorlds, ...openGoalPersonalWorlds,
       ...operatorGoalWorlds, ...openGoalRecoveryWorlds, ...publicationGoalWorlds,
       ...openGoalPdfWorlds, ...openGoalGmailWorlds, ...openGoalPdfVaultWorlds,
       ...openGoalCalendarWorlds, ...openPersonalArtifactWorlds, ...openPersonalHistoryWorlds,
@@ -7857,6 +7865,72 @@ function verifyDemoPortfolio(exercise, world, proof, skill) {
   );
 }
 
+function verifyBridgeDelivery(exercise, world, proof, skill) {
+  const result=exercise.report.outcome;
+  const {index,plan,scope,operations,bridgeRead,fileReads,branch,decision,commit,handoff}=proof;
+  const issued=new Map(operations);
+  const snapshots=new Map(fileReads);
+  const records=exercise.calls.map(({record})=>record);
+  const child=(owner,name)=>records.filter(record=>record.parent_call_id===owner?.call_id&&
+    record.definition?.name===name&&record.outcome==="done");
+  const step=name=>child(skill,name);
+  const effects=(records,service,method)=>records.flatMap(record=>(record.effects??[])
+    .filter(effect=>effect.service===service&&effect.method===method&&!effect.error));
+  const exactEffect=(effects,args,result)=>effects.length===1&&matchesValue(effects[0].args,args)&&matchesValue(effects[0].result,result);
+  const discovery=effects(step("discover"),"branchDeliveryRead","discover");
+  const inspection=effects(step("inspect"),"branchDeliveryRead","inspect");
+  const commits=effects(step("commit"),"branchDeliveryWrite","commit");
+  const notes=effects(step("retain"),"branchDeliveryWrite","retain");
+  const [selection]=step("chooseBridgeScope");
+  const [git]=step("inspectCurrentBridge");
+  const [retained]=step("assessRetainedBranch");
+  const [verdict]=step("decideLocalDelivery");
+  const fileReviews=step("reviewDeliveryFile");
+  const nativeBindings=effects(step("operation"),"branchDeliveryRead","operation");
+  const binding=(owner,path)=>[...nativeBindings].filter(effect=>matchesValue(effect.args,[plan.id,path])&&
+    matchesValue(effect.result,issued.get(path))).length===1&&matchesValue(owner.inputs?.operationId,issued.get(path));
+  const [installedGit]=child(git,"reviewGitBridge");
+  const artifact=typeof proof.artifact==="string"?JSON.parse(proof.artifact):null;
+  requireEvidence(
+    exactEffect(discovery,[],index)&&exactEffect(inspection,[plan.id],scope)&&
+      step("chooseBridgeScope").length===1&&matchesValue(selection.inputs?.goal,world.goal)&&
+      matchesValue(selection.inputs?.index,index)&&matchesValue(selection.output,plan)&&isDeepStrictEqual(result.plan,plan)&&isDeepStrictEqual(result.scope,scope)&&
+      nativeBindings.length===3&&step("inspectCurrentBridge").length===1&&binding(git,"")&&
+      matchesValue(git.inputs?.goal,world.goal)&&matchesValue(git.inputs?.scope,scope)&&matchesValue(git.output,result.local)&&
+      child(git,"reviewGitBridge").length===1&&matchesValue(installedGit.inputs?.request,
+        {operationId:issued.get(""),goal:world.goal,repository:scope.repository,direction:"diagnose"})&&
+      exactEffect(effects([installedGit],"gitBridgeReviewRead","observe"),[issued.get("")],bridgeRead)&&
+      matchesValue(installedGit.output,result.local)&&isDeepStrictEqual(result.local.view,bridgeRead)&&
+      bridgeRead.upstream.state==="local-only"&&fileReviews.length===2&&[scope.specPath,scope.notePath].every((path,i)=>{
+        const wrapper=fileReviews[i], report=i===0?result.spec:result.note;
+        const [installed]=child(wrapper,"reviewVcsDelivery");
+        return binding(wrapper,path)&&matchesValue(wrapper.inputs?.goal,world.goal)&&matchesValue(wrapper.inputs?.scope,scope)&&
+          matchesValue(wrapper.inputs?.path,path)&&matchesValue(wrapper.output,report)&&child(wrapper,"reviewVcsDelivery").length===1&&
+          matchesValue(installed.inputs?.request,{operationId:issued.get(path),goal:world.goal,repository:scope.repository,path})&&
+          exactEffect(effects([installed],"vcsDeliveryRead","observe"),[issued.get(path)],snapshots.get(path))&&
+          matchesValue(installed.output,report)&&isDeepStrictEqual(report.snapshot,snapshots.get(path));
+      })&&
+      step("assessRetainedBranch").length===1&&matchesValue(retained.inputs?.scope,scope)&&
+      matchesValue(retained.output,branch)&&isDeepStrictEqual(result.branch,branch)&&branch.status===world.condition&&
+      step("decideLocalDelivery").length===1&&matchesValue(verdict.inputs?.goal,world.goal)&&matchesValue(verdict.inputs?.plan,plan)&&
+      matchesValue(verdict.inputs?.scope,scope)&&matchesValue(verdict.inputs?.local,result.local)&&
+      matchesValue(verdict.inputs?.spec,result.spec)&&matchesValue(verdict.inputs?.note,result.note)&&matchesValue(verdict.inputs?.branch,branch)&&
+      matchesValue(verdict.output,decision)&&isDeepStrictEqual(result.decision,decision)&&decision.status===world.result&&
+      isDeepStrictEqual(result.commit,commit)&&isDeepStrictEqual(result.handoff,handoff)&&
+      (commit?exactEffect(commits,[plan.id,result.spec.snapshot.working],commit)&&commit.repository===scope.repository&&
+        commit.protectedEventId===bridgeRead.semantic.mainEventId&&isDeepStrictEqual(commit.from,result.spec.snapshot.working)&&
+        isDeepStrictEqual(commit.files,[scope.specPath,scope.notePath]):commits.length===0)&&
+      (handoff?artifact&&exactEffect(notes,[{...result,handoff:null}],handoff)&&handoff.digest===hash(proof.artifact)&&
+        artifact.visibility==="private-local"&&artifact.repository===scope.repository&&artifact.branch===scope.branch&&
+        artifact.retainedDigest===scope.retainedDigest&&isDeepStrictEqual(artifact.retained,scope.retained)&&
+        artifact.protectedEventId===bridgeRead.semantic.mainEventId&&
+        isDeepStrictEqual(artifact.commit,commit)&&isDeepStrictEqual(artifact.decision,decision)&&
+        isDeepStrictEqual(artifact.spec,result.spec.snapshot.file)&&isDeepStrictEqual(artifact.note,result.note.snapshot.file):
+        notes.length===0&&artifact===null),
+    "Expected exact Git Bridge and semantic delivery evidence"
+  );
+}
+
 function verifyEditorialPacket(exercise, world, proof, skill) {
   const report=exercise.report.outcome;
   const {listed,snapshots,plan,sources,attempts,stored,edit,decision,note}=proof;
@@ -8057,6 +8131,8 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
     verifyChatContinuity(exercise, world, proof, skill);
   } else if (world.kind === "editorial-packet") {
     verifyEditorialPacket(exercise, world, proof, skill);
+  } else if (world.kind === "bridge-delivery") {
+    verifyBridgeDelivery(exercise, world, proof, skill);
   } else if (world.kind === "demo-portfolio") {
     verifyDemoPortfolio(exercise, world, proof, skill);
   } else if (world.kind === "regency-briefing") {
