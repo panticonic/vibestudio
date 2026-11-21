@@ -39,8 +39,8 @@ test.describe("Panel Rebuild Lifecycle", () => {
 
     try {
       testApp = await launchTestApp({ workspace: workspacePath, launchTimeout: 180_000 });
-      await approvePendingStartupUnits(testApp);
       await approvePendingWorkspaceCreationReview(testApp);
+      await approvePendingStartupUnits(testApp);
       const caller = await ensureHostedShellReady(testApp, { panelSource: "panels/chat" });
 
       const targetId = caller.panelId;
