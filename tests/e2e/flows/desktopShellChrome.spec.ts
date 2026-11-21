@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { createRpcMethods } from "@vibestudio/shared/rpcMethods";
 import { mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
+import { fsMethods } from "@vibestudio/service-schemas/fs";
 import { viewMethods } from "@vibestudio/service-schemas/view";
 import { vcsMethods } from "@vibestudio/service-schemas/vcs";
 import { shellApprovalMethods } from "@vibestudio/service-schemas/shellApproval";
@@ -527,24 +528,24 @@ test.describe("Desktop Shell Chrome", () => {
         .textContent())!.trim();
       expect(contextId).toMatch(/^file-copy-/);
       const status = await targetVcs.status({ contextId });
-      const repository = await targetVcs.resolveRepository({
-        state: status.workingHead,
-        repoPath: "projects/copied-welcome",
-      });
-      expect(repository).toBeTruthy();
-      const copied = await targetVcs.listFiles({
-        state: status.workingHead,
-        repositoryId: repository!.repositoryId,
-        limit: 200,
-      });
-      expect(copied.files.map((file) => file.path)).toEqual(["Welcome.mdx"]);
-      const result = await targetVcs.readFile({
-        state: status.workingHead,
-        repositoryId: repository!.repositoryId,
-        file: { kind: "path", path: "Welcome.mdx" },
-      });
-      expect(result?.contentHash).toBe(sourceFile!.contentHash);
-      expect(result?.content).toEqual(sourceFile!.content);
+      expect(status.workingHead).not.toEqual(targetMain);
+      const targetFs = createTypedServiceClient(
+        "fs",
+        fsMethods,
+        nativeUiServiceInvoker(
+          page,
+          { kind: "workspace", workspaceId: system.workspaceId },
+          "fs",
+          fsMethods
+        )
+      );
+      // The shell's VCS catalog is the published workspace. The filesystem
+      // reads name the exact review context and use its own working state.
+      const copyRoot = "/projects/copied-welcome";
+      expect(await targetFs.readdir(contextId, copyRoot)).toEqual(["Welcome.mdx"]);
+      const result = await targetFs.readText(contextId, `${copyRoot}/Welcome.mdx`);
+      expect(result.contentHash).toBe(sourceFile!.contentHash);
+      expect({ kind: "text", text: result.text }).toEqual(sourceFile!.content);
       expect(await targetVcs.mainState()).toEqual(targetMain);
       expect(
         await targetVcs.resolveRepository({
