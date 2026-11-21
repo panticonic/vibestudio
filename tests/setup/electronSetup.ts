@@ -657,7 +657,8 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
  */
 export async function approvePendingStartupUnits(
   fixture: TestApp,
-  timeoutMs = 180_000
+  timeoutMs = 180_000,
+  observeReview?: (review: import("@vibestudio/shared/approvals").PendingUnitInstallReviewApproval) => void
 ): Promise<void> {
   const owner = { app: fixture.app, workspaceId: fixture.systemWorkspaceId };
   const deadline = Date.now() + timeoutMs;
@@ -670,6 +671,7 @@ export async function approvePendingStartupUnits(
         []
       );
       if (gate.launch.status === "approval-required") {
+        for (const review of gate.launch.approvals) observeReview?.(review);
         await callTestApi(owner, "resolveLaunchApprovals", ["once"]);
         continue;
       }

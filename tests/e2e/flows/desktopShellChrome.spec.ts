@@ -127,7 +127,20 @@ test.describe("Desktop Shell Chrome", () => {
 
   test("mounts the dynamic shell app with custom titlebar chrome", async () => {
     testApp = await launchTestApp({ launchTimeout: 240_000 });
-    await approveStartupUnitsAndDeclineReporting(testApp);
+    let deletePermission: { action: string; unrecognized?: true } | undefined;
+    await approvePendingStartupUnits(testApp, 180_000, (review) => {
+      const part = review.parts.find((entry) => entry.repoPath === "extensions/browser-data");
+      if (!part) return;
+      const permission = [...part.notableRows, ...part.everydayRows].find(
+        (entry) =>
+          entry.kind === "permission" &&
+          entry.row.capability === "userland:workers/browser-data/browser-data.delete#*"
+      );
+      if (permission?.kind === "permission") deletePermission = permission.row;
+    });
+    expect(deletePermission?.action).toBe("delete persistent browser data");
+    expect(deletePermission?.unrecognized).toBeUndefined();
+    await declineFirstRunReporting(testApp);
 
     const shellPage = await findWorkspaceShellPage(testApp);
     try {
@@ -148,87 +161,15 @@ test.describe("Desktop Shell Chrome", () => {
         return chrome.id;
       }, shellPage.url());
       for (const workspace of ["Personal", "System", "Personal"]) {
-        await testApp.app.evaluate(
-          async ({ webContents }, { chromeId, workspace }) => {
-            const chrome = webContents.fromId(chromeId);
-            if (!chrome || chrome.isDestroyed())
-              throw new Error("Workspace switching replaced the desktop chrome");
-            await chrome.executeJavaScript(
-              `document.querySelector('[aria-label="Open ${workspace}"]').click()`
-            );
-          },
-          { chromeId, workspace }
-        );
-        await expect
-          .poll(
-            () =>
-              testApp!.app.evaluate(
-                async ({ webContents }, { chromeId, workspace }) => {
-                  const chrome = webContents.fromId(chromeId);
-                  if (!chrome || chrome.isDestroyed()) return false;
-                  return chrome.executeJavaScript(
-                    `document.querySelector('.workspace-section-focused')?.getAttribute('aria-label') === '${workspace} workspace'`
-                  );
-                },
-                { chromeId, workspace }
-              ),
-            { timeout: 60_000 }
-          )
-          .toBe(true);
+        const openWorkspace = shellPage.getByRole("button", {
+          name: `Open ${workspace}`,
+          exact: true,
+        });
+        await openWorkspace.click();
+        await expect(openWorkspace).toHaveAttribute("aria-current", "location", {
+          timeout: 60_000,
+        });
       }
-      // Personal's startup review consumes a worker receiver declaration even
-      // though the worker itself does not require privileged-code admission.
-      const workspaces = await nativeUiRead(
-        shellPage,
-        { kind: "hub" },
-        hubControlRpcMethods.listWorkspaces,
-        []
-      );
-      const personal = workspaces.find((workspace) => workspace.privateRole === "personal");
-      expect(personal).toBeTruthy();
-      let browserReview:
-        | import("@vibestudio/shared/approvals").PendingUnitInstallReviewApproval
-        | undefined;
-      await expect
-        .poll(
-          async () => {
-            const pending = await nativeUiRead(
-              shellPage,
-              { kind: "workspace", workspaceId: personal!.workspaceId },
-              shellApprovalRpcMethods.listPending,
-              []
-            );
-            browserReview = pending.find(
-              (
-                approval
-              ): approval is import("@vibestudio/shared/approvals").PendingUnitInstallReviewApproval =>
-                approval.kind === "unit-install-review" &&
-                approval.parts.some((part) =>
-                  part.identityKey.startsWith("extensions/browser-data@")
-                )
-            );
-            return Boolean(browserReview);
-          },
-          { timeout: 60_000 }
-        )
-        .toBe(true);
-      if (!browserReview) throw new Error("The browser-data declaration review disappeared");
-      const reviewCard = await presentApprovalCard(shellPage, browserReview.approvalId);
-      const browserDataRow = reviewCard.locator(
-        '[data-part-row][data-identity-key^="extensions/browser-data@"]'
-      );
-      await expect(browserDataRow).toBeVisible();
-      if (
-        (await browserDataRow.getAttribute("aria-current")) !== "true" &&
-        (await browserDataRow.getAttribute("aria-expanded")) !== "true"
-      ) {
-        await browserDataRow.click();
-      }
-      const browserDataDetail = reviewCard.locator(".install-review-detail").filter({
-        hasText: "delete persistent browser data",
-      });
-      await expect(browserDataDetail).toBeVisible();
-      expect(await browserDataDetail.innerText()).not.toContain("doesn't recognize");
       const screenshot = await testApp.app.evaluate(async ({ webContents }, id) => {
         const chrome = webContents.fromId(id);
         if (!chrome || chrome.isDestroyed()) throw new Error("System desktop chrome disappeared");
@@ -242,7 +183,7 @@ test.describe("Desktop Shell Chrome", () => {
     } catch (error) {
       const shellText = await shellPage.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
       throw new Error(
-        `${error instanceof Error ? error.message : String(error)}\nShell text: ${shellText}\nElectron output tail:\n${testApp.getOutput().slice(-20_000)}`
+        `${error instanceof Error ? error.stack ?? error.message : String(error)}\nShell text: ${shellText}\nElectron output tail:\n${testApp.getOutput().slice(-20_000)}`
       );
     }
   });
