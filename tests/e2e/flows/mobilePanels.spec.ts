@@ -1,11 +1,9 @@
 /**
- * Mobile panel chrome smoke tests.
+ * Phone-width desktop panel smoke tests.
  *
  * These run the real Electron shell at a phone-sized native window and assert
- * shell-chrome behavior (titlebar, address bar, panel tree, stack mode) at
- * mobile size. The per-panel viewport-fit matrix lives in @workspace/testkit;
- * panels/chat keeps a targeted entry here because it exercises the agentic
- * panel chrome path in the desktop shell.
+ * desktop titlebars, the address bar, and the panel sidebar at that size.
+ * The per-panel viewport-fit matrix lives in @workspace/testkit.
  */
 
 import { expect, test } from "@playwright/test";
@@ -33,7 +31,7 @@ import {
   startPanelDiagnostics,
   type TestApp,
 } from "../../setup/electronSetup";
-import { declineFirstRunReporting } from "../support/workspaceCreation";
+import { declineFirstRunReporting, findWorkspaceShellPage } from "../support/workspaceCreation";
 
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 
@@ -265,149 +263,6 @@ async function waitForHostedShellChrome(owner: TestApp, panelSource: string): Pr
   await ensureHostedShellReady(owner, { panelSource });
 }
 
-async function shellElementVisibleByLabel(owner: TestApp, label: string): Promise<boolean> {
-  return Boolean(
-    await evaluateInHostedShell(
-      owner,
-      `(() => {
-        const label = ${JSON.stringify(label)};
-        const visible = (node) => {
-          if (!(node instanceof HTMLElement)) return false;
-          const style = getComputedStyle(node);
-          const rect = node.getBoundingClientRect();
-          return style.display !== "none"
-            && style.visibility !== "hidden"
-            && rect.width > 0
-            && rect.height > 0
-            && !node.closest("[hidden], [aria-hidden='true']");
-        };
-        return Array.from(document.querySelectorAll("[aria-label]"))
-          .some((node) => node.getAttribute("aria-label") === label && visible(node));
-      })()`
-    )
-  );
-}
-
-async function shellElementVisibleByLabels(owner: TestApp, labels: string[]): Promise<boolean> {
-  return Boolean(
-    await evaluateInHostedShell(
-      owner,
-      `(() => {
-        const labels = ${JSON.stringify(labels)};
-        const visible = (node) => {
-          if (!(node instanceof HTMLElement)) return false;
-          const style = getComputedStyle(node);
-          const rect = node.getBoundingClientRect();
-          return style.display !== "none"
-            && style.visibility !== "hidden"
-            && rect.width > 0
-            && rect.height > 0
-            && !node.closest("[hidden], [aria-hidden='true']");
-        };
-        return Array.from(document.querySelectorAll("[aria-label]"))
-          .some((node) => labels.includes(node.getAttribute("aria-label") ?? "") && visible(node));
-      })()`
-    )
-  );
-}
-
-async function getHostedShellNavigationState(owner: TestApp): Promise<{
-  found: boolean;
-  viewport: { width: number; height: number } | null;
-  labels: string[];
-  buttons: string[];
-  bodyText: string;
-}> {
-  return (
-    (await evaluateInHostedShell(
-      owner,
-      `(() => ({
-        found: true,
-        viewport: { width: window.innerWidth, height: window.innerHeight },
-        labels: Array.from(document.querySelectorAll("[aria-label]"))
-          .map((node) => node.getAttribute("aria-label"))
-          .filter(Boolean),
-        buttons: Array.from(document.querySelectorAll("button,[role='button']"))
-          .map((node) => (node.textContent ?? "").trim())
-          .filter(Boolean),
-        bodyText: (document.body?.innerText ?? "").slice(0, 1200),
-      }))()`
-    )) ?? {
-      found: false,
-      viewport: null,
-      labels: [],
-      buttons: [],
-      bodyText: "",
-    }
-  );
-}
-
-async function shellClickByLabels(owner: TestApp, labels: string[]): Promise<boolean> {
-  return Boolean(
-    await evaluateInHostedShell(
-      owner,
-      `(() => {
-        const labels = ${JSON.stringify(labels)};
-        const visible = (node) => {
-          if (!(node instanceof HTMLElement)) return false;
-          const style = getComputedStyle(node);
-          const rect = node.getBoundingClientRect();
-          return style.display !== "none"
-            && style.visibility !== "hidden"
-            && rect.width > 0
-            && rect.height > 0
-            && !node.closest("[hidden], [aria-hidden='true']");
-        };
-        const nodes = Array.from(document.querySelectorAll("[aria-label]"))
-          .filter((item) => labels.includes(item.getAttribute("aria-label") ?? "") && visible(item));
-        if (nodes.length === 0) return false;
-        for (const node of nodes) {
-          if (node instanceof HTMLElement) node.click();
-        }
-        return true;
-      })()`
-    )
-  );
-}
-
-async function shellClickByLabel(owner: TestApp, label: string): Promise<boolean> {
-  return Boolean(
-    await evaluateInHostedShell(
-      owner,
-      `(() => {
-        const label = ${JSON.stringify(label)};
-        const visible = (node) => {
-          if (!(node instanceof HTMLElement)) return false;
-          const style = getComputedStyle(node);
-          const rect = node.getBoundingClientRect();
-          return style.display !== "none"
-            && style.visibility !== "hidden"
-            && rect.width > 0
-            && rect.height > 0
-            && !node.closest("[hidden], [aria-hidden='true']");
-        };
-        const node = Array.from(document.querySelectorAll("[aria-label]"))
-          .find((item) => item.getAttribute("aria-label") === label && visible(item));
-        if (!(node instanceof HTMLElement)) return false;
-        node.click();
-        return true;
-      })()`
-    )
-  );
-}
-
-function normalizeNavigationTreeOpenLabel(): string[] {
-  return ["Open panel tree", "Switch to tree view", "Open stack", "Show panel tree"];
-}
-
-function normalizeNavigationTreeCloseLabel(): string[] {
-  return ["Close panel tree", "Switch to breadcrumb navigation", "Hide panel tree", "Close stack"];
-}
-
-function normalizeHideAddressBarLabels(): string[] {
-  return ["Hide address bar", "Back to breadcrumbs"];
-}
-
 async function shellClickButtonByTextPattern(owner: TestApp, pattern: RegExp): Promise<boolean> {
   return Boolean(
     await evaluateInHostedShell(
@@ -604,7 +459,7 @@ async function expectShellFitsMobileViewport(owner: TestApp): Promise<void> {
       scrollWidth: document.documentElement.scrollWidth,
       scrollHeight: document.documentElement.scrollHeight,
       titleBarText: document.body.innerText,
-      hasMenu: Boolean(document.querySelector('[aria-label="Menu"]')),
+      hasMenu: Boolean(document.querySelector('[aria-label="App menu"]')),
       hasNewPanel: Boolean(document.querySelector('[aria-label="New panel"]')),
     }))()`
   );
@@ -627,23 +482,11 @@ async function getRootPanelIds(owner: TestApp): Promise<string[]> {
   );
 }
 
-async function ensureShellStackMode(owner: TestApp): Promise<void> {
-  await shellClickByLabels(owner, normalizeHideAddressBarLabels()).catch(() => false);
-  await shellClickByLabels(owner, normalizeNavigationTreeCloseLabel()).catch(() => false);
-  try {
-    await expect
-      .poll(() => shellElementVisibleByLabels(owner, normalizeNavigationTreeOpenLabel()), {
-        timeout: 30_000,
-        intervals: [250, 500, 1000],
-      })
-      .toBe(true);
-  } catch (error) {
-    const state = await getHostedShellNavigationState(owner).catch(() => null);
-    throw new Error(
-      `${error instanceof Error ? error.message : String(error)}\n` +
-        `Hosted shell navigation state: ${JSON.stringify(state)}`
-    );
-  }
+async function collapsePanelSidebar(owner: TestApp): Promise<void> {
+  const shell = await findWorkspaceShellPage(owner);
+  const collapse = shell.getByRole("button", { name: "Collapse sidebar", exact: true });
+  if (await collapse.isVisible()) await collapse.click();
+  await expect(shell.getByRole("button", { name: "Expand sidebar", exact: true })).toBeVisible();
 }
 
 async function expectPanelFitsMobileViewport(owner: TestApp, panelId: string): Promise<void> {
@@ -802,7 +645,7 @@ async function diagnosePendingApprovalResolution(
   return attempts;
 }
 
-test.describe("Mobile Panels", () => {
+test.describe("Phone-width desktop panels", () => {
   test.describe.configure({ mode: "serial", timeout: 600_000 });
 
   let testApp: TestApp | undefined;
@@ -819,71 +662,60 @@ test.describe("Mobile Panels", () => {
     testApp = undefined;
   });
 
-  test("shell chrome exposes mobile panel tree without horizontal overflow", async () => {
-    expect(testApp).toBeDefined();
+  test("shell chrome opens the panel sidebar without horizontal overflow", async () => {
     await setMobileWindow(testApp!);
-    await ensureShellStackMode(testApp!);
-    await delay(500);
-
+    await collapsePanelSidebar(testApp!);
     await expectShellFitsMobileViewport(testApp!);
 
-    expect(await shellClickByLabels(testApp!, normalizeNavigationTreeOpenLabel())).toBe(true);
-    await expect
-      .poll(() => shellElementVisibleByLabels(testApp!, normalizeNavigationTreeCloseLabel()), {
-        timeout: 30_000,
-        intervals: [250, 500, 1000],
-      })
-      .toBe(true);
+    const shell = await findWorkspaceShellPage(testApp!);
+    const expand = shell.getByRole("button", { name: "Expand sidebar", exact: true });
+    const collapse = shell.getByRole("button", { name: "Collapse sidebar", exact: true });
+    await expand.click();
+    await expect(collapse).toHaveAttribute("aria-expanded", "true");
+    await expect(shell.getByRole("searchbox", { name: "Find panels" })).toBeVisible();
     await expectShellFitsMobileViewport(testApp!);
 
-    expect(await shellClickByLabels(testApp!, normalizeNavigationTreeCloseLabel())).toBe(true);
-    await expect
-      .poll(() => shellElementVisibleByLabels(testApp!, normalizeNavigationTreeOpenLabel()), {
-        timeout: 30_000,
-        intervals: [250, 500, 1000],
-      })
-      .toBe(true);
+    await collapse.click();
+    await expect(expand).toHaveAttribute("aria-expanded", "false");
   });
 
-  test("mobile titlebar toggles the address bar without overflow", async () => {
-    expect(testApp).toBeDefined();
+  test("panel titlebar toggles the address bar without overflow", async () => {
     await setMobileWindow(testApp!);
-    await ensureShellStackMode(testApp!);
+    await collapsePanelSidebar(testApp!);
     await ensurePanelSource(testApp!, "about/help");
 
-    expect(await shellClickByLabel(testApp!, "Show address bar")).toBe(true);
-    await expect
-      .poll(() => shellElementVisibleByLabel(testApp!, "Panel path"), {
-        timeout: 30_000,
-        intervals: [250, 500, 1000],
-      })
-      .toBe(true);
+    const shell = await findWorkspaceShellPage(testApp!);
+    const address = shell.getByRole("textbox", { name: "Panel path" });
+    await shell.getByTitle("Edit address", { exact: true }).click();
+    await expect(address).toBeVisible();
     await expectShellFitsMobileViewport(testApp!);
 
-    expect(await shellClickByLabels(testApp!, normalizeHideAddressBarLabels())).toBe(true);
-    await expect
-      .poll(() => shellElementVisibleByLabel(testApp!, "Panel path"), {
-        timeout: 30_000,
-        intervals: [250, 500, 1000],
-      })
-      .toBe(false);
+    await shell.getByRole("button", { name: "Back to breadcrumbs", exact: true }).click();
+    await expect(address).toBeHidden();
     await expectShellFitsMobileViewport(testApp!);
   });
 
-  test("mobile titlebar creates a new panel", async () => {
+  test("app controls create a new root panel", async () => {
     expect(testApp).toBeDefined();
     await setMobileWindow(testApp!);
-    await ensureShellStackMode(testApp!);
+    await collapsePanelSidebar(testApp!);
     await waitForAnyPanel(testApp!);
-    const initialCount = (await getPanelTree(testApp!)).length;
+    const initialPanels = await getPanelTree(testApp!);
+    const existingIds = new Set(initialPanels.map(({ id }) => id));
 
-    expect(await shellClickByLabel(testApp!, "New panel")).toBe(true);
+    const shell = await findWorkspaceShellPage(testApp!);
+    await shell
+      .getByRole("toolbar", { name: "App controls" })
+      .getByRole("button", { name: "New panel", exact: true })
+      .click();
     await expect
       .poll(
         async () => {
           const panels = await getPanelTree(testApp!);
           const rootPanelIds = await getRootPanelIds(testApp!);
-          const newPanel = panels.find((panel) => panel.snapshot?.source === "about/new");
+          const newPanel = panels.find(
+            (panel) => panel.snapshot?.source === "about/new" && !existingIds.has(panel.id)
+          );
           return {
             count: panels.length,
             hasNewPanel: Boolean(newPanel),
@@ -892,14 +724,14 @@ test.describe("Mobile Panels", () => {
         },
         { timeout: 30_000, intervals: [250, 500, 1000] }
       )
-      .toEqual({ count: initialCount + 1, hasNewPanel: true, hasRootNewPanel: true });
+      .toEqual({ count: initialPanels.length + 1, hasNewPanel: true, hasRootNewPanel: true });
     await expectShellFitsMobileViewport(testApp!);
   });
 
-  test("mobile panel tree selection returns to stack mode", async () => {
+  test("panel sidebar selects a background panel and can then collapse", async () => {
     expect(testApp).toBeDefined();
     await setMobileWindow(testApp!);
-    await ensureShellStackMode(testApp!);
+    await collapsePanelSidebar(testApp!);
     const parentId = await ensurePanelSource(testApp!, "about/new");
     const existingHelpPanel = (await getPanelTree(testApp!)).find(
       (panel) => panel.snapshot?.source === "about/help"
@@ -913,20 +745,11 @@ test.describe("Mobile Panels", () => {
     // A background panel has no native slot, so canonical presentation
     // readiness begins only after selecting it. Its durable tree row is the
     // precondition for exercising that selection.
-    expect(await shellClickByLabels(testApp!, normalizeNavigationTreeOpenLabel())).toBe(true);
-    await expect
-      .poll(() => shellElementVisibleByLabels(testApp!, normalizeNavigationTreeCloseLabel()), {
-        timeout: 30_000,
-        intervals: [250, 500, 1000],
-      })
-      .toBe(true);
-    await expect
-      .poll(() => shellElementVisibleByLabel(testApp!, "Help"), {
-        timeout: 30_000,
-        intervals: [250, 500, 1000],
-      })
-      .toBe(true);
-    expect(await shellClickByLabel(testApp!, "Help")).toBe(true);
+    const shell = await findWorkspaceShellPage(testApp!);
+    await shell.getByRole("button", { name: "Expand sidebar", exact: true }).click();
+    const helpRow = shell.getByRole("treeitem", { name: "Help", exact: true });
+    await helpRow.click();
+    await expect(helpRow).toHaveAttribute("aria-selected", "true");
 
     await expect
       .poll(() => isPanelReady(testApp!, helpPanel.id).catch(() => false), {
@@ -935,25 +758,14 @@ test.describe("Mobile Panels", () => {
       })
       .toBe(true);
 
-    await expect
-      .poll(() => shellElementVisibleByLabels(testApp!, normalizeNavigationTreeOpenLabel()), {
-        timeout: 30_000,
-        intervals: [250, 500, 1000],
-      })
-      .toBe(true);
-    await expect
-      .poll(() => shellElementVisibleByLabels(testApp!, normalizeNavigationTreeCloseLabel()), {
-        timeout: 30_000,
-        intervals: [250, 500, 1000],
-      })
-      .toBe(false);
+    await collapsePanelSidebar(testApp!);
     await expectShellFitsMobileViewport(testApp!);
   });
 
   test("terminal session fits the mobile panel viewport", async () => {
     expect(testApp).toBeDefined();
     await setMobileWindow(testApp!);
-    await ensureShellStackMode(testApp!);
+    await collapsePanelSidebar(testApp!);
     const panelId = await ensurePanelSource(testApp!, "panels/terminal");
     await startPanelDiagnostics(testApp!, panelId);
     await approveShellPrompts(testApp!);
@@ -1029,7 +841,7 @@ test.describe("Mobile Panels", () => {
     test(`${source} fits a phone-width panel viewport`, async () => {
       expect(testApp).toBeDefined();
       await setMobileWindow(testApp!);
-      await ensureShellStackMode(testApp!);
+      await collapsePanelSidebar(testApp!);
       const panelId = await ensurePanelSource(testApp!, source);
       await delay(500);
 
