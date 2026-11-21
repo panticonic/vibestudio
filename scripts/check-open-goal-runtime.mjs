@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { registerHooks } from "node:module";
 import path from "node:path";
@@ -163,7 +164,8 @@ function resolvesCallable(codebase, reference) {
   return item?.kind === "natlang";
 }
 
-const typeErrors = new Map();
+const checkedTypes = new Set();
+const brokenTypes = [];
 const scopes = [];
 let references = 0;
 for (const definition of definitions) {
@@ -176,8 +178,9 @@ for (const definition of definitions) {
     if (!resolvesCallable(codebase, mention)) scopes.push(`${source}: ${mention}`);
   }
   // The runtime checks every alias when it constructs a call, including aliases unused by its signature.
-  const fingerprint = JSON.stringify(types);
-  if (!typeErrors.has(fingerprint)) {
+  const fingerprint = createHash("sha256").update(JSON.stringify(types)).digest("hex");
+  if (!checkedTypes.has(fingerprint)) {
+    checkedTypes.add(fingerprint);
     const errors = [];
     const parsed = {};
     for (const [name, type] of Object.entries(types)) {
@@ -195,11 +198,10 @@ for (const definition of definitions) {
         errors.push(`${name}: ${error.message}`);
       }
     }
-    typeErrors.set(fingerprint, { source, errors });
+    if (errors.length) brokenTypes.push({ source, errors });
   }
 }
 
-const brokenTypes = [...typeErrors.values()].filter(({ errors }) => errors.length);
 console.log(
   `${composition}: checked ${definitions.size} linked lambdas and ${references} explicit qualified references.`
 );
