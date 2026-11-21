@@ -68,7 +68,13 @@ test("website SDK requires explicit connection and retires access on document re
     const templatePin = ${JSON.stringify(templatePin)};
     const operationId = sessionStorage.getItem('operationId') || crypto.randomUUID();
     sessionStorage.setItem('operationId', operationId);
-    const attempt = async operation => { try { output(await operation()); } catch (error) { output('error:' + formatRpcFailure(error)); } };
+    const attempt = async operation => {
+      try { output(await operation()); }
+      catch (error) {
+        const code = typeof error?.code === 'string' ? error.code + ': ' : '';
+        output('error:' + code + formatRpcFailure(error));
+      }
+    };
     document.querySelector('#connect').onclick = () => attempt(async () => { await connectWorkspace(); return 'connected:' + workspaceConnection.connected; });
     document.querySelector('#tree').onclick = () => attempt(async () => 'tree:' + JSON.stringify(await callMain('fs.readdir', '/')));
     document.querySelector('#read').onclick = () => attempt(async () => 'read:' + typeof await callMain('fs.readFile', 'meta/vibestudio.yml', 'utf8'));
