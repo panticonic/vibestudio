@@ -11897,12 +11897,63 @@ export function openOwnedResearchEvidence(execution, exercise, _scenario, workfl
   };
 }
 
-function openGoalEvidence(execution, exercise, _scenario, workflow) {
+function verifiedPublicSearch(proof, exercise, effects, assignment) {
+  const { searches, fetched, citationSources } = proof;
+  const citations = exercise.report?.research?.statements?.flatMap(({ cites }) => cites);
+  if (![searches, fetched, citationSources, citations].every(list => Array.isArray(list) && list.length > 0)) return false;
+  const keyed = ["tavily", "brave", "exa"];
+  const origins = new Set(assignment.required.flatMap(({ host }) => [`https://${host}`, `https://www.${host}`]));
+  const publicOrigin = (url) => typeof url === "string" && URL.canParse(url) && origins.has(new URL(url).origin);
+  for (const { provider, queries, credentialChecks, result, urls } of searches) {
+    if (!Array.isArray(credentialChecks) || !credentialChecks.length || credentialChecks.length > keyed.length ||
+        !credentialChecks.every((check, index) => check.provider === keyed[index] && typeof check.matched === "boolean") ||
+        credentialChecks.slice(0, -1).some(check => check.matched)) return false;
+    const last = credentialChecks.at(-1);
+    if (provider !== result?.provider || (last.matched ? provider !== last.provider
+      : provider !== "duckduckgo" || credentialChecks.length !== keyed.length)) return false;
+    if (!Array.isArray(queries) || !Array.isArray(result.results) ||
+        !isDeepStrictEqual(result.results.map(row => row.query), queries.map(query => String(query).trim()).filter(Boolean)) ||
+        !result.results.every(row => Array.isArray(row.sources)) ||
+        !isDeepStrictEqual(urls, result.results.filter(row => !row.error).flatMap(row => row.sources.map(source => source.url)))) return false;
+  }
+
+  const searchEffects = effects.filter(({ service, method, error }) =>
+    !error && method === "search" && (service === "goalDiscovery" || service === "web"));
+  const fetchEffects = effects.filter(({ service, method, error }) => !error && service === "web" && method === "fetch");
+  function exactEffects(used, receipts, matches) {
+    const remaining = receipts.slice();
+    return used.length === remaining.length && used.every(effect => {
+      const index = remaining.findIndex(receipt => matches(effect, receipt));
+      if (index < 0) return false;
+      remaining.splice(index, 1);
+      return true;
+    });
+  }
+  if (!exactEffects(searchEffects, searches, (effect, { queries, result }) => effect.service === "goalDiscovery"
+      ? matchesValue(effect.args, [queries]) && matchesValue(effect.result, result.results)
+      : matchesValue(effect.args, [{ queries }]) && matchesValue(effect.result, result)) ||
+      !exactEffects(fetchEffects, fetched, (effect, { input, page }) =>
+        matchesValue(effect.args, [input]) && matchesValue(effect.result, page))) return false;
+
+  if (!fetched.every(({ requested, url, digest, searchIndex, provider, input, page }) =>
+    Number.isInteger(searchIndex) && searches[searchIndex]?.provider === provider &&
+    searches[searchIndex].urls.includes(requested) && input?.url === requested &&
+    (input.session === undefined || input.session === "public") && page?.url === url && page.session === "public" &&
+    page.digest === digest && /^[a-f0-9]{64}$/u.test(digest) && publicOrigin(requested) && publicOrigin(url))) return false;
+  return citationSources.length === citations.length && citationSources.every((source, index) => {
+    const { url, quote, retrieved } = citations[index];
+    return source.url === url && source.quote === quote && source.retrieved === retrieved &&
+      fetched.some(page => page.url === url && page.digest === source.digest && page.searchIndex === source.searchIndex &&
+        page.provider === source.provider);
+  });
+}
+
+export function openGoalEvidence(execution, exercise, _scenario, workflow) {
   const proof = execution.diagnostics.openGoalVerification;
   const { id, goal, kind } = workflow.assignment;
   const root = exercise.calls.find(({ callId }) => callId === exercise.rootCallIds[0])?.record;
   const effects = exercise.calls.flatMap(({ record }) => record.effects ?? []);
-  const researchChecks = ["discoveredSources", "exactPageReadback", "answeredGoal", "groundedCitations", "requiredEvidence", "supportedConclusion"];
+  const researchChecks = ["discoveredSources", "attestedSearchProvider", "exactPageReadback", "answeredGoal", "groundedCitations", "requiredEvidence", "supportedConclusion"];
   const editChecks = ["discoveredWorkspace", "recoveredConcurrentEdit", "exactDocumentReadback", "preservedOtherDocuments", "reportedStoredRevision"];
   const browser = kind === "browser";
   const suite = kind === "suite";
@@ -11965,6 +12016,10 @@ function openGoalEvidence(execution, exercise, _scenario, workflow) {
           proof.runAttempts === 0 && !effects.some((effect) => effect.service === "testSuiteVerificationRun")),
       "Expected a current suite receipt or an inspection without execution"
     );
+  }
+  if (kind === "research" || kind === "research-and-edit") {
+    requireEvidence(verifiedPublicSearch(proof, exercise, effects, workflow.assignment),
+      "Expected the attested public search provider, its exact returned sources, and the independently verified citation basis");
   }
   if (kind === "research-and-edit") {
     const children = exercise.calls.map(({ record }) => record)
