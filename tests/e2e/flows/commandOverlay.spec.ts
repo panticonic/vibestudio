@@ -181,7 +181,7 @@ test.describe("command overlay", () => {
     // because it is the difference between "delivery is broken" and "this
     // caller was never able to subscribe".
     const entities = await callWorkspaceService(testApp, "runtime", "listEntities", [
-      { kind: "app" },
+      { kind: "client" },
     ]);
     const appRows = (entities.ok ? (entities.value as Array<Record<string, unknown>>) : []) ?? [];
     console.log(
@@ -264,12 +264,21 @@ test.describe("command overlay", () => {
 
     // One key, resume-aware: the panel now has a conversation, so the same chord
     // that opened the palette above lands in the conversation instead.
-    await expect
-      .poll(async () => (await probeCommandOverlay(testApp))?.conversation === true, {
-        timeout: 30_000,
-        intervals: [250, 500, 1000],
-      })
-      .toBe(true);
+    try {
+      await expect
+        .poll(async () => (await probeCommandOverlay(testApp))?.conversation === true, {
+          timeout: 30_000,
+          intervals: [250, 500, 1000],
+        })
+        .toBe(true);
+    } catch (error) {
+      const shellConsole = await readShellConsole(testApp).catch(() => []);
+      await test.info().attach("quickfire-reopen-console.log", {
+        body: shellConsole.filter((line) => /quickfire|channel|focus/i.test(line)).slice(-80).join("\n"),
+        contentType: "text/plain",
+      });
+      throw error;
+    }
 
     // Reopening the conversation chrome alone is insufficient: a replacement
     // subscription must restore its transcript, not only its conversation ID.
