@@ -734,14 +734,16 @@ test.describe("Terminal Startup", () => {
   });
 
   test("opens one usable terminal after required approvals are resolved", async () => {
-    test.setTimeout(360_000);
+    test.setTimeout(480_000);
     workspacePath = await createTerminalOnlyWorkspace();
     testApp = await launchTestApp({ workspace: workspacePath, launchTimeout: 90_000 });
     // Leave the launch permission unchecked so the initial registry request
     // exercises the interactive approval while the terminal panel waits.
     await approvePendingWorkspaceCreationReview(testApp, undefined, [TERMINAL_APPS_RUN_CAPABILITY]);
     const startupShellClearances: string[] = [];
-    await approvePendingStartupUnits(testApp, 180_000, (review) => {
+    // A project launch also waits for a separate cold Personal workspace.
+    // Give that launch gate time to finish before starting the terminal checks.
+    await approvePendingStartupUnits(testApp, 270_000, (review) => {
       for (const part of review.parts) {
         for (const row of [...part.notableRows, ...part.everydayRows]) {
           if (
