@@ -33,7 +33,7 @@ const native = (taskId: number, callId: string, agent = "agent"): VerifiedCaller
   nativeInvocation: {
     owner: { runtimeId: agent, authoritySessionId: "sealed" },
     task: { conversationId: 3, taskId },
-    operation: { kind: "tool", assistantEntryId: 0, callId },
+    operation: { kind: "tool", assistantEntryId: 1, callId },
   },
 });
 
@@ -457,7 +457,15 @@ it("stores prepared participant content before applying the edit and returns a c
     const after = Buffer.from("edited");
     const { digest: originalHash } = await putBytes(blobsDir, before);
     const contentHash = sha256HexSyncText(after.toString("utf8"));
-    const cause = { parent: null };
+    const cause = {
+      parent: {
+        kind: "trajectory-invocation" as const,
+        logId: "channel-log",
+        head: "main",
+        invocationId: "edit-invocation",
+        nativeInvocation: native(1, "edit").nativeInvocation!,
+      },
+    };
     const edit: VcsEditInput = {
       commandId: "edit-command",
       contextId: "edit-context",

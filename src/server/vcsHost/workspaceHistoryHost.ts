@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { compareUtf16CodeUnits, sha256HexSyncText } from "@vibestudio/content-addressing";
+import { rpcCausalParentSchema } from "@vibestudio/service-schemas/rpcCausality";
 import {
   vcsBlameResultSchema,
   vcsCompareResultSchema,
@@ -70,16 +71,7 @@ const retainedParticipantKeys = z.array(z.string().regex(/^work-[0-9a-f]{64}$/u)
 const retainedContentHashes = z.array(digest);
 const blob = z.object({ contentHash: digest, base64: z.string() }).strict();
 const causeSchema = z
-  .object({
-    parent: z
-      .object({
-        logId: z.string().min(1),
-        head,
-        invocationId: z.string().min(1),
-      })
-      .strict()
-      .nullable(),
-  })
+  .object({ parent: rpcCausalParentSchema.nullable() })
   .strict();
 const mutationPlan = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("read-content"), contentHashes: z.array(digest).min(1) }).strict(),
