@@ -1825,6 +1825,8 @@ export async function loadLiveTeacherCases(checkouts) {
         ...(assignment.devices ? { devices: assignment.devices } : {}),
         ...(assignment.requiresAndroidEmulator ? { requiresAndroidEmulator: true } : {}),
         ...(assignment.requiresDeploymentPackage ? { requiresDeploymentPackage: true } : {}),
+        ...(assignment.kind === "preparedContentProject" &&
+          (assignment.profile === "commit" || assignment.profile === "draft") ? { requiresReview:true } : {}),
         ...(assignment.workspaceBaseline ? { workspaceBaseline: assignment.workspaceBaseline } : {}),
         evidence: domain ? openTemplateGoalEvidence : ownedResearch ? openOwnedResearchEvidence : openGoalEvidence,
       });
@@ -15968,7 +15970,7 @@ export async function exportLiveTeacherWorkflow({
         JSON.stringify(semanticReview.input) === JSON.stringify(observed.reviewInput) &&
         semanticReview.exchange?.request &&
         semanticReview.exchange?.reply,
-      "Independent reviewer did not bind the exact committed document readback"
+      "Independent reviewer did not bind the exact retained document readback"
     );
     await writeFile(`${out}.review.json`, `${JSON.stringify(semanticReview, null, 2)}\n`, {
       mode: 0o600,
