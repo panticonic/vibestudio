@@ -7951,7 +7951,8 @@ function verifyPanelLaunchState(exercise, world, proof, skill) {
   const [final]=step("concludeLaunchState");
   const installed=child(authority,"reviewAuthority");
   const operation=installed.length===1?child(installed[0],"reviewOperation"):[];
-  const preflight=operation.length===1?effects(operation,"assignedAuthorityRead","preflight"):[];
+  const preflightStep=operation.length===1?child(operation[0],"preflight"):[];
+  const preflight=effects(preflightStep,"assignedAuthorityRead","preflight");
   const artifact=typeof proof.artifact==="string"?JSON.parse(proof.artifact):null;
   requireEvidence(
     bound(listed,[],index)&&step("planLaunchState").length===1&&matchesValue(selection.inputs?.goal,world.goal)&&
@@ -7966,7 +7967,8 @@ function verifyPanelLaunchState(exercise, world, proof, skill) {
         step("reviewLaunchAuthority").length===1&&matchesValue(authority.inputs?.request,request)&&
         isDeepStrictEqual(report.preflight?.request,request)&&matchesValue(authority.output,report.preflight.report)&&
         installed.length===1&&matchesValue(installed[0].inputs?.request,request)&&matchesValue(installed[0].output,report.preflight.report)&&
-        operation.length===1&&bound(preflight,[request.operations[0].id],witness)&&
+        operation.length===1&&preflightStep.length===1&&matchesValue(preflightStep[0].inputs?.operationId,request.operations[0].id)&&
+        matchesValue(preflightStep[0].output,witness)&&bound(preflight,[request.operations[0].id],witness)&&
         isDeepStrictEqual(report.preflight.report.reviews[0]?.observation,witness)&&
         bound(patches,[plan.panelId,current.digest,plan.patch],effect)&&effect.basis===current.digest&&effect.panelId===plan.panelId:
         binding.length===0&&patches.length===0&&step("reviewLaunchAuthority").length===0&&report.preflight===null&&effect===null)&&

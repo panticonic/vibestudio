@@ -50,20 +50,21 @@ function fixture(status,note) {
   node("planLaunchState",skill,{inputs:{goal:ref(world.goal),index:ref(index)},output:ref(plan)});
   const reads=proof.frames.map(frame=>effectNode("readLaunchSlot","launchStateRead","read",[plan.panelId],frame));
   node("decideLaunchChange",skill,{inputs:{goal:ref(world.goal),plan:ref(plan),opening:ref(opening),current:ref(current)},output:ref(decision)});
-  let authorityEffect,patch;
+  let authorityEffect,preflightStep,patch;
   if(attempt){
     effectNode("bindLaunchAuthority","launchStateRead","bind",[plan.panelId,current.digest,plan.patch],request);
     const authority=node("reviewLaunchAuthority",skill,{inputs:{request:ref(request)},output:ref(review)});
     const installed=node("reviewAuthority",authority,{inputs:{request:ref(request)},output:ref(review)});
     const operation=node("reviewOperation",installed);
-    authorityEffect=effectNode(null,"assignedAuthorityRead","preflight",["exact"],witness,operation);
+    preflightStep=node("preflight",operation,{inputs:{operationId:ref("exact")},output:ref(witness)});
+    authorityEffect=effectNode(null,"assignedAuthorityRead","preflight",["exact"],witness,preflightStep);
     patch=effectNode("applyLaunchPatch","launchStateWrite","patch",[plan.panelId,current.digest,plan.patch],effect);
   }
   const seal=effectNode("readbackLaunchSlot","launchStateRead","seal",[plan.panelId],readback);
   node("concludeLaunchState",skill,{inputs:{plan:ref(plan),opening:ref(opening),current:ref(current),decision:ref(decision),
     effect:ref(effect),readback:ref(readback)},output:ref(result)});
   const written=note?effectNode("writeLaunchNote","launchStateWrite","stage",[{...outcome,handoff:null}],handoff):null;
-  return {proof,reads,authorityEffect,patch,seal,written,validate(){
+  return {proof,reads,authorityEffect,preflightStep,patch,seal,written,validate(){
     return openTemplateGoalEvidence({diagnostics:{openGoalVerification:proof},provenance:{contextId}},
       {report,calls,rootCallIds:[root.call_id]},world.id,{assignment:world});
   }};
@@ -75,6 +76,7 @@ test("launch-state export requires the exact scoped authority, native patch and 
   for(const change of [
     x=>{x.reads[1].result=x.reads[0].result;},
     x=>{x.authorityEffect.result=x.proof.witness;},
+    x=>{x.preflightStep.parent_call_id="flattened-or-unrelated";},
     x=>{x.patch.args=ref(["active","stale",{count:7}]);},
     x=>{x.seal.result=x.patch.result;},
     x=>{x.written.result.complete=false;},
