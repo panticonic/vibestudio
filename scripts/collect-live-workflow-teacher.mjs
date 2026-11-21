@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -27,6 +27,7 @@ const { values } = parseArgs({
     preflight: { type: "boolean" },
     "review-model": { type: "string" },
     "test-timeout-ms": { type: "string" },
+    concurrency: { type: "string", default: "1" },
     "cases-per-instance": { type: "string", default: "12" },
     "approve-codex-session": { type: "boolean" },
     out: { type: "string" },
@@ -41,6 +42,9 @@ const preflight = values.preflight && !values.list && values.out === undefined &
 const batchSize = Number(values["cases-per-instance"]);
 if (!/^\d+$/u.test(values["cases-per-instance"]) || !Number.isSafeInteger(batchSize))
   throw new Error("--cases-per-instance must be a nonnegative integer");
+const concurrency = Number(values.concurrency);
+if (!/^\d+$/u.test(values.concurrency) || !Number.isSafeInteger(concurrency) || concurrency < 1)
+  throw new Error("--concurrency must be a positive integer");
 const caseTimeout = values["test-timeout-ms"];
 if (caseTimeout !== undefined && (!/^\d+$/u.test(caseTimeout) || !Number.isSafeInteger(Number(caseTimeout)) || Number(caseTimeout) <= 0)) {
   throw new Error("--test-timeout-ms must be a positive integer");
@@ -56,7 +60,7 @@ if (
   (!list && !preflight && (values.list || values.preflight || !values.out || !requested.length))
 ) {
   throw new Error(
-    "Usage: pnpm natlang:teacher --list | --preflight [--case CASE ...] | --case CASE [--case CASE ...] --out NEW_DIR [--model PROVIDER:MODEL] [--test-timeout-ms MS] [--cases-per-instance N] [--approve-codex-session] [--assignments]"
+    "Usage: pnpm natlang:teacher --list | --preflight [--case CASE ...] | --case CASE [--case CASE ...] --out NEW_DIR [--model PROVIDER:MODEL] [--test-timeout-ms MS] [--cases-per-instance N] [--concurrency N] [--approve-codex-session] [--assignments]"
   );
 }
 
@@ -301,54 +305,65 @@ for (const group of groups) {
       throw new Error(`The managed ${workspace} workspace did not pass readiness checks`);
     }
     const catalog = installedTests(group);
-    for (const { scenario, directory, pins, caseSource } of cases) {
-      try {
-        const reason = unavailableCase(catalog, scenario);
-        if (reason) throw new Error(reason);
-        if (JSON.stringify(pinSources()) !== JSON.stringify(pinned))
-          throw new Error("Source pins changed before starting the case");
-        const status = systemTest([
-          "run",
-          scenario,
-          "--model",
-          source.teacher,
-          ...(caseTimeout === undefined ? [] : ["--test-timeout-ms", caseTimeout]),
-          ...(values["approve-codex-session"] ? ["--approve-codex-session"] : []),
-          "--out-dir",
-          directory,
-        ]);
-        const runs = readdirSync(directory).filter((entry) => /^st_[a-f0-9]{32}$/u.test(entry));
-        if (runs.length !== 1) throw new Error("Expected one managed system-test run");
-        const [runId] = runs;
-        writePins(pins, { ...caseSource, run_id: runId });
-        const traceStatus = systemTest(
-          ["trajectory", runId, scenario, "--full", "--json", "--out-dir", directory],
-          "ignore"
-        );
-        if (status !== 0) {
-          const detail = traceStatus === 0
-            ? `Its full trajectory was retained in ${directory}`
-            : `Its full trajectory could not be retrieved. See ${directory}`;
-          throw new Error(`System test ${runId} failed. ${detail}`);
+    const ready = cases.filter(({ scenario }) => {
+      const reason = unavailableCase(catalog, scenario);
+      if (!reason) return true;
+      const error = new Error(reason);
+      console.error(`Teacher case ${scenario} failed: ${String(error)}`);
+      failures.push(error);
+      return false;
+    });
+    const runSize = concurrency === 1 ? 1 : ready.length;
+    for (let offset = 0; offset < ready.length; offset += runSize) {
+      const batch = ready.slice(offset, offset + runSize);
+      const concurrent = batch.length > 1;
+      const runOut = concurrent ? mkdtempSync(path.join(out, "managed-")) : batch[0].directory;
+      if (JSON.stringify(pinSources()) !== JSON.stringify(pinned))
+        throw new Error("Source pins changed before starting the batch");
+      const status = systemTest([
+        "run", ...batch.map(({ scenario }) => scenario),
+        "--model", source.teacher,
+        ...(concurrent ? ["--concurrency", String(Math.min(concurrency, batch.length)), "--retain-trajectories"] : []),
+        ...(caseTimeout === undefined ? [] : ["--test-timeout-ms", caseTimeout]),
+        ...(values["approve-codex-session"] ? ["--approve-codex-session"] : []),
+        "--out-dir", runOut,
+      ]);
+      const runs = readdirSync(runOut).filter((entry) => /^st_[a-f0-9]{32}$/u.test(entry));
+      if (runs.length !== 1) throw new Error("Expected one managed system-test run");
+      const [runId] = runs;
+      const summaryPath = path.join(runOut, runId, "summary.json");
+      const summary = concurrent && existsSync(summaryPath) ? JSON.parse(readFileSync(summaryPath, "utf8")) : {};
+      const failed = new Set([...(summary.failedTests ?? []), ...(summary.testsWithUnexpectedToolFailures ?? [])]);
+      for (const { scenario, directory, pins, caseSource } of batch) {
+        try {
+          writePins(pins, { ...caseSource, run_id: runId });
+          const filename = `trajectory-${scenario}-full.json.gz`;
+          const target = path.join(directory, runId, filename);
+          const retained = [path.join(runOut, runId, filename), path.join(runOut, runId, "failure-evidence", filename)]
+            .find(candidate => existsSync(candidate));
+          if (retained) {
+            if (retained !== target) {
+              mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+              copyFileSync(retained, target);
+            }
+          } else if (systemTest(["trajectory", runId, scenario, "--full", "--json", "--out-dir", directory], "ignore") !== 0) {
+            throw new Error(`Unable to retrieve the durable trajectory for ${runId}`);
+          }
+          if (failed.has(scenario) || (!concurrent && status !== 0)) {
+            throw new Error(`System test ${runId} failed. Its full trajectory was retained in ${directory}`);
+          }
+          if (JSON.stringify(pinSources()) !== JSON.stringify(pinned))
+            throw new Error("Source pins changed during the live run");
+          const destination = path.join(directory, "verified");
+          await exportLiveTeacherWorkflow({
+            trajectory: target, pins, validator: validators.get(scenario), out: destination,
+            split: liveTeacherCases.get(scenario).split ?? "train", review, cases: liveTeacherCases,
+          });
+          console.log(path.join(destination, "manifest.json"));
+        } catch (error) {
+          console.error(`Teacher case ${scenario} failed: ${String(error)}`);
+          failures.push(error);
         }
-        if (traceStatus !== 0)
-          throw new Error(`Unable to retrieve the durable trajectory for ${runId}`);
-        if (JSON.stringify(pinSources()) !== JSON.stringify(pinned))
-          throw new Error("Source pins changed during the live run");
-        const destination = path.join(directory, "verified");
-        await exportLiveTeacherWorkflow({
-          trajectory: path.join(directory, runId, `trajectory-${scenario}-full.json.gz`),
-          pins,
-          validator: validators.get(scenario),
-          out: destination,
-          split: liveTeacherCases.get(scenario).split ?? "train",
-          review,
-          cases: liveTeacherCases,
-        });
-        console.log(path.join(destination, "manifest.json"));
-      } catch (error) {
-        console.error(`Teacher case ${scenario} failed: ${String(error)}`);
-        failures.push(error);
       }
     }
   } catch (error) {

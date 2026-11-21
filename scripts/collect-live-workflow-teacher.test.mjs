@@ -63,6 +63,7 @@ test("a batch reuses each workspace instance and retains successes across failur
     export async function exportLiveTeacherWorkflow({ out, pins, trajectory }) {
       const source = JSON.parse(await readFile(pins, 'utf8'));
       const run = JSON.parse(await readFile(trajectory, 'utf8'));
+      if (run.scenario === 'failing') throw new Error('Fixture outcome failed');
       await mkdir(out);
       await writeFile(path.join(out, 'manifest.json'), JSON.stringify({ source, run }));
     }`
@@ -101,6 +102,19 @@ exit 0
     const out = args[args.indexOf('--out-dir') + 1];
     if (command === 'run') {
       fs.mkdirSync(path.join(out, '${runId}'));
+      if (args.includes('--retain-trajectories')) {
+        const run = path.join(out, '${runId}');
+        const failure = path.join(run, 'failure-evidence');
+        fs.mkdirSync(failure);
+        for (const scenario of args.slice(0, args.indexOf('--model'))) {
+          const directory = scenario === 'failing' ? failure : run;
+          fs.writeFileSync(path.join(directory, 'trajectory-' + scenario + '-full.json.gz'), JSON.stringify({ scenario }));
+        }
+        if (args.includes('failing')) {
+          fs.writeFileSync(path.join(run, 'summary.json'), JSON.stringify({failedTests:['failing']}));
+          process.exit(1);
+        }
+      }
       if (args[0] === 'failing') process.exit(1);
     }
     if (command === 'trajectory')
@@ -181,6 +195,24 @@ exit 0
   assert.equal(JSON.parse(await readFile(pathFor("failing", "source.json"), "utf8")).run_id, runId);
   await assert.rejects(readFile(pathFor("failing", "verified/manifest.json")), { code: "ENOENT" });
 
+  const parallelOut = path.join(root, "parallel");
+  const parallel = spawnSync(process.execPath, ["scripts/collect-live-workflow-teacher.mjs",
+    "--assignments", "--concurrency", "2", "--case", "passing", "--case", "failing", "--out", parallelOut], {
+    cwd: root, env: { ...process.env, PATH: path.join(root, "bin") + path.delimiter + process.env.PATH }, encoding: "utf8",
+  });
+  assert.equal(parallel.status, 1);
+  assert.match(parallel.stderr, /Teacher case failing failed.*full trajectory was retained/);
+  const parallelCommands = (await readFile(path.join(root, "commands.jsonl"), "utf8"))
+    .trim().split("\n").map(JSON.parse).slice(commands.length);
+  assert.deepEqual(parallelCommands.map(({ command }) => command), ["doctor", "list", "run", "stop"]);
+  assert.deepEqual(parallelCommands[2].args.slice(0, 2), ["passing", "failing"]);
+  assert.equal(parallelCommands[2].args[parallelCommands[2].args.indexOf("--concurrency") + 1], "2");
+  const parallelPassed = JSON.parse(await readFile(path.join(parallelOut, "cases/passing/verified/manifest.json"), "utf8"));
+  assert.equal(parallelPassed.source.run_id, runId);
+  const parallelFailed = path.join(parallelOut, "cases/failing");
+  assert.equal(JSON.parse(await readFile(path.join(parallelFailed, runId, "trajectory-failing-full.json.gz"), "utf8")).scenario, "failing");
+  await assert.rejects(readFile(path.join(parallelFailed, "verified/manifest.json")), { code: "ENOENT" });
+
   const preflight = spawnSync(process.execPath, ["scripts/collect-live-workflow-teacher.mjs", "--preflight", "--assignments"], {
     cwd: root,
     env: {
@@ -197,7 +229,7 @@ exit 0
     ] },
   ]);
   const preflightCommands = (await readFile(path.join(root, "commands.jsonl"), "utf8"))
-    .trim().split("\n").map(JSON.parse).slice(commands.length);
+    .trim().split("\n").map(JSON.parse).slice(commands.length + parallelCommands.length);
   assert.deepEqual(preflightCommands.map(({ command }) => command), [
     "doctor", "list", "stop", "doctor", "list", "stop",
   ]);

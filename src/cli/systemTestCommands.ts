@@ -682,13 +682,14 @@ async function run(inv: ParsedInvocation): Promise<number> {
         inv.flags["detach"] === true ||
         category ||
         all ||
-        names.length !== 1 ||
-        !names[0]?.startsWith("open-goal-") ||
+        names.length === 0 ||
+        new Set(names).size !== names.length ||
+        names.some(name => !name.startsWith("open-goal-")) ||
         typeof inv.flags["model"] !== "string" ||
         !inv.flags["model"].startsWith("openai-codex:"))
     ) {
       throw new UsageError(
-        "--approve-codex-session requires one Codex open goal in an owned teacher workspace"
+        "--approve-codex-session requires exact Codex open-goal names in an owned teacher workspace"
       );
     }
     const observationJson = process.env[approvalObservationEnvironmentKey];
