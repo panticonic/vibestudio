@@ -5,6 +5,7 @@ import { expect, test, type Page } from "@playwright/test";
 import {
   approvePendingWorkspaceCreationReview,
   createPanel,
+  getPanelReadiness,
   getPanelTree,
   hasElectronDisplay,
   ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE,
@@ -98,25 +99,22 @@ test("opens publishing and installed sources in the selected workspace", async (
     const expected = caseRootTemplate.template.defaultTemplates;
     const panels = await getPanelTree(app);
     expect(panels.length).toBeGreaterThan(0);
-    await createPanel(app, panels[0]!.id, "about/workspace", { focus: true });
+    const workspacePanel = await createPanel(app, panels[0]!.id, "about/workspace", { focus: true });
     let page: Page | undefined;
     await expect
       .poll(
         async () => {
-          for (const candidate of app!.app.context().pages()) {
-            if (await candidate.getByRole("tab", { name: "Publish", exact: true }).count()) {
-              page = candidate;
-              return true;
-            }
-          }
-          return false;
+          const readiness = await getPanelReadiness(app!, workspacePanel.id);
+          if (!readiness.contentReady) return false;
+          page = app!.app.context().pages().find((candidate) =>
+            /\/about\/workspace\/(?:[?#]|$)/u.test(candidate.url())
+          );
+          return page !== undefined;
         },
         { timeout: 120_000 }
       )
       .toBe(true);
-    await page!
-      .getByRole("tab", { name: "Publish", exact: true })
-      .dispatchEvent("mousedown", { button: 0, ctrlKey: false });
+    await page!.getByRole("tab", { name: "Publish", exact: true }).click();
     await expect(page!.getByRole("heading", { name: /^Publish / })).toBeVisible();
     // Do not accept the fallback heading as readiness: it is also rendered
     // while authoringSetup is still resolving.
@@ -138,9 +136,7 @@ test("opens publishing and installed sources in the selected workspace", async (
       body: await page!.screenshot(),
       contentType: "image/png",
     });
-    await page!
-      .getByRole("tab", { name: "Updates", exact: true })
-      .dispatchEvent("mousedown", { button: 0, ctrlKey: false });
+    await page!.getByRole("tab", { name: "Updates", exact: true }).click();
     await expect(page!.getByRole("heading", { name: "Workspace updates" })).toBeVisible();
     await expect(
       page!.getByText(expected.personal.url.replace(/^git\+/, ""), { exact: true })

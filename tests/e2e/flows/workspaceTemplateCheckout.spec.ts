@@ -23,7 +23,11 @@ import {
 } from "../../setup/electronSetup";
 import { waitHostedShellReady } from "../support/commandOverlay";
 import { nativeUiRead } from "../support/nativeUiRead";
-import { presentApprovalCard } from "../support/workspaceCreation";
+import {
+  declineFirstRunReporting,
+  findWorkspaceShellPage,
+  presentApprovalCard,
+} from "../support/workspaceCreation";
 
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 const hubControlRpcMethods = createRpcMethods("hubControl", hubControlMethods);
@@ -129,24 +133,8 @@ test("opens the selected local checkout as a separate workspace after exact revi
       }, workspaceId);
       await approvePendingWorkspaceCreationReview({ app: activeApp.app, workspaceId }, ids);
     }
-    let chrome: Page | undefined;
-    await expect
-      .poll(
-        async () => {
-          for (const candidate of activeApp.app.context().pages()) {
-            if (
-              await candidate.getByRole("button", { name: "Add workspace", exact: true }).count()
-            ) {
-              chrome = candidate;
-              return true;
-            }
-          }
-          return false;
-        },
-        { timeout: 30_000 }
-      )
-      .toBe(true);
-    const page = chrome!;
+    await declineFirstRunReporting(activeApp);
+    const page = await findWorkspaceShellPage(activeApp);
     const before = await nativeUiRead(
       page,
       { kind: "hub" },
