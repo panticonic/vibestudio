@@ -71,7 +71,7 @@ test.describe("command overlay", () => {
       },
       { workspaceId: testApp.workspaceId, panelId: panel.panelId }
     );
-    await captureShellConsole(testApp);
+    expect(await captureShellConsole(testApp)).toBe(true);
   });
 
   test.afterAll(async () => {

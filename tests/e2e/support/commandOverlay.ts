@@ -403,19 +403,20 @@ export async function callWorkspaceService(
  */
 export async function captureShellConsole(testApp: TestApp): Promise<boolean> {
   return testApp.app.evaluate(async ({ webContents }) => {
-    const globals = globalThis as { __shellConsole?: string[]; __shellConsoleBound?: boolean };
+    const globals = globalThis as { __shellConsole?: string[]; __shellConsoleBound?: Set<number> };
     globals.__shellConsole ??= [];
-    if (globals.__shellConsoleBound) return true;
+    const bound = (globals.__shellConsoleBound ??= new Set());
     for (const contents of webContents.getAllWebContents()) {
       if (contents.isDestroyed()) continue;
-      if (!contents.getURL().startsWith("vs-client://")) continue;
-      contents.on("console-message", (_event, level, message) => {
-        globals.__shellConsole?.push(`[${level}] ${message}`);
+      const url = contents.getURL();
+      if (!url.startsWith("vs-client://") || url.includes("overlaySurface=")) continue;
+      if (bound.has(contents.id)) continue;
+      contents.on("console-message", (event) => {
+        globals.__shellConsole?.push(`[${event.level}] ${event.message}`);
       });
-      globals.__shellConsoleBound = true;
-      return true;
+      bound.add(contents.id);
     }
-    return false;
+    return bound.size > 0;
   });
 }
 
