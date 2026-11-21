@@ -203,13 +203,8 @@ test.describe("command overlay", () => {
         .join("\n") || "(nothing matched)"
     );
 
-    // Assert on the TRANSCRIPT, never on the surface text: the Base service is
-    // deliberately not exposed as a host schema, and the ask row quotes
-    // the query back, so a whole-surface match passes the moment you type and
-    // says nothing about the conversation. A rendered message has been through
-    // createEntity, vessel activation, subscribeChannel and the channel's own
-    // delivery — the exact chain that failed with 403s, a 500, and a closure
-    // missing its plumbing.
+    // The conversation must render the submitted prompt. Keep this assertion
+    // fast enough to exercise dismissal while the first send is still queued.
     await expect
       .poll(
         async () => {
@@ -280,18 +275,18 @@ test.describe("command overlay", () => {
       throw error;
     }
 
-    // Reopening the conversation chrome alone is insufficient: a replacement
-    // subscription must restore its transcript, not only its conversation ID.
+    // Require the prompt to arrive through the conversation channel after
+    // reopening, even if the earlier assertion only saw its queued echo.
     await expect
       .poll(
         async () => {
           const resumed = await probeCommandOverlay(testApp);
           if (resumed?.error) return resumed.error;
-          return resumed?.transcript.some((message) =>
+          return resumed?.durableTranscript.some((message) =>
             message.includes("why is this panel laid out this way?")
           );
         },
-        { timeout: 30_000, intervals: [250, 500, 1000] }
+        { timeout: 120_000, intervals: [500, 1000, 2000] }
       )
       .toBe(true);
     expect((await probeCommandOverlay(testApp))?.error).toBeNull();

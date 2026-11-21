@@ -35,9 +35,11 @@ export interface CommandOverlaySnapshot {
    * Separate from `text` on purpose: a suggestion row echoes the query back
    * ("Send \u201c…\u201d to the agent"), so asserting the typed prose against the
    * whole surface passes the instant you type it and proves nothing about the
-   * conversation. A message here has been through the channel.
+   * conversation. This includes optimistic echoes of queued prompts.
    */
   transcript: string[];
+  /** Messages rendered from the conversation channel, excluding queued echoes. */
+  durableTranscript: string[];
   /** The visible conversation/command failure, if an operation terminated. */
   error: string | null;
   /** Whole-surface text, so a test can assert on an error banner verbatim. */
@@ -140,17 +142,20 @@ export async function probeCommandOverlay(
       const SNAPSHOT = `(() => {
         if (!globalThis.__vibestudioContentOverlay) return null;
         const card = document.querySelector(".quickfire-card");
-        if (!card) return { open: false, activeMode: null, rows: [], buttons: [], conversation: false, transcript: [], error: null, text: "" };
+        if (!card) return { open: false, activeMode: null, rows: [], buttons: [], conversation: false, transcript: [], durableTranscript: [], error: null, text: "" };
         const active = card.querySelector(".quickfire-mode[aria-pressed='true']");
+        const transcriptCards = Array.from(card.querySelectorAll(
+          '[data-testid="quickfire-transcript"] [data-testid^="quickfire-card-"]'
+        ));
         return {
           open: true,
           activeMode: active ? active.textContent.trim() : null,
           rows: Array.from(card.querySelectorAll("[data-row-id]")).map((row) => row.textContent.trim()),
           buttons: Array.from(card.querySelectorAll("button")).map((button) => button.getAttribute("aria-label") ?? button.textContent.trim()),
           conversation: card.getAttribute("data-mode") === "conversation",
-          transcript: Array.from(card.querySelectorAll(
-            '[data-testid="quickfire-transcript"] [data-testid^="quickfire-card-"]'
-          ))
+          transcript: transcriptCards.map((message) => message.textContent.trim()),
+          durableTranscript: transcriptCards
+            .filter((message) => !message.getAttribute("data-testid").startsWith("quickfire-card-pending:"))
             .map((message) => message.textContent.trim()),
           error: card.querySelector('[data-testid="quickfire-error"], .quickfire-error')?.textContent?.trim() || null,
           text: card.textContent ?? "",
