@@ -9507,7 +9507,8 @@ export function openOutcomeGoalEvidence(execution, exercise, _scenario, workflow
   const root = exercise.calls.find(({ callId }) => callId === exercise.rootCallIds[0])?.record;
   const checks = proof?.checks ?? {};
   const entry = workflow.entry;
-  const attestedEntry = entry && { program: entry.program, callable: entry.callable, arguments: entry.arguments };
+  const attestedEntry = entry && { program: entry.program, callable: entry.callable, arguments: entry.arguments,
+    ...(entry.argumentJson ? { argumentJson: entry.argumentJson } : {}) };
   const inputValues = entry?.arguments ?? { goal: world.goal };
   requireEvidence(
     proof?.passed === true && proof.caseId === world.id && proof.goal === world.goal &&
@@ -16532,6 +16533,7 @@ export async function exportLiveTeacherWorkflow({
           program: workflow.entry.program,
           callable: workflow.entry.callable,
           arguments: workflow.entry.arguments,
+          ...(workflow.entry.argumentJson ? { argumentJson: workflow.entry.argumentJson } : {}),
         } } : {}) } }
     : {};
   const world = {

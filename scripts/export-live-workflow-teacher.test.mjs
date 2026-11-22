@@ -990,7 +990,8 @@ function bindApplicationResult(run, proof, workflow, result) {
     const text = JSON.stringify(value);
     return { complete: true, bytes: Buffer.byteLength(text), hash: createHash("sha256").update(text).digest("hex") };
   };
-  const entry = { program: workflow.entry.program, callable: workflow.entry.callable, arguments: workflow.entry.arguments };
+  const entry = { program: workflow.entry.program, callable: workflow.entry.callable, arguments: workflow.entry.arguments,
+    ...(workflow.entry.argumentJson ? { argumentJson: workflow.entry.argumentJson } : {}) };
   run.entry = entry;
   proof.entry = structuredClone(entry);
   proof.actualResult = result;
