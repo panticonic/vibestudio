@@ -63,6 +63,9 @@ describe("runNpmInstall", () => {
     expect(cacheArg(args!)).not.toContain(sharedDerivedDataPath);
     expect(args).toContain("--ignore-scripts");
     expect(args).toContain("--legacy-peer-deps");
+    expect(args).toContain("--no-update-notifier");
+    expect(installation).toContain("--no-update-notifier");
+    expect(JSON.parse(fs.readFileSync(path.join(fixture.installDir, "dns-orders.json"), "utf8"))).toEqual(["ipv4first", "ipv4first"]);
     expect(args).toContain("--package-lock-only");
     expect(installation![0]).toBe("ci");
     expect(cacheArg(installation!)).toBe(
@@ -72,6 +75,19 @@ describe("runNpmInstall", () => {
     const launches = vi.mocked(compileNativeLaunch).mock.calls.slice(-2);
     expect(launches[0]![0].writePaths).not.toContain(cacheArg(installation!));
     expect(launches[1]![0].writePaths).toContain(cacheArg(installation!));
+  });
+
+  it("preserves explicitly requested DNS ordering in each npm phase", async () => {
+    const fixture = createFakeNpmFixture();
+    await runNpmInstall(fixture.installDir, { appRoot: fixture.appRoot, dnsResultOrder: "verbatim" });
+    expect(JSON.parse(fs.readFileSync(path.join(fixture.installDir, "dns-orders.json"), "utf8"))).toEqual(["verbatim", "verbatim"]);
+  });
+
+  it("enables npm update checks only when explicitly requested", async () => {
+    const fixture = createFakeNpmFixture();
+    await runNpmInstall(fixture.installDir, { appRoot: fixture.appRoot, updateNotifier: true });
+    expect(readAttempts(fixture.installDir)).toHaveLength(2);
+    expect(readAttempts(fixture.installDir).every(args => !args.includes("--no-update-notifier"))).toBe(true);
   });
 
   it.each([
@@ -419,6 +435,10 @@ const control = JSON.parse(fs.readFileSync(path.join(process.cwd(), "control.jso
 const args = process.argv.slice(2);
 attempts.push(args);
 fs.writeFileSync(attemptsPath, JSON.stringify(attempts));
+const dnsOrdersPath = path.join(process.cwd(), "dns-orders.json");
+const dnsOrders = fs.existsSync(dnsOrdersPath) ? JSON.parse(fs.readFileSync(dnsOrdersPath, "utf8")) : [];
+dnsOrders.push(require("node:dns").getDefaultResultOrder());
+fs.writeFileSync(dnsOrdersPath, JSON.stringify(dnsOrders));
 if (control.VIBESTUDIO_NPM_INSTALLER_TEST_CHILD) {
   const child = require("node:child_process").spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);"], {stdio:"inherit"});
   fs.writeFileSync(path.join(process.cwd(), "child.json"), JSON.stringify(child.pid));

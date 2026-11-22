@@ -261,6 +261,33 @@ describe("extension runtime dependency publication", () => {
     }
   });
 
+  it.each(["compile", "extension"] as const)("reclaims orphan content after pressure evicts %s dependency trees", async kind => {
+    const root = path.join(testExtDepsRoot, kind === "compile" ? "external-deps" : "extension-runtime-deps");
+    const pressure = vi.spyOn(derivedCache, "derivedCacheUnderPressure").mockReturnValue(true);
+    const owner = derivedCache.derivedCacheCoordinator(root);
+    const prune = vi.spyOn(owner, "prune").mockResolvedValue({
+      root, bytes: 0, entries: 0, leasedEntries: 1, reclaimableBytes: 0,
+      availableBytes: 0, removedEntries: 1, removedBytes: 1, targetBytes: 0,
+    });
+    vi.mocked(scheduleDependencyContentPrune).mockClear();
+    const deps = { [`pressure-${kind}-cleanup-test`]: "1.0.0" };
+    let borrowed: Awaited<ReturnType<typeof acquireExternalDeps>> | undefined;
+    try {
+      borrowed = kind === "compile"
+        ? await acquireExternalDeps(deps, {}, { appRoot: process.cwd() })
+        : await ensureExtensionRuntimeDeps(process.cwd(), deps);
+      expect(prune).toHaveBeenCalledWith(root);
+      expect(scheduleDependencyContentPrune).toHaveBeenCalledWith(
+        path.resolve(process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"]!),
+      );
+    } finally {
+      borrowed?.release();
+      await drainExternalDependencyPruning();
+      prune.mockRestore();
+      pressure.mockRestore();
+    }
+  });
+
   it("retains release-prune failures until the derived-data drain", async () => {
     const failure = new Error("base cache prune failed");
     const derivedPrune = vi

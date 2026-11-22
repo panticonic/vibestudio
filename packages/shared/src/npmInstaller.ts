@@ -64,6 +64,10 @@ async function runNpmInstallInSlot(
     appRoot: string;
     signal?: AbortSignal;
     ignoreScripts?: boolean;
+    /** Explicitly enable npm self-update checks; build installs disable them by default. */
+    updateNotifier?: boolean;
+    /** Prefer working IPv4 endpoints; preserve explicit native DNS ordering when requested. */
+    dnsResultOrder?: "ipv4first" | "ipv6first" | "verbatim";
   }
 ): Promise<void> {
   options.signal?.throwIfAborted();
@@ -105,6 +109,10 @@ async function installInOwnership(
     appRoot: string;
     signal?: AbortSignal;
     ignoreScripts?: boolean;
+    /** Explicitly enable npm self-update checks; build installs disable them by default. */
+    updateNotifier?: boolean;
+    /** Prefer working IPv4 endpoints; preserve explicit native DNS ordering when requested. */
+    dnsResultOrder?: "ipv4first" | "ipv6first" | "verbatim";
   }
 ): Promise<void> {
   const ignoreScripts = options.ignoreScripts ?? true;
@@ -160,6 +168,7 @@ async function installInOwnership(
     const invokeNpm = `
     const fs = require('node:fs');
     const path = require('node:path');
+    require('node:dns').setDefaultResultOrder(${JSON.stringify(options.dnsResultOrder ?? "ipv4first")});
     const [reset, cli, ...args] = process.argv.slice(1);
     if (reset === '1') {
       fs.rmSync(path.join(process.cwd(), 'node_modules'), {recursive:true, force:true});
@@ -198,6 +207,7 @@ async function installInOwnership(
         "--cache",
         installCacheDir,
       ];
+      if (options.updateNotifier !== true) args.push("--no-update-notifier");
       if (ignoreScripts) args.push("--ignore-scripts");
       if (lockOnly) args.push("--package-lock-only");
       const launch = compileNativeLaunch({

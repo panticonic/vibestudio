@@ -1132,7 +1132,8 @@ async function acquireDependencyCache(
   const lease = derivedCacheCoordinator(options.baseDir).acquire(options.baseDir, options.key);
   try {
     if (derivedCacheUnderPressure(options.baseDir)) {
-      await derivedCacheCoordinator(options.baseDir).prune(options.baseDir);
+      const pruned = await derivedCacheCoordinator(options.baseDir).prune(options.baseDir);
+      if (pruned.removedEntries > 0) scheduleDependencyContentPrune(options.hostArtifactRoot);
     }
     const nodeModulesDir = await ensureDepsInstalled(deps, options);
     return borrowedDependencyEnvironment(
