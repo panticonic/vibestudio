@@ -166,6 +166,22 @@ describe("typecheckUnit (push build-gate fold-in)", () => {
     expect(messages).toMatch(/Cannot find module ['"]ext-pkg['"]/);
   });
 
+  it("loads generated workspace program declarations in a materialized unit", async () => {
+    const unit = "packages/call-program";
+    const unitDir = path.join(sourceRoot, unit);
+    await fsp.mkdir(unitDir, { recursive: true });
+    try {
+      await fsp.writeFile(path.join(unitDir, "refresh.d.nl.ts"), "declare const refresh: () => string; export default refresh;");
+      await fsp.writeFile(
+        path.join(unitDir, "index.ts"),
+        'import refresh from "./refresh.nl"; export const message: string = refresh();'
+      );
+      expect(await typecheckUnit(unit, sourceRoot, [], [], WORKER_CONDITIONS)).toEqual([]);
+    } finally {
+      await fsp.rm(unitDir, { recursive: true, force: true });
+    }
+  });
+
   it("reports typecheck files in workspace-relative coordinates", async () => {
     const brokenPath = path.join(sourceRoot, "panels/hello/broken.ts");
     await fsp.writeFile(brokenPath, `export const count: number = "wrong";`);

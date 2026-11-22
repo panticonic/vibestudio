@@ -160,7 +160,12 @@ export async function typecheckUnit(
       // Protected publication enforces one platform safety floor. A unit's
       // tsconfig may describe its environment or add stricter checks, but it
       // cannot weaken the checks required for code admitted to main.
-      compilerOptions: { ...USERLAND_TYPECHECK_BASELINE, customConditions: [...moduleConditions] },
+      compilerOptions: {
+        ...USERLAND_TYPECHECK_BASELINE,
+        // Generated declarations for workspace programs use .d.nl.ts.
+        allowArbitraryExtensions: true,
+        customConditions: [...moduleConditions],
+      },
       requiredRootFiles,
       // Repository-view builds are hermetic at the unit/dependency closure.
       // A unit without its own config uses deterministic defaults; it must not
