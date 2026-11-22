@@ -88,10 +88,17 @@ function withStore<T>(file: string, action: (db: DatabaseSync) => T): T {
 }
 
 /** Call only after independently storing bytes supplied by this authenticated producer. */
-export function recordBlobUpload(blobsDir: string, principal: string, digest: string): void {
+export function recordBlobUpload(
+  blobsDir: string,
+  principal: string,
+  digest: string,
+  readPrincipal?: string,
+): void {
+  const principals = readPrincipal ? [principal, readPrincipal] : [principal];
   withStore(databasePath(blobsDir), (db) => {
-    db.prepare("INSERT OR IGNORE INTO blob_uploads(digest, principal) VALUES (?, ?)")
-      .run(digest, principal);
+    db.prepare(
+      "INSERT OR IGNORE INTO blob_uploads(digest, principal) SELECT ?, value FROM json_each(?)"
+    ).run(digest, JSON.stringify(principals));
   });
 }
 

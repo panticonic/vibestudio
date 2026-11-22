@@ -8052,6 +8052,7 @@ async function main() {
         createBlobstoreService({
           blobsDir,
           recordParticipantUploads: () => workspaceVcs.participantHistoryAttached,
+          admittedEvalOwner: (caller) => admittedEvalContextOwner(entityCache, caller),
           canReadPrivateContent: (contentHash, context) => readScopedWorkspaceBlob({ contentHash }, context),
           canReadWorkspacePlacement: (placement, context) => readScopedWorkspaceBlob({ placement }, context),
         }),

@@ -61,6 +61,7 @@ import {
 import type { ServiceContext, VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import {
   blobUploadPrincipal,
+  hasBlobUploads,
   hasPrivateWorkspaceBlobs,
   markPrivateWorkspaceBlobs,
   privateWorkspaceBlobScopes,
@@ -82,6 +83,7 @@ function errorText(error: unknown): string {
 export interface BlobstoreServiceDeps {
   blobsDir: string;
   recordParticipantUploads?: () => boolean;
+  admittedEvalOwner?: (caller: VerifiedCaller) => { runtimeId: string; contextId: string } | null;
   canReadPrivateContent?: (digest: string, context?: ServiceContext) => Promise<boolean>;
   canReadWorkspacePlacement?: (state: WorkspaceStateRef, context?: ServiceContext) => Promise<boolean>;
 }
@@ -2374,9 +2376,24 @@ export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithR
   // Durable Object identities survive process/build incarnations. Logical keys
   // are never allowed to choose a different authenticated caller namespace.
   const retentionNamespace = (caller: VerifiedCaller) => blobRetentionNamespace(caller.runtime);
+  // The particular tool task proves supply to semantic history. Only direct
+  // reads can reuse an upload from another call in the same admitted notebook.
+  const evalUploadPrincipal = (ctx?: ServiceContext): string | undefined => {
+    const caller = ctx?.caller;
+    const invocation = caller?.nativeInvocation;
+    if (!caller || !invocation) return undefined;
+    const owner = deps.admittedEvalOwner?.(caller);
+    if (!owner || owner.runtimeId !== invocation.owner.runtimeId) return undefined;
+    return JSON.stringify(["eval-owner", owner.runtimeId, invocation.owner.authoritySessionId, owner.contextId]);
+  };
   const recordUpload = (ctx: ServiceContext, digest: string) => {
     if (deps.recordParticipantUploads?.())
-      recordBlobUpload(deps.blobsDir, blobUploadPrincipal(ctx), digest);
+      recordBlobUpload(deps.blobsDir, blobUploadPrincipal(ctx), digest, evalUploadPrincipal(ctx));
+  };
+  const canReadContent = async (digest: string, ctx?: ServiceContext): Promise<boolean> => {
+    const principal = evalUploadPrincipal(ctx);
+    return (principal !== undefined && hasBlobUploads(deps.blobsDir, principal, [digest])) ||
+      (await deps.canReadPrivateContent?.(digest, ctx)) === true;
   };
   const put = (ctx: ServiceContext, bytes: Buffer) =>
     deps.recordParticipantUploads?.()
@@ -2399,8 +2416,7 @@ export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithR
     const placements = workspaceBlobPlacements(deps.blobsDir, closure.treeDigests);
     const visible = new Map<string, boolean>();
     for (const [digest, scope] of digests) {
-      if ((scope === "content" || files.has(digest)) &&
-        !await deps.canReadPrivateContent?.(digest, ctx)) return false;
+      if ((scope === "content" || files.has(digest)) && !await canReadContent(digest, ctx)) return false;
       const refs = placements.get(digest);
       if (refs) {
         let admitted = false;
@@ -2423,7 +2439,7 @@ export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithR
   };
   const readScoped = async (digest: string, scope: WorkspaceBlobScope, ctx?: ServiceContext) =>
     scope === "content"
-      ? await deps.canReadPrivateContent?.(digest, ctx) === true
+      ? canReadContent(digest, ctx)
       : treeContentReadable(`${scope}:${digest}`, ctx);
   const canRead = async (digest: string, ctx?: ServiceContext): Promise<boolean> => {
     const scope = privateWorkspaceBlobScopes(deps.blobsDir, [digest]).get(digest);
