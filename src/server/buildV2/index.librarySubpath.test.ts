@@ -17,7 +17,7 @@ import type { BuildSourceProvider } from "./buildSource.js";
 import type { WorkspaceStateSource } from "./stateTrigger.js";
 import { discoverPackageGraph } from "./packageGraph.js";
 import { createBuildProcessOwner } from "./builder.js";
-import { exactUserlandRoot } from "../../../tests/exactUserlandRoot";
+import { exactUnitRoots, exactUserlandRoot } from "../../../tests/exactUserlandRoot";
 
 const APP_NODE_MODULES = [path.resolve(__dirname, "../../../node_modules")];
 const requireNodeBuiltin = createRequire(import.meta.url);
@@ -343,6 +343,38 @@ describe("BuildSystemV2 library package subpaths", () => {
         libraryTarget: "panel",
       })
     ).toEqual(result);
+  });
+
+  it.each(["worker", "panel"] as const)("resolves semantic application entries through the installed package closure (%s)", async (target) => {
+    const producer = path.join(exactUserlandRoot, "skills/open-user-goal");
+    const destination = path.join(workspaceRoot, "skills/open-user-goal");
+    fs.mkdirSync(destination, { recursive: true });
+    // Use the real source package contract and registry. A .nl package alone
+    // is not a JavaScript package in the prepared dependency graph.
+    for (const name of ["package.json", "entrypoints.ts", "entriesGenerated.ts"])
+      fs.copyFileSync(path.join(producer, name), path.join(destination, name));
+    const runner = exactUnitRoots("workers/system-test-runner")[0];
+    expect(runner).toBeDefined();
+    const manifest = JSON.parse(fs.readFileSync(path.join(runner!, "package.json"), "utf8"));
+    expect(manifest.dependencies["@workspace-skills/open-user-goal"]).toBe("workspace:*");
+    const consumer = path.join(workspaceRoot, "packages/semantic-entry-consumer");
+    fs.mkdirSync(consumer, { recursive: true });
+    fs.writeFileSync(path.join(consumer, "package.json"), JSON.stringify({
+      name: "@workspace/semantic-entry-consumer", version: "0.1.0", type: "module",
+      dependencies: { "@workspace-skills/open-user-goal": manifest.dependencies["@workspace-skills/open-user-goal"] },
+      exports: { ".": "./index.ts" },
+    }));
+    fs.writeFileSync(path.join(consumer, "index.ts"),
+      'import { semanticTaskEntry } from "@workspace-skills/open-user-goal/entrypoints"; export const entry = semanticTaskEntry("browser", "Inspect the assigned panel");\n');
+    buildSystem = await initBuildSystemV2(workspaceRoot, fakeWorkspaceSource(() => workspaceRoot), buildRoots(workspaceRoot));
+    const result = await buildSystem.getBuild("@workspace/semantic-entry-consumer", undefined, { library: true, libraryTarget: target });
+    const module = { exports: {} as Record<string, unknown> };
+    await new Function("require", "exports", "module", "__vibestudioImport", `return (async()=>{${result.bundle}\n})();`)(
+      (name: string) => { throw new Error(`unexpected external dependency ${name}`); }, module.exports, module,
+      async (name: string) => { throw new Error(`unexpected dynamic dependency ${name}`); });
+    expect(module.exports.entry).toMatchObject({
+      program: "skills/open-user-goal/workInBrowser.nl", callable: "workInBrowser", arguments: { goal: "Inspect the assigned panel" },
+    });
   });
 
   it("builds a requested package wildcard export subpath", async () => {
