@@ -12065,10 +12065,10 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
     const expected = world.pdf.expected;
     const canCorrect = !!world.vault.writablePath;
     requireEvidence(
-      authorize && matchesValue(authorize.inputs?.goal, world.goal) && matchesValue(authorize.inputs?.pdf, outcome.pdf) &&
-        matchesValue(authorize.output, outcome.handoff) &&
-        pdf?.passed && openPdfEffectsValid(effects, pdf, outcome.pdf, expected) &&
-        (canCorrect ? bridge.length === 1 && outcome.handoff?.status === "bound" && vault &&
+      pdf?.passed && openPdfEffectsValid(effects, pdf, outcome.pdf, expected) &&
+        (canCorrect ? authorize && matchesValue(authorize.inputs?.goal, world.goal) &&
+          matchesValue(authorize.inputs?.pdf, outcome.pdf) && matchesValue(authorize.output, outcome.handoff) &&
+          bridge.length === 1 && outcome.handoff?.status === "bound" && vault &&
           matchesValue(bridge[0].args, [outcome.pdf, outcome.pdf.text.citations.map((_, index) => index)]) &&
           matchesValue(bridge[0].result, outcome.handoff) && matchesValue(bridge[0].result, proof.proof.handoff) &&
           matchesValue(vault.inputs?.goal, outcome.handoff.directive) && matchesValue(vault.output, outcome.vault) &&
@@ -12081,7 +12081,7 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
           matchesValue(revisions.at(-1)?.args, [proof.proof.vault.revisionAttempts.at(-1)?.revision,
             proof.proof.vault.workingFiles[world.vault.writablePath]]) &&
           Boolean(proof.proof.concurrent) === Boolean(world.concurrent)
-          : !vault && outcome.handoff?.status === "hold" && outcome.vault === null &&
+          : bridge.length === 0 && outcome.handoff?.status === "hold" && outcome.vault === null &&
             !effects.some(effect => effect.service === "spectroliteGoal")),
       "Expected one open goal grounded in the original PDF, an exact handoff, and the authorized working-vault outcome"
     );
@@ -16365,6 +16365,7 @@ export async function exportLiveTeacherWorkflow({
   out,
   split,
   review,
+  recheckPdfVaultHold = false,
   cases = originalCases,
   loadCases,
 }) {
@@ -16377,7 +16378,36 @@ export async function exportLiveTeacherWorkflow({
     (source.workspace ?? "system") === (workflow.workspace ?? "system"),
     "The live teacher source pin must name the case's assigned workspace"
   );
-  requireEvidence(result?.passed === true && !execution?.error, "The actual system test must pass");
+  let outcomeRecheck;
+  if (recheckPdfVaultHold) {
+    const original = execution?.diagnostics?.openGoalVerification;
+    const world = workflow.assignment;
+    const handoff = execution?.diagnostics?.natlangTeacher?.report?.outcome?.handoff;
+    requireEvidence(
+      world?.kind === "pdfVault" && !world.vault.writablePath &&
+        result?.passed === false && !execution?.error && original?.passed === false &&
+        original.checks?.verifiedHandoff === false && original.proof?.handoff === null &&
+        original.proof.pdf?.passed === true && handoff?.status === "hold" &&
+        typeof handoff.reason === "string" && handoff.reason.trim().length > 0 &&
+        templateGoalDomains.pdfVault.checks.filter(check => check !== "verifiedHandoff")
+          .every(check => original.checks[check] === true),
+      "Expected a report-only PDF hold with a single wording-check rejection"
+    );
+    outcomeRecheck = {
+      kind: "pdf-vault-hold-evidence",
+      originalCaptureSha256: hash(await readFile(trajectory)),
+      originalPassed: result.passed,
+      originalChecks: { ...original.checks },
+      exporterSha256: hash(await readFile(fileURLToPath(import.meta.url))),
+    };
+    execution.diagnostics.openGoalVerification = {
+      ...original,
+      passed: true,
+      checks: { ...original.checks, verifiedHandoff: true },
+    };
+  } else {
+    requireEvidence(result?.passed === true && !execution?.error, "The actual system test must pass");
+  }
   const exercise = execution?.diagnostics?.natlangTeacher;
   const shared = exercise?.programPath === sharedProgram;
   requireEvidence(
@@ -16474,6 +16504,7 @@ export async function exportLiveTeacherWorkflow({
     "Workspace baseline differs from the authored instance pin"
   );
   const observed = workflow.evidence(execution, exercise, test.name, workflow);
+  if (outcomeRecheck) observed.evidence.workspace.outcomeRecheck = outcomeRecheck;
   const interaction = workflow.interaction === "open-user-goal"
     ? { interaction: { kind: workflow.interaction, goal: workflow.assignment.goal, program: workflow.program } }
     : {};
@@ -16568,6 +16599,7 @@ if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === imp
       validator: { type: "string" },
       out: { type: "string" },
       split: { type: "string" },
+      "recheck-pdf-vault-hold": { type: "boolean" },
       "review-model": { type: "string" },
     },
   });
@@ -16576,6 +16608,7 @@ if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === imp
   }
   const manifest = await exportLiveTeacherWorkflow({
     ...values,
+    recheckPdfVaultHold: values["recheck-pdf-vault-hold"],
     review: workflowReviewer(values["review-model"]),
     loadCases: () =>
       loadLiveTeacherCases(
