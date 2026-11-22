@@ -72,6 +72,8 @@ for (const [scenario, workflow] of liveTeacherCases) {
     liveTeacherCases.delete(scenario);
   } else if (workflow.interaction === "open-user-goal" && !isSystemTestWorkspace(workflow.workspace ?? "system")) {
     throw new Error(`Open goal ${scenario} requires an instantiable System Test workspace, received ${workflow.workspace}`);
+  } else if (workflow.interaction === "open-user-goal" && !workflow.entry) {
+    throw new Error(`Collection requires an application entry for ${scenario}`);
   }
 }
 if (!liveTeacherCases.size) {
@@ -93,6 +95,7 @@ if (list) {
           split: workflow.split,
           taskId: `${workflow.namespace}:${scenario}`,
           goalSha256: createHash("sha256").update(JSON.stringify(workflow.assignment.goal)).digest("hex"),
+          ...(workflow.entry ? { entry: workflow.entry } : {}),
         } : {}),
         requiresReview: Boolean(workflow.requiresReview),
         ...(workflow.workspaceBaseline ? { workspaceBaseline: workflow.workspaceBaseline } : {}),

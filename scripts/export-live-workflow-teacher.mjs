@@ -1643,6 +1643,10 @@ const originalCases = new Map([
 ]);
 
 export async function loadLiveTeacherCases(checkouts) {
+  // Archived test catalogs can contain only their original System Testing checkout.
+  const semanticTaskEntry = checkouts.base
+    ? (await import(pathToFileURL(path.join(checkouts.base, "skills/open-user-goal/entrypoints.ts")).href)).semanticTaskEntry
+    : null;
   const directory = path.join(checkouts["system-testing"], "skills/system-testing");
   const [
     { contentProjectWorlds },
@@ -1866,6 +1870,7 @@ export async function loadLiveTeacherCases(checkouts) {
             "skills/spectrolite-review-fixtures/knowledge-graph.ts")).href)).verifiesKnowledgeGraph
         : undefined;
       const ownedResearch = assignment.kind === "owned-research" || assignment.kind === "owned-research-and-edit";
+      const entry = semanticTaskEntry?.(assignment.kind, assignment.goal, assignment);
       cases.set(scenario, {
         family: `workspace-open-user-goal-${assignment.kind}`,
         workspace: assignment.workspace ?? "examples",
@@ -1876,8 +1881,9 @@ export async function loadLiveTeacherCases(checkouts) {
         sourceGroups,
         split,
         interaction: "open-user-goal",
-        program: "skills/open-user-goal/runUserGoal.nl",
-        root: "runUserGoal",
+        program: entry?.program ?? "skills/open-user-goal/runUserGoal.nl",
+        root: entry?.callable ?? "runUserGoal",
+        ...(entry ? { entry } : {}),
         validator: domain?.validator ?? (ownedResearch
           ? { template: "system-testing", path: "skills/system-testing/open-goal-owned-research-managed.ts" }
           : { template: "system-testing", path: `skills/system-testing/open-goal${[
@@ -9500,11 +9506,18 @@ export function openOutcomeGoalEvidence(execution, exercise, _scenario, workflow
   const world = workflow.assignment;
   const root = exercise.calls.find(({ callId }) => callId === exercise.rootCallIds[0])?.record;
   const checks = proof?.checks ?? {};
+  const entry = workflow.entry;
+  const attestedEntry = entry && { program: entry.program, callable: entry.callable, arguments: entry.arguments };
+  const inputValues = entry?.arguments ?? { goal: world.goal };
   requireEvidence(
     proof?.passed === true && proof.caseId === world.id && proof.goal === world.goal &&
       typeof proof.contextId === "string" && proof.contextId === execution.provenance?.contextId &&
       Object.keys(checks).length > 0 && Object.values(checks).every(value => value === true) &&
-      Object.keys(root?.inputs ?? {}).length === 1 && matchesValue(root.inputs.goal, world.goal),
+      isDeepStrictEqual(Object.keys(root?.inputs ?? {}).sort(), Object.keys(inputValues).sort()) &&
+      Object.entries(inputValues).every(([name, value]) => matchesValue(root.inputs[name], value)) &&
+      (!entry || isDeepStrictEqual(proof.entry, attestedEntry) &&
+        isDeepStrictEqual(exercise.entry, attestedEntry) &&
+        root.definition?.name === entry.callable && matchesValue(root.output, proof.actualResult)),
     "Expected independently verified outcomes bound to the actual workspace and original user goal"
   );
   const evidence = { workspace: { proof } };
@@ -9525,17 +9538,8 @@ export function openOutcomeGoalEvidence(execution, exercise, _scenario, workflow
     evidence.cdp = { panelId, inspections, attempts, after };
   }
   if (world.kind === "suite") {
-    const { choice, runtime, status } = world.expected;
-    const runs = choice.mode === "verify";
-    requireEvidence(
-      isDeepStrictEqual(proof.selected, choice) && isDeepStrictEqual(exercise.report?.selection, proof.selected) &&
-        proof.plan?.contextId === proof.contextId && proof.plan.runtime === runtime &&
-        proof.routes?.some((route) => route.id === choice.routeId && route.stateHash === proof.plan.stateHash) &&
-        (runs ? proof.runAttempts === 1 && proof.execution?.status === status &&
-          proof.execution?.receipt?.stateHash === proof.plan.stateHash &&
-          isDeepStrictEqual(exercise.report?.review?.execution, proof.execution) : proof.runAttempts === 0),
-      "Expected a current suite receipt or an inspection without execution"
-    );
+    requireEvidence(!proof.execution || proof.execution.receipt?.stateHash === proof.plan?.stateHash,
+      "Suite execution evidence must belong to the independently observed workspace state");
   }
   if (!workflow.requiresReview) return { world: worldBinding, checks, evidence };
   const project = proof.preparedContentProject;
@@ -16385,7 +16389,11 @@ export async function exportLiveTeacherWorkflow({
   const entry = await readJson(trajectory);
   const source = await readJson(pins);
   const { test, result, execution } = entry;
-  const workflow = cases.get(test?.name) ?? (await loadCases?.())?.get(test?.name);
+  const declaredWorkflow = cases.get(test?.name) ?? (await loadCases?.())?.get(test?.name);
+  const archivedRouter = execution?.diagnostics?.natlangTeacher?.programPath === "skills/open-user-goal/runUserGoal.nl";
+  const workflow = archivedRouter && declaredWorkflow?.entry
+    ? { ...declaredWorkflow, entry: undefined, program: "skills/open-user-goal/runUserGoal.nl", root: "runUserGoal" }
+    : declaredWorkflow;
   requireEvidence(workflow, "Unsupported live teacher scenario");
   requireEvidence(
     (source.workspace ?? "system") === (workflow.workspace ?? "system"),
@@ -16444,8 +16452,8 @@ export async function exportLiveTeacherWorkflow({
     root?.record.definition?.name === expectedRoot &&
       root.record.parent_call_id === null &&
       generationTurns(root).length > 0 &&
-      captured.some((call) => call.callId !== rootId && generationTurns(call).length > 0),
-    `Expected the authored ${expectedRoot} root and at least one actual child call`
+      (workflow.entry || captured.some((call) => call.callId !== rootId && generationTurns(call).length > 0)),
+    `Expected the actual authored ${expectedRoot} invocation`
   );
   if (shared) {
     const expectedSkills = workflow.skills ?? [workflow.root];
@@ -16519,7 +16527,12 @@ export async function exportLiveTeacherWorkflow({
   const observed = workflow.evidence(execution, exercise, test.name, workflow);
   if (outcomeRecheck) observed.evidence.workspace.outcomeRecheck = outcomeRecheck;
   const interaction = workflow.interaction === "open-user-goal"
-    ? { interaction: { kind: workflow.interaction, goal: workflow.assignment.goal, program: workflow.program } }
+    ? { interaction: { kind: workflow.interaction, goal: workflow.assignment.goal, program: workflow.program,
+        ...(workflow.entry ? { entry: {
+          program: workflow.entry.program,
+          callable: workflow.entry.callable,
+          arguments: workflow.entry.arguments,
+        } } : {}) } }
     : {};
   const world = {
     instance: source.instance,

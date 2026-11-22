@@ -57,6 +57,8 @@ test("a batch reuses each workspace instance and retains successes across failur
     liveTeacherCases.set('open-café', {
       family: 'open', group: 'open', interaction: 'open-user-goal', split: 'train',
       namespace: 'vibestudio:fixture', assignment: { goal: 'Send a café update.\\n"Use the new time."' },
+      entry: { program: 'skills/mail/sendUpdate.nl', callable: 'sendUpdate',
+        resultType: 'DeliveryReceipt', arguments: { goal: 'Send a café update.\\n"Use the new time."' } },
     });
     export async function loadLiveTeacherCases() { return liveTeacherCases; }
     export function workflowSourceGroups(workflow) { return [workflow.group]; }
