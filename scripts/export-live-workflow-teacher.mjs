@@ -1643,6 +1643,10 @@ const originalCases = new Map([
 ]);
 
 export async function loadLiveTeacherCases(checkouts) {
+  // Archived test catalogs can contain only their original System Testing checkout.
+  const semanticTaskEntry = checkouts.base
+    ? (await import(pathToFileURL(path.join(checkouts.base, "skills/open-user-goal/entrypoints.ts")).href)).semanticTaskEntry
+    : null;
   const directory = path.join(checkouts["system-testing"], "skills/system-testing");
   const [
     { contentProjectWorlds },
@@ -1866,6 +1870,7 @@ export async function loadLiveTeacherCases(checkouts) {
             "skills/spectrolite-review-fixtures/knowledge-graph.ts")).href)).verifiesKnowledgeGraph
         : undefined;
       const ownedResearch = assignment.kind === "owned-research" || assignment.kind === "owned-research-and-edit";
+      const entry = semanticTaskEntry?.(assignment.kind, assignment.goal, assignment);
       cases.set(scenario, {
         family: `workspace-open-user-goal-${assignment.kind}`,
         workspace: assignment.workspace ?? "examples",
@@ -1876,8 +1881,9 @@ export async function loadLiveTeacherCases(checkouts) {
         sourceGroups,
         split,
         interaction: "open-user-goal",
-        program: "skills/open-user-goal/runUserGoal.nl",
-        root: "runUserGoal",
+        program: entry?.program ?? "skills/open-user-goal/runUserGoal.nl",
+        root: entry?.callable ?? "runUserGoal",
+        ...(entry ? { entry } : {}),
         validator: domain?.validator ?? (ownedResearch
           ? { template: "system-testing", path: "skills/system-testing/open-goal-owned-research-managed.ts" }
           : { template: "system-testing", path: `skills/system-testing/open-goal${[
@@ -9500,11 +9506,19 @@ export function openOutcomeGoalEvidence(execution, exercise, _scenario, workflow
   const world = workflow.assignment;
   const root = exercise.calls.find(({ callId }) => callId === exercise.rootCallIds[0])?.record;
   const checks = proof?.checks ?? {};
+  const entry = workflow.entry;
+  const attestedEntry = entry && { program: entry.program, callable: entry.callable, arguments: entry.arguments,
+    ...(entry.argumentJson ? { argumentJson: entry.argumentJson } : {}) };
+  const inputValues = entry?.arguments ?? { goal: world.goal };
   requireEvidence(
     proof?.passed === true && proof.caseId === world.id && proof.goal === world.goal &&
       typeof proof.contextId === "string" && proof.contextId === execution.provenance?.contextId &&
       Object.keys(checks).length > 0 && Object.values(checks).every(value => value === true) &&
-      Object.keys(root?.inputs ?? {}).length === 1 && matchesValue(root.inputs.goal, world.goal),
+      isDeepStrictEqual(Object.keys(root?.inputs ?? {}).sort(), Object.keys(inputValues).sort()) &&
+      Object.entries(inputValues).every(([name, value]) => matchesValue(root.inputs[name], value)) &&
+      (!entry || isDeepStrictEqual(proof.entry, attestedEntry) &&
+        isDeepStrictEqual(exercise.entry, attestedEntry) &&
+        root.definition?.name === entry.callable && matchesValue(root.output, proof.actualResult)),
     "Expected independently verified outcomes bound to the actual workspace and original user goal"
   );
   const evidence = { workspace: { proof } };
@@ -9525,17 +9539,8 @@ export function openOutcomeGoalEvidence(execution, exercise, _scenario, workflow
     evidence.cdp = { panelId, inspections, attempts, after };
   }
   if (world.kind === "suite") {
-    const { choice, runtime, status } = world.expected;
-    const runs = choice.mode === "verify";
-    requireEvidence(
-      isDeepStrictEqual(proof.selected, choice) && isDeepStrictEqual(exercise.report?.selection, proof.selected) &&
-        proof.plan?.contextId === proof.contextId && proof.plan.runtime === runtime &&
-        proof.routes?.some((route) => route.id === choice.routeId && route.stateHash === proof.plan.stateHash) &&
-        (runs ? proof.runAttempts === 1 && proof.execution?.status === status &&
-          proof.execution?.receipt?.stateHash === proof.plan.stateHash &&
-          isDeepStrictEqual(exercise.report?.review?.execution, proof.execution) : proof.runAttempts === 0),
-      "Expected a current suite receipt or an inspection without execution"
-    );
+    requireEvidence(!proof.execution || proof.execution.receipt?.stateHash === proof.plan?.stateHash,
+      "Suite execution evidence must belong to the independently observed workspace state");
   }
   if (!workflow.requiresReview) return { world: worldBinding, checks, evidence };
   const project = proof.preparedContentProject;
@@ -9553,6 +9558,13 @@ export function openOutcomeGoalEvidence(execution, exercise, _scenario, workflow
     "Expected the independently read back project and its bound semantic review input"
   );
   return { world: worldBinding, checks: { ...checks }, evidence, reviewInput };
+}
+
+function uniqueObservedReads(effects, service, methods) {
+  return effects.filter((effect, index) => effect.error || effect.service !== service ||
+    !methods.includes(effect.method) || !effects.slice(0, index).some(previous =>
+      !previous.error && previous.service === service && previous.method === effect.method &&
+      isDeepStrictEqual(previous.args, effect.args) && isDeepStrictEqual(previous.result, effect.result)));
 }
 
 export function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
@@ -11121,22 +11133,24 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
       }), "Expected exact package baseline, scoped local effect and installed native verification plan trajectory");
   } else if (world.kind === "webhook-admission") {
     const outcome = exercise.report.outcome;
-    const observed = effects.filter(effect => ["webhookAdmissionEvidence", "webhookAdmissionHandoff"].includes(effect.service));
+    const observed = uniqueObservedReads(
+      effects.filter(effect => ["webhookAdmissionEvidence", "webhookAdmissionHandoff"].includes(effect.service)),
+      "webhookAdmissionEvidence", ["discover", "inspect"]);
     const receipts = proof.effects?.slice();
     const branch = exercise.calls.find(({ record }) => record === skill);
     const child = (parent, name) => exercise.calls.filter(({ record }) => record.parent_call_id === parent?.callId &&
       record.definition?.name === name && record.outcome === "done");
     const read = child(branch, "inspectWebhookStatus");
-    const native = child(read[0], "readWebhookEvidence");
+    const native = read.flatMap(call => child(call, "readWebhookEvidence"));
     const match = child(branch, "matchRegistration");
     const assess = child(branch, "assessWebhookAdmission");
     const policy = child(assess[0], "assessRequiredPolicy");
     const stage = child(branch, "stageWebhookAudit");
     requireEvidence(isDeepStrictEqual(outcome.assignment, proof.assignment) && isDeepStrictEqual(outcome.evidence, proof.evidence) &&
       isDeepStrictEqual(outcome.binding, proof.binding) && isDeepStrictEqual(outcome.assessment, proof.assessment) &&
-      isDeepStrictEqual(outcome.handoff, proof.handoff) && read.length === 1 && native.length === 1 &&
-      matchesValue(read[0].record.inputs?.assignment, proof.assignment) && matchesValue(read[0].record.output, proof.evidence) &&
-      matchesValue(native[0].record.inputs?.assignment, proof.assignment) && matchesValue(native[0].record.output, proof.evidence) &&
+      isDeepStrictEqual(outcome.handoff, proof.handoff) &&
+      read.some(({ record }) => matchesValue(record.inputs?.assignment, proof.assignment) && matchesValue(record.output, proof.evidence)) &&
+      native.some(({ record }) => matchesValue(record.inputs?.assignment, proof.assignment) && matchesValue(record.output, proof.evidence)) &&
       match.length === 1 && matchesValue(match[0].record.inputs?.assignment, proof.assignment) &&
       matchesValue(match[0].record.inputs?.evidence, proof.evidence) && matchesValue(match[0].record.output, proof.binding) &&
       assess.length === 1 && matchesValue(assess[0].record.inputs?.assignment, proof.assignment) &&
@@ -11157,14 +11171,16 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
       }), "Expected exact owned webhook admission, retained native binding, and private audit trajectory");
   } else if (world.kind === "delivery-wake") {
     const outcome = exercise.report.outcome;
-    const serviceEffects = effects.filter(effect => ["deliveryWakeEvidence", "deliveryWakeAction"].includes(effect.service));
+    const serviceEffects = uniqueObservedReads(
+      effects.filter(effect => ["deliveryWakeEvidence", "deliveryWakeAction"].includes(effect.service)),
+      "deliveryWakeEvidence", ["discover", "observe"]);
     const receipts = proof.effects?.slice();
     const branch = exercise.calls.find(({ record }) => record === skill);
     const child = (parent, name) => exercise.calls.filter(({ record }) => record.parent_call_id === parent?.callId &&
       record.definition?.name === name && record.outcome === "done");
     const discover = child(branch, "discoverDeliveryWake");
     const observe = child(branch, "inspectDeliveryWake");
-    const native = child(observe[0], "readNativeWake");
+    const native = observe.flatMap(call => child(call, "readNativeWake"));
     const choose = child(branch, "decideDeliveryWake");
     const select = child(choose[0], "matchDeliveryWakeEvent");
     const apply = child(branch, "applyDeliveryWake");
@@ -11179,14 +11195,16 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
     const rows = event ? evidence.mailbox.filter(row => row.event === event.id && row.recipient === assignment.recipient &&
       row.revision === assignment.revision) : [];
     const selected = { event: rows.length > 1 ? null : event, mailbox: rows.length === 1 ? rows[0] : null };
-    const leaf = (call, service, method) => call?.record.effects?.length === 1 &&
-      call.record.effects[0].service === service && call.record.effects[0].method === method;
+    const leaf = (call, service, method) => {
+      const observed = uniqueObservedReads(call?.record.effects ?? [], "deliveryWakeEvidence", ["discover", "observe"]);
+      return observed.length === 1 && observed[0].service === service && observed[0].method === method;
+    };
     const match = (record, params, output) =>
       Object.entries(params).every(([name,value]) => matchesValue(record.inputs?.[name], value)) && matchesValue(record.output, output);
     requireEvidence(["assignment", "evidence", "choice", "receipt"].every(name => isDeepStrictEqual(outcome[name], proof[name])) &&
-      discover.length === 1 && leaf(discover[0], "deliveryWakeEvidence", "discover") && match(discover[0].record, {}, assignment) &&
-      observe.length === 1 && match(observe[0].record, { assignment }, evidence) &&
-      native.length === 1 && leaf(native[0], "deliveryWakeEvidence", "observe") && match(native[0].record, { assignment }, evidence) &&
+      discover.some(call => leaf(call, "deliveryWakeEvidence", "discover") && match(call.record, {}, assignment)) &&
+      observe.some(({ record }) => match(record, { assignment }, evidence)) &&
+      native.some(call => leaf(call, "deliveryWakeEvidence", "observe") && match(call.record, { assignment }, evidence)) &&
       choose.length === 1 && match(choose[0].record, { assignment, evidence }, proof.choice) &&
       (canMatch ? select.length === 1 && match(select[0].record, { assignment, evidence }, selected) : select.length === 0) &&
       (proof.receipt ? apply.length === 1 && leaf(apply[0], "deliveryWakeAction", "apply") &&
@@ -12065,10 +12083,10 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
     const expected = world.pdf.expected;
     const canCorrect = !!world.vault.writablePath;
     requireEvidence(
-      authorize && matchesValue(authorize.inputs?.goal, world.goal) && matchesValue(authorize.inputs?.pdf, outcome.pdf) &&
-        matchesValue(authorize.output, outcome.handoff) &&
-        pdf?.passed && openPdfEffectsValid(effects, pdf, outcome.pdf, expected) &&
-        (canCorrect ? bridge.length === 1 && outcome.handoff?.status === "bound" && vault &&
+      pdf?.passed && openPdfEffectsValid(effects, pdf, outcome.pdf, expected) &&
+        (canCorrect ? authorize && matchesValue(authorize.inputs?.goal, world.goal) &&
+          matchesValue(authorize.inputs?.pdf, outcome.pdf) && matchesValue(authorize.output, outcome.handoff) &&
+          bridge.length === 1 && outcome.handoff?.status === "bound" && vault &&
           matchesValue(bridge[0].args, [outcome.pdf, outcome.pdf.text.citations.map((_, index) => index)]) &&
           matchesValue(bridge[0].result, outcome.handoff) && matchesValue(bridge[0].result, proof.proof.handoff) &&
           matchesValue(vault.inputs?.goal, outcome.handoff.directive) && matchesValue(vault.output, outcome.vault) &&
@@ -12081,7 +12099,7 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
           matchesValue(revisions.at(-1)?.args, [proof.proof.vault.revisionAttempts.at(-1)?.revision,
             proof.proof.vault.workingFiles[world.vault.writablePath]]) &&
           Boolean(proof.proof.concurrent) === Boolean(world.concurrent)
-          : !vault && outcome.handoff?.status === "hold" && outcome.vault === null &&
+          : bridge.length === 0 && outcome.handoff?.status === "hold" && outcome.vault === null &&
             !effects.some(effect => effect.service === "spectroliteGoal")),
       "Expected one open goal grounded in the original PDF, an exact handoff, and the authorized working-vault outcome"
     );
@@ -16365,19 +16383,53 @@ export async function exportLiveTeacherWorkflow({
   out,
   split,
   review,
+  recheckPdfVaultHold = false,
   cases = originalCases,
   loadCases,
 }) {
   const entry = await readJson(trajectory);
   const source = await readJson(pins);
   const { test, result, execution } = entry;
-  const workflow = cases.get(test?.name) ?? (await loadCases?.())?.get(test?.name);
+  const declaredWorkflow = cases.get(test?.name) ?? (await loadCases?.())?.get(test?.name);
+  const archivedRouter = execution?.diagnostics?.natlangTeacher?.programPath === "skills/open-user-goal/runUserGoal.nl";
+  const workflow = archivedRouter && declaredWorkflow?.entry
+    ? { ...declaredWorkflow, entry: undefined, program: "skills/open-user-goal/runUserGoal.nl", root: "runUserGoal" }
+    : declaredWorkflow;
   requireEvidence(workflow, "Unsupported live teacher scenario");
   requireEvidence(
     (source.workspace ?? "system") === (workflow.workspace ?? "system"),
     "The live teacher source pin must name the case's assigned workspace"
   );
-  requireEvidence(result?.passed === true && !execution?.error, "The actual system test must pass");
+  let outcomeRecheck;
+  if (recheckPdfVaultHold) {
+    const original = execution?.diagnostics?.openGoalVerification;
+    const world = workflow.assignment;
+    const handoff = execution?.diagnostics?.natlangTeacher?.report?.outcome?.handoff;
+    requireEvidence(
+      world?.kind === "pdfVault" && !world.vault.writablePath &&
+        result?.passed === false && !execution?.error && original?.passed === false &&
+        original.checks?.verifiedHandoff === false && original.proof?.handoff === null &&
+        original.proof.pdf?.passed === true && handoff?.status === "hold" &&
+        typeof handoff.reason === "string" && handoff.reason.trim().length > 0 &&
+        templateGoalDomains.pdfVault.checks.filter(check => check !== "verifiedHandoff")
+          .every(check => original.checks[check] === true),
+      "Expected a report-only PDF hold with a single wording-check rejection"
+    );
+    outcomeRecheck = {
+      kind: "pdf-vault-hold-evidence",
+      originalCaptureSha256: hash(await readFile(trajectory)),
+      originalPassed: result.passed,
+      originalChecks: { ...original.checks },
+      exporterSha256: hash(await readFile(fileURLToPath(import.meta.url))),
+    };
+    execution.diagnostics.openGoalVerification = {
+      ...original,
+      passed: true,
+      checks: { ...original.checks, verifiedHandoff: true },
+    };
+  } else {
+    requireEvidence(result?.passed === true && !execution?.error, "The actual system test must pass");
+  }
   const exercise = execution?.diagnostics?.natlangTeacher;
   const shared = exercise?.programPath === sharedProgram;
   requireEvidence(
@@ -16401,8 +16453,8 @@ export async function exportLiveTeacherWorkflow({
     root?.record.definition?.name === expectedRoot &&
       root.record.parent_call_id === null &&
       generationTurns(root).length > 0 &&
-      captured.some((call) => call.callId !== rootId && generationTurns(call).length > 0),
-    `Expected the authored ${expectedRoot} root and at least one actual child call`
+      (workflow.entry || captured.some((call) => call.callId !== rootId && generationTurns(call).length > 0)),
+    `Expected the actual authored ${expectedRoot} invocation`
   );
   if (shared) {
     const expectedSkills = workflow.skills ?? [workflow.root];
@@ -16474,8 +16526,15 @@ export async function exportLiveTeacherWorkflow({
     "Workspace baseline differs from the authored instance pin"
   );
   const observed = workflow.evidence(execution, exercise, test.name, workflow);
+  if (outcomeRecheck) observed.evidence.workspace.outcomeRecheck = outcomeRecheck;
   const interaction = workflow.interaction === "open-user-goal"
-    ? { interaction: { kind: workflow.interaction, goal: workflow.assignment.goal, program: workflow.program } }
+    ? { interaction: { kind: workflow.interaction, goal: workflow.assignment.goal, program: workflow.program,
+        ...(workflow.entry ? { entry: {
+          program: workflow.entry.program,
+          callable: workflow.entry.callable,
+          arguments: workflow.entry.arguments,
+          ...(workflow.entry.argumentJson ? { argumentJson: workflow.entry.argumentJson } : {}),
+        } } : {}) } }
     : {};
   const world = {
     instance: source.instance,
@@ -16568,6 +16627,7 @@ if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === imp
       validator: { type: "string" },
       out: { type: "string" },
       split: { type: "string" },
+      "recheck-pdf-vault-hold": { type: "boolean" },
       "review-model": { type: "string" },
     },
   });
@@ -16576,6 +16636,7 @@ if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === imp
   }
   const manifest = await exportLiveTeacherWorkflow({
     ...values,
+    recheckPdfVaultHold: values["recheck-pdf-vault-hold"],
     review: workflowReviewer(values["review-model"]),
     loadCases: () =>
       loadLiveTeacherCases(

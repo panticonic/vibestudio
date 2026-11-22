@@ -985,7 +985,23 @@ test("live panel export rejects a child from a different evaluation", async (t) 
   await assert.rejects(() => exportLiveTeacherWorkflow(options), /different EvalDO/);
 });
 
-test("open goal export attests the goal-only invocation and rejects a hidden assignment", async (t) => {
+function bindApplicationResult(run, proof, workflow, result) {
+  const reference = value => {
+    const text = JSON.stringify(value);
+    return { complete: true, bytes: Buffer.byteLength(text), hash: createHash("sha256").update(text).digest("hex") };
+  };
+  const entry = { program: workflow.entry.program, callable: workflow.entry.callable, arguments: workflow.entry.arguments,
+    ...(workflow.entry.argumentJson ? { argumentJson: workflow.entry.argumentJson } : {}) };
+  run.entry = entry;
+  proof.entry = structuredClone(entry);
+  proof.actualResult = result;
+  const root = run.calls.find(({ callId }) => callId === run.rootCallIds[0]).record;
+  root.definition.name = entry.callable;
+  root.inputs = Object.fromEntries(Object.entries(entry.arguments).map(([name, value]) => [name, reference(value)]));
+  root.output = reference(result);
+}
+
+test("open goal export attests application inputs and rejects a hidden assignment", async (t) => {
   const { options, diagnostics, entry, save } = await fixture(t);
   const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
     path.resolve(import.meta.dirname, "..")
@@ -1013,12 +1029,13 @@ test("open goal export attests the goal-only invocation and rejects a hidden ass
       preservedOtherDocuments: true, reportedStoredRevision: true,
     },
   };
+  bindApplicationResult(run, diagnostics.openGoalVerification, workflow, { status: "edited", path: "guide.md", version: "new" });
   await save();
   await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases, split: "test" }), /predeclared split/u);
   await exportLiveTeacherWorkflow({ ...options, cases });
   const manifest = JSON.parse(await readFile(path.join(options.out, "manifest.json"), "utf8"));
   const verification = JSON.parse(await readFile(path.join(options.out, "verification.json"), "utf8"));
-  assert.deepEqual(manifest.interaction, { kind: "open-user-goal", goal, program: workflow.program });
+  assert.deepEqual(manifest.interaction, { kind: "open-user-goal", goal, program: workflow.program, entry: run.entry });
   assert.deepEqual(verification.interaction, manifest.interaction);
   assert.equal(verification.split, "train");
   root.record.inputs.work = {};
@@ -1060,6 +1077,7 @@ test("open browser goal export retains CDP evidence and rejects a replaced gener
     checks: { discoveredBrowser: true, readBackBrowser: true, exactPanelOutcome: true,
       respectedBrowserAuthority: true, reportedVisibleRows: true, protectedHeadUnchanged: true },
   };
+  bindApplicationResult(run, diagnostics.openGoalVerification, workflow, { status: "observed", rows: [] });
   await save();
   await exportLiveTeacherWorkflow({ ...options, cases });
   const manifest = JSON.parse(await readFile(path.join(options.out, "manifest.json"), "utf8"));
@@ -1102,13 +1120,14 @@ test("open suite goal export requires the recorded current suite receipt", async
     checks: { discoveredSuites: true, selectedAuthorizedSuite: true, currentSuitePlan: true,
       identifiedApproval: true, checkedSuiteReceipt: true },
   };
+  bindApplicationResult(run, diagnostics.openGoalVerification, workflow, run.report);
   await save();
   await exportLiveTeacherWorkflow({ ...options, cases });
-  run.report.review.execution.receipt.stateHash = "prior-revision";
+  diagnostics.openGoalVerification.execution.receipt.stateHash = "prior-revision";
   await save();
   await assert.rejects(
     exportLiveTeacherWorkflow({ ...options, cases, out: path.join(path.dirname(options.out), "stale") }),
-    /current suite receipt/u
+    /independently observed workspace state/u
   );
 });
 
@@ -1146,6 +1165,7 @@ test("open Drive goal export accepts a different callable and requires verified 
     checks: { discoveredDriveScope: true, exactProviderReads: true, boundDriveOutcome: true,
       groundedDriveFindings: true, preservedReadOnlyScope: true },
   };
+  bindApplicationResult(run, diagnostics.openGoalVerification, workflow, outcome);
   await save();
   await exportLiveTeacherWorkflow({ ...options, cases });
   diagnostics.openGoalVerification.checks.preservedReadOnlyScope = false;
