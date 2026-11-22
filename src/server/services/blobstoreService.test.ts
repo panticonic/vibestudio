@@ -2164,6 +2164,7 @@ describe("blobstoreService", () => {
     const callers = new Map([
       ["alice-notebook", { runtimeId: notebookOwner.runtimeId, contextId: "alice-copy" }],
       ["moved-notebook", { runtimeId: notebookOwner.runtimeId, contextId: "other-copy" }],
+      ["other-notebook", { runtimeId: notebookOwner.runtimeId, contextId: "alice-copy" }],
       ["child-notebook", { runtimeId: "agent:child", contextId: "child-copy" }],
     ]);
     const service = createBlobstoreService({
@@ -2203,6 +2204,7 @@ describe("blobstoreService", () => {
 
     for (const other of [
       fromEval("moved-notebook", 2),
+      fromEval("other-notebook", 2),
       fromEval("child-notebook", 2),
       fromEval("unknown-notebook", 2),
       fromEval("alice-notebook", 2, { ...notebookOwner, authoritySessionId: "new-session" }),

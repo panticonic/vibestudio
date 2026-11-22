@@ -1,8 +1,10 @@
+import type { ExecutionAdmissionFact } from "@vibestudio/rpc";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { describe, expect, it } from "vitest";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 
-import { entityOfCodeIdentity, resolveCodeIdentity } from "./principalIdentity.js";
+import { admittedNotebookOwner, entityOfCodeIdentity, resolveCodeIdentity } from "./principalIdentity.js";
 
 function makeDoRecord(id: string, repoPath: string, effectiveVersion: string): EntityRecord {
   return {
@@ -29,6 +31,64 @@ function makeDoRecord(id: string, repoPath: string, effectiveVersion: string): E
     },
   };
 }
+
+describe("admittedNotebookOwner", () => {
+  it("recognizes a verified embedded notebook in its exact active context", () => {
+    const id = "do:workers/agent-worker:AiChatWorker:alice";
+    const record = makeDoRecord(id, "workers/agent-worker", "hash-1");
+    const cache = new EntityCache();
+    cache._onActivate(record);
+    const caller = createVerifiedCaller(id, "do");
+    const admission = {
+      v: 2,
+      authoritySessionId: "admission-1",
+      authoritySessionVersion: 1,
+      admissionKey: "eval:run-1",
+      controllerRuntimeId: id,
+      mode: "interactive",
+      ownerUser: "user:alice",
+      workspaceId: "workspace",
+      contextId: record.contextId,
+      agentBinding: null,
+      taskRef: "task-1",
+      executionImage: {
+        principal: "code:workers/agent-worker@hash-1",
+        repoPath: "workers/agent-worker",
+        ref: "state:current",
+        effectiveVersion: "hash-1",
+        executionDigest: "a".repeat(64),
+      },
+      executor: {
+        kind: "dynamic-code",
+        runtimeId: id,
+        runId: "run-1",
+        authorityManifest: {
+          mode: "adaptive", effects: "read-write", approvals: "prompt", requests: [],
+          digest: "0".repeat(64),
+        },
+      },
+      parent: null,
+      causalParent: null,
+      issuedAt: 1,
+      expiresAt: Number.MAX_SAFE_INTEGER,
+      nonce: "nonce-1",
+    } satisfies ExecutionAdmissionFact;
+
+    expect(admittedNotebookOwner(cache, { ...caller, executionSession: admission }))
+      .toEqual({ runtimeId: id, contextId: record.contextId });
+    expect(admittedNotebookOwner(cache, caller)).toBeNull();
+    for (const mismatch of [
+      { contextId: "other-copy" },
+      { controllerRuntimeId: "other-controller" },
+      { executor: { ...admission.executor, runtimeId: "other-executor" } },
+    ]) {
+      expect(admittedNotebookOwner(cache, {
+        ...caller, executionSession: { ...admission, ...mismatch },
+      })).toBeNull();
+    }
+    expect(admittedNotebookOwner(new EntityCache(), { ...caller, executionSession: admission })).toBeNull();
+  });
+});
 
 describe("resolveCodeIdentity", () => {
   it("resolves source identity from a concrete DO entity row", () => {

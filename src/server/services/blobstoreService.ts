@@ -2384,7 +2384,9 @@ export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithR
     if (!caller || !invocation) return undefined;
     const owner = deps.admittedEvalOwner?.(caller);
     if (!owner || owner.runtimeId !== invocation.owner.runtimeId) return undefined;
-    return JSON.stringify(["eval-owner", owner.runtimeId, invocation.owner.authoritySessionId, owner.contextId]);
+    return JSON.stringify([
+      "eval-owner", owner.runtimeId, invocation.owner.authoritySessionId, owner.contextId, caller.runtime.id,
+    ]);
   };
   const recordUpload = (ctx: ServiceContext, digest: string) => {
     if (deps.recordParticipantUploads?.())

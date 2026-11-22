@@ -150,7 +150,11 @@ import {
   isEvalHostRecord,
 } from "@vibestudio/shared/evalRuntimeIdentity";
 import { isEvalHost } from "./services/evalKernelAuthority.js";
-import { admittedEvalContextOwner, entityOfCodeIdentity } from "./services/principalIdentity.js";
+import {
+  admittedEvalContextOwner,
+  admittedNotebookOwner,
+  entityOfCodeIdentity,
+} from "./services/principalIdentity.js";
 import {
   resolveHistoricalWorkspaceHost,
   requireCompatibleTransitionHost,
@@ -8052,7 +8056,7 @@ async function main() {
         createBlobstoreService({
           blobsDir,
           recordParticipantUploads: () => workspaceVcs.participantHistoryAttached,
-          admittedEvalOwner: (caller) => admittedEvalContextOwner(entityCache, caller),
+          admittedEvalOwner: (caller) => admittedNotebookOwner(entityCache, caller),
           canReadPrivateContent: (contentHash, context) => readScopedWorkspaceBlob({ contentHash }, context),
           canReadWorkspacePlacement: (placement, context) => readScopedWorkspaceBlob({ placement }, context),
         }),

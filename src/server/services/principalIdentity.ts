@@ -36,6 +36,23 @@ export function admittedEvalContextOwner(
   return { runtimeId: executor.parentId, contextId: admission.contextId };
 }
 
+/** A notebook may execute in its own admitted session or directly in the agent hosting its kernel. */
+export function admittedNotebookOwner(
+  entityCache: Pick<EntityCache, "resolveActive">,
+  caller: VerifiedCaller,
+): { runtimeId: string; contextId: string } | null {
+  const hosted = admittedEvalContextOwner(entityCache, caller);
+  if (hosted) return hosted;
+  const admission = caller.executionSession;
+  const runtimeId = caller.runtime.id;
+  if (admission?.executor.kind !== "dynamic-code" ||
+      admission.executor.runtimeId !== runtimeId ||
+      admission.controllerRuntimeId !== runtimeId) return null;
+  const executor = entityCache.resolveActive(runtimeId);
+  if (executor?.kind !== "do" || executor.contextId !== admission.contextId) return null;
+  return { runtimeId, contextId: admission.contextId };
+}
+
 function evalOwner(record: {
   kind?: string;
   source: { repoPath: string };
