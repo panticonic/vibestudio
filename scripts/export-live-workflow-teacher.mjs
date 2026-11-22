@@ -9555,6 +9555,13 @@ export function openOutcomeGoalEvidence(execution, exercise, _scenario, workflow
   return { world: worldBinding, checks: { ...checks }, evidence, reviewInput };
 }
 
+function uniqueObservedReads(effects, service, methods) {
+  return effects.filter((effect, index) => effect.error || effect.service !== service ||
+    !methods.includes(effect.method) || !effects.slice(0, index).some(previous =>
+      !previous.error && previous.service === service && previous.method === effect.method &&
+      isDeepStrictEqual(previous.args, effect.args) && isDeepStrictEqual(previous.result, effect.result)));
+}
+
 export function openTemplateGoalEvidence(execution, exercise, _scenario, workflow) {
   const proof = execution.diagnostics.openGoalVerification;
   const world = workflow.assignment;
@@ -11121,22 +11128,24 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
       }), "Expected exact package baseline, scoped local effect and installed native verification plan trajectory");
   } else if (world.kind === "webhook-admission") {
     const outcome = exercise.report.outcome;
-    const observed = effects.filter(effect => ["webhookAdmissionEvidence", "webhookAdmissionHandoff"].includes(effect.service));
+    const observed = uniqueObservedReads(
+      effects.filter(effect => ["webhookAdmissionEvidence", "webhookAdmissionHandoff"].includes(effect.service)),
+      "webhookAdmissionEvidence", ["discover", "inspect"]);
     const receipts = proof.effects?.slice();
     const branch = exercise.calls.find(({ record }) => record === skill);
     const child = (parent, name) => exercise.calls.filter(({ record }) => record.parent_call_id === parent?.callId &&
       record.definition?.name === name && record.outcome === "done");
     const read = child(branch, "inspectWebhookStatus");
-    const native = child(read[0], "readWebhookEvidence");
+    const native = read.flatMap(call => child(call, "readWebhookEvidence"));
     const match = child(branch, "matchRegistration");
     const assess = child(branch, "assessWebhookAdmission");
     const policy = child(assess[0], "assessRequiredPolicy");
     const stage = child(branch, "stageWebhookAudit");
     requireEvidence(isDeepStrictEqual(outcome.assignment, proof.assignment) && isDeepStrictEqual(outcome.evidence, proof.evidence) &&
       isDeepStrictEqual(outcome.binding, proof.binding) && isDeepStrictEqual(outcome.assessment, proof.assessment) &&
-      isDeepStrictEqual(outcome.handoff, proof.handoff) && read.length === 1 && native.length === 1 &&
-      matchesValue(read[0].record.inputs?.assignment, proof.assignment) && matchesValue(read[0].record.output, proof.evidence) &&
-      matchesValue(native[0].record.inputs?.assignment, proof.assignment) && matchesValue(native[0].record.output, proof.evidence) &&
+      isDeepStrictEqual(outcome.handoff, proof.handoff) &&
+      read.some(({ record }) => matchesValue(record.inputs?.assignment, proof.assignment) && matchesValue(record.output, proof.evidence)) &&
+      native.some(({ record }) => matchesValue(record.inputs?.assignment, proof.assignment) && matchesValue(record.output, proof.evidence)) &&
       match.length === 1 && matchesValue(match[0].record.inputs?.assignment, proof.assignment) &&
       matchesValue(match[0].record.inputs?.evidence, proof.evidence) && matchesValue(match[0].record.output, proof.binding) &&
       assess.length === 1 && matchesValue(assess[0].record.inputs?.assignment, proof.assignment) &&
@@ -11157,14 +11166,16 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
       }), "Expected exact owned webhook admission, retained native binding, and private audit trajectory");
   } else if (world.kind === "delivery-wake") {
     const outcome = exercise.report.outcome;
-    const serviceEffects = effects.filter(effect => ["deliveryWakeEvidence", "deliveryWakeAction"].includes(effect.service));
+    const serviceEffects = uniqueObservedReads(
+      effects.filter(effect => ["deliveryWakeEvidence", "deliveryWakeAction"].includes(effect.service)),
+      "deliveryWakeEvidence", ["discover", "observe"]);
     const receipts = proof.effects?.slice();
     const branch = exercise.calls.find(({ record }) => record === skill);
     const child = (parent, name) => exercise.calls.filter(({ record }) => record.parent_call_id === parent?.callId &&
       record.definition?.name === name && record.outcome === "done");
     const discover = child(branch, "discoverDeliveryWake");
     const observe = child(branch, "inspectDeliveryWake");
-    const native = child(observe[0], "readNativeWake");
+    const native = observe.flatMap(call => child(call, "readNativeWake"));
     const choose = child(branch, "decideDeliveryWake");
     const select = child(choose[0], "matchDeliveryWakeEvent");
     const apply = child(branch, "applyDeliveryWake");
@@ -11179,14 +11190,16 @@ export function openTemplateGoalEvidence(execution, exercise, _scenario, workflo
     const rows = event ? evidence.mailbox.filter(row => row.event === event.id && row.recipient === assignment.recipient &&
       row.revision === assignment.revision) : [];
     const selected = { event: rows.length > 1 ? null : event, mailbox: rows.length === 1 ? rows[0] : null };
-    const leaf = (call, service, method) => call?.record.effects?.length === 1 &&
-      call.record.effects[0].service === service && call.record.effects[0].method === method;
+    const leaf = (call, service, method) => {
+      const observed = uniqueObservedReads(call?.record.effects ?? [], "deliveryWakeEvidence", ["discover", "observe"]);
+      return observed.length === 1 && observed[0].service === service && observed[0].method === method;
+    };
     const match = (record, params, output) =>
       Object.entries(params).every(([name,value]) => matchesValue(record.inputs?.[name], value)) && matchesValue(record.output, output);
     requireEvidence(["assignment", "evidence", "choice", "receipt"].every(name => isDeepStrictEqual(outcome[name], proof[name])) &&
-      discover.length === 1 && leaf(discover[0], "deliveryWakeEvidence", "discover") && match(discover[0].record, {}, assignment) &&
-      observe.length === 1 && match(observe[0].record, { assignment }, evidence) &&
-      native.length === 1 && leaf(native[0], "deliveryWakeEvidence", "observe") && match(native[0].record, { assignment }, evidence) &&
+      discover.some(call => leaf(call, "deliveryWakeEvidence", "discover") && match(call.record, {}, assignment)) &&
+      observe.some(({ record }) => match(record, { assignment }, evidence)) &&
+      native.some(call => leaf(call, "deliveryWakeEvidence", "observe") && match(call.record, { assignment }, evidence)) &&
       choose.length === 1 && match(choose[0].record, { assignment, evidence }, proof.choice) &&
       (canMatch ? select.length === 1 && match(select[0].record, { assignment, evidence }, selected) : select.length === 0) &&
       (proof.receipt ? apply.length === 1 && leaf(apply[0], "deliveryWakeAction", "apply") &&
