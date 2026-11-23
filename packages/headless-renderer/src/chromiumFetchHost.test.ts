@@ -84,6 +84,40 @@ describe("ChromiumFetchHost", () => {
     });
   });
 
+  it("revokes the network grant before blocked CDP cleanup and retains every failure", async () => {
+    const primary = new Error("attach failed");
+    const targetFailure = new Error("target cleanup failed");
+    const contextFailure = new Error("context cleanup failed");
+    let proxyUrl = "";
+    let releaseTarget!: (error: Error) => void;
+    const targetClose = new Promise((_resolve, reject) => {
+      releaseTarget = reject;
+    });
+    const send = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "Target.createBrowserContext") {
+        proxyUrl = String(params!.proxyServer);
+        return { browserContextId: "ctx" };
+      }
+      if (method === "Target.createTarget") return { targetId: "target" };
+      if (method === "Target.attachToTarget") throw primary;
+      if (method === "Target.closeTarget") return targetClose;
+      if (method === "Target.disposeBrowserContext") throw contextFailure;
+      return {};
+    });
+    const pending = new ChromiumFetchHost({ send } as never, { prepare: vi.fn() } as never)
+      .open("https://example.com", "public")
+      .catch((error: unknown) => error);
+    await vi.waitFor(() =>
+      expect(send).toHaveBeenCalledWith("Target.closeTarget", { targetId: "target" })
+    );
+    await expect(fetch(proxyUrl)).rejects.toThrow();
+    expect(send).toHaveBeenCalledWith("Target.disposeBrowserContext", { browserContextId: "ctx" });
+    releaseTarget(targetFailure);
+    const failure = await pending;
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([primary, targetFailure, contextFailure]);
+  });
+
   it("uses and disposes an isolated cookie-free context for public fetches", async () => {
     const listeners = new Set<
       (event: { method: string; params: unknown; sessionId?: string }) => void

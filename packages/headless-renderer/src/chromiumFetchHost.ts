@@ -47,6 +47,9 @@ export class ChromiumFetchHost {
     const proxy = new ChromiumNetworkProxy(authority);
     let contextId: string | undefined;
     let targetId: string | undefined;
+    let storedResponseId: string | undefined;
+    let executionFailure: unknown;
+    let executionFailed = false;
     try {
       contextId = await this.createBrowserContext(await proxy.ready);
       if (session === "browser") await this.cookies.prepare(contextId, url);
@@ -86,18 +89,36 @@ export class ChromiumFetchHost {
         headers: response.headers,
         size: bytes.byteLength,
       };
+      storedResponseId = responseId;
       this.responses.set(responseId, { ...result, bytes, expiresAt: Date.now() + RESPONSE_TTL_MS });
       return result;
+    } catch (error) {
+      executionFailed = true;
+      executionFailure = error;
+      throw error;
     } finally {
+      // Revoke endpoint authority before a CDP close can block. Join every owned
+      // disposal independently and retain cleanup failures with the original error.
+      const failures: unknown[] = [];
       try {
-        if (targetId)
-          await this.cdp.send("Target.closeTarget", { targetId }).catch(() => undefined);
-        if (contextId)
-          await this.cdp
-            .send("Target.disposeBrowserContext", { browserContextId: contextId })
-            .catch(() => undefined);
-      } finally {
         await proxy.close();
+      } catch (error) {
+        failures.push(error);
+      }
+      const disposals = await Promise.allSettled([
+        ...(targetId ? [this.cdp.send("Target.closeTarget", { targetId })] : []),
+        ...(contextId
+          ? [this.cdp.send("Target.disposeBrowserContext", { browserContextId: contextId })]
+          : []),
+      ]);
+      for (const disposal of disposals)
+        if (disposal.status === "rejected") failures.push(disposal.reason);
+      if (failures.length) {
+        if (storedResponseId) this.responses.delete(storedResponseId);
+        throw new AggregateError(
+          executionFailed ? [executionFailure, ...failures] : failures,
+          "Chromium fetch resource cleanup failed"
+        );
       }
     }
   }
