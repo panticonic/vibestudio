@@ -16,8 +16,9 @@ import { initBuildSystemV2, type BuildSystemV2 } from "./index.js";
 import type { BuildSourceProvider } from "./buildSource.js";
 import type { WorkspaceStateSource } from "./stateTrigger.js";
 import { discoverPackageGraph } from "./packageGraph.js";
+import { composeDevelopmentTemplateCheckouts } from "../../dev/developmentTemplateComposition.js";
 import { createBuildProcessOwner } from "./builder.js";
-import { exactUnitRoots, exactUserlandRoot } from "../../../tests/exactUserlandRoot";
+import { exactUnitRoots, exactUserlandRoot, exactTemplateRoots } from "../../../tests/exactUserlandRoot";
 
 const APP_NODE_MODULES = [path.resolve(__dirname, "../../../node_modules")];
 const requireNodeBuiltin = createRequire(import.meta.url);
@@ -375,6 +376,26 @@ describe("BuildSystemV2 library package subpaths", () => {
     expect(module.exports.entry).toMatchObject({
       program: "skills/open-user-goal/workInBrowser.nl", callable: "workInBrowser", arguments: { goal: "Inspect the assigned panel" },
     });
+  });
+
+  it.each([
+    ["/semantic-outcome-contract","worker"], ["/semantic-outcome-contract","panel"], ["","worker"],
+  ] as const)("builds the real system-testing package%s (%s)", async (subpath,target) => {
+    const composition=composeDevelopmentTemplateCheckouts(["base","system","system-testing"].map(name=>({checkout:exactTemplateRoots[name]!,url:`fixture://${name}`})));
+    try {
+      buildSystem=await initBuildSystemV2(composition.root,fakeWorkspaceSource(()=>composition.root),buildRoots(composition.root));
+      const result=await buildSystem.getBuild("@workspace-skills/system-testing"+subpath,undefined,{library:true,libraryTarget:target});
+      if(subpath==="")expect(result.bundle).toContain("runSystemTests");
+      else {
+        const module={exports:{} as Record<string,unknown>};
+        await new Function("require","exports","module","__vibestudioImport",`return(async()=>{${result.bundle}\n})();`)(
+          (name:string)=>{throw new Error(`unexpected external ${name}`);},module.exports,module,
+          async(name:string)=>{throw new Error(`unexpected dynamic ${name}`);});
+        const assess=module.exports.assessSemanticOutcome as (value:unknown)=>{passed:boolean};
+        expect(assess({passed:true,checks:{observed:true}}).passed).toBe(true);
+        expect(assess({passed:false,checks:{observed:false}}).passed).toBe(false);
+      }
+    } finally {await buildSystem?.shutdown();buildSystem=null;composition.release();}
   });
 
   it("builds a requested package wildcard export subpath", async () => {
