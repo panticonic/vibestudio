@@ -5254,7 +5254,7 @@ export class WorkerdManager {
       const capture = await retainNativeStorageBeforeErase({
         archiveRoot: this.deps.nativeStorageRetentionRoot,
         directory: dir, hash, workspaceId: this.deps.workspaceId, target: ref,
-        verifySqlite: paths => this.sqliteIntegrityWorker.verify(paths),
+        verifySqlite: paths => this.sqliteIntegrityWorker.verify(paths, { readOnly: false }),
       });
       const manifest = JSON.parse(await fs.promises.readFile(path.join(capture, "manifest.json"), "utf8")) as {files:Array<{name:string}>};
       capturedFiles = manifest.files.map(file => file.name).sort();

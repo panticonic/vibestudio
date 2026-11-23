@@ -96,6 +96,19 @@ describe("immutable schema probe evidence", () => {
     expect(await published()).toHaveLength(1);
   });
 
+  it("ignores the exact owned cache retirement directory", async () => {
+    await acquire(async () => descriptor);
+    await fs.mkdir(path.join(cacheRoot(), ".trash"));
+    const staged = await stage();
+    try { await staged.publication.publish(); } finally { await staged.publication.close(); }
+  });
+
+  it("rejects a symlink substituted for the cache retirement directory", async () => {
+    await acquire(async () => descriptor);
+    await fs.symlink(path.join(cacheRoot(), ".storage"), path.join(cacheRoot(), ".trash"));
+    await expect(stage()).rejects.toThrow(/owned directory/);
+  });
+
   it("rejects unknown cache entries instead of treating arbitrary private-looking paths as misses", async () => {
     await acquire(async () => descriptor);
     await fs.mkdir(path.join(cacheRoot(), ".foreign"));

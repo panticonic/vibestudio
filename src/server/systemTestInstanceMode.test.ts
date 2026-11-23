@@ -38,5 +38,8 @@ it("carries collector retention through the actual supervisor and workspace envi
     });
     expect(readNativeCaptureRetentionMode(workspace)).toBe(!optOut);
     expect(workspace[NATIVE_CAPTURE_RETENTION_ENV]).toBe(optOut ? "0" : "1");
+    const {captureEvidenceForWorkspace}=await import("./captureEvidenceOwnership.js");
+    const selected=captureEvidenceForWorkspace("/owned/retained/generation/workspaces/owned-workspace/state","owned-workspace",workspace);
+    expect(selected.root).toMatch(optOut ? /workspaces\/owned-workspace\/state\/capture-evidence$/ : /^\/owned\/retained\/generation\/capture-evidence\/workspaces\/[a-f0-9]{64}$/);
   }
 });

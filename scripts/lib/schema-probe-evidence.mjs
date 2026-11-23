@@ -188,6 +188,7 @@ export async function stageInstalledSchemaProbeEvidence({
     // contract are unadvertised. Unknown entries remain corruption, not misses.
     const privateEntry =
       entry.name === ".storage" ||
+      entry.name === ".trash" ||
       /^[a-f0-9]{64}\.tmp\.[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/u.test(
         entry.name
       );

@@ -283,13 +283,13 @@ test("joined collector move includes native pre-run and paid exchange custody", 
   const retained = path.join(root, "supervisor/retained");
   const destination = path.join(root, "capture/retained-state-test");
   for (const [leaf, content] of [["native-storage/retired/before-start.sqlite", "original pre-run bytes"], ["natlang/exchanges.json", "paid original replies"]]) {
-    const file = path.join(retained, "generation/workspaces/ws/state/capture-evidence", leaf);
+    const file = path.join(retained, "generation/capture-evidence/workspaces/owned", leaf);
     await mkdir(path.dirname(file), { recursive:true }); await writeFile(file, content);
   }
   assert.throws(() => moveRetainedState({retained,destination,instance:"test",stopped:false}), /joined/);
   moveRetainedState({retained,destination,instance:"test",stopped:true});
-  assert.equal(await readFile(path.join(destination,"generation/workspaces/ws/state/capture-evidence/native-storage/retired/before-start.sqlite"),"utf8"),"original pre-run bytes");
-  assert.equal(await readFile(path.join(destination,"generation/workspaces/ws/state/capture-evidence/natlang/exchanges.json"),"utf8"),"paid original replies");
+  assert.equal(await readFile(path.join(destination,"generation/capture-evidence/workspaces/owned/native-storage/retired/before-start.sqlite"),"utf8"),"original pre-run bytes");
+  assert.equal(await readFile(path.join(destination,"generation/capture-evidence/workspaces/owned/natlang/exchanges.json"),"utf8"),"paid original replies");
   assert.equal(JSON.parse(await readFile(path.join(destination,"retention.json"),"utf8")).archived,false);
   const duplicate = path.join(root,"duplicate"); await mkdir(path.join(duplicate,"generation"),{recursive:true});
   assert.throws(() => moveRetainedState({retained:duplicate,destination,instance:"test",stopped:true}), /already exists/);

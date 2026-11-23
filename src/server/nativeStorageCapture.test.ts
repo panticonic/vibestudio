@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -97,6 +98,51 @@ describe("native storage capture erase barrier", () => {
       writer.close();
     }
   });
+  it("keeps original hot-journal bytes while proving recovery in a disposable copy", async () => {
+    const f = await fixture(),
+      file = path.join(f.directory, hash + ".sqlite");
+    const child = spawnSync(
+      process.execPath,
+      [
+        "--input-type=commonjs",
+        "-e",
+        `
+      const {DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(process.argv[1]);
+      db.exec("PRAGMA journal_mode=DELETE;CREATE TABLE diagnostic(value TEXT);INSERT INTO diagnostic VALUES ('committed');CREATE TABLE spill(value BLOB);PRAGMA cache_size=1;BEGIN IMMEDIATE;UPDATE diagnostic SET value='uncommitted';");
+      const insert=db.prepare('INSERT INTO spill VALUES (?)');for(let i=0;i<32;i++)insert.run(Buffer.alloc(16384,i));
+      process.kill(process.pid,'SIGKILL');
+    `,
+        file,
+      ],
+      { encoding: "utf8" }
+    );
+    expect(child.signal).toBe("SIGKILL");
+    const raw = await fs.readFile(file),
+      journal = await fs.readFile(file + "-journal");
+    expect(journal.length).toBeGreaterThan(0);
+    const snapshot = await retainNativeStorageBeforeErase({
+      ...f,
+      verifySqlite: async (paths) => {
+        for (const file of paths) {
+          const recovered = new DatabaseSync(file);
+          try {
+            expect(recovered.prepare("SELECT value FROM diagnostic").get()).toEqual({
+              value: "committed",
+            });
+            expect(Object.values(recovered.prepare("PRAGMA integrity_check").get()!)).toEqual([
+              "ok",
+            ]);
+          } finally {
+            recovered.close();
+          }
+        }
+      },
+    });
+    expect(await fs.readFile(file)).toEqual(raw);
+    expect(await fs.readFile(file + "-journal")).toEqual(journal);
+    expect(await fs.readFile(path.join(snapshot, hash + ".sqlite-journal"))).toEqual(journal);
+  });
+
   it("publishes and reuses one immutable snapshot and rejects changed archive bytes", async () => {
     const f = await fixture();
     await fs.writeFile(path.join(f.directory, hash + ".facets"), "native descriptor");

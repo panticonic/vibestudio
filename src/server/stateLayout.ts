@@ -13,17 +13,17 @@ import { gitCheckoutsPath } from "@vibestudio/workspace/gitCheckouts";
  * handed one of these dedicated directories continue to own their internal
  * files.
  */
+export function captureEvidenceLayout(root: string) {
+  return { root, natlang: path.join(root, "natlang"), nativeStorage: path.join(root, "native-storage") };
+}
+
 export function stateLayout(statePath: string) {
   const databases = path.join(statePath, ".databases");
   const contextProjectionsBase = contextProjectionsBasePath(statePath);
   const authority = path.join(statePath, "authority");
   return {
     root: statePath,
-    captureEvidence: {
-      root: path.join(statePath, "capture-evidence"),
-      natlang: path.join(statePath, "capture-evidence", "natlang"),
-      nativeStorage: path.join(statePath, "capture-evidence", "native-storage"),
-    },
+    captureEvidence: captureEvidenceLayout(path.join(statePath, "capture-evidence")),
     adminTokenFile: path.join(statePath, "admin-token"),
     bootGenerationFile: path.join(statePath, ".boot-generation"),
     contextProjections: {

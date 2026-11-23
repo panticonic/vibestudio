@@ -19,7 +19,7 @@ import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { stateLayout } from "./stateLayout.js";
 import { INTERNAL_DO_SOURCE } from "./internalDOs/internalDoLoader.js";
-import { schemaProbeEnvironmentForFixture } from "../../tests/fixtures/schemaProbeEnvironment.js";
+import { schemaProbeEnvironmentForFixture, mockSchemaProbeDiskSpace } from "../../tests/fixtures/schemaProbeEnvironment.js";
 import { stageInstalledSchemaProbeEvidence } from "../../scripts/lib/schema-probe-evidence.mjs";
 import { closeDerivedCacheCoordinators } from "@vibestudio/shared/derivedCache";
 import {
@@ -289,9 +289,11 @@ function statusOf(mgr: WorkerdManager, name: string) {
   return mgr.listInstances().find((instance) => instance.name === name) ?? null;
 }
 
+let restoreSchemaDisk: (() => void) | undefined;
 beforeEach(() => {
   const derived = fs.mkdtempSync(path.join(os.tmpdir(), "workerd-schema-derived-"));
   testStatePaths.add(derived);
+  restoreSchemaDisk = mockSchemaProbeDiskSpace(derived);
   vi.stubEnv("VIBESTUDIO_SHARED_DERIVED_CACHE_DIR", derived);
   vi.stubGlobal(
     "fetch",
@@ -317,6 +319,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   await closeDerivedCacheCoordinators();
+  restoreSchemaDisk?.();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   vi.mocked(findServicePort).mockImplementation(

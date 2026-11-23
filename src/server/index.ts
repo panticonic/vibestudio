@@ -995,6 +995,8 @@ async function main() {
   // seams and unattended test policies are admitted on a server a developer
   // started to run tests, and nowhere else.
   const systemTestInstance = readSystemTestInstanceMode();
+  const { captureEvidenceForWorkspace } = await import("./captureEvidenceOwnership.js");
+  const captureEvidence = captureEvidenceForWorkspace(statePath, workspaceId);
   const { authorizeVerifiedCaller } = await import("./services/authorityRuntime.js");
   const { authoritySessionIdForCaller } = await import("./services/callerAuthoritySession.js");
   // Exact root bootstrap may run while services are starting, before the
@@ -1494,7 +1496,7 @@ async function main() {
         const client=createTypedServiceClient("eval-engine",evalEngineMethods,(_service,method,args)=>
           container.get<import("./doDispatch.js").DODispatch>("doDispatch").dispatch(
             {source:record.source.repoPath,className:record.className!,objectKey:record.key!},method,...args));
-        await retainEvalCaptureEvidence(record,layout.captureEvidence.natlang,
+        await retainEvalCaptureEvidence(record,captureEvidence.natlang,
           input=>client.readPendingCaptureEvidence(input));
       },
       releaseBlobRetentions: async (runtime) => {
