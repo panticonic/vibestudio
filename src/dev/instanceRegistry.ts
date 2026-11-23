@@ -187,6 +187,16 @@ export function persistentInstanceRoot(repoRoot: string, id: string): string {
   return path.join(getProfileDataPath(), "instance-state", repoKey(repoRoot), id);
 }
 
+/** Each managed execution gets fresh durable evidence state. Process ownership
+ * may retire generated files, but must never own this root as scratch. */
+export function retainedSystemTestInstanceRoot(repoRoot: string, id: string): string {
+  return path.join(
+    persistentInstanceRoot(repoRoot, id),
+    "retained",
+    randomBytes(16).toString("hex")
+  );
+}
+
 export function generatedInstanceId(kind: DevInstanceRecord["kind"]): string {
   return `${kind}-${randomBytes(4).toString("hex")}`;
 }

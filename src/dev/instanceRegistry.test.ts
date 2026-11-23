@@ -12,6 +12,7 @@ import {
   devInstanceReadyPath,
   devInstanceRecordPath,
   persistentInstanceRoot,
+  retainedSystemTestInstanceRoot,
   publishDevInstanceReady,
   registerDevInstance,
   resolveDevInstance,
@@ -51,6 +52,25 @@ describe("developer instance registry", () => {
 
     unregisterDevInstance(repoRoot, "source");
     expect(() => resolveDevInstance(repoRoot, "source")).toThrow(/Unknown Vibestudio instance/u);
+  });
+
+  it("retains native evidence after owned processes and generated scratch retire", async () => {
+    const repoRoot = fs.mkdtempSync(path.join(tempDir, "retention-repo-"));
+    const root = retainedSystemTestInstanceRoot(repoRoot, "teacher");
+    expect(retainedSystemTestInstanceRoot(repoRoot, "teacher")).not.toBe(root);
+    const owner = await Ownership.open({
+      profileDir: profileRoot(),
+      id: "retention-test",
+      lifetime: "until-stop",
+    });
+    const scratch = await owner.scratch("generated-");
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(path.join(root, "native.sqlite"), "unfinished exchange and native receipt");
+    await owner.release();
+    expect(fs.existsSync(scratch)).toBe(false);
+    expect(fs.readFileSync(path.join(root, "native.sqlite"), "utf8")).toBe(
+      "unfinished exchange and native receipt"
+    );
   });
 
   it("rejects ids that could escape the registry", () => {

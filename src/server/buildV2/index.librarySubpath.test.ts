@@ -373,7 +373,7 @@ describe("BuildSystemV2 library package subpaths", () => {
     await new Function("require", "exports", "module", "__vibestudioImport", `return (async()=>{${result.bundle}\n})();`)(
       (name: string) => { throw new Error(`unexpected external dependency ${name}`); }, module.exports, module,
       async (name: string) => { throw new Error(`unexpected dynamic dependency ${name}`); });
-    expect(module.exports.entry).toMatchObject({
+    expect(module.exports["entry"]).toMatchObject({
       program: "skills/open-user-goal/workInBrowser.nl", callable: "workInBrowser", arguments: { goal: "Inspect the assigned panel" },
     });
   });
@@ -391,7 +391,7 @@ describe("BuildSystemV2 library package subpaths", () => {
         await new Function("require","exports","module","__vibestudioImport",`return(async()=>{${result.bundle}\n})();`)(
           (name:string)=>{throw new Error(`unexpected external ${name}`);},module.exports,module,
           async(name:string)=>{throw new Error(`unexpected dynamic ${name}`);});
-        const assess=module.exports.assessSemanticOutcome as (value:unknown)=>{passed:boolean};
+        const assess=module.exports["assessSemanticOutcome"] as (value:unknown)=>{passed:boolean};
         expect(assess({passed:true,checks:{observed:true}}).passed).toBe(true);
         expect(assess({passed:false,checks:{observed:false}}).passed).toBe(false);
       }

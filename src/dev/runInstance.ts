@@ -43,6 +43,7 @@ import {
   devInstanceRecordPath,
   generatedInstanceId,
   persistentInstanceRoot,
+  retainedSystemTestInstanceRoot,
   publishDevInstanceReady,
   registerDevInstance,
   type DevInstanceRecord,
@@ -790,6 +791,13 @@ async function main(): Promise<void> {
   }
   // A hung-up terminal fails every write with EIO; the cleanup still runs.
   if (terminalOptions) tolerateTerminalHangup();
+  // System-test state is evidence, including unfinished model exchanges. Its
+  // lifetime must survive owner death and retirement even if the CLI could not
+  // retrieve a final trajectory. Generated generation paths below remain owned
+  // and disposable; no child process survives normal retirement.
+  const retainedSystemTestRoot = parsed.systemTestManaged && disposable
+    ? retainedSystemTestInstanceRoot(repoRoot, id)
+    : undefined;
   const persistentRoot = disposable ? undefined : persistentInstanceRoot(repoRoot, id);
   let launchFailure: unknown;
   let retirementFailure: unknown;
@@ -799,9 +807,9 @@ async function main(): Promise<void> {
   const resources: LaunchResources = {};
   const sourceCoupled = id === "source" && !disposable;
   try {
-    const root = disposable
-      ? await ownership.scratch(`vs-${id}-`)
-      : persistentInstanceRoot(repoRoot, id);
+    const root =
+      retainedSystemTestRoot ??
+      (disposable ? await ownership.scratch(`vs-${id}-`) : persistentInstanceRoot(repoRoot, id));
     fs.mkdirSync(root, { recursive: true, mode: 0o700 });
     const cleanRoomProfileRoot = cleanRoom ? path.join(root, "profile") : undefined;
     // Owned before it exists: the record is removed with the claim.

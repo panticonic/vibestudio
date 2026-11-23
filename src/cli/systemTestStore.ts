@@ -21,6 +21,8 @@ export interface StoredSystemTestRun {
   runnerTargetId: string;
   /** Absolute run-specific artifact directory. */
   artifactDir: string;
+  /** Native state survives managed process retirement until evidence archival. */
+  stateDir?: string;
   config: {
     names: string[];
     category?: string;
@@ -55,6 +57,15 @@ export function saveSystemTestRun(run: StoredSystemTestRun): void {
   const dir = systemTestRunDir(run.runId);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   writeFileAtomicSync(path.join(dir, "run.json"), JSON.stringify(run, null, 2), { mode: 0o600 });
+  // The requested artifact tree must identify the run before the start RPC or
+  // wait can fail. Shared profile metadata alone is invisible to a collector
+  // that is about to retire its owned instance.
+  if (path.resolve(run.artifactDir) !== path.resolve(dir)) {
+    fs.mkdirSync(run.artifactDir, { recursive: true, mode: 0o700 });
+    writeFileAtomicSync(path.join(run.artifactDir, "run.json"), JSON.stringify(run, null, 2), {
+      mode: 0o600,
+    });
+  }
 }
 
 export function loadSystemTestRun(runId: string): StoredSystemTestRun | null {
