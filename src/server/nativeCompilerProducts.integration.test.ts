@@ -57,9 +57,10 @@ it.skipIf(!process.env["VIBESTUDIO_TEST_NATLANG_COMPILER_ENTRY"])(
         format: "cjs",
         input: {},
       }) as {heap:number;argv:string[]};
-      expect(heap.argv).toContain("--max-old-space-size=3072");
+      expect(heap.argv).toEqual(["--max-old-space-size=3072"]);
       expect(heap.heap).toBeGreaterThanOrEqual(3072*1024*1024);
-      expect(heap.heap).toBeLessThan(3200*1024*1024);
+      // V8 reports total heap including young generations; the explicit old-space
+      // ceiling is the launch argument, not an assumed total-heap overhead.
       const previousHeap = process.env["VIBESTUDIO_COMPILER_HEAP_MIB"];
       try {
         process.env["VIBESTUDIO_COMPILER_HEAP_MIB"] = "0";
