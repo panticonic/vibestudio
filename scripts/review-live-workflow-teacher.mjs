@@ -62,7 +62,7 @@ export function workflowReviewer(
   const modelId = model.slice(separator + 1);
   const loader = (relative) =>
     import(pathToFileURL(path.resolve(repo, "ts-host/dist", relative)).href);
-  return async (input, teacher) => {
+  const reviewer = async (input, teacher) => {
     if (model === teacher) throw new Error("Choose a reviewer model distinct from the executor");
     const [{ createPiModelBackend }, { modelOracleJudge }] = await Promise.all([
       loader("model/pi-provider.js"),
@@ -84,10 +84,11 @@ export function workflowReviewer(
       };
       const assessment=input?.kind==="public-claims" ? await assessPublicClaims(input,turn,loader) : null;
       const verdict=assessment?.verdict ?? await modelOracleJudge(turn)(input);
-      return { schema: "natlang.live-workflow-review/1", model, input, exchange, exchanges, verdict,
+      return { schema: "natlang.live-workflow-review/1", model, teacher, input, exchange, exchanges, verdict,
         ...(assessment?{semanticResult:assessment.semanticResult,program:assessment.program,inputSha256:assessment.inputSha256}:{}) };
     } finally {
       backend.close();
     }
   };
+  return Object.assign(reviewer, { model });
 }

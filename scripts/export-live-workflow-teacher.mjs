@@ -7,6 +7,7 @@ import { isDeepStrictEqual, parseArgs } from "node:util";
 import { gunzipSync } from "node:zlib";
 import { requireDevelopmentTemplateCheckouts } from "../src/dev/developmentTemplateConfig.cjs";
 import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
+import { sourceClaimKinds, sourceClaimReviewInput, sourceClaimProgramIdentity, sourceClaimReviewMatches, sourceClaimReviewPath } from "./lib/source-claim-admission.mjs";
 
 const sharedProgram = "skills/vibestudio-workflows/runWorkflow.nl";
 const templateGoalDomains = {
@@ -1894,6 +1895,7 @@ export async function loadLiveTeacherCases(checkouts) {
         ...(assignment.devices ? { devices: assignment.devices } : {}),
         ...(assignment.requiresAndroidEmulator ? { requiresAndroidEmulator: true } : {}),
         ...(assignment.requiresDeploymentPackage ? { requiresDeploymentPackage: true } : {}),
+        ...(sourceClaimKinds.has(assignment.kind) ? { requiresReview: true } : {}),
         ...(assignment.kind === "preparedContentProject" &&
           (assignment.profile === "commit" || assignment.profile === "draft") ? { requiresReview:true } : {}),
         ...(assignment.workspaceBaseline ? { workspaceBaseline: assignment.workspaceBaseline } : {}),
@@ -9542,6 +9544,11 @@ export function openOutcomeGoalEvidence(execution, exercise, _scenario, workflow
     requireEvidence(!proof.execution || proof.execution.receipt?.stateHash === proof.plan?.stateHash,
       "Suite execution evidence must belong to the independently observed workspace state");
   }
+  if (sourceClaimKinds.has(world.kind)) {
+    requireEvidence(workflow.requiresReview === true, "Source claim review must be declared before teacher execution");
+    const reviewInput = sourceClaimReviewInput(proof, world);
+    return { world: worldBinding, checks: { ...checks }, evidence, reviewInput };
+  }
   if (!workflow.requiresReview) return { world: worldBinding, checks, evidence };
   const project = proof.preparedContentProject;
   const artifact = project?.artifact;
@@ -16547,7 +16554,23 @@ export async function exportLiveTeacherWorkflow({
       typeof review === "function",
       "An independent content reviewer must be configured"
     );
-    const semanticReview = await review(observed.reviewInput, source.teacher);
+    const claims = observed.reviewInput?.kind === "public-claims";
+    const program = claims ? await sourceClaimProgramIdentity() : null;
+    requireEvidence(!claims || typeof review.model === "string", "Source claim reviewer must identify its configured independent model");
+    const reviewPath = claims ? sourceClaimReviewPath(out, observed.reviewInput, review.model, source.teacher, program) : `${out}.review.json`;
+    let semanticReview;
+    if (claims) {
+      try { semanticReview = JSON.parse(await readFile(reviewPath, "utf8")); }
+      catch (error) { if (error.code !== "ENOENT") throw error; }
+      requireEvidence(semanticReview === undefined || sourceClaimReviewMatches(semanticReview, observed.reviewInput, review.model, source.teacher, program),
+        "Retained semantic review differs from its exact source, input, model or teacher");
+    }
+    const retainedReview = semanticReview !== undefined;
+    if (!retainedReview) {
+      semanticReview = await review(observed.reviewInput, source.teacher);
+      requireEvidence(!claims || sourceClaimReviewMatches(semanticReview, observed.reviewInput, review.model, source.teacher, program),
+        "Source claim reviewer did not bind the actual typed value and assessor program");
+    }
     requireEvidence(
       semanticReview?.schema === "natlang.live-workflow-review/1" &&
         semanticReview.model !== source.teacher &&
@@ -16556,10 +16579,8 @@ export async function exportLiveTeacherWorkflow({
         semanticReview.exchange?.reply,
       "Independent reviewer did not bind the exact retained document readback"
     );
-    await writeFile(`${out}.review.json`, `${JSON.stringify(semanticReview, null, 2)}\n`, {
-      mode: 0o600,
-      flag: "wx",
-    });
+    if (!retainedReview) await writeFile(reviewPath, `${JSON.stringify(semanticReview, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+
     requireEvidence(
       semanticReview.verdict?.accepted === true,
       "Independent content review did not pass"
