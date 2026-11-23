@@ -174,3 +174,34 @@ it("selects an exact additional checkout without changing the private workspace 
   expect(JSON.parse(env["VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES"]!)).toEqual(defaultTemplates.pins);
   expect(JSON.parse(env["VIBESTUDIO_WORKSPACE_SOURCES"]!)).toContainEqual(templates[0]);
 });
+
+it("keeps the complete preparation selection when an optional workspace is the initial target", () => {
+  const examples = {
+    ...defaultTemplates.pins.base,
+    url: "git+https://example.test/examples.git",
+    commit: "9".repeat(40),
+  };
+  const sourcePins = { ...defaultTemplates.pins, examples };
+  const env = developmentInstanceEnvironment({
+    parent: { VIBESTUDIO_PREPARE_WORKSPACE_TEMPLATES: "stale" },
+    repoRoot: "/host",
+    instanceRoot: "/instance",
+    instanceId: "optional",
+    sourceCoupled: true,
+    disposable: true,
+    defaultTemplates: { ...defaultTemplates, sourcePins },
+    initialWorkspaceTemplate: examples,
+  });
+  expect(JSON.parse(env["VIBESTUDIO_PREPARE_WORKSPACE_TEMPLATES"]!)).toEqual(sourcePins);
+  expect(JSON.parse(env["VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES"]!)).toEqual(defaultTemplates.pins);
+  expect(JSON.parse(env["VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE"]!)).toEqual(examples);
+  const unconfigured = developmentInstanceEnvironment({
+    parent: env,
+    repoRoot: "/host",
+    instanceRoot: "/instance2",
+    instanceId: "default",
+    sourceCoupled: false,
+    disposable: true,
+  });
+  expect(unconfigured["VIBESTUDIO_PREPARE_WORKSPACE_TEMPLATES"]).toBeUndefined();
+});

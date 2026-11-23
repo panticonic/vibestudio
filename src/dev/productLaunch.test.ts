@@ -140,3 +140,20 @@ describe("product source launch", () => {
     });
   });
 });
+
+it("transports the exact optional preparation roots without making them default workspaces", () => {
+  const news = { ...systemPin, url: "git+https://example.test/news.git", commit: "9".repeat(40) };
+  const selected = { ...defaultTemplates, sourcePins: { ...defaultTemplates.sourcePins, news } };
+  const env = productLaunchEnvironment({
+    parent: { VIBESTUDIO_PREPARE_WORKSPACE_TEMPLATES: "stale" },
+    repoRoot: "/host",
+    defaultTemplates: selected,
+  });
+  expect(JSON.parse(env["VIBESTUDIO_PREPARE_WORKSPACE_TEMPLATES"]!)).toEqual(selected.sourcePins);
+  expect(JSON.parse(env["VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES"]!)).toEqual(defaultTemplates.pins);
+  expect(
+    productLaunchEnvironment({ parent: env, repoRoot: "/host" })[
+      "VIBESTUDIO_PREPARE_WORKSPACE_TEMPLATES"
+    ]
+  ).toBeUndefined();
+});

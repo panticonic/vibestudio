@@ -6,6 +6,7 @@ import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 import { z } from "zod";
+import { RpcBoundaryError } from "@vibestudio/rpc";
 import {
   prepareBuildRootConfig,
   buildCompilerProtocolIdentity,
@@ -215,17 +216,32 @@ async function inspectPreparedWorkspaceRelease(
   manifest: PreparedWorkspaceReleaseManifest,
   resolvedIdentity: WorkspaceReleaseIdentity
 ) {
-  if (
-    manifest.appDependencyFingerprint !== resolvedIdentity.appDependencyFingerprint ||
-    canonicalJson(manifest.hostBuild) !== canonicalJson(resolvedIdentity.hostBuild) ||
-    canonicalJson(manifest.compilerProtocol) !== canonicalJson(resolvedIdentity.compilerProtocol) ||
-    canonicalJson(manifest.templates) !== canonicalJson(input.templates) ||
-    canonicalJson(manifest.layers) !== canonicalJson(input.layers)
-  ) {
-    throw new Error(
-      "Prepared workspace release does not match the current host and template inputs"
+  const compared = {
+    appDependencyFingerprint: {
+      expected: resolvedIdentity.appDependencyFingerprint,
+      actual: manifest.appDependencyFingerprint,
+    },
+    hostBuild: { expected: resolvedIdentity.hostBuild, actual: manifest.hostBuild },
+    compilerProtocol: {
+      expected: resolvedIdentity.compilerProtocol,
+      actual: manifest.compilerProtocol,
+    },
+    templates: { expected: input.templates, actual: manifest.templates },
+    layers: { expected: input.layers, actual: manifest.layers },
+  };
+  const mismatches = Object.fromEntries(
+    Object.entries(compared).filter(
+      ([, value]) => canonicalJson(value.expected) !== canonicalJson(value.actual)
+    )
+  );
+  if (Object.keys(mismatches).length)
+    throw new RpcBoundaryError(
+      `Prepared workspace release does not match the current host and template inputs: ${Object.keys(mismatches).join(", ")}`,
+      "application",
+      "EWORKSPACE_RELEASE_INPUTS",
+      undefined,
+      { schema: "vibestudio.workspace-release-input-mismatch/1", mismatches }
     );
-  }
 
   const templateEntries = new Map(
     manifest.preparedTemplates.map((entry) => [entry.workspace, entry.recordDigest])

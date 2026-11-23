@@ -1,3 +1,4 @@
+import { WORKSPACE_PREPARATION_TEMPLATES_ENV } from "../server/workspacePreparationTemplates.js";
 import { WORKSPACE_SOURCES_ENV } from "@vibestudio/workspace/workspaceSources";
 import * as path from "node:path";
 import { TEMPLATE_REGISTRY_FILE_ENV } from "@vibestudio/service-schemas/templates";
@@ -50,6 +51,7 @@ export function developmentInstanceEnvironment(input: {
         )
     : [];
   delete env[DEFAULT_WORKSPACE_TEMPLATES_ENV];
+  delete env[WORKSPACE_PREPARATION_TEMPLATES_ENV];
   delete env[INITIAL_WORKSPACE_TEMPLATE_ENV];
   delete env[WORKSPACE_SOURCES_ENV];
   delete env[TEMPLATE_REGISTRY_FILE_ENV];
@@ -83,6 +85,9 @@ export function developmentInstanceEnvironment(input: {
     ...(selectedTemplates
       ? {
           [DEFAULT_WORKSPACE_TEMPLATES_ENV]: JSON.stringify(selectedTemplates.pins),
+          [WORKSPACE_PREPARATION_TEMPLATES_ENV]: JSON.stringify(
+            selectedTemplates.sourcePins ?? selectedTemplates.pins
+          ),
           [INITIAL_WORKSPACE_TEMPLATE_ENV]: JSON.stringify(selectedTemplates.pins.system),
         }
       : {}),
