@@ -795,7 +795,7 @@ async function main(): Promise<void> {
   // lifetime must survive owner death and retirement even if the CLI could not
   // retrieve a final trajectory. Generated generation paths below remain owned
   // and disposable; no child process survives normal retirement.
-  const retainedSystemTestRoot = parsed.systemTestManaged
+  const retainedSystemTestRoot = parsed.systemTestManaged && disposable
     ? retainedSystemTestInstanceRoot(repoRoot, id)
     : undefined;
   const persistentRoot = disposable ? undefined : persistentInstanceRoot(repoRoot, id);
