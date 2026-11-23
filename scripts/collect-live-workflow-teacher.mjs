@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -18,6 +18,8 @@ import {
 } from "./export-live-workflow-teacher.mjs";
 import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
 import { groupLiveTeacherCases, terminalStartupFailure } from "./lib/live-teacher-groups.mjs";
+
+import { liveTeacherEnvironment, moveRetainedState } from "./lib/live-teacher-retention.mjs";
 
 const args = process.argv.slice(2);
 const { values } = parseArgs({
@@ -118,7 +120,7 @@ if (unknown.length) {
 const groups = groupLiveTeacherCases(scenarios, liveTeacherCases, preflight ? 0 : batchSize);
 
 function command(args, stdout = "inherit") {
-  const result = spawnSync("pnpm", args, { cwd: host, stdio: ["inherit", stdout, "inherit"] });
+  const result = spawnSync("pnpm", args, { cwd: host, env: liveTeacherEnvironment(), stdio: ["inherit", stdout, "inherit"] });
   if (result.error) throw result.error;
   return result.status ?? 1;
 }
@@ -136,7 +138,7 @@ function installedTests(group) {
   const { workspace } = group;
   const result = spawnSync("pnpm", [
     "--silent", ...systemTestArgs(group, ["list", "--json"]),
-  ], { cwd: host, encoding: "utf8", maxBuffer: 8 * 1024 * 1024, stdio: ["ignore", "pipe", "inherit"] });
+  ], { cwd: host, env: liveTeacherEnvironment(), encoding: "utf8", maxBuffer: 8 * 1024 * 1024, stdio: ["ignore", "pipe", "inherit"] });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`Could not list tests in managed workspace ${workspace}`);
   const tests = JSON.parse(result.stdout);
@@ -222,7 +224,7 @@ const validators = new Map(
 );
 const runtimePin = path.join(checkouts.base, "packages/natlang/vendor/natlang-pin.json");
 const readJson = (file) => JSON.parse(readFileSync(file, "utf8"));
-const git = (...args) => execFileSync("git", args, { cwd: host, encoding: "utf8" }).trim();
+const git = (...args) => execFileSync("git", args, { cwd: host, env: liveTeacherEnvironment(), encoding: "utf8" }).trim();
 
 function pinSources() {
   const entries = Object.entries(checkouts).map(([name, dir]) => {
@@ -300,7 +302,7 @@ for (const group of groups) {
   let stopStatus;
   try {
     const doctor = spawnSync("pnpm", systemTestArgs(group, ["doctor", "--approve-startup", "--model", source.teacher]), {
-      cwd: host, encoding: "utf8", stdio: ["inherit", "pipe", "inherit"],
+      cwd: host, env: liveTeacherEnvironment(), encoding: "utf8", stdio: ["inherit", "pipe", "inherit"],
     });
     if (doctor.error) throw doctor.error;
     process.stdout.write(doctor.stdout);
@@ -382,23 +384,7 @@ for (const group of groups) {
     if (stopStatus === 0 && existsSync(retained)) {
       const destination = path.join(out, `retained-state-${instance}`);
       try {
-        mkdirSync(destination, { recursive: true, mode: 0o700 });
-        for (const entry of readdirSync(retained)) {
-          const target = path.join(destination, entry);
-          if (existsSync(target))
-            throw new Error(`Retained state destination already exists: ${target}`);
-          renameSync(path.join(retained, entry), target);
-        }
-        writeFileSync(
-          path.join(destination, "retention.json"),
-          JSON.stringify({
-            instance,
-            original: retained,
-            stopped: stopStatus === 0,
-            archived: false,
-          }) + "\n",
-          { mode: 0o600 }
-        );
+        moveRetainedState({ retained, destination, instance, stopped: stopStatus === 0 });
       } catch (error) {
         failures.push(
           new Error(`Native state remains recoverable at ${retained}: ${String(error)}`)

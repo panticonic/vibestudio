@@ -5,6 +5,7 @@ import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPubl
 import type { BuildSystemV2 } from "../buildV2/index.js";
 import { describe, expect, it, vi } from "vitest";
 import {
+  nativeCaptureRetentionRoot,
   parseGatewayAliases,
   resolveWorkerdServerAliasUrls,
   wireWorkerdCore,
@@ -280,4 +281,11 @@ describe("workerd bootstrap policy", () => {
       )
     );
   });
+});
+
+it("roots native custody inside the actual owned workspace state", () => {
+  const statePath = "/owned/retained/generation/workspaces/ws/state";
+  expect(nativeCaptureRetentionRoot(statePath, { VIBESTUDIO_RETAIN_NATIVE_STORAGE: "1" })).toBeUndefined();
+  expect(nativeCaptureRetentionRoot(statePath, { VIBESTUDIO_SYSTEM_TEST_INSTANCE: "1", VIBESTUDIO_RETAIN_NATIVE_STORAGE: "0" })).toBeUndefined();
+  expect(nativeCaptureRetentionRoot(statePath, { VIBESTUDIO_SYSTEM_TEST_INSTANCE: "1", VIBESTUDIO_RETAIN_NATIVE_STORAGE: "1" })).toBe(statePath + "/capture-evidence/native-storage");
 });

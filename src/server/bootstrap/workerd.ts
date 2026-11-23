@@ -1,3 +1,5 @@
+import { stateLayout } from "../stateLayout.js";
+import { readNativeCaptureRetentionMode } from "../systemTestInstanceMode.js";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { FsService } from "../services/fsService.js";
 import type { ServiceContainer } from "@vibestudio/shared/serviceContainer";
@@ -295,6 +297,7 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
         workspaceId: deps.workspaceId,
         workspacePath: deps.workspacePath,
         statePath: deps.statePath,
+        nativeStorageRetentionRoot: nativeCaptureRetentionRoot(deps.statePath),
         getInternalDoEnv: deps.getInternalDoEnv,
         executionPublicationPort: deps.executionPublicationPort,
         republishStorageOwner: deps.republishStorageOwner,
@@ -536,4 +539,8 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
       return manager;
     },
   });
+}
+
+export function nativeCaptureRetentionRoot(statePath: string, environment: NodeJS.ProcessEnv = process.env): string | undefined {
+  return readNativeCaptureRetentionMode(environment) ? stateLayout(statePath).captureEvidence.nativeStorage : undefined;
 }

@@ -19,3 +19,10 @@ export const SYSTEM_TEST_INSTANCE_ENV = "VIBESTUDIO_SYSTEM_TEST_INSTANCE";
 export function readSystemTestInstanceMode(environment: NodeJS.ProcessEnv = process.env): boolean {
   return environment[SYSTEM_TEST_INSTANCE_ENV] === "1";
 }
+
+export const NATIVE_CAPTURE_RETENTION_ENV = "VIBESTUDIO_RETAIN_NATIVE_STORAGE";
+
+/** Process-owned opt-in; a guest claim alone cannot request native snapshots. */
+export function readNativeCaptureRetentionMode(environment: NodeJS.ProcessEnv = process.env): boolean {
+  return readSystemTestInstanceMode(environment) && environment[NATIVE_CAPTURE_RETENTION_ENV] === "1";
+}

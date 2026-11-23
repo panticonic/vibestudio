@@ -28,6 +28,7 @@ test("a batch reuses each workspace instance and retains successes across failur
     new URL("lib/live-teacher-groups.mjs", import.meta.url),
     path.join(root, "scripts/lib/live-teacher-groups.mjs")
   );
+  await copyFile(new URL("lib/live-teacher-retention.mjs", import.meta.url), path.join(root, "scripts/lib/live-teacher-retention.mjs"));
   await put("src/dev/instanceRegistry.js", 'exports.persistentInstanceRoot = (host, instance) => host + "/state/" + instance;');
   await put("src/dev/cliWorkspaceSelection.js",
     'exports.isSystemTestWorkspace = value => ["system", "personal"].includes(value);');
@@ -94,7 +95,7 @@ exit 0
     }
     const [command, ...args] = remaining;
     if (launcher === 'natlang:vendor') process.exit(0);
-    fs.appendFileSync('commands.jsonl', JSON.stringify({ instance, workspace, devices, command, args }) + '\\n');
+    fs.appendFileSync('commands.jsonl', JSON.stringify({ instance, workspace, devices, command, args, nativeRetention: process.env.VIBESTUDIO_RETAIN_NATIVE_STORAGE }) + '\\n');
     const retainedState = path.join('state', instance, 'retained', 'generation-one');
     if (command === 'doctor') {
       fs.mkdirSync(retainedState, {recursive:true});
@@ -190,6 +191,7 @@ exit 0
     .trim()
     .split("\n")
     .map(JSON.parse);
+  assert.ok(commands.every(command => command.nativeRetention === "1"));
   assert.deepEqual(
     commands.map(({ command }) => command),
     ["doctor", "list", "run", "trajectory", "run", "trajectory", "stop", "doctor", "list", "run", "trajectory", "stop"]
@@ -269,4 +271,27 @@ exit 0
   assert.equal(interruptedFiles.length,1);
   assert.equal(await readFile(path.join(interruptedOut,interruptedFiles[0],"generation-one","native-records.sqlite"),"utf8"),"durable original bytes");
 
+});
+
+
+test("joined collector move includes native pre-run and paid exchange custody", async t => {
+  const { moveRetainedState, liveTeacherEnvironment } = await import("./lib/live-teacher-retention.mjs");
+  assert.equal(liveTeacherEnvironment({}).VIBESTUDIO_RETAIN_NATIVE_STORAGE, "1");
+  assert.equal(liveTeacherEnvironment({ VIBESTUDIO_RETAIN_NATIVE_STORAGE: "0" }).VIBESTUDIO_RETAIN_NATIVE_STORAGE, "0");
+  const root = await mkdtemp(path.join(os.tmpdir(), "native-custody-move-"));
+  t.after(() => rm(root, {recursive:true, force:true}));
+  const retained = path.join(root, "supervisor/retained");
+  const destination = path.join(root, "capture/retained-state-test");
+  for (const [leaf, content] of [["native-storage/retired/before-start.sqlite", "original pre-run bytes"], ["natlang/exchanges.json", "paid original replies"]]) {
+    const file = path.join(retained, "generation/workspaces/ws/state/capture-evidence", leaf);
+    await mkdir(path.dirname(file), { recursive:true }); await writeFile(file, content);
+  }
+  assert.throws(() => moveRetainedState({retained,destination,instance:"test",stopped:false}), /joined/);
+  moveRetainedState({retained,destination,instance:"test",stopped:true});
+  assert.equal(await readFile(path.join(destination,"generation/workspaces/ws/state/capture-evidence/native-storage/retired/before-start.sqlite"),"utf8"),"original pre-run bytes");
+  assert.equal(await readFile(path.join(destination,"generation/workspaces/ws/state/capture-evidence/natlang/exchanges.json"),"utf8"),"paid original replies");
+  assert.equal(JSON.parse(await readFile(path.join(destination,"retention.json"),"utf8")).archived,false);
+  const duplicate = path.join(root,"duplicate"); await mkdir(path.join(duplicate,"generation"),{recursive:true});
+  assert.throws(() => moveRetainedState({retained:duplicate,destination,instance:"test",stopped:true}), /already exists/);
+  assert.ok((await import("node:fs")).existsSync(path.join(duplicate,"generation")));
 });
