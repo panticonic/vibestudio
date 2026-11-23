@@ -1,3 +1,4 @@
+import { dispatchWorkspaceSourceRead } from "./workspaceSourceReadRecovery.js";
 import type { RpcCausalParent } from "@vibestudio/rpc";
 import type {
   InitializeExactWorkspaceSnapshotInput,
@@ -132,7 +133,9 @@ export function createWorkspaceSemanticPort(
   const client = createTypedServiceClient(
     "workspaceSource",
     gadWireMethods,
-    (_service, method, args) => dispatch.dispatch(provider, method, ...args)
+    (_service, method, args) => dispatchWorkspaceSourceRead(
+      provider, method, args, (target, request) => dispatch.dispatch(target, method, ...request)
+    )
   );
   return {
     contentGcRoots: () => client.vcsContentGcRoots(),
