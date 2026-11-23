@@ -26,6 +26,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { DatabaseSync } from "node:sqlite";
 import { stateLayout } from "./stateLayout.js";
+import { retainCelldStorageImage } from "./nativeStorageCapture.js";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import { createVerifiedCaller, type VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { FsService } from "./services/fsService.js";
@@ -440,6 +441,8 @@ export interface WorkerInstance {
 }
 
 export interface RuntimeManagerDeps {
+  /** On an explicitly retained test instance, preserve retired native cells with its state. */
+  nativeStorageRetentionRoot?: string;
   /** Existing admitted host/SDK installation capture; never rescan at admission. */
   readonly schemaProbeEnvironment: WorkspaceReleaseIdentity;
   readonly schemaProbeReleaseRoot: string;
@@ -783,10 +786,15 @@ export class RuntimeManager {
     fs.mkdirSync(layout.root, { recursive: true });
     this.doStorageDb = new DatabaseSync(path.toNamespacedPath(layout.durableObjectMaintenanceDb));
     this.cloneReceipts = new DurableObjectCloneReceipts(this.doStorageDb);
+    const { nativeStorageRetentionRoot } = deps;
     this.storage = new DurableObjectStorage({
       db: this.doStorageDb,
-      objectOperation: (input) => this.objectOperation(input),
+      objectOperation: async (input) => { await this.objectOperation(input); },
       destroyCell: (ref) => this.destroyCell(ref),
+      ...(nativeStorageRetentionRoot ? {
+        retainRetiredCell: (ref, incarnation) =>
+          this.retainRetiredCell(nativeStorageRetentionRoot, ref, incarnation),
+      } : {}),
       abortFacet: (ref) => this.abortUserlandDOFacet(ref, "__vibestudio_retire"),
       ensureNodeRunning: () => this.ensureWorkerdRunning(),
       nodeRunning: () =>
@@ -4381,21 +4389,22 @@ export class RuntimeManager {
    * carries the runtime's stable error code (`ERR_OBJECT_EXISTS`, ...).
    */
   private async objectOperation(input: {
-    op: "fork" | "restore";
+    op: "fork" | "restore" | "identify";
     from: DORef;
-    to: DORef;
+    to?: DORef;
     stop?: boolean;
     /** `fork`: take over a target an interrupted fork left unfinished. */
     replaceUnfinished?: boolean;
     /** `fork`: a Dolt facet copied at its own commit. */
     facets?: Record<string, { at?: string }>;
-  }): Promise<void> {
+  }): Promise<string | undefined> {
+    const internal = isInternalDOSource(input.from.source);
     const response = await this.nodeFetch("/_object", {
       body: {
         op: input.op,
-        namespace: "UNIVERSAL_DO",
-        from: this.cellName(input.from),
-        to: this.cellName(input.to),
+        namespace: internal ? `${input.from.source}:${input.from.className}` : "UNIVERSAL_DO",
+        from: internal ? input.from.objectKey : this.cellName(input.from),
+        ...(input.to ? { to: internal ? input.to.objectKey : this.cellName(input.to) } : {}),
         ...(input.stop ? { stop: true } : {}),
         ...(input.replaceUnfinished ? { replaceUnfinished: true } : {}),
         ...(input.facets ? { facets: input.facets } : {}),
@@ -4407,10 +4416,23 @@ export class RuntimeManager {
           `${input.op} of ${input.from.className}/${input.from.objectKey} failed ` +
             `(${response.status}): ${await response.text()}`
         ),
-        { code: response.headers.get(OBJECT_ERROR_HEADER) ?? undefined }
+{ code: response.headers.get(OBJECT_ERROR_HEADER) ?? undefined }
       );
     }
-    await response.arrayBuffer();
+    const result = await response.json() as { id?: string };
+    return result.id;
+  }
+
+  private async retainRetiredCell(root: string, ref: DORef, incarnation: string): Promise<void> {
+    const directory = path.join(root, incarnation);
+    if (fs.existsSync(path.join(directory, "manifest.json"))) return;
+    const cellId = await this.objectOperation({ op: "identify", from: ref });
+    if (!cellId) throw new Error("Celld did not identify the retired cell");
+    const layout = stateLayout(this.deps.statePath);
+    await retainCelldStorageImage({
+      directory, indexPath: path.join(layout.celldDir, "index.sqlite"),
+      blobRoot: layout.blobsDir, cellId, workspaceId: this.deps.workspaceId, source: ref,
+    });
   }
 
   /**

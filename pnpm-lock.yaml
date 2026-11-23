@@ -5,11 +5,6 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
-  '@panticonic/pi-telemetry': file:/home/werg/vibestudio-pi-worktrees/artifacts/1.2.0-vibestudio.4-dolt.5/panticonic-pi-telemetry-1.2.0-vibestudio.4-dolt.5.tgz
-  '@panticonic/pi-chord': file:/home/werg/vibestudio-pi-worktrees/artifacts/1.2.0-vibestudio.4-dolt.5/panticonic-pi-chord-1.2.0-vibestudio.4-dolt.5.tgz
-  '@panticonic/pi-codemode': file:/home/werg/vibestudio-pi-worktrees/artifacts/1.2.0-vibestudio.4-dolt.5/panticonic-pi-codemode-1.2.0-vibestudio.4-dolt.5.tgz
-  '@panticonic/pi-ai': file:/home/werg/vibestudio-pi-worktrees/artifacts/1.2.0-vibestudio.4-dolt.5/panticonic-pi-ai-1.2.0-vibestudio.4-dolt.5.tgz
-  '@panticonic/pi-durable': file:/home/werg/vibestudio-pi-worktrees/artifacts/1.2.0-vibestudio.4-dolt.5/panticonic-pi-durable-1.2.0-vibestudio.4-dolt.5.tgz
   dts-bundle-generator>typescript: 6.0.3
   react: 19.0.0
   react-dom: 19.0.0
@@ -100,14 +95,14 @@ importers:
         specifier: workspace:*
         version: link:packages/builtin
       '@panticonic/pi-ai':
-        specifier: file:/home/werg/vibestudio-pi-worktrees/artifacts/1.2.0-vibestudio.4-dolt.5/panticonic-pi-ai-1.2.0-vibestudio.4-dolt.5.tgz
-        version: file:../../vibestudio-pi-worktrees/artifacts/1.2.0-vibestudio.4-dolt.5/panticonic-pi-ai-1.2.0-vibestudio.4-dolt.5.tgz(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)
+        specifier: 1.2.0-vibestudio.4-dolt.5
+        version: 1.2.0-vibestudio.4-dolt.5(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)
       '@panticonic/pi-chord':
-        specifier: file:/home/werg/vibestudio-pi-worktrees/artifacts/1.2.0-vibestudio.4-dolt.5/panticonic-pi-chord-1.2.0-vibestudio.4-dolt.5.tgz
-        version: file:../../vibestudio-pi-worktrees/artifacts/1.2.0-vibestudio.4-dolt.5/panticonic-pi-chord-1.2.0-vibestudio.4-dolt.5.tgz
+        specifier: 1.2.0-vibestudio.4-dolt.5
+        version: 1.2.0-vibestudio.4-dolt.5
       '@panticonic/pi-durable':
-        specifier: file:/home/werg/vibestudio-pi-worktrees/artifacts/1.2.0-vibestudio.4-dolt.5/panticonic-pi-durable-1.2.0-vibestudio.4-dolt.5.tgz
-        version: file:../../vibestudio-pi-worktrees/artifacts/1.2.0-vibestudio.4-dolt.5/panticonic-pi-durable-1.2.0-vibestudio.4-dolt.5.tgz(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)
+        specifier: 1.2.0-vibestudio.4-dolt.5
+        version: 1.2.0-vibestudio.4-dolt.5(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)
       '@puppeteer/browsers':
         specifier: ^2.6.1
         version: 2.13.2
@@ -3345,30 +3340,25 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@panticonic/pi-ai@file:../../vibestudio-pi-worktrees/artifacts/1.2.0-vibestudio.4-dolt.5/panticonic-pi-ai-1.2.0-vibestudio.4-dolt.5.tgz':
-    resolution: {integrity: sha512-ZQTeEFek9q+a3PNtVECCQ96F1LHftdfap3Mvta5q3/AFfKlXEaQO02XGCCEcelSQMX5Knwy1MM7l9tZ+Sm3KmA==, tarball: file:../../vibestudio-pi-worktrees/artifacts/1.2.0-vibestudio.4-dolt.5/panticonic-pi-ai-1.2.0-vibestudio.4-dolt.5.tgz}
-    version: 1.2.0-vibestudio.4-dolt.5
+  '@panticonic/pi-ai@1.2.0-vibestudio.4-dolt.5':
+    resolution: {integrity: sha512-sCcnKqRNfm70XfFPZgogmzL8QdZhg1N8+OV14IueKBz8C8PsZgnA8h3zSq52FUO8+2tQ+PfM5tchC/hY7NsXLA==}
     engines: {node: '>=22.19.0'}
     hasBin: true
 
-  '@panticonic/pi-chord@file:../../vibestudio-pi-worktrees/artifacts/1.2.0-vibestudio.4-dolt.5/panticonic-pi-chord-1.2.0-vibestudio.4-dolt.5.tgz':
-    resolution: {integrity: sha512-rKDcA3ryNyyLTsHPsqAfNy6Ose2s40kdvqNBb3eF/2HpTxBY3+KbodW4h4Okz+Mcqn8A5w6jVOL00UZvn6rOHA==, tarball: file:../../vibestudio-pi-worktrees/artifacts/1.2.0-vibestudio.4-dolt.5/panticonic-pi-chord-1.2.0-vibestudio.4-dolt.5.tgz}
-    version: 1.2.0-vibestudio.4-dolt.5
+  '@panticonic/pi-chord@1.2.0-vibestudio.4-dolt.5':
+    resolution: {integrity: sha512-upmbOrYPN9PIx/H9qds+Wr22IF0Ztsqv2Ydhevqnfrv3/RUiPS6TJ5VIH+3KfnZ4SIp594CqA94CHxY6ZSWfdw==}
     engines: {node: '>=22.19.0'}
 
-  '@panticonic/pi-codemode@file:../../vibestudio-pi-worktrees/artifacts/1.2.0-vibestudio.4-dolt.5/panticonic-pi-codemode-1.2.0-vibestudio.4-dolt.5.tgz':
-    resolution: {integrity: sha512-ZBf+H5QHX3pZYMzDzSCRaH5vkaCpwZkjSx3gt5fth7surbDhYfyIQ3exyG7ugCRqKfZwoS+tPiRpiBTrLv8TmQ==, tarball: file:../../vibestudio-pi-worktrees/artifacts/1.2.0-vibestudio.4-dolt.5/panticonic-pi-codemode-1.2.0-vibestudio.4-dolt.5.tgz}
-    version: 1.2.0-vibestudio.4-dolt.5
+  '@panticonic/pi-codemode@1.2.0-vibestudio.4-dolt.5':
+    resolution: {integrity: sha512-97KxsrShRtx5Rku9brBO9oyxaEA7lj6caTftMtE4S1Cplj4J9JleKVyGbYzpohBF4Gdwd2M/trn5sPy1nU8fkg==}
     engines: {node: '>=22.19.0'}
 
-  '@panticonic/pi-durable@file:../../vibestudio-pi-worktrees/artifacts/1.2.0-vibestudio.4-dolt.5/panticonic-pi-durable-1.2.0-vibestudio.4-dolt.5.tgz':
-    resolution: {integrity: sha512-okXzh4LbayohFn/+06+N3SbT5UaFMCd4Df8xDmIX+jKLMNjdlb/JIvoSHeeUeB/Tm8a8PYKT1JBuLuAnNYGa2A==, tarball: file:../../vibestudio-pi-worktrees/artifacts/1.2.0-vibestudio.4-dolt.5/panticonic-pi-durable-1.2.0-vibestudio.4-dolt.5.tgz}
-    version: 1.2.0-vibestudio.4-dolt.5
+  '@panticonic/pi-durable@1.2.0-vibestudio.4-dolt.5':
+    resolution: {integrity: sha512-oFeDG1F0hqxYvFnd2LSVaFt8fPkmrK4UhZDQTUjjy5PXLptEpmXla3vsLdXZk6+d6ArqHx1wydOkWum6NrY7QA==}
     engines: {node: '>=22.19.0'}
 
-  '@panticonic/pi-telemetry@file:../../vibestudio-pi-worktrees/artifacts/1.2.0-vibestudio.4-dolt.5/panticonic-pi-telemetry-1.2.0-vibestudio.4-dolt.5.tgz':
-    resolution: {integrity: sha512-LJIbOkLqAIh1YOUODbm03f+d47ENoIefiyRN0AIG1SJczpt9jcb4Wll9c4B13joTYq/wGT/bDUsTpHLKD/Jvvg==, tarball: file:../../vibestudio-pi-worktrees/artifacts/1.2.0-vibestudio.4-dolt.5/panticonic-pi-telemetry-1.2.0-vibestudio.4-dolt.5.tgz}
-    version: 1.2.0-vibestudio.4-dolt.5
+  '@panticonic/pi-telemetry@1.2.0-vibestudio.4-dolt.5':
+    resolution: {integrity: sha512-+i27ZzDoLqV/idpTddrtg20r3nuZw3e6LcMvtCYWP8SpeDY6hMEeI+0tw2CwbRkhp0jeb2v3RlEE5c2KLvatJw==}
     engines: {node: '>=22.19.0'}
 
   '@peculiar/asn1-schema@2.8.0':
@@ -4547,6 +4537,9 @@ packages:
   '@smithy/core@3.35.0':
     resolution: {integrity: sha512-zRMhfkByhT2snNdr1si24vJitU6Cr9ix2MikUfWmkAgp4jrNP0GcKSP5YvwQ+TlI8AZXER5QOGJn3JsVtSD9/A==}
     engines: {node: '>=18.0.0'}
+    deprecated: |-
+      Deprecated due to a bug in custom logger data redaction. Upgrade to the latest version. If you used a custom logger with this
+        version, review your logs and rotate any credentials or other secrets. See https://github.com/aws/aws-sdk-js-v3/issues/8393.
 
   '@smithy/credential-provider-imds@4.5.2':
     resolution: {integrity: sha512-A9uSdn72ozbRUSit0eib0TW7nXuNPlaeM0zcGkJ+nE6tFcSDbnmtwoxbTCFBukVQcszDAyvsd7+rTduPTXpygg==}
@@ -12023,12 +12016,12 @@ snapshots:
   '@panticonic/iroh-win32-x64-msvc@https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.2/panticonic-iroh-win32-x64-msvc-1.1.0-cancel.2.tgz':
     optional: true
 
-  '@panticonic/pi-ai@file:../../vibestudio-pi-worktrees/artifacts/1.2.0-vibestudio.4-dolt.5/panticonic-pi-ai-1.2.0-vibestudio.4-dolt.5.tgz(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)':
+  '@panticonic/pi-ai@1.2.0-vibestudio.4-dolt.5(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)':
     dependencies:
       '@anthropic-ai/sdk': 0.129.0(zod@3.25.76)
       '@aws-sdk/client-bedrock-runtime': 3.1127.0
       '@google/genai': 2.21.0
-      '@panticonic/pi-telemetry': file:../../vibestudio-pi-worktrees/artifacts/1.2.0-vibestudio.4-dolt.5/panticonic-pi-telemetry-1.2.0-vibestudio.4-dolt.5.tgz
+      '@panticonic/pi-telemetry': 1.2.0-vibestudio.4-dolt.5
       '@smithy/node-http-handler': 4.12.1
       http-proxy-agent: 9.1.0
       https-proxy-agent: 9.1.0
@@ -12048,21 +12041,21 @@ snapshots:
       - ws
       - zod
 
-  '@panticonic/pi-chord@file:../../vibestudio-pi-worktrees/artifacts/1.2.0-vibestudio.4-dolt.5/panticonic-pi-chord-1.2.0-vibestudio.4-dolt.5.tgz':
+  '@panticonic/pi-chord@1.2.0-vibestudio.4-dolt.5':
     dependencies:
-      '@panticonic/pi-telemetry': file:../../vibestudio-pi-worktrees/artifacts/1.2.0-vibestudio.4-dolt.5/panticonic-pi-telemetry-1.2.0-vibestudio.4-dolt.5.tgz
+      '@panticonic/pi-telemetry': 1.2.0-vibestudio.4-dolt.5
       typebox: 1.3.27
 
-  '@panticonic/pi-codemode@file:../../vibestudio-pi-worktrees/artifacts/1.2.0-vibestudio.4-dolt.5/panticonic-pi-codemode-1.2.0-vibestudio.4-dolt.5.tgz':
+  '@panticonic/pi-codemode@1.2.0-vibestudio.4-dolt.5':
     dependencies:
       quickjs-wasi: 3.6.2
 
-  '@panticonic/pi-durable@file:../../vibestudio-pi-worktrees/artifacts/1.2.0-vibestudio.4-dolt.5/panticonic-pi-durable-1.2.0-vibestudio.4-dolt.5.tgz(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)':
+  '@panticonic/pi-durable@1.2.0-vibestudio.4-dolt.5(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)':
     dependencies:
-      '@panticonic/pi-ai': file:../../vibestudio-pi-worktrees/artifacts/1.2.0-vibestudio.4-dolt.5/panticonic-pi-ai-1.2.0-vibestudio.4-dolt.5.tgz(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)
-      '@panticonic/pi-chord': file:../../vibestudio-pi-worktrees/artifacts/1.2.0-vibestudio.4-dolt.5/panticonic-pi-chord-1.2.0-vibestudio.4-dolt.5.tgz
-      '@panticonic/pi-codemode': file:../../vibestudio-pi-worktrees/artifacts/1.2.0-vibestudio.4-dolt.5/panticonic-pi-codemode-1.2.0-vibestudio.4-dolt.5.tgz
-      '@panticonic/pi-telemetry': file:../../vibestudio-pi-worktrees/artifacts/1.2.0-vibestudio.4-dolt.5/panticonic-pi-telemetry-1.2.0-vibestudio.4-dolt.5.tgz
+      '@panticonic/pi-ai': 1.2.0-vibestudio.4-dolt.5(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)
+      '@panticonic/pi-chord': 1.2.0-vibestudio.4-dolt.5
+      '@panticonic/pi-codemode': 1.2.0-vibestudio.4-dolt.5
+      '@panticonic/pi-telemetry': 1.2.0-vibestudio.4-dolt.5
       '@silvia-odwyer/photon': 0.3.3
       diff: 8.0.4
       typebox: 1.3.27
@@ -12079,7 +12072,7 @@ snapshots:
       - ws
       - zod
 
-  '@panticonic/pi-telemetry@file:../../vibestudio-pi-worktrees/artifacts/1.2.0-vibestudio.4-dolt.5/panticonic-pi-telemetry-1.2.0-vibestudio.4-dolt.5.tgz': {}
+  '@panticonic/pi-telemetry@1.2.0-vibestudio.4-dolt.5': {}
 
   '@peculiar/asn1-schema@2.8.0':
     dependencies:

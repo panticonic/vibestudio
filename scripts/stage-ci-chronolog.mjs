@@ -18,8 +18,8 @@ if (!/^\d+$/u.test(runId ?? "") || !/^[a-f0-9]{40}$/u.test(source ?? "") ||
 }
 const run = JSON.parse(execFileSync("gh", ["api", `repos/${repository}/actions/runs/${runId}`], { encoding: "utf8" }));
 if (run.head_sha !== source || run.status !== "completed" || run.conclusion !== "success" ||
-    run.path !== ".github/workflows/release.yml") {
-  throw new Error("Chronolog CI staging requires the successful release workflow at the pinned source");
+    run.path !== ".github/workflows/celld-peer-session.yml") {
+  throw new Error("Chronolog CI staging requires the successful celld package workflow at the pinned source");
 }
 
 const directory = mkdtempSync(path.join(runnerTemp ?? tmpdir(), "vibestudio-chronolog-ci-"));

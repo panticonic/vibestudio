@@ -2,6 +2,9 @@ import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { writeFileAtomicSync } from "../atomicFile.js";
+import { blobCasPath } from "./storage/blobCas.js";
 
 interface NativeCaptureIdentity {
   workspaceId: string;
@@ -106,7 +109,7 @@ async function verifyPublished(
 ): Promise<void> {
   const raw = await fs.readFile(path.join(directory, "manifest.json"), "utf8");
   const manifest = JSON.parse(raw) as NativeCaptureManifest;
-  const { capturedAt, ...bound } = manifest;
+  const { capturedAt: _capturedAt, ...bound } = manifest;
   if (JSON.stringify(bound) !== JSON.stringify(expected))
     throw new Error("Native archive manifest does not match the exact source");
   const members = (await fs.readdir(directory)).sort();
@@ -197,6 +200,72 @@ export async function retainNativeStorageBeforeErase(input: {
     await verifyPublished(destination, bound);
     return destination;
   } finally {
+    await fs.rm(stage, { recursive: true, force: true });
+  }
+}
+
+/** Copy the quiesced celld object and its facets, including Dolt local tables. */
+export async function retainCelldStorageImage(input: {
+  directory: string;
+  indexPath: string;
+  blobRoot: string;
+  cellId: string;
+  workspaceId: string;
+  source: NativeCaptureIdentity["target"];
+}): Promise<void> {
+  if (!/^[a-f0-9]{64}$/u.test(input.cellId)) throw new Error("Invalid celld capture cell ID");
+  const database = new DatabaseSync(input.indexPath, { readOnly: true });
+  const prefix = (() => {
+    try {
+      const rows = database.prepare("SELECT key FROM objects WHERE key GLOB ?")
+        .all(`cells/*:${input.cellId}/own.json`);
+      if (rows.length > 1) throw new Error("Found more than one celld cell with the same ID");
+      return rows[0] ? String(rows[0]["key"]).slice(0, -"own.json".length) : null;
+    } catch (error) {
+      database.close();
+      throw error;
+    }
+  })();
+  if (prefix === null) {
+    database.close();
+    return;
+  }
+  const stage = `${input.directory}.${randomUUID()}.pending`;
+  try {
+    await fs.mkdir(stage, { recursive: true, mode: 0o700 });
+    const files: Array<{ key: string; bytes: number; sha256: string }> = [];
+    const entries = database.prepare("SELECT key, size, digest, body FROM objects WHERE key >= ? AND key < ? ORDER BY key")
+      .iterate(prefix, `${prefix.slice(0, -1)}0`);
+    for (const row of entries) {
+      const key = String(row["key"]);
+      const relative = key.slice(prefix.length);
+      if (!relative.split("/").every(name => /^[a-zA-Z0-9_.-]+$/u.test(name) && name !== "." && name !== ".."))
+        throw new Error("Invalid celld archive member name");
+      const file = path.join(stage, relative);
+      const bytes = Number(row["size"]);
+      await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+      const digest = row["digest"];
+      if (typeof digest === "string") {
+        await fs.copyFile(blobCasPath(input.blobRoot, digest), file, constants.COPYFILE_EXCL);
+        if ((await fs.stat(file)).size !== bytes) throw new Error("Truncated celld archive member");
+        files.push({ key, bytes, sha256: digest });
+      } else {
+        const body = row["body"];
+        if (!(body instanceof Uint8Array) || body.byteLength !== bytes) throw new Error("Invalid celld inline archive member");
+        await fs.writeFile(file, body, { flag: "wx", mode: 0o600 });
+        files.push({ key, bytes, sha256: createHash("sha256").update(body).digest("hex") });
+      }
+    }
+    writeFileAtomicSync(path.join(stage, "manifest.json"), JSON.stringify({
+      schema: "vibestudio.celld-native-storage-capture/1",
+      workspaceId: input.workspaceId,
+      source: input.source,
+      cellId: input.cellId,
+      files,
+    }) + "\n");
+    await fs.rename(stage, input.directory);
+  } finally {
+    database.close();
     await fs.rm(stage, { recursive: true, force: true });
   }
 }

@@ -1041,8 +1041,6 @@ async function main() {
   // seams and unattended test policies are admitted on a server a developer
   // started to run tests, and nowhere else.
   const systemTestInstance = readSystemTestInstanceMode();
-  const { captureEvidenceForWorkspace } = await import("./captureEvidenceOwnership.js");
-  const captureEvidence = captureEvidenceForWorkspace(statePath, workspaceId);
   const { authorizeVerifiedCaller } = await import("./services/authorityRuntime.js");
   const { authoritySessionIdForCaller } = await import("./services/callerAuthoritySession.js");
   // Exact root bootstrap may run while services are starting, before the
@@ -1542,15 +1540,6 @@ async function main() {
       credentialSessionGrantStore,
       tokenManager,
       connectionGrants,
-      retainNativeEvidence: async (record) => {
-        const {retainEvalCaptureEvidence}=await import("./retainEvalCaptureEvidence.js");
-        const {evalEngineMethods}=await import("@vibestudio/service-schemas/evalEngine");
-        const client=createTypedServiceClient("eval-engine",evalEngineMethods,(_service,method,args)=>
-          container.get<import("./doDispatch.js").DODispatch>("doDispatch").dispatch(
-            {source:record.source.repoPath,className:record.className!,objectKey:record.key!},method,...args));
-        await retainEvalCaptureEvidence(record,captureEvidence.natlang,
-          input=>client.readPendingCaptureEvidence(input));
-      },
       releaseBlobRetentions: async (runtime) => {
         const { blobRetentionNamespace, releaseBlobRetentionNamespace, withBlobContentLock } =
           await import("./storage/blobRetentions.js");

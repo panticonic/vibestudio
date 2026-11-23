@@ -101,7 +101,8 @@ const celldDeployments: Array<{
 }> = [];
 const celldReloads = { count: 0, fail: false };
 
-vi.mock("./celldNode.js", async () => {
+vi.mock("./celldNode.js", async (importOriginal) => {
+  const { createCelldLineReader } = await importOriginal<typeof import("./celldNode.js")>();
   const { spawn: mockedSpawn } = await import("child_process");
   class FakeCelldNodeProcess {
     hasExited = false;
@@ -143,11 +144,7 @@ vi.mock("./celldNode.js", async () => {
       const child = mockedSpawn("celld", ["--listen", String(ports.listen)]);
       // The supervisor reports the node's output line by line.
       for (const stream of ["stdout", "stderr"] as const) {
-        child[stream]?.on("data", (data: Buffer) => {
-          for (const line of data.toString().split("\n")) {
-            if (line.trim()) this.options.onOutput(stream, line);
-          }
-        });
+        child[stream]?.on("data", createCelldLineReader(line => this.options.onOutput(stream, line)));
       }
       return new FakeCelldNodeProcess(child, ports.listen, ports.inspector);
     }
@@ -418,7 +415,7 @@ function unfinishedBackups(mgr: RuntimeManager): string[] {
   ).map((row) => row.operation_id);
 }
 
-function fakeNode(options: { failFork?: boolean | string; failDestroy?: boolean } = {}) {
+function fakeNode(options: { failFork?: boolean | string; failDestroy?: boolean; captureId?: string } = {}) {
   const state = {
     failFork: options.failFork ?? false,
     failForkCode: undefined as string | undefined,
@@ -445,7 +442,7 @@ function fakeNode(options: { failFork?: boolean | string; failDestroy?: boolean 
         );
       }
       state.objects.push(body);
-      return Response.json(body["op"] === "fork" ? { id: "abc" } : { restored: true });
+      return Response.json(body["op"] === "restore" ? { restored: true } : { id: options.captureId ?? "abc" });
     }
     if (url.pathname.endsWith("/__vibestudio_destroy")) {
       if (state.failDestroy) return new Response("injected destroy failure", { status: 500 });
@@ -1511,6 +1508,54 @@ describe("RuntimeManager", () => {
       expect(node.destroyed).toHaveLength(2);
     } finally {
       await reopened.shutdown();
+    }
+  });
+
+  it("keeps the retired cell until the campaign copy is published", async () => {
+    const deps = createMockDeps();
+    const archive = path.join(deps.statePath, "campaign-cell-captures");
+    const cellId = "a".repeat(64);
+    const celldDir = stateLayout(deps.statePath).celldDir;
+    fs.mkdirSync(celldDir, { recursive: true });
+    const index = new DatabaseSync(path.join(celldDir, "index.sqlite"));
+    index.exec("CREATE TABLE objects (key TEXT PRIMARY KEY, size INTEGER, digest TEXT, body BLOB)");
+    const insert = index.prepare("INSERT INTO objects (key, size, body) VALUES (?, ?, ?)");
+    const prefix = `cells/test/UniversalDO:${cellId}`;
+    const snapshotKey = "facets/sub/ltx/e1/0000/snapshot.ltx";
+    const snapshots = {
+      "own.json": '{"epoch":1,"node":""}',
+      "ltx/e1/0000/snapshot.ltx": "root",
+      [snapshotKey]: "facet",
+    };
+    for (const [key, content] of Object.entries(snapshots))
+      insert.run(`${prefix}/${key}`, Buffer.byteLength(content), Buffer.from(content));
+    index.close();
+
+    const mgr = new RuntimeManager({ ...deps, nativeStorageRetentionRoot: archive });
+    await mgr.startWorker(startArgs());
+    const node = fakeNode({ captureId: cellId });
+    const ref = { source: "workers/board", className: "BoardDO", objectKey: "retired" };
+    try {
+      node.failFork = true;
+      await mgr.destroyRetiredDOStorage(ref);
+      expect(node.destroyed).toEqual([]);
+      expect(retiredOutbox(mgr)).toHaveLength(1);
+      node.failFork = false;
+      await mgr.destroyRetiredDOStorage(ref);
+      expect(node.objects).toEqual([
+        expect.objectContaining({ op: "identify", from: encodeUniversalKey(ref) }),
+      ]);
+      const [receipt] = fs.readdirSync(archive);
+      const captured = path.join(archive, receipt!);
+      const capture = JSON.parse(fs.readFileSync(path.join(captured, "manifest.json"), "utf8"));
+      expect(capture).toMatchObject({ source: ref, cellId, files: expect.arrayContaining([
+        expect.objectContaining({ key: `${prefix}/${snapshotKey}`, bytes: 5 }),
+      ]) });
+      expect(fs.readFileSync(path.join(captured, snapshotKey), "utf8")).toBe("facet");
+      expect(node.destroyed.map(entry => decodeURIComponent(entry.key))).toEqual([encodeUniversalKey(ref)]);
+      expect(retiredOutbox(mgr)).toEqual([]);
+    } finally {
+      await mgr.shutdown();
     }
   });
 
@@ -3205,6 +3250,7 @@ describe("RuntimeManager", () => {
     });
 
     it("joins generation closing while the old process is still alive", async () => {
+      celldReloads.fail = true;
       const mgr = new RuntimeManager(createMockDeps());
       await mgr.startWorker(startArgs());
       let joining: Promise<void> | undefined;

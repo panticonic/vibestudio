@@ -5,7 +5,8 @@
  * (set `VIBESTUDIO_CELLD_BIN`, or stage `native/celld`).
  */
 import { createHash } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { retainCelldStorageImage } from "./nativeStorageCapture.js";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -104,6 +105,44 @@ describe.skipIf(!celldTestBinary())("runtime native features (real celld)", () =
     await p.stop();
     await p.start();
     expect(await (await fetch(p.endpoint)).text()).toBe("3");
+  }, 60_000);
+
+  it("archives the native root and facet outside the workspace", async () => {
+    const p = await start({
+      bundle: `export class UniversalDO {
+        constructor(ctx, env) { this.ctx = ctx; this.env = env; }
+        fetch(req) {
+          const worker = this.env.LOADER.load({ compatibilityDate: '2025-12-01', mainModule: 'facet.js', modules: { 'facet.js': ${FACET_COUNTER} } });
+          return this.ctx.facets.get('do', () => ({ class: worker.getDurableObjectClass('Counter') })).fetch(req);
+        }
+      }
+      export default { async fetch(req, env) {
+        const source = env.COUNTER.idFromName('source');
+        if (new URL(req.url).pathname === '/identity') return new Response(source.toString());
+        return env.COUNTER.get(source).fetch(req);
+      } };`,
+      classes: ["UniversalDO"],
+      bindings: [{ name: "COUNTER", class_name: "UniversalDO" }],
+      loader: true,
+    });
+    expect(await (await fetch(p.endpoint)).text()).toBe("1");
+    const identity = await fetch(`${p.endpoint}/identity`);
+    expect(identity.ok).toBe(true);
+    const cellId = await identity.text();
+    await p.stop();
+    const directory = path.join(root!, "campaign", "capture");
+    await retainCelldStorageImage({
+      directory,
+      indexPath: path.join(root!, "celld", "index.sqlite"),
+      blobRoot: path.join(root!, "blobs"),
+      cellId,
+      workspaceId: "probe",
+      source: { source: "fixture", className: "UniversalDO", objectKey: "source" },
+    });
+    const manifest = JSON.parse(await readFile(path.join(directory, "manifest.json"), "utf8"));
+    expect(manifest).toMatchObject({ cellId, files: expect.arrayContaining([
+      expect.objectContaining({ key: expect.stringMatching(/\/facets\/.*\.ltx$/u) }),
+    ]) });
   }, 60_000);
 
   it("loads a dynamic Worker", async () => {

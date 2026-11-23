@@ -64,6 +64,8 @@ export interface DurableObjectStorageDeps {
   objectOperation(input: ObjectOperation): Promise<void>;
   /** Delete the object's cell (root, facet index and facets). */
   destroyCell(ref: StorageDORef): Promise<void>;
+  /** Preserve a campaign-owned image while the retired object is still fenced. */
+  retainRetiredCell?(ref: StorageDORef, incarnation: string): Promise<void>;
   /** Retire a loaded facet so nothing writes while its storage is replaced. */
   abortFacet(ref: StorageDORef): Promise<void>;
   ensureNodeRunning(): Promise<void>;
@@ -441,6 +443,9 @@ export class DurableObjectStorage {
       try {
         await this.serialize(targetId, () =>
           this.fenced(ref, "destroy", crypto.randomUUID(), async () => {
+            if (this.deps.retainRetiredCell) {
+              await this.deps.retainRetiredCell(ref, this.incarnation(ref).incarnation);
+            }
             await this.deps.destroyCell(ref);
             // The identity of what is gone is retired with it: a new object under the
             // same key is a new storage.

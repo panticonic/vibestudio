@@ -20,6 +20,7 @@ import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import { isIP } from "node:net";
+import { StringDecoder } from "node:string_decoder";
 import * as path from "node:path";
 import { getPhysicalPathForAsarPath } from "@vibestudio/shared/runtimePaths";
 import { initializeBlobRetentions } from "./storage/blobRetentions.js";
@@ -475,7 +476,7 @@ export class CelldNode {
           )
         )
       );
-      const lines = lineReader((line) => {
+      const lines = createCelldLineReader((line) => {
         const match = INTERNAL_LISTENING.exec(line);
         if (match?.[1]) resolve(`http://${match[1]}`);
         this.options.onOutput("stdout", line);
@@ -485,16 +486,17 @@ export class CelldNode {
     internalOrigin.catch(() => undefined);
     child.stderr?.on(
       "data",
-      lineReader((line) => this.options.onOutput("stderr", line))
+      createCelldLineReader((line) => this.options.onOutput("stderr", line))
     );
     return new CelldNodeProcess(child, ports.listen, ports.inspector, internalOrigin);
   }
 }
 
-function lineReader(onLine: (line: string) => void): (data: Buffer) => void {
+export function createCelldLineReader(onLine: (line: string) => void): (data: Buffer) => void {
+  const decoder = new StringDecoder("utf8");
   let pending = "";
   return (data) => {
-    pending += data.toString();
+    pending += decoder.write(data);
     const lines = pending.split(/\r?\n/u);
     pending = lines.pop() ?? "";
     for (const line of lines) if (line.trim()) onLine(line);

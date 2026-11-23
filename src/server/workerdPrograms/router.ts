@@ -62,8 +62,8 @@ interface ForkableNamespace extends DurableObjectNamespace {
 }
 
 interface ObjectOperation {
-  op: "fork" | "restore" | "deleteUnfinished";
-  /** `UNIVERSAL_DO`, or the binding name of a product class. */
+  op: "fork" | "restore" | "deleteUnfinished" | "identify";
+  /** `UNIVERSAL_DO`, or the deployed source and class identity of a product DO. */
   namespace: string;
   /** Cell names (`idFromName`). */
   from: string;
@@ -77,13 +77,17 @@ interface ObjectOperation {
 
 async function objectOperation(env: RouterEnv, request: Request): Promise<Response> {
   const input = (await request.json()) as ObjectOperation;
-  const bindings = new Set<string>(["UNIVERSAL_DO", ...Object.values(env.RUNTIME_DO_BINDINGS)]);
-  const binding = bindings.has(input.namespace) ? env[input.namespace] : undefined;
+  const bindingName = input.namespace === "UNIVERSAL_DO" ? input.namespace :
+    Object.hasOwn(env.RUNTIME_DO_BINDINGS, input.namespace) ? env.RUNTIME_DO_BINDINGS[input.namespace] : undefined;
+  const binding = bindingName ? env[bindingName] : undefined;
   if (!isDurableObjectNamespace(binding)) {
     return new Response(`Unknown namespace ${input.namespace}`, { status: 404 });
   }
   const namespace = binding as ForkableNamespace;
   try {
+    if (input.op === "identify") {
+      return Response.json({ id: namespace.idFromName(input.from).toString() });
+    }
     if (input.op === "fork") {
       const id = await namespace.fork(namespace.idFromName(input.from), {
         to: namespace.idFromName(input.to),
