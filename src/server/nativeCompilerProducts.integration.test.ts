@@ -28,6 +28,7 @@ it.skipIf(!process.env["VIBESTUDIO_TEST_NATLANG_COMPILER_ENTRY"])(
         format: "cjs",
         platform: "node",
         write: false,
+        nodePaths: [path.join(process.cwd(), "node_modules")],
         logLevel: "silent",
       });
       const request = {
@@ -50,32 +51,46 @@ it.skipIf(!process.env["VIBESTUDIO_TEST_NATLANG_COMPILER_ENTRY"])(
       expect(a.build.ok).toBe(true);
       expect(Object.keys(a.build.declarations).length).toBeGreaterThan(0);
       expect(run).toHaveBeenCalledTimes(1);
-      expect(run.mock.calls[0]?.[1]).toEqual({execArgv:["--max-old-space-size=3072"]});
+      expect(run.mock.calls[0]?.[1]).toEqual({ execArgv: ["--max-old-space-size=3072"] });
       // Observe inside the actual native workspace child, not the test parent's flags.
-      const heap = await runtime.compileProduct({
-        bundle: 'module.exports.compileVirtualProjectProduct=()=>({heap:require("node:v8").getHeapStatistics().heap_size_limit,argv:process.execArgv});',
+      const heap = (await runtime.compileProduct({
+        bundle:
+          'module.exports.compileVirtualProjectProduct=()=>({heap:require("node:v8").getHeapStatistics().heap_size_limit,argv:process.execArgv});',
         format: "cjs",
         input: {},
-      }) as {heap:number;argv:string[]};
+      })) as { heap: number; argv: string[] };
       expect(heap.argv).toEqual(["--max-old-space-size=3072"]);
-      expect(heap.heap).toBeGreaterThanOrEqual(3072*1024*1024);
+      expect(heap.heap).toBeGreaterThanOrEqual(3072 * 1024 * 1024);
       // V8 reports total heap including young generations; the explicit old-space
       // ceiling is the launch argument, not an assumed total-heap overhead.
       const previousHeap = process.env["VIBESTUDIO_COMPILER_HEAP_MIB"];
       try {
         process.env["VIBESTUDIO_COMPILER_HEAP_MIB"] = "0";
-        const automatic = await runtime.compileProduct({
-          bundle: 'module.exports.compileVirtualProjectProduct=()=>({heap:require("node:v8").getHeapStatistics().heap_size_limit,argv:process.execArgv});',
+        const automatic = (await runtime.compileProduct({
+          bundle:
+            'module.exports.compileVirtualProjectProduct=()=>({heap:require("node:v8").getHeapStatistics().heap_size_limit,argv:process.execArgv});',
           format: "cjs",
           input: { uncachedOptOutWitness: true },
-        }) as {heap:number;argv:string[]};
+        })) as { heap: number; argv: string[] };
         expect(automatic.argv).toEqual([]);
         expect(automatic.heap).toBeGreaterThan(0);
-        console.info(JSON.stringify({schema:"native.compiler-heap-witness/1",explicit:heap,automatic}));
+        console.info(
+          JSON.stringify({ schema: "native.compiler-heap-witness/1", explicit: heap, automatic })
+        );
       } finally {
         if (previousHeap === undefined) delete process.env["VIBESTUDIO_COMPILER_HEAP_MIB"];
         else process.env["VIBESTUDIO_COMPILER_HEAP_MIB"] = previousHeap;
       }
+      // Exercise the real native output file and owner transport above the old
+      // 32MiB acceptance ceiling, independently of cache retention policy.
+      const large = (await runtime.compileProduct({
+        bundle:
+          'module.exports.compileVirtualProjectProduct=()=>({value:"x".repeat(33*1024*1024)});',
+        format: "cjs",
+        input: {},
+      })) as { value: string };
+      expect(large.value.length).toBe(33 * 1024 * 1024);
+      expect(large.value[0]).toBe("x");
       a.build.diagnostics.push("poison");
       expect(b.build.diagnostics).toEqual([]);
       await expect(

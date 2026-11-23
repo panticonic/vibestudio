@@ -82,7 +82,11 @@ function loadExecutable(
   // Objects still own separate facets, SQLite storage, and lifecycle; a live
   // update selects another unit without replacing a sibling's assigned code.
   const unitKey = executableUnitKey(args.source, args.className, args.version);
-  return env.LOADER.get(unitKey, async () => {
+  // Schema admission uses a one-shot, no-egress executable. A named loader
+  // entry retains its code after the disposable facet is retired; null uses
+  // the same async loading protocol without adding a permanent cache owner.
+  const loaderName = args.version.endsWith(":schema-probe") ? null : unitKey;
+  return env.LOADER.get(loaderName, async () => {
     const startedAt = performance.now();
     const identity = `${args.source}:${args.className}`;
     const codeResponse = await fetchLoader(
