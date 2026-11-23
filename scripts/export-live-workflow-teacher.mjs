@@ -1251,7 +1251,7 @@ const originalCases = new Map([
 ]);
 
 export async function loadLiveTeacherCases(checkouts) {
-  // Archived test catalogs can contain only their original System Testing checkout.
+  // Assigned archived catalogs can omit Base; authored open goals require their semantic entry registry.
   const semanticTaskEntry = checkouts.base
     ? (await import(pathToFileURL(path.join(checkouts.base, "skills/open-user-goal/entrypoints.ts")).href)).semanticTaskEntry
     : null;
@@ -1479,6 +1479,8 @@ export async function loadLiveTeacherCases(checkouts) {
         : undefined;
       const ownedResearch = assignment.kind === "owned-research" || assignment.kind === "owned-research-and-edit";
       const entry = semanticTaskEntry?.(assignment.kind, assignment.goal, assignment);
+      requireEvidence(entry && typeof entry.program === "string" && typeof entry.callable === "string" && entry.arguments,
+        `Missing semantic task entry for open-goal kind ${assignment.kind} (${assignment.id})`);
       cases.set(scenario, {
         family: `workspace-open-user-goal-${assignment.kind}`,
         workspace: assignment.workspace ?? "examples",
@@ -1489,9 +1491,9 @@ export async function loadLiveTeacherCases(checkouts) {
         sourceGroups,
         split,
         interaction: "open-user-goal",
-        program: entry?.program ?? "skills/open-user-goal/runUserGoal.nl",
-        root: entry?.callable ?? "runUserGoal",
-        ...(entry ? { entry } : {}),
+        program: entry.program,
+        root: entry.callable,
+        entry,
         validator: domain?.validator ?? (ownedResearch
           ? { template: "system-testing", path: "skills/system-testing/open-goal-owned-research-managed.ts" }
           : { template: "system-testing", path: `skills/system-testing/open-goal${[

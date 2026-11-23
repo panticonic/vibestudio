@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, mkdir, mkdtemp, writeFile, rm } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
@@ -28,6 +29,16 @@ test("every authored open goal registers the outcome admission function and its 
     assert.equal(workflow.entry.callable, expected.callable);
     assert.equal(workflow.entry.program, expected.program);
   }
+});
+
+test("an authored open goal with no semantic entry cannot fall back to the retired router", async (t) => {
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(path.resolve(import.meta.dirname, ".."));
+  const base = await mkdtemp(path.join(os.tmpdir(), "semantic-missing-entry-"));
+  t.after(() => rm(base, { recursive: true, force: true }));
+  const directory = path.join(base, "skills/open-user-goal");
+  await mkdir(directory, { recursive: true });
+  await writeFile(path.join(directory, "entrypoints.ts"), "export const semanticTaskEntry = () => undefined;\n");
+  await assert.rejects(loadLiveTeacherCases({ ...checkouts, base }), /Missing semantic task entry for open-goal kind/);
 });
 
 test("semantic application admission accepts arbitrary internal decompositions without weakening state authenticity", () => {
