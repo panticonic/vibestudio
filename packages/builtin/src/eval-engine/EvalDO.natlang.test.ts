@@ -414,3 +414,49 @@ describe("EvalDO natlang provider", () => {
     expect(overview.ambient).toContain("scope");
   });
 });
+
+describe("native pending model exchange custody",()=>{
+ it("retains exact paid exchanges from provider finalization outside guest execution",async()=>{
+  const h=await harness();
+  const factory=h.provider.module.createEvalNatlang as (host:NatlangProviderHost)=>EvalNatlang;
+  let originalEvidence:unknown;
+  h.provider.module.createEvalNatlang=(host:NatlangProviderHost)=>{
+   const provider=factory(host),run=provider.runCell.bind(provider);
+   provider.runCell=async(execute,options)=>{
+    try{return await run(execute,options)}finally{
+     originalEvidence={schema:"natlang.pending-model-exchanges/1",owner:host.owner,runId:options.runId,
+      calls:[{callId:"paid-1",model_turns:[{request:{input:"a".repeat(65500)+"😀".repeat(2000)},response:{output:"exact paid response"}}],acknowledgedPrefix:0}],failures:["records unavailable"]};
+     await host.retainCaptureEvidence!(originalEvidence);
+    }
+   };
+   return provider;
+  };
+  await h.run("await nl`paid`()",undefined,"paid-run");
+  const sql=(h.instance as unknown as {sql:{exec(query:string,...args:unknown[]):{toArray():Record<string,unknown>[]}}}).sql;
+  const rows=sql.exec("SELECT key,value FROM state WHERE key LIKE ?","natlang_pending_capture:paid-run:%").toArray();
+  const manifestRow=rows.find(row=>String(row.key).split(":").length===3)!;
+  const manifest=JSON.parse(String(manifestRow.value));
+  expect(manifest).toMatchObject({schema:"eval.retained-provider-evidence/1",source:NATLANG_SOURCE,runId:"paid-run",chunks:2});
+  const parts=Array.from({length:manifest.chunks},(_,index)=>String(rows.find(row=>row.key===`${manifestRow.key}:${index}`)!.value));
+  expect(JSON.parse(parts.join(""))).toEqual(originalEvidence);
+  // Notebook reset drops user scope, not native custody.
+  (h.instance as unknown as {resetLocked():unknown}).resetLocked();
+  expect(sql.exec("SELECT value FROM state WHERE key = ?",manifestRow.key).toArray()).toHaveLength(1);
+  await expect(h.provider.created[0]!.host.retainCaptureEvidence!(originalEvidence)).rejects.toThrow("active");
+ });
+ it("rejects forged owner/run provenance before writing native evidence",async()=>{
+  const h=await harness();
+  const factory=h.provider.module.createEvalNatlang as (host:NatlangProviderHost)=>EvalNatlang;
+  h.provider.module.createEvalNatlang=(host:NatlangProviderHost)=>{
+   const provider=factory(host),run=provider.runCell.bind(provider);
+   provider.runCell=async(execute,options)=>{
+    await expect(host.retainCaptureEvidence!({schema:"natlang.pending-model-exchanges/1",owner:host.owner,runId:"foreign"})).rejects.toThrow("another owner or run");
+    await expect(host.retainCaptureEvidence!({schema:"natlang.pending-model-exchanges/1",owner:{...host.owner,objectKey:"foreign"},runId:options.runId})).rejects.toThrow("another owner or run");
+    return run(execute,options);
+   };
+   return provider;
+  };
+  await h.run("await nl`x`()");
+  expect((h.instance as any).sql.exec("SELECT key FROM state WHERE key LIKE ?","natlang_pending_capture:%").toArray()).toEqual([]);
+ });
+});

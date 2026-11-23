@@ -6,12 +6,17 @@ import type { EvalNatlangCallSummary } from "./eval.js";
  * Bump this whenever either side's structural contract changes; a provider
  * built against another version must fail before it runs a cell.
  */
-export const NATLANG_PROVIDER_HOST_CONTRACT_VERSION = 2 as const;
+export const NATLANG_PROVIDER_HOST_CONTRACT_VERSION = 3 as const;
 
 /** What the host hands the provider once per EvalDO owner. */
 export interface NatlangProviderHost {
   /** workerd UNSAFE_EVAL newFunction: the same constructor the eval engine uses. */
   newFunction(body: string, name: string, ...argNames: string[]): (...args: unknown[]) => unknown;
+  /** Private emergency custody when the records service cannot acknowledge paid exchanges.
+   * The native host binds the original JSON to the actual owner/run/source and
+   * awaits durable retention. This is evidence preservation, never admission.
+   */
+  retainCaptureEvidence?(evidence: unknown): Promise<void>;
   /** The eval's runtime bindings (rpc, workers, fs, vcs, gad, services, credentials, ...). */
   bindings: Readonly<Record<string, unknown>>;
   owner: {

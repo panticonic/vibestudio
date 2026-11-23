@@ -65,7 +65,7 @@ import {
   EVAL_ENGINE_HOST_CONTRACT_VERSION,
   evalEngineMethods,
 } from "@vibestudio/service-schemas/evalEngine";
-import type { EvalNatlang } from "@vibestudio/service-schemas/evalNatlang";
+import type { EvalNatlang, NatlangProviderHost } from "@vibestudio/service-schemas/evalNatlang";
 import { evalEventIngressMethods } from "@vibestudio/service-schemas/evalEventIngress";
 import { evalExecutionRootsMethods } from "@vibestudio/service-schemas/evalExecutionRoots";
 import { fsMethods } from "@vibestudio/service-schemas/fs";
@@ -570,6 +570,7 @@ export class EvalDO extends DurableObjectBase {
   static override schemaVersion = 5;
 
   private engine: EvalEngine | null = null;
+  private readonly libraryCaptureIdentities = new Map<string, {execution: unknown; bundleSha256: string}>();
   private scopeManager: ScopeManagerLike | null = null;
   /** Invalidates persistence and db bindings captured by an execution orphaned during recovery. */
   private scopeGeneration = 0;
@@ -3550,7 +3551,8 @@ export class EvalDO extends DurableObjectBase {
       const settled: { value: SandboxResult; calls: EvalNatlangCallSummary[] } = loweringFailure
         ? { value: loweringFailure, calls: [] }
         : natlang
-          ? await natlang.runCell(execute, { runId: runId ?? crypto.randomUUID(), signal })
+          ? await this.activeEvalExecution.run(execution, () =>
+              natlang.runCell(execute, { runId: runId ?? crypto.randomUUID(), signal }))
           : { value: await execute(), calls: [] };
       const result = settled.value;
       // Live progress is incidental. The terminal result below is canonical and
@@ -3866,6 +3868,10 @@ export class EvalDO extends DurableObjectBase {
         { receiver },
         createPrivateGuestGlobal(globalThis as unknown as Record<string, unknown>, opts.endowments)
       );
+      this.libraryCaptureIdentities.set(specifier, {
+        execution: artifact.execution,
+        bundleSha256: createHash("sha256").update(artifact.bundle).digest("hex"),
+      });
       moduleMap[specifier] = freezeModuleNamespace(module.exports);
     }
     return moduleMap[specifier];
@@ -3921,10 +3927,8 @@ export class EvalDO extends DurableObjectBase {
         externals: Object.keys(this.isolateModuleMap),
       })
     );
-    return this.ownerNatlang.ensure(module, {
-      newFunction: (body, name, ...argNames) => this.compileFunction(argNames, body, name),
-      bindings,
-      owner: {
+    const sourceIdentity = this.libraryCaptureIdentities.get(source) ?? null;
+    const owner: NatlangProviderHost["owner"] = {
         kind: args.agentRef
           ? "agent"
           : args.parent?.parentKind === "panel"
@@ -3935,7 +3939,48 @@ export class EvalDO extends DurableObjectBase {
         objectKey: this.objectKey,
         ...(args.agentRef ? { agentRef: args.agentRef } : {}),
         ...(args.channelId ? { channelId: args.channelId } : {}),
-      },
+      };
+    return this.ownerNatlang.ensure(module, {
+      newFunction: (body, name, ...argNames) => this.compileFunction(argNames, body, name),
+      bindings,
+      owner,
+      retainCaptureEvidence: evidence => this.retainNatlangCaptureEvidence(source, sourceIdentity, owner, evidence),
+    });
+  }
+
+  /** Native-only custody survives records-service failure and notebook reset. */
+  private async retainNatlangCaptureEvidence(
+    source: string,
+    sourceIdentity: unknown,
+    owner: NatlangProviderHost["owner"],
+    evidence: unknown,
+  ): Promise<void> {
+    const execution = this.requireActiveEvalExecution();
+    if (this.closedInspectionExecutions.has(execution) || !execution.runId)
+      throw new Error("eval: capture retention requires its active owning run");
+    const value = evidence as Record<string, unknown> | null;
+    if (!value || value.schema !== "natlang.pending-model-exchanges/1" ||
+        value.runId !== execution.runId || canonicalJson(value.owner) !== canonicalJson(owner))
+      throw new Error("eval: pending capture evidence belongs to another owner or run");
+    const json = JSON.stringify(evidence);
+    const digest = createHash("sha256").update(json).digest("hex");
+    const key = `natlang_pending_capture:${execution.runId}:${digest}`;
+    const chunks: string[] = [];
+    for (let offset = 0; offset < json.length;) {
+      let end = Math.min(offset + 65536, json.length);
+      // SQLite UTF-8 encoding must never split a surrogate pair between rows.
+      if (end < json.length && /[\uD800-\uDBFF]/u.test(json[end - 1]!)) end -= 1;
+      chunks.push(json.slice(offset, end)); offset = end;
+    }
+    this.ctx.storage.transactionSync(() => {
+      chunks.forEach((chunk, index) => this.setStateValue(`${key}:${index}`, chunk));
+      this.setStateValue(key, JSON.stringify({
+        schema: "eval.retained-provider-evidence/1", source, sourceIdentity,
+        owner, runId: execution.runId, contextId: execution.contextId,
+        incarnationId: this.kernelIncarnationId,
+        sha256: digest, chars: json.length, bytes: new TextEncoder().encode(json).byteLength,
+        chunks: chunks.length,
+      }));
     });
   }
 
