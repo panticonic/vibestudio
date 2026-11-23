@@ -102,6 +102,11 @@ export class WorkerdInspectorBridge {
     };
   }
 
+  /** Egress boundary proof; the subsequent native handshake consumes this grant. */
+  validatesTransportGrant(token: string, targetPath: string): boolean {
+    return Boolean(this.options.getInspectorUrl()) && this.grants.validatesTarget(token, `workerd-inspector:${targetPath}`);
+  }
+
   isInspectorPath(pathname: string): boolean {
     return pathname.startsWith(WORKERD_INSPECTOR_PATH_PREFIX);
   }

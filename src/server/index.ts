@@ -965,7 +965,7 @@ async function main() {
   const { ClientConfigStore } = await import("@vibestudio/credential-client/clientConfigStore");
   const { AuditLog } = await import("@vibestudio/credential-client/audit");
   const { createEgressProxy } = await import("./services/egressProxy.js");
-  const { CdpGrantService, CDP_INTERNAL_GRANT_HEADER } =
+  const { CdpGrantService } =
     await import("@vibestudio/shared/cdpGrants");
   const { CredentialLifecycle } = await import("./services/credentialLifecycle.js");
   const { CredentialSessionGrantStore } = await import("./services/credentialSessionGrants.js");
@@ -1399,6 +1399,8 @@ async function main() {
     },
   });
   const cdpGrants = new CdpGrantService();
+  let inspectorTransportBridge: import("./workerdInspectorBridge.js").WorkerdInspectorBridge | null = null;
+  const { authorizeInspectionEgress } = await import("./inspectionEgress.js");
 
   const egressProxy = createEgressProxy({
     credentialStore,
@@ -1418,27 +1420,11 @@ async function main() {
       } catch {
         return null;
       }
-      if (
-        input.targetUrl.origin !== gatewayOrigin ||
-        !input.targetUrl.pathname.startsWith("/cdp/")
-      ) {
-        return null;
-      }
-      const rawHeader =
-        input.headers instanceof Headers
-          ? input.headers.get(CDP_INTERNAL_GRANT_HEADER)
-          : Object.entries(input.headers).find(
-              ([name]) => name.toLowerCase() === CDP_INTERNAL_GRANT_HEADER
-            )?.[1];
-      const token = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
-      if (typeof token !== "string" || token.length === 0) return null;
-      const targetId = decodeURIComponent(input.targetUrl.pathname.slice("/cdp/".length));
-      if (!cdpGrants.validatesTarget(token, targetId)) return null;
-      return {
-        trustedForwardHeaders: {
-          [CDP_INTERNAL_GRANT_HEADER]: token,
-        },
-      };
+      return authorizeInspectionEgress(input, {
+        gatewayOrigin,
+        validatesPanel: (token,targetId) => cdpGrants.validatesTarget(token,targetId),
+        validatesWorkerd: (token,targetPath) => inspectorTransportBridge?.validatesTransportGrant(token,targetPath) === true,
+      });
     },
     authorizePlatformRpcCallback: ({ targetUrl, authorization, runtimeId }) => {
       let gatewayOrigin: string;
@@ -7878,6 +7864,7 @@ async function main() {
           getInspectorUrl: () => workerdManager.getInspectorUrl(),
           port: gatewayPort,
         });
+        inspectorTransportBridge = bridge;
         server.setWorkerdInspectorBridge(bridge);
         // Inspector sessions cannot survive a workerd restart — close them
         // eagerly so clients fail fast instead of hanging on a dead socket.
@@ -7894,6 +7881,7 @@ async function main() {
         return bridge;
       },
       async stop(instance: import("./workerdInspectorBridge.js").WorkerdInspectorBridge) {
+        if (inspectorTransportBridge === instance) inspectorTransportBridge = null;
         instance?.stop();
       },
       getServiceDefinition() {
