@@ -11218,6 +11218,11 @@ export async function exportLiveTeacherWorkflow({
   } else {
     requireEvidence(result?.passed === true && !execution?.error, "The actual system test must pass");
   }
+  requireEvidence(
+    execution?.toolFailures === undefined ||
+      (Array.isArray(execution.toolFailures) && execution.toolFailures.every(failure => failure?.expected === true)),
+    "The actual case contains an unexpected tool failure"
+  );
   const exercise = execution?.diagnostics?.natlangTeacher;
   const shared = exercise?.programPath === sharedProgram;
   requireEvidence(

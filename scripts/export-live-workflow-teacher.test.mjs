@@ -926,6 +926,21 @@ async function fixture(t) {
   return { options, diagnostics, entry, save };
 }
 
+test("case admission uses actual tool failures without requiring a suite summary", async t => {
+  const {options,entry,save} = await fixture(t);
+  for (const failure of [{name:"broken"},{name:"broken",expected:false},null]) {
+    entry.execution.toolFailures=[failure];
+    await save();
+    await assert.rejects(exportLiveTeacherWorkflow(options),/unexpected tool failure/);
+  }
+  entry.execution.toolFailures={unexpected:true};
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow(options),/unexpected tool failure/);
+  entry.execution.toolFailures=[{name:"declared intentional fault",expected:true}];
+  await save();
+  await exportLiveTeacherWorkflow(options);
+});
+
 test("managed panel export requires the assigned baseline failure and the paired browser readback", async (t) => {
   const { options, diagnostics, save } = await fixture(t);
   diagnostics.panelDraftBaseline.checks.navigationDoesNotSave = false;
