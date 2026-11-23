@@ -961,21 +961,22 @@ test("live panel export rejects a report about a different revision", async (t) 
   await assert.rejects(() => exportLiveTeacherWorkflow(options), /repair report/);
 });
 
-test("shared program export requires the assigned skill and its actual nested stages", async (t) => {
+test("shared program export accepts a native bridge without mandatory model-call wrappers", async (t) => {
   const { options, diagnostics, save } = await fixture(t);
   const run = diagnostics.natlangTeacher;
   run.programPath = "skills/vibestudio-workflows/runWorkflow.nl";
   const [root, reproduce] = run.calls;
   root.record.definition.name = "runWorkflow";
+  root.record.model_turns = []; // An authored TS root can delegate the semantic model work.
   await save();
-  await assert.rejects(() => exportLiveTeacherWorkflow(options), /assigned repairPanel skill/);
+  await exportLiveTeacherWorkflow(options);
   const skill = structuredClone(reproduce);
   skill.callId = skill.summary.call_id = "skill";
   skill.record.definition.name = "repairPanel";
   reproduce.record.parent_call_id = "skill";
   run.calls.push(skill);
   await save();
-  await exportLiveTeacherWorkflow(options);
+  await exportLiveTeacherWorkflow({ ...options, out: `${options.out}-with-wrapper` });
 });
 
 test("live panel export rejects a child from a different evaluation", async (t) => {
@@ -1994,7 +1995,7 @@ test("runtime program export binds stale execution to the measured revision pair
   );
 });
 
-test("incident continuation export requires both child calls, source groups, and read order", async (t) => {
+test("incident continuation export binds source groups and native read order independently of NL start times", async (t) => {
   const { options, diagnostics, entry, save } = await fixture(t);
   const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
     path.resolve(import.meta.dirname, "..")
@@ -2128,10 +2129,7 @@ test("incident continuation export requires both child calls, source groups, and
   journal[1] = { kind: "host-log", index: 1 };
   modelsCall.record.started_at = new Date(2).toISOString();
   await save();
-  await assert.rejects(
-    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-early-skill` }),
-    /dependent skill started before its prerequisite completed/u
-  );
+  await exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-early-skill` });
 });
 
 test("host log export requires the actual boot and exclusive cursor", async (t) => {
@@ -6239,6 +6237,18 @@ test("web brief export binds exact page continuation and cited text", async (t) 
   };
   await save();
   await exportLiveTeacherWorkflow({ ...options, cases });
+  // Pure TS forwarding has no writeAssignedBrief model-call record.
+  const run = diagnostics.natlangTeacher;
+  run.calls = run.calls.filter(call => call.record.definition.name !== "writeAssignedBrief");
+  run.calls.find(call => call.record.definition.name === "researchBrief").record.parent_call_id = "runWorkflow";
+  run.applicationResult = { results: [{ kind: "domain", domain: "webResearch", operation: "writeAssignedBrief", report }], remaining: [] };
+  run.calls[0].record.output = ref(run.applicationResult);
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-native-bridge` });
+  run.applicationResult.results[0].report = { ...report, question: "A fabricated return" };
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /actual returned brief/u);
+  run.applicationResult.results[0].report = report;
   continuation.args = ref([{ ...readArgs, offset: 1 }]);
   await save();
   await assert.rejects(
