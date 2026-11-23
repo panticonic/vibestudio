@@ -1,3 +1,4 @@
+import { installedPackageGraphHash } from "../../../scripts/lib/installed-package-graph.mjs";
 import { logVerbose } from "@vibestudio/dev-log";
 /**
  * Effective Version Computer — content-tree subtree hash + bottom-up EV
@@ -31,7 +32,6 @@ import { logVerbose } from "@vibestudio/dev-log";
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
-import { createRequire, isBuiltin } from "node:module";
 import { z } from "zod";
 import type { PackageGraph } from "./packageGraph.js";
 import {
@@ -615,156 +615,17 @@ async function localPackageFingerprintInputs(
   return presentFiles;
 }
 
-/**
- * Whether a manifest declares the platforms it installs on (`os`, `cpu`, `libc`).
- * npm installs such a package on matching platforms only: the esbuild, workerd,
- * iroh and sharp binaries. Which of them an installation holds is a property of
- * the machine, not of the code being built.
- */
-function isPlatformGatedManifest(manifest: Buffer): boolean {
-  try {
-    const parsed = JSON.parse(manifest.toString("utf8")) as Record<string, unknown>;
-    return [parsed["os"], parsed["cpu"], parsed["libc"]].some(
-      (field) => (Array.isArray(field) && field.length > 0) || (typeof field === "string" && field)
-    );
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Fold the identity of every installed package that is the same on every
- * platform. Platform-gated packages are left out, so the fold, and every build
- * key derived from it, is the same on every platform for the same code; the
- * wrapper package that selects a platform binary still pins its exact version in
- * its own manifest (`optionalDependencies`), which is folded.
- */
+/** Preserve the runtime's bounded I/O and source-tree capture while sharing
+ * exact installed package ownership, topology and serialization with builds. */
 async function installedPackageManifestsHash(
   nodeModulesRoot: string,
   localSourceNames: ReadonlySet<string>,
   session: FingerprintSession
 ): Promise<string> {
-  type Node = {
-    manifest: string;
-    implementation?: string;
-    dependencies: Array<[string, number | null | "builtin"]>;
-    installed: Array<[string, number]>;
-  };
-  const nodes: Node[] = [];
-  const identities = new Map<string, number>();
-  const io = session.io;
-  const packagesAt = async (directory: string): Promise<Array<[string, string]>> => {
-    let entries: fs.Dirent[];
-    try {
-      entries = await io.run(() => fs.promises.readdir(directory, { withFileTypes: true }));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-      throw error;
-    }
-    const result: Array<[string, string]> = [];
-    for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
-      if (entry.name.startsWith(".") || (!entry.isDirectory() && !entry.isSymbolicLink())) continue;
-      const root = path.join(directory, entry.name);
-      if (entry.name.startsWith("@")) {
-        for (const scoped of (
-          await io.run(() => fs.promises.readdir(root, { withFileTypes: true }))
-        ).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)))
-          if (scoped.isDirectory() || scoped.isSymbolicLink())
-            result.push([`${entry.name}/${scoped.name}`, path.join(root, scoped.name)]);
-      } else result.push([entry.name, root]);
-    }
-    return result;
-  };
-  const packageNode = async (root: string, localSource = false): Promise<number | null> => {
-    let physical: string, manifest: Buffer;
-    try {
-      physical = await io.run(() => fs.promises.realpath(root));
-      manifest = await io.run(() => fs.promises.readFile(path.join(physical, "package.json")));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-      throw error;
-    }
-    if (isPlatformGatedManifest(manifest)) return null;
-    const parsed = JSON.parse(manifest.toString("utf8")) as Record<string, unknown>;
-    localSource ||=
-      parsed["private"] === true ||
-      (typeof parsed["name"] === "string" && localSourceNames.has(parsed["name"]));
-    const prior = identities.get(physical);
-    if (prior !== undefined) {
-      if (localSource && !nodes[prior]!.implementation)
-        nodes[prior]!.implementation = await session.tree(physical);
-      return prior;
-    }
-    const id = nodes.length;
-    // Publish the identity before following edges, so dependency cycles terminate.
-    // IDs are assigned by sorted logical traversal, never by physical addresses.
-    identities.set(physical, id);
-    const node: Node = { manifest: await fullHash(manifest), dependencies: [], installed: [] };
-    nodes.push(node);
-    if (localSource) node.implementation = await session.tree(physical);
-    const dependencyNames = new Set<string>();
-    const localDependencies = new Set<string>();
-    for (const field of [
-      "dependencies",
-      "optionalDependencies",
-      "peerDependencies",
-      "devDependencies",
-    ]) {
-      const value = parsed[field];
-      if (value && typeof value === "object" && !Array.isArray(value))
-        for (const [name, specifier] of Object.entries(value)) {
-          dependencyNames.add(name);
-          if (typeof specifier === "string" && /^(?:file:|link:|workspace:)/.test(specifier))
-            localDependencies.add(name);
-        }
-    }
-    const require = createRequire(path.join(physical, "package.json"));
-    for (const name of [...dependencyNames].sort()) {
-      if (isBuiltin(name)) {
-        node.dependencies.push([name, "builtin"]);
-        continue;
-      }
-      // Use Node's actual physical-owner lookup order, including pnpm's sibling
-      // dependency realm and inherited parent installations. Exports cannot hide
-      // a package's manifest from this owner-resolved graph discovery.
-      if (
-        !/^(?:@[^/]+\/)?[^/]+$/.test(name) ||
-        name.includes("\\") ||
-        name.includes("\0") ||
-        name.split("/").some((part) => part === "." || part === "..")
-      )
-        throw new Error(`Invalid installed dependency name: ${name}`);
-      let target: number | null = null;
-      for (const directory of require.resolve.paths(name) ?? []) {
-        const candidate = path.join(directory, name);
-        try {
-          await io.run(() => fs.promises.access(path.join(candidate, "package.json")));
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-          throw error;
-        }
-        target = await packageNode(
-          candidate,
-          localDependencies.has(name) || localSourceNames.has(name)
-        );
-        break;
-      }
-      node.dependencies.push([name, target]);
-    }
-    for (const [name, installed] of await packagesAt(path.join(physical, "node_modules"))) {
-      const target = await packageNode(installed, localSourceNames.has(name));
-      if (target !== null) node.installed.push([name, target]);
-    }
-    return id;
-  };
-  const roots: Array<[string, number]> = [];
-  for (const [name, root] of await packagesAt(nodeModulesRoot)) {
-    const target = await packageNode(root, localSourceNames.has(name));
-    if (target !== null) roots.push([name, target]);
-  }
-  return fullHash(
-    Buffer.from(JSON.stringify({ schema: "installed-package-graph/2", roots, nodes }))
-  );
+  return installedPackageGraphHash(nodeModulesRoot, localSourceNames, {
+    tree: (root) => session.tree(root),
+    io: session.io,
+  });
 }
 
 /**

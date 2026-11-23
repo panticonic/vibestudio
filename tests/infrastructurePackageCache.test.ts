@@ -376,3 +376,29 @@ describe("infrastructure package cache", () => {
     expect(buildInfoExistedWhenBuildStarted).toBe(false);
   });
 });
+
+it("invalidates verified infrastructure outputs when only a nested installed dependency changes", () => {
+  const cwd = fixture();
+  write(
+    cwd,
+    "node_modules/consumer/package.json",
+    JSON.stringify({ name: "consumer", version: "1", dependencies: { aws: "^4" } })
+  );
+  write(cwd, "node_modules/aws/package.json", JSON.stringify({ name: "aws", version: "4.11.3" }));
+  write(
+    cwd,
+    "node_modules/consumer/node_modules/aws/package.json",
+    JSON.stringify({ name: "aws", version: "4.11.3" })
+  );
+  writeInfrastructurePackageCache(inspectInfrastructurePackageBuilds({ cwd }));
+  expect(inspectInfrastructurePackageBuilds({ cwd }).dirty).toEqual([]);
+  write(
+    cwd,
+    "node_modules/consumer/node_modules/aws/package.json",
+    JSON.stringify({ name: "aws", version: "4.12.1" })
+  );
+  expect(inspectInfrastructurePackageBuilds({ cwd }).dirty.map((state) => state.name)).toEqual([
+    "@vibestudio/base",
+    "@vibestudio/consumer",
+  ]);
+});
