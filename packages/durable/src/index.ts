@@ -2,7 +2,7 @@ import {
   assertReceiverAuthorityComplete,
   resolveReceiverAuthority,
 } from "@vibestudio/shared/receiverAuthorityDeclaration";
-import { LifecyclePreparation } from "@vibestudio/shared/lifecyclePreparation";
+import { LifecyclePreparation, LIFECYCLE_RELEASED_STATE_KEY } from "@vibestudio/shared/lifecyclePreparation";
 import { deserializeRpcFailure, serializeRpcFailure } from "@vibestudio/rpc";
 import {
   collectExposableMethods,
@@ -175,7 +175,13 @@ export interface AlarmSchedule {
 // framework/lifecycle methods are simply never `@rpc`-marked, and the base-proto boundary backstops.)
 
 export abstract class DurableObjectBase {
-  private readonly lifecyclePreparation = new LifecyclePreparation();
+  private readonly lifecyclePreparation = new LifecyclePreparation({
+    get: () => this.getStateValue(LIFECYCLE_RELEASED_STATE_KEY) as "started" | "complete" | null,
+    set: (state) => {
+      if (state) this.setStateValue(LIFECYCLE_RELEASED_STATE_KEY, state);
+      else this.deleteStateValue(LIFECYCLE_RELEASED_STATE_KEY);
+    },
+  });
   static schemaVersion = 1;
   static readonly durableWorkQueues: readonly DurableWorkQueue[] = [];
   static eventIntake: readonly EventIntakeRule[] = [];
@@ -817,6 +823,8 @@ export abstract class DurableObjectBase {
               ? await (async () => {
                   const input = parseLifecyclePrepareInput(args[0]);
                   this.lifecyclePreparation.advance(input);
+                  if (this.lifecyclePreparation.releaseCompleted())
+                    return { status: "ready" } satisfies LifecyclePrepareResult;
                   if (input.phase === "cancel") {
                     await this.cancelLifecyclePreparation(input);
                     this.lifecyclePreparation.cancelled(input);
@@ -826,7 +834,9 @@ export abstract class DurableObjectBase {
                     this.beginLifecycleRelease(input);
                     await this.drainAlarmRpcs();
                   }
-                  return await this.releaseForLifecycle(input);
+                  const result = await this.releaseForLifecycle(input);
+                  if (result.status === "ready") this.lifecyclePreparation.completed(input);
+                  return result;
                 })()
               : await (async () => {
                   await this.resumeAfterRestart(args[0] as LifecycleResumeInput);
@@ -1604,7 +1614,7 @@ export abstract class DurableObjectBase {
       const result = await this.invocationContext.run(context, async () => {
         try {
           const value = await callback();
-          if (message.method !== "__alarm") {
+          if (message.method !== "__alarm" && !this.lifecyclePreparation.resourcesReleased()) {
             const nextAlarm = await this.nextAlarmAfterRequest();
             if (nextAlarm === null) this.deleteAlarm();
             else if (nextAlarm !== undefined) this.setAlarmAt(nextAlarm.wakeAt);

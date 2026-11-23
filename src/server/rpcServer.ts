@@ -1390,16 +1390,27 @@ export class RpcServer {
     return this.deps.userSubjectSource?.resolve(callerId, callerKind, agentBinding) ?? null;
   }
 
+  private membershipFailureReason(
+    callerId: string,
+    callerKind: CallerKind,
+    subject: UserSubject | undefined
+  ): string {
+    return subject === undefined && RUNTIME_CALLER_KINDS.has(callerKind)
+      ? `Unknown or inactive runtime entity: ${callerId}`
+      : "Not a member of this workspace";
+  }
+
   /** Re-evaluate workspace membership at every stateless HTTP admission. */
-  private async isWorkspaceMember(
+  private async workspaceMembershipFailure(
     callerId: string,
     callerKind: CallerKind,
     agentBinding?: import("@vibestudio/identity/types").AgentBinding
-  ): Promise<boolean> {
-    if (!this.deps.membershipGate) return true;
-    return this.deps.membershipGate(
-      (await this.resolveSubject(callerId, callerKind, agentBinding)) ?? undefined
-    );
+  ): Promise<string | null> {
+    if (!this.deps.membershipGate) return null;
+    const subject = (await this.resolveSubject(callerId, callerKind, agentBinding)) ?? undefined;
+    return this.deps.membershipGate(subject)
+      ? null
+      : this.membershipFailureReason(callerId, callerKind, subject);
   }
 
   private serviceContextForRpcMessage(
@@ -2192,10 +2203,7 @@ export class RpcServer {
         // (so no subject could be derived at all). Reporting both as
         // non-membership sends debugging into the identity system when the
         // fault is in the runtime registry, so name the actual condition.
-        const reason =
-          gateSubject === undefined && RUNTIME_CALLER_KINDS.has(callerKind)
-            ? `Unknown or inactive runtime entity: ${callerId}`
-            : "Not a member of this workspace";
+        const reason = this.membershipFailureReason(callerId, callerKind, gateSubject);
         const msg: WsServerMessage = {
           type: "ws:auth-result",
           success: false,
@@ -3813,11 +3821,12 @@ export class RpcServer {
       };
     }
     const httpAgentBinding = callerId === entry.callerId ? entry.agentBinding : undefined;
-    if (!(await this.isWorkspaceMember(callerId, callerKind, httpAgentBinding))) {
+    const membershipFailure = await this.workspaceMembershipFailure(callerId, callerKind, httpAgentBinding);
+    if (membershipFailure) {
       return {
         ok: false,
         status: 403,
-        body: { error: "Not a member of this workspace", code: "EACCES" },
+        body: { error: membershipFailure, code: "EACCES" },
       };
     }
     return {

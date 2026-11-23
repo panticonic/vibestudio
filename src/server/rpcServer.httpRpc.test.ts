@@ -423,6 +423,7 @@ describe("RpcServer HTTP POST /rpc", () => {
     it("admits a concrete system-owned DO through the HTTP membership gate", async () => {
       await gateway.stop();
       await setup.server.stop();
+      let active=true;
       const callerId = "do:workers/model-settings:ModelSettingsDO:workspace-model-settings";
       const entityCache = new EntityCache();
       entityCache._onActivate(
@@ -431,7 +432,7 @@ describe("RpcServer HTTP POST /rpc", () => {
       setup = createTestSetup({
         entityCache,
         userSubjectSource: {
-          resolve: (id) => (id === callerId ? { userId: "system", handle: "system" } : null),
+          resolve: (id) => (id === callerId && active ? { userId: "system", handle: "system" } : null),
         },
         membershipGate: (subject) => subject?.userId === "system",
       });
@@ -458,6 +459,11 @@ describe("RpcServer HTTP POST /rpc", () => {
         userId: "system",
         handle: "system",
       });
+      active=false;
+      const retired=await postRpc(port,serviceToken,{method:"build.status",args:[]},
+        {"X-vibestudio-Runtime-Id":callerId});
+      expect(retired).toEqual({status:403,body:{error:`Unknown or inactive runtime entity: ${callerId}`,code:"EACCES"}});
+      expect(setup.dispatched).toHaveLength(1);
     });
 
     it("rejects the in-process shell principal over HTTP RPC", async () => {
