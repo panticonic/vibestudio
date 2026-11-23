@@ -7152,20 +7152,29 @@ export function openOutcomeGoalEvidence(execution, exercise, _scenario, workflow
   const checks = proof?.checks ?? {};
   const entry = workflow.entry;
   const attestedEntry = entry && { program: entry.program, callable: entry.callable, arguments: entry.arguments,
+    ...(entry.resultType === "void" ? {resultType:"void"} : {}),
     ...(entry.argumentJson ? { argumentJson: entry.argumentJson } : {}) };
+  const voidReturn = entry?.resultType === "void" || proof?.actualResultKind === "void" || exercise.applicationResultKind === "void";
+  const returnedValue = voidReturn
+    ? entry?.resultType === "void" && entry.program.endsWith(".ts") &&
+      proof?.actualResultKind === "void" && Object.hasOwn(proof,"actualResult") && proof.actualResult === null &&
+      exercise.applicationResultKind === "void" && exercise.applicationResult === null &&
+      root?.executor?.kind === "crisp" && root?.definition?.returns === "void" && matchesValue(root.output,null)
+    : proof?.actualResultKind === undefined && exercise.applicationResultKind === undefined && matchesValue(root?.output,proof?.actualResult);
   const inputValues = entry?.arguments ?? { goal: world.goal };
   requireEvidence(
     proof?.passed === true && proof.caseId === world.id && proof.goal === world.goal &&
+      (!voidReturn || returnedValue) &&
       typeof proof.contextId === "string" && proof.contextId === execution.provenance?.contextId &&
       Object.keys(checks).length > 0 && Object.values(checks).every(value => value === true) &&
       isDeepStrictEqual(Object.keys(root?.inputs ?? {}).sort(), Object.keys(inputValues).sort()) &&
       Object.entries(inputValues).every(([name, value]) => matchesValue(root.inputs[name], value)) &&
       (!entry || isDeepStrictEqual(proof.entry, attestedEntry) &&
         isDeepStrictEqual(exercise.entry, attestedEntry) &&
-        root.definition?.name === entry.callable && matchesValue(root.output, proof.actualResult)),
+        root.definition?.name === entry.callable && returnedValue),
     "Expected independently verified outcomes bound to the actual workspace and original user goal"
   );
-  const evidence = { workspace: { proof } };
+  const evidence = { workspace: { proof, ...(voidReturn ? {applicationReturn:{kind:"void",root_call_id:root.call_id,valueJson:"null",selectedResult:null}} : {}) } };
   const worldBinding = { context_id: proof.contextId, case_id: proof.caseId };
   if (world.kind === "browser") {
     const { panelId, inspections, attempts, after } = proof;
@@ -11300,6 +11309,7 @@ export async function exportLiveTeacherWorkflow({
           program: workflow.entry.program,
           callable: workflow.entry.callable,
           arguments: workflow.entry.arguments,
+          ...(workflow.entry.resultType === "void" ? {resultType:"void"} : {}),
           ...(workflow.entry.argumentJson ? { argumentJson: workflow.entry.argumentJson } : {}),
         } } : {}) } }
     : {};
