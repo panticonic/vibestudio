@@ -1881,7 +1881,10 @@ export class WorkerdManager {
    */
   private async ensureWorkerdRunning(): Promise<void> {
     for (;;) {
-      if (this.process && this.process.exitCode === null && this.pendingBootGeneration === null) return;
+      if (
+        this.process && this.process.exitCode === null && this.pendingBootGeneration === null &&
+        this.activeTransition?.state !== "stopping" && this.activeTransition?.state !== "reaping"
+      ) return;
       // A generation transition is already in flight (or queued): joining it is
       // mandatory. Minting a fresh restart epoch here would race the stop→spawn
       // window and force a needless second full restart cycle.
@@ -2070,7 +2073,10 @@ export class WorkerdManager {
    */
   isGenerationTransitionInFlight(): boolean {
     return (
-      this.activeTransition !== null && !(this.process !== null && this.process.exitCode === null)
+      this.activeTransition !== null && (
+        this.activeTransition.state === "stopping" || this.activeTransition.state === "reaping" ||
+        this.pendingBootGeneration !== null || !(this.process !== null && this.process.exitCode === null)
+      )
     );
   }
 

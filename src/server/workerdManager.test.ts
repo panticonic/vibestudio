@@ -2906,6 +2906,22 @@ describe("WorkerdManager", () => {
       expect(nextMgr.getBootGeneration()).toBe(2);
     });
 
+    it("joins generation closing while the old process is still alive", async () => {
+      const mgr = new WorkerdManager(createMockDeps());
+      await mgr.startWorker(startArgs());
+      let joining: Promise<void> | undefined;
+      let joined = false;
+      mgr.onGenerationClosing(() => {
+        expect(mgr.isGenerationTransitionInFlight()).toBe(true);
+        joining = mgr.ensureTransportReady().then(() => {joined=true;});
+        expect(joined).toBe(false);
+      });
+      await (mgr as unknown as {restartWorkerd():Promise<void>}).restartWorkerd();
+      await joining;
+      expect(joined).toBe(true);
+      expect(mgr.isGenerationTransitionInFlight()).toBe(false);
+    });
+
     it("publishes relay transport on an idle-stop lazy boot without fabricating lease recovery", async () => {
       const mgr = new WorkerdManager(createMockDeps());
       const ready = vi.fn();
