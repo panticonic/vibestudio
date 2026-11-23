@@ -1,4 +1,3 @@
-import { panelConsoleHistoryResultSchema } from "@vibestudio/service-schemas/panelCdp";
 import { describe, expect, it } from "vitest";
 import { ConsoleHistoryStore, levelFromConsoleType } from "./consoleHistory.js";
 import { panelConsoleHistoryResultSchema } from "@vibestudio/service-schemas/panelCdp";
