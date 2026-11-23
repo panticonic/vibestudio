@@ -176,3 +176,16 @@ it("rejects non-UTF8 and symlink output and recovers after malformed JSON", asyn
     await rm(root, { recursive: true, force: true });
   }
 });
+
+it("accepts a resource-bounded request above32MiB without confusing cache capacity with validity", async () => {
+  const payload = "x".repeat(33 * 1024 * 1024);
+  const owner = new NativeCompilerProducts(
+    async (actual) =>
+      JSON.stringify({ length: (actual.input as { payload: string }).payload.length }),
+    1024
+  );
+  expect(await owner.compile({ ...request, input: { payload } })).toEqual({
+    length: payload.length,
+  });
+  await owner.close();
+});

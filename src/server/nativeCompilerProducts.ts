@@ -106,8 +106,6 @@ export class NativeCompilerProducts {
     if (this.closed) throw new Error("Native compiler owner retired");
     // Clone/snapshot before queue admission: later caller mutation cannot change the computation.
     const snapshot = JSON.stringify(request);
-    if (Buffer.byteLength(snapshot) > 32 * 1024 * 1024)
-      throw new Error("Native compiler request exceeds32MiB");
     const key = createHash("sha256").update(snapshot).digest("hex");
     const cache = process.env["VIBESTUDIO_CACHE_COMPILER_PRODUCTS"] !== "0";
     const prior = cache ? this.values.get(key) : undefined;
