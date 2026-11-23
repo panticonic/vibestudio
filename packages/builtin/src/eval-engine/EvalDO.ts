@@ -976,6 +976,7 @@ export class EvalDO extends DurableObjectBase {
             ...checkpoint,
             state: "failed",
             error: formatRpcFailure(error),
+            failure: serializeRpcFailure(error),
           });
         }
         throw error;
@@ -2505,7 +2506,12 @@ export class EvalDO extends DurableObjectBase {
 
   private completeRunCheckpoint(runId: string, checkpoint: Record<string, unknown>): void {
     const at = Date.now();
-    this.persistRunCheckpoint(runId, { ...checkpoint, at }, at);
+    const completed = { ...checkpoint, at };
+    this.persistRunCheckpoint(runId, completed, at);
+    // A caller may catch an RPC failure and continue successfully. Its next
+    // request replaces the latest checkpoint, but must not erase the original
+    // failure graph. Diagnostics also remain admissible during terminal cleanup.
+    if (checkpoint["state"] === "failed") this.appendRunEvent(runId, "diagnostic", completed);
   }
 
   private persistRunCheckpoint(

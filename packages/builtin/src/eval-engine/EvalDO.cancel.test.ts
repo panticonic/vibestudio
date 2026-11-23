@@ -434,6 +434,39 @@ describe("EvalDO cancellation + forced recovery", () => {
     ]);
   });
 
+  it("retains a caught native RPC failure graph after a later successful checkpoint", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    const reset = Object.assign(new Error("source provider reset"), { code: "ECONNRESET" });
+    const secondary = new Error("second source batch disconnected");
+    const failure = new AggregateError([reset, secondary], "Reading Natlang program sources failed", {
+      cause: reset,
+    });
+    mockOwnedCall(instance, async (_target, method) => {
+      if (method === "fs.readProgramSources") throw failure;
+      return "later operation succeeded";
+    });
+    const runId = "caught-source-error";
+    const execution = priv<
+      (input: { contextId: string; runId: string }) => { rpc: RpcWireClient }
+    >(instance, "createExecutionContext").call(instance, { contextId: "ctx", runId });
+    await expect(execution.rpc.call("main", "fs.readProgramSources", [{ roots: ["skills/example"] }]))
+      .rejects.toBe(failure);
+    await expect(execution.rpc.call("main", "fs.readFile", ["notes.txt", "utf8"]))
+      .resolves.toBe("later operation succeeded");
+    const latest = sql.exec("SELECT checkpoint FROM run_checkpoints WHERE run_id = ?", runId).toArray()[0];
+    expect(JSON.parse(String(latest?.["checkpoint"]))).toMatchObject({
+      method: "fs.readFile", state: "completed",
+    });
+    const diagnostics = sql.exec(
+      "SELECT payload FROM run_events WHERE run_id = ? AND kind = 'diagnostic' ORDER BY sequence", runId
+    ).toArray();
+    expect(diagnostics).toHaveLength(1);
+    expect(JSON.parse(String(diagnostics[0]?.["payload"]))).toMatchObject({
+      targetId: "main", method: "fs.readProgramSources", state: "failed",
+      failure: serializeRpcFailure(failure),
+    });
+  });
+
   it("borrows the current cell through a retained view instead of capturing the creating cell", async () => {
     const { instance } = await createTestDO(EvalDO);
     const dispatch = vi.fn(
