@@ -4348,7 +4348,13 @@ export class EvalDO extends DurableObjectBase {
           throw new Error("eval: CDP socket requires its exact active execution and issued endpoint grant");
       };
       assertActive();
-      const opener=bindCdpSocket(endpoint,{platform:globalThis,assertActive,signal:execution.signal,onSocket:socket=>{
+      const opener=bindCdpSocket(endpoint,{platform:globalThis,assertActive,signal:execution.signal,
+        dispatch:deliver=>{
+          // Native WebSocket events are not caller-owned async resources in
+          // workerd. Re-enter only their captured, still-live execution.
+          if(!this.closedInspectionExecutions.has(execution))
+            this.activeEvalExecution.run(execution,deliver);
+        },onSocket:socket=>{
         const forget=()=>{
           execution.residentSessionCleanups.delete(cleanup);
           execution.signal?.removeEventListener("abort",onAbort);

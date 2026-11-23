@@ -76,6 +76,8 @@ export type CdpSocketBindingOptions = {
   /** The native owner checks its exact current execution, including completion. */
   assertActive?: () => void;
   signal?: AbortSignal;
+  /** Re-enter the captured native owner for asynchronous transport events. */
+  dispatch?: (deliver: () => void) => void;
   /** Native lifecycle registration; the raw socket is never passed to guests. */
   onSocket?: (socket: WorkerClientWebSocket) => void;
 };
@@ -114,6 +116,7 @@ export function bindCdpSocket(endpoint: {wsEndpoint:string;token?:string}, optio
       const byCapture=byListener.get(listener)??new Map();byListener.set(listener,byCapture);
       if(byCapture.has(capture))return;
       const wrapped:EventListener=(event)=>{
+       const deliver=()=>{
         if(typeof settings==="object" && settings.once)byCapture.delete(capture);
         try {
           // Cancellation must still settle pending commands through close/error.
@@ -127,6 +130,8 @@ export function bindCdpSocket(endpoint: {wsEndpoint:string;token?:string}, optio
         const safe=Object.assign(Object.create(null),{type:event.type,data:typeof original.data==="string"?original.data:undefined,code:original.code,reason:original.reason,
           wasClean:original.wasClean,target:facade,currentTarget:facade});
         if(typeof listener==="function")Reflect.apply(listener,facade,[safe]);else listener.handleEvent(safe);
+       };
+       if(options.dispatch)options.dispatch(deliver);else deliver();
       };
       byCapture.set(capture,wrapped);native.addEventListener(type,wrapped,settings);
     }) as typeof facade.addEventListener;

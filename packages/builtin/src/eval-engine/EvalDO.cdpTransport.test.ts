@@ -51,9 +51,10 @@ it("injects real kernel capabilities into privately evaluated inspector and pane
     operationJournal:new ExecutionJournal(),rpc:{call:vi.fn(async()=>endpoint),stream:vi.fn(),streamReadable:vi.fn()}};
   const run=<T>(work:()=>Promise<T>):Promise<T>=>kernel.activeEvalExecution.run(execution,work);
   const NativeWebSocket=globalThis.WebSocket;
+  const nativeSockets:WebSocket[]=[];
   vi.stubGlobal("WebSocketPair",function WorkerPair(){});
   vi.stubGlobal("fetch",vi.fn(async(input:RequestInfo|URL)=>{
-    const url=new URL(String(input));url.protocol="ws:";const native=new NativeWebSocket(url);
+    const url=new URL(String(input));url.protocol="ws:";const native=new NativeWebSocket(url);nativeSockets.push(native);
     await new Promise<void>((resolve,reject)=>{native.addEventListener("open",()=>resolve(),{once:true});native.addEventListener("error",reject,{once:true});});
     return {status:101,webSocket:native} as unknown as Response;
   }));
@@ -79,6 +80,12 @@ it("injects real kernel capabilities into privately evaluated inspector and pane
       expect(events[0].target).toBe((connection as any).ws);
       expect(events[0].currentTarget).toBe((connection as any).ws);
       expect(events[0].target.constructor).toBeUndefined();
+      const eventCount=events.length;
+      // Native workerd socket events need not preserve caller async context.
+      kernel.activeEvalExecution.exit(()=>nativeSockets[0]!.dispatchEvent(new MessageEvent("message",{
+        data:JSON.stringify({method:"Runtime.consoleAPICalled",params:{type:"log"}})})));
+      expect(events).toHaveLength(eventCount+1);
+      expect(()=>kernel.activeEvalExecution.exit(()=>panelOptions.bindCdpSocket(endpoint))).toThrow("active");
       await expect(bound.openSocket(bound.wsEndpoint,bound.token)).rejects.toThrow("already been used");
       expect(()=>panelOptions.bindCdpSocket({...endpoint,token:"foreign"})).toThrow("issued endpoint grant");
       expect(()=>panelOptions.bindCdpSocket({...endpoint,wsEndpoint:endpoint.wsEndpoint+"/foreign"})).toThrow("issued endpoint grant");
