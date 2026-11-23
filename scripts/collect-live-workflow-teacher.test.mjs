@@ -28,6 +28,7 @@ test("a batch reuses each workspace instance and retains successes across failur
     new URL("lib/live-teacher-groups.mjs", import.meta.url),
     path.join(root, "scripts/lib/live-teacher-groups.mjs")
   );
+  await copyFile(new URL("lib/live-teacher-budget.mjs", import.meta.url), path.join(root, "scripts/lib/live-teacher-budget.mjs"));
   await copyFile(new URL("lib/live-teacher-retention.mjs", import.meta.url), path.join(root, "scripts/lib/live-teacher-retention.mjs"));
   await put("src/dev/instanceRegistry.js", 'exports.persistentInstanceRoot = (host, instance) => host + "/state/" + instance;');
   await put("src/dev/cliWorkspaceSelection.js",
@@ -112,7 +113,7 @@ exit 0
     const out = args[args.indexOf('--out-dir') + 1];
     if (command === 'run') {
       fs.mkdirSync(path.join(out, '${runId}'));
-      if (process.env.VIBE_TEST_INTERRUPT) process.exit(1);
+      if (process.env.VIBE_TEST_INTERRUPT && !process.env.VIBE_TEST_COMPLETED) process.exit(1);
       if (args.includes('--retain-trajectories')) {
         const run = path.join(out, '${runId}');
         const failure = path.join(run, 'failure-evidence');
@@ -121,6 +122,7 @@ exit 0
           const directory = scenario === 'failing' ? failure : run;
           fs.writeFileSync(path.join(directory, 'trajectory-' + scenario + '-full.json.gz'), JSON.stringify({ scenario }));
         }
+        if (process.env.VIBE_TEST_COMPLETED) process.exit(1);
         if (args.includes('failing')) {
           fs.writeFileSync(path.join(run, 'summary.json'), JSON.stringify({failedTests:['failing']}));
           process.exit(1);
@@ -128,6 +130,7 @@ exit 0
       }
       if (args[0] === 'failing') process.exit(1);
     }
+    if (command === 'trajectory' && process.env.VIBE_TEST_INTERRUPT && !process.env.VIBE_TEST_COMPLETED) process.exit(1);
     if (command === 'trajectory')
       fs.writeFileSync(
         path.join(out, '${runId}', 'trajectory-' + args[1] + '-full.json.gz'),
@@ -186,7 +189,7 @@ exit 0
     );
   }
   assert.match(result.stderr, /Teacher case failing failed/);
-  assert.match(result.stderr, /Its full trajectory was retained/u);
+  assert.match(result.stderr, /Fixture outcome failed/u);
   const commands = (await readFile(path.join(root, "commands.jsonl"), "utf8"))
     .trim()
     .split("\n")
@@ -239,6 +242,19 @@ exit 0
   assert.equal(JSON.parse(await readFile(path.join(parallelFailed, runId, "trajectory-failing-full.json.gz"), "utf8")).scenario, "failing");
   await assert.rejects(readFile(path.join(parallelFailed, "verified/manifest.json")), { code: "ENOENT" });
 
+  // A supervisor interruption after individual completion leaves no summary.
+  // The real exporter remains the authority; the fixture rejects its bad case.
+  const completedOut = path.join(root, "completed-before-interruption");
+  const completed = spawnSync(process.execPath, ["scripts/collect-live-workflow-teacher.mjs",
+    "--assignments", "--concurrency", "2", "--case", "passing", "--case", "failing", "--out", completedOut], {
+    cwd: root, env: { ...process.env, PATH: path.join(root, "bin") + path.delimiter + process.env.PATH,
+      VIBE_TEST_INTERRUPT:"1", VIBE_TEST_COMPLETED:"1" }, encoding:"utf8",
+  });
+  assert.equal(completed.status,1);
+  assert.equal(JSON.parse(await readFile(path.join(completedOut,"cases/passing/verified/manifest.json"),"utf8")).run.scenario,"passing");
+  assert.match(completed.stderr,/Fixture outcome failed/);
+  await assert.rejects(readFile(path.join(completedOut,"cases/failing/verified/manifest.json")),{code:"ENOENT"});
+
   const preflight = spawnSync(process.execPath, ["scripts/collect-live-workflow-teacher.mjs", "--preflight", "--assignments"], {
     cwd: root,
     env: {
@@ -255,7 +271,7 @@ exit 0
     ] },
   ]);
   const preflightCommands = (await readFile(path.join(root, "commands.jsonl"), "utf8"))
-    .trim().split("\n").map(JSON.parse).slice(commands.length + parallelCommands.length);
+    .trim().split("\n").map(JSON.parse).slice(commands.length + parallelCommands.length + 4);
   assert.deepEqual(preflightCommands.map(({ command }) => command), [
     "doctor", "list", "stop", "doctor", "list", "stop",
   ]);

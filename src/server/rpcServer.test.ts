@@ -2098,6 +2098,43 @@ describe("RpcServer relay behavior", () => {
     });
   });
 
+  it("joins a recovering generation before an unsent DO relay and preserves its original failure", async () => {
+    let release!: () => void;
+    const resumed = new Promise<void>(resolve => { release = resolve; });
+    let server!: RpcServer;
+    const ensureWorkerdTransportReady = vi.fn(async () => {
+      await resumed;
+      server.setWorkerdUrl("http://127.0.0.1:2222");
+    });
+    const setup = createServer({ensureWorkerdTransportReady});
+    server = setup.server;
+    const targetId = "do:workers/example:Store:key";
+    setup.entityCache._onActivate(makeRecord(targetId,"do"));
+    server.setWorkerdGatewayToken("gateway-token");
+    const fetchError = new TypeError("original dispatch failure");
+    const fetchMock = vi.fn().mockRejectedValue(fetchError);
+    vi.stubGlobal("fetch",fetchMock);
+    const operation = testServer(server).relayToDO("panel:nav-a","panel",targetId,"ping",[]);
+    await vi.waitFor(() => expect(ensureWorkerdTransportReady).toHaveBeenCalledOnce());
+    expect(fetchMock).not.toHaveBeenCalled();
+    release();
+    await expect(operation).rejects.toMatchObject({cause:fetchError});
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0]?.[0]).toMatch(/^http:\/\/127\.0\.0\.1:2222\//);
+  });
+
+  it("propagates generation-owner failure without dispatching or retrying", async () => {
+    const original = new Error("workerd recovery failed at startup");
+    const {server,entityCache} = createServer({ensureWorkerdTransportReady: async () => {throw original;}});
+    const targetId = "do:workers/example:Store:key";
+    entityCache._onActivate(makeRecord(targetId,"do"));
+    server.setWorkerdGatewayToken("gateway-token");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch",fetchMock);
+    await expect(testServer(server).relayToDO("panel:nav-a","panel",targetId,"ping",[])).rejects.toBe(original);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("does not replay a DO relay when the target retires during the failed dispatch", async () => {
     const { server, entityCache } = createServer();
     const targetId = "do:workers/example:Store:key";

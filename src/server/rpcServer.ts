@@ -682,6 +682,8 @@ export class RpcServer {
       websiteDocuments?: Pick<import("./services/websiteDocuments.js").WebsiteDocuments, "fact">;
       /** Exact active-row readiness barrier required before direct DO relay. */
       ensureUserlandDoReady: (ref: DORef) => Promise<void>;
+      /** Join the local generation owner before dispatching an unsent relay. */
+      ensureWorkerdTransportReady?: () => Promise<void>;
       /** Live host-created admission for one concrete evaluated run. */
       executionSessionForRuntime?: (
         runtimeId: string,
@@ -4916,6 +4918,13 @@ export class RpcServer {
     return result;
   }
 
+  private async ensureRelayTransportReady(): Promise<void> {
+    if (!this.workerdUrl && this.deps.ensureWorkerdTransportReady) {
+      if (this.isShuttingDown()) throw createRelayError("Server shutting down", "SERVER_SHUTTING_DOWN");
+      await this.deps.ensureWorkerdTransportReady();
+    }
+  }
+
   private async ensureDirectDoReady(ref: DORef): Promise<void> {
     await this.deps.ensureUserlandDoReady(ref);
   }
@@ -4946,6 +4955,7 @@ export class RpcServer {
     const { postToDurableObject } = await import("./workerdRpcRelay.js");
 
     const dispatch = async () => {
+      await this.ensureRelayTransportReady();
       if (!this.deps.tokenManager || !this.workerdUrl || !this.workerdGatewayToken) {
         throw new Error(
           "Cannot relay to DO: tokenManager, workerdUrl, or workerdGatewayToken not configured"
@@ -5109,6 +5119,7 @@ export class RpcServer {
         "DO_NOT_CREATED"
       );
     }
+    await this.ensureRelayTransportReady();
     if (!this.workerdUrl || !this.workerdGatewayToken) {
       throw new Error("Cannot stream to DO: workerdUrl or workerdGatewayToken not configured");
     }
@@ -5184,6 +5195,7 @@ export class RpcServer {
     const workerAdmission = (await this.resolveWorkerAdmissionFn?.(targetId)) ?? null;
     if (!workerAdmission) throw new Error(`Worker not found: ${targetId}`);
     try {
+      await this.ensureRelayTransportReady();
       if (!this.workerdUrl) throw new Error("workerdUrl not configured");
 
       const caller = { callerId, callerKind };
@@ -5310,6 +5322,7 @@ export class RpcServer {
       const ref = parseDOTarget(targetId);
       await this.ensureDirectDoReady(ref);
 
+      await this.ensureRelayTransportReady();
       if (!this.deps.tokenManager || !this.workerdUrl || !this.workerdGatewayToken) {
         throw new Error(
           "Cannot relay event to DO: tokenManager, workerdUrl, or workerdGatewayToken not configured"
@@ -5356,7 +5369,8 @@ export class RpcServer {
       const workerAdmission = (await this.resolveWorkerAdmissionFn?.(targetId)) ?? null;
       if (!workerAdmission) throw new Error(`Worker not found: ${targetId}`);
       try {
-        if (!this.workerdUrl) throw new Error("workerdUrl not configured");
+        await this.ensureRelayTransportReady();
+      if (!this.workerdUrl) throw new Error("workerdUrl not configured");
 
         const eventEnvelope = envelopeFromMessage({
           selfId: fromId,

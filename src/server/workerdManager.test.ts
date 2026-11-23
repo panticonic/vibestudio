@@ -2906,6 +2906,27 @@ describe("WorkerdManager", () => {
       expect(nextMgr.getBootGeneration()).toBe(2);
     });
 
+    it("publishes relay transport on an idle-stop lazy boot without fabricating lease recovery", async () => {
+      const mgr = new WorkerdManager(createMockDeps());
+      const ready = vi.fn();
+      const transport = vi.fn();
+      mgr.onGenerationReady(transport);
+      mgr.onRestartReady(ready);
+      await mgr.startWorker(startArgs());
+      expect(transport).toHaveBeenCalledTimes(1);
+      const internal = mgr as unknown as {
+        instances: Map<string, unknown>;
+        stopWorkerdIfIdle(): Promise<void>;
+      };
+      internal.instances.clear();
+      await internal.stopWorkerdIfIdle();
+      expect(mgr.getPort()).toBeNull();
+      await mgr.startWorker(startArgs());
+      expect(transport).toHaveBeenCalledTimes(2);
+      expect(transport.mock.lastCall?.[0]).toEqual({generation:2,port:mgr.getPort()});
+      expect(ready).not.toHaveBeenCalled();
+    });
+
     it("propagates original activation recovery failure after joining independent hooks without restarting the ready process", async () => {
       const mgr = new WorkerdManager(createMockDeps());
       await mgr.startWorker(startArgs());

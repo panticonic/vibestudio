@@ -5457,6 +5457,8 @@ async function main() {
         egressProxy,
         fsService,
         entityCache,
+        ensureWorkerdTransportReady: () =>
+          container.get<import("./workerdManager.js").WorkerdManager>("workerdManager").ensureTransportReady(),
         ensureUserlandDoReady: async (ref) => {
           await durableObjectExecutionReadiness.ensureReady(ref);
         },
@@ -8049,13 +8051,13 @@ async function main() {
     // projection pauses its reconcile loop while the runtime is offline).
     eventService.emit("server-health", { workerd: "restarting", sampledAt: Date.now() });
   });
-  const stopAuthorityRecoveryOnRestart = workerdManager.onRestartReady(async () => {
-    const restartedPort = workerdManager.getPort();
-    if (!restartedPort) {
-      throw new Error("workerd restart reported ready without a relay port");
-    }
-    rpcServerInstance.setWorkerdUrl(`http://127.0.0.1:${restartedPort}`);
+  // Every process boot restores transport, even after an idle stop. Lease
+  // recovery remains restart-only and runs after the transport is published.
+  workerdManager.onGenerationReady(({ port }) => {
+    rpcServerInstance.setWorkerdUrl(`http://127.0.0.1:${port}`);
     eventService.emit("server-health", { workerd: "running", sampledAt: Date.now() });
+  });
+  const stopAuthorityRecoveryOnRestart = workerdManager.onRestartReady(async () => {
     await acquisitionCoordinator.reprojectOwnerDelivery();
   });
   rpcServerInstance.setWorkerdGatewayToken(workerdGatewayToken);

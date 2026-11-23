@@ -805,6 +805,7 @@ export class WorkerdManager {
   private pendingBootGeneration: number | null = null;
   private readonly bootGenerationFile: string;
   private restartBeginHooks = new Set<(event: RestartBeginEvent) => Promise<void> | void>();
+  private generationReadyHooks = new Set<(event: { generation: number; port: number }) => void>();
   private restartReadyHooks = new Set<(event: RestartReadyEvent) => Promise<void> | void>();
   private generationClosingHooks = new Set<
     (event: GenerationClosingEvent) => Promise<void> | void
@@ -1880,7 +1881,7 @@ export class WorkerdManager {
    */
   private async ensureWorkerdRunning(): Promise<void> {
     for (;;) {
-      if (this.process && this.process.exitCode === null) return;
+      if (this.process && this.process.exitCode === null && this.pendingBootGeneration === null) return;
       // A generation transition is already in flight (or queued): joining it is
       // mandatory. Minting a fresh restart epoch here would race the stop→spawn
       // window and force a needless second full restart cycle.
@@ -1897,6 +1898,13 @@ export class WorkerdManager {
       await this.restartWorkerd();
       return;
     }
+  }
+
+  /** Join the generation owner before admitting an unsent relay. Startup
+   * failures propagate unchanged; already-dispatched calls are never retried. */
+  async ensureTransportReady(): Promise<void> {
+    if (this.shuttingDown) throw new Error("workerd is shutting down");
+    await this.ensureWorkerdRunning();
   }
 
   /**
@@ -2024,6 +2032,13 @@ export class WorkerdManager {
 
   getBootGeneration(): number {
     return this.bootGeneration;
+  }
+
+  /** Transport publication for every successful boot, including lazy starts
+   * after an idle stop. Separate from lease recovery's restart-only event. */
+  onGenerationReady(fn: (event: { generation: number; port: number }) => void): () => void {
+    this.generationReadyHooks.add(fn);
+    return () => this.generationReadyHooks.delete(fn);
   }
 
   onRestartBegin(fn: (event: RestartBeginEvent) => Promise<void> | void): () => void {
@@ -3218,6 +3233,11 @@ export class WorkerdManager {
         }
         await this.stopWorkerd("startup-retry", "force");
         continue;
+      }
+      const readyPort = this.getPort();
+      if (!readyPort) throw new Error("workerd started without a relay port");
+      for (const hook of this.generationReadyHooks) {
+        hook({ generation: this.bootGeneration, port: readyPort });
       }
       // Process startup and activation recovery have different owners. A
       // failed resume must reach the restart caller without replacing an

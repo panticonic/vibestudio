@@ -325,7 +325,7 @@ for (const group of groups) {
       const runOut = concurrent ? mkdtempSync(path.join(out, "managed-")) : batch[0].directory;
       if (JSON.stringify(pinSources()) !== JSON.stringify(pinned))
         throw new Error("Source pins changed before starting the batch");
-      const status = systemTest([
+      systemTest([
         "run", ...batch.map(({ scenario }) => scenario),
         "--model", source.teacher,
         ...(concurrent ? ["--concurrency", String(Math.min(concurrency, batch.length)), "--retain-trajectories"] : []),
@@ -354,7 +354,10 @@ for (const group of groups) {
           } else if (systemTest(["trajectory", runId, scenario, "--full", "--json", "--out-dir", directory], "ignore") !== 0) {
             throw new Error(`Unable to retrieve the durable trajectory for ${runId}`);
           }
-          if (failed.has(scenario) || (status !== 0 && (!concurrent || !existsSync(summaryPath)))) {
+          // Overall interruption and a missing aggregate summary do not invalidate
+          // independent completed cases. The exporter verifies this packet
+          // against its exact source/model/root/outcome before admitting it.
+          if (failed.has(scenario)) {
             throw new Error(`System test ${runId} failed. Its full trajectory was retained in ${directory}`);
           }
           if (JSON.stringify(pinSources()) !== JSON.stringify(pinned))
