@@ -7202,6 +7202,7 @@ export function openOutcomeGoalEvidence(execution, exercise, _scenario, workflow
       reviewInput?.actual?.contextId === proof.contextId &&
       isDeepStrictEqual(reviewInput.actual.state, project.actual?.workingHead) &&
       (reviewInput.actual.lifecycle ?
+        reviewInput.actual.lifecycle.requestedDisposition===project.expectedOutcome &&
         isDeepStrictEqual(reviewInput.actual.lifecycle.baseline,{committedEvent:project.before?.committed,workingHead:project.before?.workingHead,clean:project.before?.clean,protectedMainEventId:project.before?.mainEventId}) &&
         isDeepStrictEqual(reviewInput.actual.lifecycle.current,{committedEvent:project.actual?.committed,workingHead:project.actual?.workingHead,clean:project.actual?.clean,protectedMainEventId:project.actual?.mainEventId}) &&
         isDeepStrictEqual(reviewInput.actual.lifecycle.delta,{committedEventChanged:project.actual?.committed?.eventId!==project.before?.committed?.eventId,workingHeadChanged:!isDeepStrictEqual(project.actual?.workingHead,project.before?.workingHead),protectedMainChanged:project.actual?.mainEventId!==project.before?.mainEventId})
