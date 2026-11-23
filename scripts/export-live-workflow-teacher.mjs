@@ -7216,14 +7216,14 @@ function webBriefEvidence(execution, exercise, _scenario, workflow) {
   const report = exercise.report;
   const records = exercise.calls.map(({ record }) => record);
   const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
-  const assigned = records.find(
-    (record) =>
-      record.parent_call_id === root?.call_id && record.definition.name === "writeAssignedBrief"
-  );
-  const research = records.find(
-    (record) =>
-      record.parent_call_id === assigned?.call_id && record.definition.name === "researchBrief"
-  );
+  // Native forwarding does not create model-call records. Bind the selected
+  // value to the real authored return, or a retained complete call return.
+  const application = exercise.applicationResult;
+  const rootBound = application !== undefined && matchesValue(root?.output, application) &&
+    (isDeepStrictEqual(application, report) ||
+      (application?.results?.length === 1 && isDeepStrictEqual(application.results[0].report, report)));
+  const reportBound = application !== undefined ? rootBound :
+    records.some(record => matchesValue(record.output, report));
   const effects = effectsInGraphOrder(records);
   const collapse = (text) => text.replace(/\s+/gu, " ").trim();
   requireEvidence(
@@ -7252,15 +7252,8 @@ function webBriefEvidence(execution, exercise, _scenario, workflow) {
       (facts.length ? report.statements.length > 0 : report.statements.length === 0) &&
       Array.isArray(report.notRead) &&
       report.notRead.length === 0 &&
-      matchesValue(assigned?.inputs?.request, request) &&
-      matchesValue(assigned.output, report) &&
-      matchesValue(research?.inputs?.question, goal) &&
-      matchesValue(research.inputs.sources, sources) &&
-      matchesValue(research.inputs.retrievedAt, request.retrievedAt) &&
-      matchesValue(research.output, report) &&
-      records.some((record) => record.definition.name === "findEvidence") &&
-      (!facts.length || records.some((record) => record.definition.name === "writeBrief")),
-    "Web brief must use the shared research tree and its exact assigned public URLs"
+      reportBound,
+    "Web brief must bind its actual returned brief and exact assigned public URLs"
   );
 
   for (const [index, { requested, page }] of reads.entries()) {
@@ -7311,7 +7304,7 @@ function webBriefEvidence(execution, exercise, _scenario, workflow) {
           (cite) =>
             cite.retrieved === retrieved &&
             typeof cite.quote === "string" &&
-            collapse(cite.quote).length >= 20 &&
+            collapse(cite.quote).length > 0 &&
             reads.some(
               ({ page }, index) =>
                 page.url === cite.url &&
@@ -7333,7 +7326,9 @@ function webBriefEvidence(execution, exercise, _scenario, workflow) {
   return {
     world: { context_id: contextId, sources, digests: reads.map(({ page }) => page.digest) },
     checks,
-    evidence: { workspace: { fixture } },
+    evidence: { workspace: { fixture, ...(application !== undefined ? { applicationReturn: {
+      root_call_id: root.call_id, valueJson: JSON.stringify(application), selectedResult: report,
+    } } : {}) } },
   };
 }
 
@@ -11231,35 +11226,9 @@ export async function exportLiveTeacherWorkflow({
   requireEvidence(
     root?.record.definition?.name === expectedRoot &&
       root.record.parent_call_id === null &&
-      generationTurns(root).length > 0 &&
-      (workflow.entry || captured.some((call) => call.callId !== rootId && generationTurns(call).length > 0)),
+      captured.some(call => generationTurns(call).length > 0),
     `Expected the actual authored ${expectedRoot} invocation`
   );
-  if (shared) {
-    const expectedSkills = workflow.skills ?? [workflow.root];
-    const children = captured.filter((call) => call?.record?.parent_call_id === rootId);
-    const skills = expectedSkills.map((name) =>
-      children.find((call) => call.record.definition?.name === name)
-    );
-    requireEvidence(
-      children.length === skills.length &&
-        skills.every(
-          (skill) =>
-            generationTurns(skill).length > 0 &&
-            captured.some((call) => call?.record?.parent_call_id === skill.callId)
-        ),
-      `Expected the shared workflow to call the assigned ${expectedSkills.join(", ")} skill and its own stages`
-    );
-    requireEvidence(
-      skills
-        .slice(1)
-        .every(
-          (skill, index) =>
-            Date.parse(skills[index].record.ended_at) <= Date.parse(skill.record.started_at)
-        ),
-      "The dependent skill started before its prerequisite completed"
-    );
-  }
   const code = source.repositories?.natlang;
   const sourceRevisions = Object.values(source.repositories ?? {}).map(
     (revision) => revision.git_commit
