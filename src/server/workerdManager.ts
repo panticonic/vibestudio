@@ -61,6 +61,7 @@ import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import { DurableObjectStorageClone } from "./durableObjectStorageClone.js";
 import type { WorkerdProgramSources } from "./workerdProgramLoader.js";
 import { resolveRequiredAppRoot } from "./appRoot.js";
+import { retainNativeStorageBeforeErase } from "./nativeStorageCapture.js";
 import { SqliteIntegrityWorkerClient } from "./storage/sqliteIntegrityWorkerClient.js";
 import {
   destroyWorkerdConnections,
@@ -512,6 +513,8 @@ export interface WorkerInstance {
 }
 
 export interface WorkerdManagerDeps {
+  /** Host-owned campaign custody, outside per-object and ordinary backup GC. */
+  nativeStorageRetentionRoot?: string;
   /** Existing admitted host/SDK installation capture; never rescan at admission. */
   readonly schemaProbeEnvironment: WorkspaceReleaseIdentity;
   readonly schemaProbeReleaseRoot: string;
@@ -5242,17 +5245,30 @@ export class WorkerdManager {
    *  the journaled maintenance flow, never the userland destroy surface. */
   private async destroyDurableObjectStorageFiles(ref: DORef): Promise<void> {
     await this.storageClones.retire(this.durableObjectTargetId(ref));
-    await this.destroyStorageFiles(this.durableObjectStorageLocation(ref));
+    await this.destroyStorageFiles(this.durableObjectStorageLocation(ref), ref);
   }
 
-  private async destroyStorageFiles({ dir, hash }: { dir: string; hash: string }): Promise<void> {
+  private async destroyStorageFiles({ dir, hash }: { dir: string; hash: string }, ref?: DORef): Promise<void> {
+    let capturedFiles: string[] | undefined;
+    if (this.deps.nativeStorageRetentionRoot) {
+      const capture = await retainNativeStorageBeforeErase({
+        archiveRoot: this.deps.nativeStorageRetentionRoot,
+        directory: dir, hash, workspaceId: this.deps.workspaceId, target: ref,
+        verifySqlite: paths => this.sqliteIntegrityWorker.verify(paths),
+      });
+      const manifest = JSON.parse(await fs.promises.readFile(path.join(capture, "manifest.json"), "utf8")) as {files:Array<{name:string}>};
+      capturedFiles = manifest.files.map(file => file.name).sort();
+    }
     const files = await fs.promises.readdir(dir).catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return [] as string[];
       throw error;
     });
+    const ownedFiles = files.filter(file => file.startsWith(`${hash}.`)).sort();
+    if (capturedFiles && JSON.stringify(ownedFiles) !== JSON.stringify(capturedFiles)) {
+      throw new Error("Native storage changed after retention; refusing erasure");
+    }
     await Promise.all(
-      files
-        .filter((f) => f.startsWith(`${hash}.`))
+      ownedFiles
         .map((f) =>
           fs.promises.unlink(path.join(dir, f)).catch((err: NodeJS.ErrnoException) => {
             if (err.code !== "ENOENT") throw err;
@@ -5327,7 +5343,7 @@ export class WorkerdManager {
           await this.destroyStorageFiles({
             dir: this.universalDoStorageDir(),
             hash: this.universalHostHash(ref),
-          });
+          }, ref);
           this.schemaProbeBuilds.delete(objectKey);
         });
       }

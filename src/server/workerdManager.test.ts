@@ -1315,6 +1315,38 @@ describe("WorkerdManager", () => {
     await mgr.shutdown();
   });
 
+  it("native retention preserves a failed pre-run Eval before stopped-generation erase", async () => {
+    const deps = createMockDeps();
+    deps.nativeStorageRetentionRoot = path.join(deps.statePath,"capture-evidence","native-storage");
+    const mgr = new WorkerdManager(deps);
+    const ref = {source:"vibestudio/internal",className:"EvalDO",objectKey:"pre-run-retention"};
+    const internals = mgr as unknown as {durableObjectStorageLocation(target:typeof ref):{dir:string;hash:string}};
+    const location=internals.durableObjectStorageLocation(ref);await fs.promises.mkdir(location.dir,{recursive:true});
+    const nativeFile=path.join(location.dir,location.hash+".sqlite");
+    const db=new DatabaseSync(nativeFile);db.exec("CREATE TABLE runs(id TEXT); CREATE TABLE diagnostic(value TEXT); INSERT INTO diagnostic VALUES ('failed before run');");db.close();
+    await mgr.destroyRetiredDOStorage(ref);expect(fs.existsSync(nativeFile)).toBe(true);
+    await mgr.shutdown();expect(fs.existsSync(nativeFile)).toBe(false);
+    const manifests=(await fs.promises.readdir(deps.nativeStorageRetentionRoot,{recursive:true})).filter(n=>n.endsWith("manifest.json"));expect(manifests).toHaveLength(1);
+    const manifestPath=path.join(deps.nativeStorageRetentionRoot,manifests[0]!);const proof=JSON.parse(await fs.promises.readFile(manifestPath,"utf8"));expect(proof.identity.target).toEqual(ref);
+    const retained=new DatabaseSync(path.join(path.dirname(manifestPath),location.hash+".sqlite"),{readOnly:true});
+    try{expect(retained.prepare("SELECT COUNT(*) AS n FROM runs").get()).toEqual({n:0});expect(retained.prepare("SELECT value FROM diagnostic").get()).toEqual({value:"failed before run"});}finally{retained.close();}
+  });
+
+  it("native retention failure leaves originals and the maintenance journal resumable", async () => {
+    const deps=createMockDeps();const blocked=path.join(deps.statePath,"blocked-capture-root");await fs.promises.writeFile(blocked,"not a directory");deps.nativeStorageRetentionRoot=blocked;
+    const ref={source:"vibestudio/internal",className:"EvalDO",objectKey:"retry-capture"};
+    type CaptureInternals={durableObjectStorageLocation(target:typeof ref):{dir:string;hash:string};readOpenDurableObjectMaintenance():Array<{operationId:string;kind:string}>};
+    const first=new WorkerdManager(deps),location=(first as unknown as CaptureInternals).durableObjectStorageLocation(ref);await fs.promises.mkdir(location.dir,{recursive:true});
+    const original=path.join(location.dir,location.hash+".sqlite");const db=new DatabaseSync(original);db.exec("CREATE TABLE preparation(value TEXT); INSERT INTO preparation VALUES ('native');");db.close();
+    await first.destroyRetiredDOStorage(ref);const [debt]=(first as unknown as CaptureInternals).readOpenDurableObjectMaintenance();
+    await expect(first.shutdown()).rejects.toThrow("shutdown failed");expect(fs.existsSync(original)).toBe(true);
+    await fs.promises.unlink(blocked);await fs.promises.mkdir(blocked);
+    const resumed=new WorkerdManager(deps);await resumed.shutdown();expect(fs.existsSync(original)).toBe(false);
+    const journal=new DatabaseSync(stateLayout(deps.statePath).databases.durableObjectMaintenanceDb,{readOnly:true});
+    try{expect(journal.prepare("SELECT status FROM do_maintenance WHERE operation_id=?").get(debt!.operationId)).toEqual({status:"complete"});}finally{journal.close();}
+    expect(debt?.kind).toBe("destroy");expect((await fs.promises.readdir(blocked,{recursive:true})).filter(n=>n.endsWith("manifest.json"))).toHaveLength(1);
+  });
+
   it("tombstones retired internal storage without restarting live peers and collects it at shutdown", async () => {
     const mgr = new WorkerdManager(createMockDeps());
     const ref = {

@@ -1494,7 +1494,7 @@ async function main() {
         const client=createTypedServiceClient("eval-engine",evalEngineMethods,(_service,method,args)=>
           container.get<import("./doDispatch.js").DODispatch>("doDispatch").dispatch(
             {source:record.source.repoPath,className:record.className!,objectKey:record.key!},method,...args));
-        await retainEvalCaptureEvidence(record,path.join(statePath,"capture-evidence","natlang"),
+        await retainEvalCaptureEvidence(record,layout.captureEvidence.natlang,
           input=>client.readPendingCaptureEvidence(input));
       },
       releaseBlobRetentions: async (runtime) => {

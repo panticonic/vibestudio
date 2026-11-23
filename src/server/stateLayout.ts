@@ -19,6 +19,11 @@ export function stateLayout(statePath: string) {
   const authority = path.join(statePath, "authority");
   return {
     root: statePath,
+    captureEvidence: {
+      root: path.join(statePath, "capture-evidence"),
+      natlang: path.join(statePath, "capture-evidence", "natlang"),
+      nativeStorage: path.join(statePath, "capture-evidence", "native-storage"),
+    },
     adminTokenFile: path.join(statePath, "admin-token"),
     bootGenerationFile: path.join(statePath, ".boot-generation"),
     contextProjections: {
