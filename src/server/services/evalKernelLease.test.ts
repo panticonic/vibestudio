@@ -319,3 +319,79 @@ describe("EvalKernelLeaseCoordinator", () => {
     expect(dispatchHeldWithSignal).not.toHaveBeenCalled();
   });
 });
+
+it("closes after a failed holder attach instead of retaining an admission with no settlement", async () => {
+  const dispatch = vi.fn(async (_ref, method: string) => {
+    if (method === "acquireKernelLease")
+      return { leaseId: "lease", expiresAt: 1, holderAttached: false };
+    throw new Error("native attach failed");
+  });
+  const held = vi.fn();
+  const coordinator = new EvalKernelLeaseCoordinator({ dispatch, dispatchHeldWithSignal: held });
+  await expect(coordinator.touch(ref)).rejects.toThrow("native attach failed");
+  await expect(coordinator.close()).resolves.toBeUndefined();
+  expect(held).not.toHaveBeenCalled();
+});
+
+it("aborts a superseded hold and still joins its native settlement on close", async () => {
+  let holderAttached = false;
+  const dispatch = vi.fn(async (_ref, method: string) => {
+    if (method === "acquireKernelLease") return { leaseId: "lease", expiresAt: 1, holderAttached };
+    holderAttached = true;
+    return { attached: true };
+  });
+  const holds: Array<{ signal: AbortSignal; release: () => void }> = [];
+  const dispatchHeldWithSignal = vi.fn(
+    (_ref, signal: AbortSignal) =>
+      new Promise<void>((release) => {
+        holds.push({ signal, release });
+      })
+  );
+  const coordinator = new EvalKernelLeaseCoordinator({ dispatch, dispatchHeldWithSignal });
+  await coordinator.touch(ref);
+  holderAttached = false;
+  await coordinator.touch(ref);
+  expect(holds).toHaveLength(2);
+  expect(holds[0]!.signal.aborted).toBe(true);
+  let closed = false;
+  const closing = coordinator.close().then(() => {
+    closed = true;
+  });
+  holds[1]!.release();
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(closed).toBe(false);
+  holds[0]!.release();
+  await closing;
+  expect(closed).toBe(true);
+});
+
+it("retains and aborts the old native hold when refresh fails", async () => {
+  let fail = false;
+  const dispatch = vi.fn(async (_ref, method: string) => {
+    if (fail) throw new Error("native acquire failed");
+    return method === "acquireKernelLease"
+      ? { leaseId: "lease", expiresAt: 1, holderAttached: false }
+      : { attached: true };
+  });
+  let signal!: AbortSignal, release!: () => void;
+  const dispatchHeldWithSignal = vi.fn((_ref, observed: AbortSignal) => {
+    signal = observed;
+    return new Promise<void>((resolve) => {
+      release = resolve;
+    });
+  });
+  const coordinator = new EvalKernelLeaseCoordinator({ dispatch, dispatchHeldWithSignal });
+  await coordinator.touch(ref);
+  fail = true;
+  await expect(coordinator.touch(ref)).rejects.toThrow("native acquire failed");
+  expect(signal.aborted).toBe(true);
+  let closed = false;
+  const closing = coordinator.close().then(() => {
+    closed = true;
+  });
+  await Promise.resolve();
+  expect(closed).toBe(false);
+  release();
+  await closing;
+});

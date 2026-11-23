@@ -34,6 +34,7 @@ export interface EvalKernelLease {
  */
 export class EvalKernelLeaseCoordinator implements EvalKernelLease {
   private readonly leases = new Map<string, LiveLease>();
+  private readonly holders = new Set<LiveLease>();
   private readonly operations = new Map<string, Promise<void>>();
   private closed = false;
 
@@ -66,69 +67,78 @@ export class EvalKernelLeaseCoordinator implements EvalKernelLease {
       this.leases.set(key, lease);
     }
 
-    let status: KernelLeaseStatus;
     try {
+      let status: KernelLeaseStatus;
       status = (await this.doDispatch.dispatch(ref, "acquireKernelLease", {
         leaseId: lease.id,
         idleMs: this.options.idleMs ?? EVAL_KERNEL_IDLE_LEASE_MS,
       })) as KernelLeaseStatus;
+
+      // Shutdown may have started while the receiver was processing the
+      // admission. Do not claim a holder after quiescence; the close loop is
+      // waiting for this operation and lifecycle release will settle any
+      // receiver-side lease that the admission already created.
+      if (this.closed) {
+        if (this.leases.get(key) === lease) this.leases.delete(key);
+        return;
+      }
+
+      // A holder attached in the EvalDO is the authoritative warm-kernel fact.
+      if (status.holderAttached) return;
+
+      // A locally tracked hold with no receiver-side holder belongs to an
+      // expired/reconstructed activation whose response has not reached us yet.
+      if (lease.holding) {
+        this.retire(key, lease);
+        lease = { id: randomUUID(), holding: false, abortController: new AbortController() };
+        this.leases.set(key, lease);
+        status = (await this.doDispatch.dispatch(ref, "acquireKernelLease", {
+          leaseId: lease.id,
+          idleMs: this.options.idleMs ?? EVAL_KERNEL_IDLE_LEASE_MS,
+        })) as KernelLeaseStatus;
+        if (status.holderAttached) {
+          throw new Error(`fresh eval kernel lease ${lease.id} unexpectedly already has a holder`);
+        }
+      }
+
+      // Claim the single holder before opening the long request. This is not an
+      // alarm activation or durable-work execution lane; it owns only residency.
+      await this.doDispatch.dispatch(ref, "attachKernelLeaseHolder", lease.id);
+      if (this.closed) {
+        if (this.leases.get(key) === lease) this.leases.delete(key);
+        return;
+      }
+      lease.holding = true;
+      const hold = this.doDispatch.dispatchHeldWithSignal(
+        ref,
+        lease.abortController.signal,
+        "holdKernelLease",
+        lease.id
+      );
+      lease.hold = hold;
+      this.holders.add(lease);
+      const holder = lease;
+      void hold
+        .catch((error) => {
+          if (this.closed || holder.abortController.signal.aborted) return;
+          (this.options.onError ?? defaultErrorReporter)(
+            `Eval kernel lease ${holder.id} for ${key} ended unexpectedly`,
+            error
+          );
+        })
+        .finally(() => {
+          this.holders.delete(holder);
+          if (this.leases.get(key) === holder) this.leases.delete(key);
+        });
     } catch (error) {
-      if (this.leases.get(key) === lease) this.leases.delete(key);
+      this.retire(key, lease);
       throw error;
     }
+  }
 
-    // Shutdown may have started while the receiver was processing the
-    // admission. Do not claim a holder after quiescence; the close loop is
-    // waiting for this operation and lifecycle release will settle any
-    // receiver-side lease that the admission already created.
-    if (this.closed) {
-      if (this.leases.get(key) === lease) this.leases.delete(key);
-      return;
-    }
-
-    // A holder attached in the EvalDO is the authoritative warm-kernel fact.
-    if (status.holderAttached) return;
-
-    // A locally tracked hold with no receiver-side holder belongs to an
-    // expired/reconstructed activation whose response has not reached us yet.
-    if (lease.holding) {
-      lease = { id: randomUUID(), holding: false, abortController: new AbortController() };
-      this.leases.set(key, lease);
-      status = (await this.doDispatch.dispatch(ref, "acquireKernelLease", {
-        leaseId: lease.id,
-        idleMs: this.options.idleMs ?? EVAL_KERNEL_IDLE_LEASE_MS,
-      })) as KernelLeaseStatus;
-      if (status.holderAttached) {
-        throw new Error(`fresh eval kernel lease ${lease.id} unexpectedly already has a holder`);
-      }
-    }
-
-    // Claim the single holder before opening the long request. This is not an
-    // alarm activation or durable-work execution lane; it owns only residency.
-    await this.doDispatch.dispatch(ref, "attachKernelLeaseHolder", lease.id);
-    if (this.closed) {
-      if (this.leases.get(key) === lease) this.leases.delete(key);
-      return;
-    }
-    lease.holding = true;
-    const hold = this.doDispatch.dispatchHeldWithSignal(
-      ref,
-      lease.abortController.signal,
-      "holdKernelLease",
-      lease.id
-    );
-    lease.hold = hold;
-    void hold
-      .catch((error) => {
-        if (this.closed || lease.abortController.signal.aborted) return;
-        (this.options.onError ?? defaultErrorReporter)(
-          `Eval kernel lease ${lease.id} for ${key} ended unexpectedly`,
-          error
-        );
-      })
-      .finally(() => {
-        if (this.leases.get(key) === lease) this.leases.delete(key);
-      });
+  private retire(key: string, lease: LiveLease): void {
+    if (this.leases.get(key) === lease) this.leases.delete(key);
+    lease.abortController.abort();
   }
 
   async close(): Promise<void> {
@@ -143,13 +153,15 @@ export class EvalKernelLeaseCoordinator implements EvalKernelLease {
     // must be aborted and awaited before close returns.
     for (;;) {
       const operations = [...this.operations.values()];
-      const leases = [...this.leases.values()];
-      const holds = leases
+      const leases = new Set([...this.leases.values(), ...this.holders]);
+      const holds = [...leases]
         .map((lease) => lease.hold)
         .filter((hold): hold is Promise<unknown> => hold !== undefined);
       for (const lease of leases) lease.abortController.abort();
+      // Admissions with no native hold have no asynchronous retirement callback.
+      for (const [key, lease] of this.leases) if (!lease.hold) this.retire(key, lease);
       await Promise.allSettled([...operations, ...holds]);
-      if (this.operations.size === 0 && this.leases.size === 0) return;
+      if (this.operations.size === 0 && this.leases.size === 0 && this.holders.size === 0) return;
     }
   }
 }
