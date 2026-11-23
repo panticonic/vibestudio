@@ -1,3 +1,4 @@
+import { WORKSPACE_PREPARATION_TEMPLATES_ENV } from "../server/workspacePreparationTemplates.js";
 import type { DevelopmentTemplateSet } from "./developmentTemplateSet.js";
 import { developmentTemplateSetSources } from "../../scripts/lib/development-template-set.mjs";
 import type { WorkspaceSource } from "@vibestudio/workspace/workspaceSources";
@@ -70,6 +71,7 @@ export function productLaunchEnvironment(input: {
     "VIBESTUDIO_INSTANCE",
     "VIBESTUDIO_SOURCE_INSTANCE",
     DEFAULT_WORKSPACE_TEMPLATES_ENV,
+    WORKSPACE_PREPARATION_TEMPLATES_ENV,
     INITIAL_WORKSPACE_TEMPLATE_ENV,
     WORKSPACE_SOURCES_ENV,
     TEMPLATE_REGISTRY_FILE_ENV,
@@ -96,6 +98,7 @@ export function productLaunchEnvironment(input: {
     ...(defaultTemplates
       ? {
           [DEFAULT_WORKSPACE_TEMPLATES_ENV]: JSON.stringify(defaultTemplates.pins),
+          [WORKSPACE_PREPARATION_TEMPLATES_ENV]: JSON.stringify(defaultTemplates.sourcePins),
           ...(input.bootstrapSystem
             ? {
                 [INITIAL_WORKSPACE_TEMPLATE_ENV]: JSON.stringify(defaultTemplates.pins.system),

@@ -771,3 +771,29 @@ it("publishes and independently admits optional exact-template artifacts and rej
     "incomplete selected templates"
   );
 });
+
+it("preserves exact release mismatch dimensions across the native RPC error boundary", async () => {
+  const { root, output } = await fixture();
+  const { validateExistingPreparedWorkspaceRelease } =
+    await import("./preparedWorkspaceRelease.js");
+  const { serializeRpcFailure } = await import("@vibestudio/rpc");
+  const wanted = { ...templates, system: { ...templates.system, commit: "9".repeat(40) } };
+  let failure: unknown;
+  try {
+    await validateExistingPreparedWorkspaceRelease({
+      appRoot: root,
+      output,
+      templates: wanted,
+      layers,
+    });
+  } catch (error) {
+    failure = error;
+  }
+  const encoded = serializeRpcFailure(failure);
+  expect(encoded.code).toBe("EWORKSPACE_RELEASE_INPUTS");
+  expect(encoded.errorData).toEqual({
+    schema: "vibestudio.workspace-release-input-mismatch/1",
+    mismatches: { templates: { expected: wanted, actual: templates } },
+  });
+  expect(encoded.message).toContain("templates");
+});
