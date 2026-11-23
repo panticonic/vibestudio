@@ -6,6 +6,15 @@ import { derivedCacheCoordinator } from "@vibestudio/shared/derivedCache";
 import { blobCasPath } from "../storage/blobCas.js";
 
 const HASH_CONCURRENCY = 8;
+// Lease more than one I/O group at a time. Metadata stays bounded; hashing and
+// publication never exceed HASH_CONCURRENCY, and every lease outlives its work.
+function publicationBatchSize(): number {
+  const value = Number(process.env.VIBESTUDIO_DEPENDENCY_CONTENT_BATCH_FILES ?? 64);
+  if (!Number.isInteger(value) || value < 1 || value > 256)
+    throw new Error("VIBESTUDIO_DEPENDENCY_CONTENT_BATCH_FILES must be an integer from 1 to 256");
+  return value;
+}
+
 const VERIFIED_CONTENT_LIMIT = 100_000;
 const WINDOWS_MAX_CONTENT_HARDLINKS = 1024;
 let contentPrune: Promise<DependencyContentPrune> | null = null;
@@ -517,14 +526,19 @@ export async function deduplicateDependencyContent(
   const failures: unknown[] = [];
   const coordinatorRoot = contentCoordinatorRoot();
   const coordinator = derivedCacheCoordinator(coordinatorRoot);
-  for (let offset = 0; offset < files.length; offset += HASH_CONCURRENCY) {
+  const batchSize = publicationBatchSize();
+  for (let offset = 0; offset < files.length; offset += batchSize) {
     const groupFailureStart = failures.length;
-    const group = files.slice(offset, offset + HASH_CONCURRENCY);
-    const preparedOutcomes = await Promise.allSettled(group.map(prepareContentFile));
+    const batch = files.slice(offset, offset + batchSize);
     const prepared: PreparedContentFile[] = [];
-    for (const outcome of preparedOutcomes) {
-      if (outcome.status === "fulfilled") prepared.push(outcome.value);
-      else failures.push(outcome.reason);
+    for (let hashOffset = 0; hashOffset < batch.length; hashOffset += HASH_CONCURRENCY) {
+      const group = batch.slice(hashOffset, hashOffset + HASH_CONCURRENCY);
+      const preparedOutcomes = await Promise.allSettled(group.map(prepareContentFile));
+      for (const outcome of preparedOutcomes) {
+        if (outcome.status === "fulfilled") prepared.push(outcome.value);
+        else failures.push(outcome.reason);
+      }
+      if (failures.length > groupFailureStart) break;
     }
     if (prepared.length === 0) break;
 
@@ -542,21 +556,23 @@ export async function deduplicateDependencyContent(
     }
 
     try {
-      const outcomes = await Promise.allSettled(
-        prepared.map((file) => replaceWithContentLink(file))
-      );
-      for (let index = 0; index < outcomes.length; index += 1) {
-        const outcome = outcomes[index]!;
-        if (outcome.status === "rejected") {
-          failures.push(outcome.reason);
-          continue;
-        }
-        const linked = outcome.value;
-        result.files += 1;
-        result.bytes += linked.bytes;
-        if (linked.linked) {
-          result.linkedFiles += 1;
-          result.linkedBytes += linked.bytes;
+      for (let publishOffset = 0; publishOffset < prepared.length; publishOffset += HASH_CONCURRENCY) {
+        const outcomes = await Promise.allSettled(
+          prepared.slice(publishOffset, publishOffset + HASH_CONCURRENCY).map((file) => replaceWithContentLink(file))
+        );
+        for (let index = 0; index < outcomes.length; index += 1) {
+          const outcome = outcomes[index]!;
+          if (outcome.status === "rejected") {
+            failures.push(outcome.reason);
+            continue;
+          }
+          const linked = outcome.value;
+          result.files += 1;
+          result.bytes += linked.bytes;
+          if (linked.linked) {
+            result.linkedFiles += 1;
+            result.linkedBytes += linked.bytes;
+          }
         }
       }
     } finally {

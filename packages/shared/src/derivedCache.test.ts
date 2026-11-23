@@ -837,3 +837,15 @@ describe("DerivedCacheCoordinator", () => {
     await closeDerivedCacheCoordinators();
   });
 });
+
+it.each([{durability:'normal',expected:1},{durability:'full',expected:2}])('uses WAL $durability cache durability while retaining transactional lease ownership', ({durability, expected}) => {
+  vi.stubEnv('VIBESTUDIO_DERIVED_CACHE_DURABILITY', durability);
+  const root = cacheRoot(), coordinator = new DerivedCacheCoordinator(derivedCacheDatabasePath(root));
+  try {
+    const connection = (coordinator as unknown as {db: DatabaseSync}).db;
+    expect(connection.prepare('PRAGMA synchronous').get()).toEqual({synchronous:expected});
+    const batch = coordinator.acquireBatch(root,['one','two']);
+    coordinator.withMutation(()=>{expect(coordinator.hasLease(root,'one')).toBe(true);expect(coordinator.hasLease(root,'two')).toBe(true);});
+    batch.release();coordinator.withMutation(()=>expect(coordinator.hasLease(root,'one')).toBe(false));
+  } finally {coordinator.close();vi.unstubAllEnvs();}
+});

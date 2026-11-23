@@ -727,3 +727,17 @@ it("joins all hash workers and aggregates independent failures", async () => {
   expect((caught as Error & { cause?: unknown }).cause).toBe(workerErrors[0]);
   expect(contentLeaseCount(coordinatorRoot)).toBe(0);
 });
+
+it.each([{label:'default',batchSize:undefined,expected:[17]},{label:'legacy opt-out',batchSize:'8',expected:[8,8,1]}])('bounds publication leases independently of hash workers: $label', async ({batchSize,expected}) => {
+  if(batchSize !== undefined)vi.stubEnv('VIBESTUDIO_DEPENDENCY_CONTENT_BATCH_FILES',batchSize);
+  const tree=path.join(root,'bounded-publication');await fs.promises.mkdir(tree);
+  for(let index=0;index<17;index++)await fs.promises.writeFile(path.join(tree,String(index).padStart(3,'0')),`independent payload ${index}`);
+  const acquire=vi.spyOn(DerivedCacheCoordinator.prototype,'acquireBatch');
+  try {
+    const result=await deduplicateDependencyContent(tree);
+    const batches=acquire.mock.calls.filter(([owner])=>owner===path.join(cache.root,'dependency-files'));
+    expect(batches.map(([,keys])=>keys.length)).toEqual(expected);
+    expect(result.files).toBe(17);expect(contentLeaseCount(path.join(cache.root,'dependency-files'))).toBe(0);
+    for(let index=0;index<17;index++)expect(await fs.promises.readFile(path.join(tree,String(index).padStart(3,'0')),'utf8')).toBe(`independent payload ${index}`);
+  } finally {vi.unstubAllEnvs();}
+});
