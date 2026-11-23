@@ -1,3 +1,4 @@
+import { bindCdpSocket, type CdpSocketOpener } from "@vibestudio/rpc/protocol/cdpSocket";
 import { residentChannelRpcMethods } from "@vibestudio/shared/residentSession";
 import { APPROVAL_WAIT_CANCELLED_CODE } from "@vibestudio/shared/approvals";
 import { schemaRpcClient } from "@vibestudio/rpc/internal";
@@ -350,7 +351,7 @@ interface RuntimeSupportModule {
     parentEntityId: string,
     parentKind?: "panel" | "worker" | "do"
   ): unknown;
-  createWorkerdClient(rpc: unknown): unknown;
+  createWorkerdClient(rpc: unknown, options?: Record<string, unknown>): unknown;
   createPanelRuntime(options: Record<string, unknown>): PanelRuntimeApiLike;
   createRuntimeSelfHandle(options: { id: string }): unknown;
   createRuntimeScopeRehydrators(
@@ -607,6 +608,8 @@ export class EvalDO extends DurableObjectBase {
    * rather than the cell that initialized the module. Async-local binding also
    * keeps a force-reset overlap from borrowing a newer run's execution session.
    */
+  private readonly issuedInspectionEndpoints = new WeakMap<EvalExecutionContext, Map<string,string>>();
+  private readonly closedInspectionExecutions = new WeakSet<EvalExecutionContext>();
   private readonly activeEvalExecution = new asyncHooks.AsyncLocalStorage<EvalExecutionContext>();
   /** Run-scoped cleanup registered by evaluated orchestration code. Cancel
    *  executes these BEFORE aborting outbound RPC so child runtimes can retire
@@ -3580,6 +3583,7 @@ export class EvalDO extends DurableObjectBase {
         ...(natlangSummary ? { natlang: natlangSummary } : {}),
       };
     } finally {
+      this.closedInspectionExecutions.add(execution);
       execution.operationJournal.close();
       evalNodeCallbackOwnerOpen = false;
       flushLiveConsole();
@@ -4152,8 +4156,18 @@ export class EvalDO extends DurableObjectBase {
     // through this transport, so it is the one place that sees all the egress
     // that brings outside content into an agent's task.
     const call = guardOutsideContentCall(
-      (targetId: string, method: string, args: unknown[], options?: RpcCallOptions) =>
-        this.requireActiveEvalExecution().rpc.call(targetId, method, args, options),
+      async (targetId: string, method: string, args: unknown[], options?: RpcCallOptions) => {
+        const execution=this.requireActiveEvalExecution();
+        const result=await execution.rpc.call(targetId, method, args, options);
+        if(targetId==="main" && (method==="workerdInspector.getEndpoint" || method==="panelCdp.getCdpEndpoint")){
+          const endpoint=result as {wsEndpoint?:unknown;token?:unknown}|null;
+          if(typeof endpoint?.wsEndpoint==="string" && typeof endpoint.token==="string"){
+            const issued=this.issuedInspectionEndpoints.get(execution)??new Map<string,string>();
+            this.issuedInspectionEndpoints.set(execution,issued);issued.set(endpoint.token,endpoint.wsEndpoint);
+          }
+        }
+        return result;
+      },
       outsideContent
     );
     const emit = (targetId: string, event: string, payload: unknown, options?: RpcCallOptions) =>
@@ -4323,6 +4337,33 @@ export class EvalDO extends DurableObjectBase {
 
   /** Identity factories are inert; restored handles borrow the active eval
    * invocation only when used, including after cold maintenance hydration. */
+  /** A narrow kernel capability, never a fetch/WebSocket guest endowment. */
+  private createEvalCdpSocketBinder() {
+    return (requestedEndpoint:{wsEndpoint:string;token?:string},preferFetchUpgrade=false):CdpSocketOpener => {
+      const endpoint={wsEndpoint:requestedEndpoint.wsEndpoint,token:requestedEndpoint.token};
+      const execution=this.requireActiveEvalExecution();
+      const assertActive=()=>{
+        if(this.requireActiveEvalExecution()!==execution || this.closedInspectionExecutions.has(execution) ||
+           !endpoint.token || this.issuedInspectionEndpoints.get(execution)?.get(endpoint.token)!==endpoint.wsEndpoint)
+          throw new Error("eval: CDP socket requires its exact active execution and issued endpoint grant");
+      };
+      assertActive();
+      const opener=bindCdpSocket(endpoint,{platform:globalThis,assertActive,signal:execution.signal,onSocket:socket=>{
+        const forget=()=>{
+          execution.residentSessionCleanups.delete(cleanup);
+          execution.signal?.removeEventListener("abort",onAbort);
+          socket.removeEventListener("close",forget);
+        };
+        const cleanup=async()=>{forget();socket.close();};
+        const onAbort=()=>{void cleanup();};
+        execution.residentSessionCleanups.add(cleanup);
+        socket.addEventListener("close",forget,{once:true});
+        execution.signal?.addEventListener("abort",onAbort,{once:true});
+      }});
+      return (url,token,prefer,signal)=>opener(url,token,preferFetchUpgrade || prefer,signal);
+    };
+  }
+
   private createEvalPanelRuntime(
     support: RuntimeSupportModule,
     contextId: string,
@@ -4335,6 +4376,7 @@ export class EvalDO extends DurableObjectBase {
     return support.createPanelRuntime({
       rpc,
       operationSignal: () => this.requireActiveEvalExecution().signal,
+      bindCdpSocket: this.createEvalCdpSocketBinder(),
       contextId,
       recordOperation,
       selfHandle: () => support.createRuntimeSelfHandle({ id: this.rpcSelfId }),
@@ -4364,7 +4406,6 @@ export class EvalDO extends DurableObjectBase {
           const activeExecution = this.requireActiveEvalExecution();
           return this.loadLibraryModule(cdpSource, activeExecution, {
             externals: Object.keys(this.isolateModuleMap),
-            endowments: { fetch: globalThis.fetch.bind(globalThis) },
           });
         }
         throw new Error(`Module "${id}" is not endowed to this eval runtime`);
@@ -4479,7 +4520,7 @@ export class EvalDO extends DurableObjectBase {
         serverUrl: gatewayConfig.serverUrl,
       }),
       panelRuntime,
-      workers: support.createWorkerdClient(rpc),
+      workers: support.createWorkerdClient(rpc,{bindCdpSocket:this.createEvalCdpSocketBinder()}),
       openExternal: (url: string, options?: unknown) =>
         this.requireActiveEvalExecution().externalOpen.openExternal(
           url,

@@ -87,6 +87,10 @@
     "./test-utils": {
       "types": "./dist/test-utils.d.ts",
       "default": "./dist/test-utils.js"
+    },
+    "./protocol/cdpSocket": {
+      "types": "./dist/protocol/cdpSocket.d.ts",
+      "default": "./dist/protocol/cdpSocket.js"
     }
   },
   "files": [
