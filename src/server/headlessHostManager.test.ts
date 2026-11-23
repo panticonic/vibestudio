@@ -98,7 +98,13 @@ describe("HeadlessHostManager keep-alive", () => {
     exitCode: number | null = null;
     stdout = new EventEmitter();
     stderr = new EventEmitter();
-    send = vi.fn();
+    send = vi.fn(() => {
+      const sessionId = coordinator
+        .listClientSessions()
+        .filter((c) => c.platform === "headless")
+        .at(-1)?.clientSessionId;
+      if (sessionId) this.emit("message", { type: "registered", clientSessionId: sessionId });
+    });
     kill = vi.fn((_signal?: string) => {
       this.exitCode = 0;
       // Defer the exit event so listeners attached after construction still fire.
@@ -188,6 +194,16 @@ describe("HeadlessHostManager keep-alive", () => {
     const { manager, spawnFn } = makeManager({ connect: true });
     manager.startKeepAlive();
     await vi.advanceTimersByTimeAsync(0);
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+    await manager.stop();
+  });
+
+  it("does not adopt an unrelated registered headless provider as its owned child", async () => {
+    registerHeadless("remote-unrelated");
+    const { manager, spawnFn } = makeManager({ connect: true });
+    await expect(manager.ensureHeadlessHost()).resolves.toMatchObject({
+      clientSessionId: "headless-1",
+    });
     expect(spawnFn).toHaveBeenCalledTimes(1);
     await manager.stop();
   });

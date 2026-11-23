@@ -24,6 +24,24 @@ function transport(headers: Record<string, string>) {
 }
 
 describe("Chromium fetch response headers", () => {
+  it("forwards local network requests separately from cookie session choice", async () => {
+    const call = vi.fn(async (_target, method) => {
+      if (method === mainRpcMethods["chromiumFetch.openLocal"])
+        return { responseId, url, status: 200, statusText: "OK", headers: {}, size: 5 };
+      return { bytesBase64: "aGVsbG8=", done: true };
+    });
+    const fetch = createChromiumFetch({ call: call as RpcCaller["call"] }, "public", {
+      kind: "loopback",
+      origin: "http://127.0.0.1:8123",
+    });
+    await (await fetch("http://127.0.0.1:8123/source")).text();
+    expect(call).toHaveBeenCalledWith("main", mainRpcMethods["chromiumFetch.openLocal"], [
+      "http://127.0.0.1:8123/source",
+      "http://127.0.0.1:8123",
+      "public",
+    ]);
+  });
+
   it("reconstructs distinct CDP header fields before streaming the body", async () => {
     const { fetch } = transport({
       "content-type": "text/plain",

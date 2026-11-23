@@ -29,8 +29,9 @@ function fixture() {
   const callerListeners = new Set<(callerId: string) => void>();
   let opened = 0;
   const deps = {
-    open: vi.fn(async (url: string) => ({
-      hostConnectionId: "host-1",
+    resolveLocalHost: vi.fn(async () => "host-local"),
+    open: vi.fn(async (url: string, _session?: string, grant?: { hostConnectionId: string }) => ({
+      hostConnectionId: grant?.hostConnectionId ?? "host-1",
       response: {
         responseId: RESPONSE_IDS[opened++]!,
         url,
@@ -71,6 +72,43 @@ const handle = (
 ) => service.handler(panelCtx(), method, args);
 
 describe("chromiumFetchService", () => {
+  it("seals local source permission to the exact origin and Host-owned provider", async () => {
+    const f = fixture();
+    const service = createChromiumFetchService(f.deps);
+    const ctx = panelCtx();
+    const prepare = service.authorityPreparation!["chromiumFetch.openLocal.origin"]!;
+    const args = ["http://127.0.0.1:8123/source", "http://127.0.0.1:8123", "public"];
+    const prepared = await prepare(ctx, args);
+    expect(prepared.selections).toEqual([
+      expect.objectContaining({
+        capability: "network.connect",
+        resourceKey: "http://127.0.0.1:8123",
+      }),
+    ]);
+    expect(prepared.payload).toEqual({
+      url: args[0],
+      origin: args[1],
+      session: "public",
+      hostConnectionId: "host-local",
+    });
+    await expect(service.handler(ctx, "openLocal", args)).rejects.toThrow(
+      "Prepared authority payload"
+    );
+    const admitted = {
+      ...ctx,
+      preparedAuthority: { resolver: "chromiumFetch.openLocal.origin", payload: prepared.payload },
+    } as ServiceContext;
+    await service.handler(admitted, "openLocal", args);
+    expect(f.deps.open).toHaveBeenCalledWith(args[0], "public", prepared.payload);
+    await expect(
+      service.handler(admitted, "openLocal", ["http://127.0.0.1:8124/", args[1], "public"])
+    ).rejects.toThrow("does not match");
+    await expect(
+      prepare(ctx, ["http://127.0.0.1:8123/", "http://127.0.0.1:8124", "public"])
+    ).rejects.toThrow("exact HTTP");
+    service.stop();
+  });
+
   it("returns the final bytes when releasing the host's copy fails", async () => {
     const f = fixture();
     const failure = new Error("host gone");

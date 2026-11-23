@@ -2,8 +2,14 @@ import {
   chromiumFetchMethods as methods,
   BROWSER_FETCH_PRESENTATION,
 } from "@vibestudio/service-schemas/chromiumFetch";
-import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
-import { fixedPreparedAuthoritySelection } from "@vibestudio/shared/serviceDefinition";
+import type {
+  ServiceDefinition,
+  FixedPreparedAuthoritySelection,
+} from "@vibestudio/shared/serviceDefinition";
+import {
+  preparedAuthorityPayload,
+  fixedPreparedAuthoritySelection,
+} from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 export interface ChromiumFetchMetadata {
   responseId: string;
@@ -17,8 +23,11 @@ export interface ChromiumFetchMetadata {
 export interface ChromiumFetchServiceDeps {
   open(
     url: string,
-    session: "public" | "browser"
+    session: "public" | "browser",
+    localGrant?: { hostConnectionId: string; origin: string }
   ): Promise<{ hostConnectionId: string; response: ChromiumFetchMetadata }>;
+  /** Select only the exact child provider owned by this Host server. */
+  resolveLocalHost(): Promise<string>;
   read(
     hostConnectionId: string,
     responseId: string,
@@ -92,6 +101,64 @@ export function createChromiumFetchService(
     authority: { principals: ["code", "host", "user"] },
     methods,
     authorityPreparation: {
+      ["chromiumFetch.openLocal.origin"]: async (ctx, [rawUrl, rawOrigin, session]) => {
+        const url = new URL(String(rawUrl));
+        const origin = new URL(String(rawOrigin));
+        // This is request-shape validation. The native DNS/address boundary remains authoritative.
+        if (
+          !["http:", "https:"].includes(origin.protocol) ||
+          origin.href !== origin.origin + "/" ||
+          origin.username ||
+          origin.password ||
+          url.origin !== origin.origin
+        )
+          throw new Error("Local source request must name its exact HTTP(S) origin");
+        const hostConnectionId = await deps.resolveLocalHost();
+        const resource = { type: "website", label: "Local network source", value: origin.origin };
+        const selections: FixedPreparedAuthoritySelection[] = [
+          fixedPreparedAuthoritySelection({
+            capability: "network.connect",
+            resourceKey: origin.origin,
+            challenge: {
+              title: "Read a local network source",
+              description: `Allow Chromium on this Host to read ${origin.origin}. Pages may also load public network content.`,
+              deniedReason: "Local source access was not allowed",
+              dedupKey: `chromium-local:${ctx.caller.runtime.id}:${hostConnectionId}:${origin.origin}`,
+              resource,
+              operation: {
+                kind: "network",
+                verb: "read a local network source",
+                object: resource,
+                groupKey: `chromium-local:${hostConnectionId}:${origin.origin}`,
+              },
+            },
+          }),
+        ];
+        if (session === "browser" && (ctx.caller.code || ctx.caller.executionSession))
+          selections.push(
+            fixedPreparedAuthoritySelection({
+              capability: "credential.use",
+              resourceKey: origin.origin,
+              challenge: {
+                title: BROWSER_FETCH_PRESENTATION.title,
+                description: BROWSER_FETCH_PRESENTATION.description,
+                deniedReason: "Browser session use was not allowed",
+                dedupKey: `chromium-fetch:${ctx.caller.runtime.id}:${origin.origin}`,
+                resource,
+                operation: {
+                  kind: "browser",
+                  verb: BROWSER_FETCH_PRESENTATION.action,
+                  object: resource,
+                  groupKey: `chromium-fetch:${origin.origin}`,
+                },
+              },
+            })
+          );
+        return {
+          selections,
+          payload: { url: url.href, origin: origin.origin, session, hostConnectionId },
+        };
+      },
       ["chromiumFetch.openBrowser.origin"]: (ctx, [rawUrl]) => {
         if (!ctx.caller.code && !ctx.caller.executionSession)
           return { selections: [], payload: null };
@@ -122,6 +189,30 @@ export function createChromiumFetchService(
       },
     },
     handler: defineServiceHandler("chromiumFetch", methods, {
+      openLocal: async (ctx, [url, origin, session]) => {
+        const grant = preparedAuthorityPayload<{
+          url: string;
+          origin: string;
+          session: "public" | "browser";
+          hostConnectionId: string;
+        }>(ctx, "chromiumFetch.openLocal.origin");
+        if (
+          new URL(url).href !== grant.url ||
+          new URL(origin).origin !== grant.origin ||
+          session !== grant.session ||
+          !grant.hostConnectionId
+        )
+          throw new Error("Prepared local source does not match request");
+        const opened = await deps.open(url, session, grant);
+        if (opened.hostConnectionId !== grant.hostConnectionId)
+          throw new Error("Local source provider differs from prepared grant");
+        responses.set(opened.response.responseId, {
+          owner: owner(ctx),
+          ownerEntityId: ownerEntityId(ctx),
+          hostConnectionId: opened.hostConnectionId,
+        });
+        return opened.response;
+      },
       openPublic: (ctx, [url]) => open(ctx, url, "public"),
       openBrowser: (ctx, [url]) => open(ctx, url, "browser"),
       read: async (ctx, [responseId, offset, limit]) => {

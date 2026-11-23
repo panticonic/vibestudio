@@ -2,7 +2,7 @@ import { once } from "node:events";
 import { Duplex, PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 
-import { bridgeDuplexSockets, consumeSocketErrorsUntilClose } from "./socketBridge.js";
+import { bridgeDuplexSockets, consumeSocketErrorsUntilClose } from "@vibestudio/shared/socketBridge";
 
 describe("bridgeDuplexSockets", () => {
   it.each(["client", "upstream"] as const)(

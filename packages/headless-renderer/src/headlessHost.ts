@@ -1,3 +1,4 @@
+import type { NetworkEndpointAuthority } from "@vibestudio/shared/networkDestination";
 import { mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
 import { HeadlessBrowserDownloads } from "./browserDownloads.js";
 import type { BrowserAutomationRequest } from "@vibestudio/shared/panel/browserAutomation";
@@ -605,10 +606,10 @@ export class HeadlessHost implements PanelHost {
   private async handleHostOperation(action: string, args: unknown[]): Promise<unknown> {
     switch (action) {
       case "chromiumFetch.open": {
-        const input = (args[0] ?? {}) as { url?: unknown; session?: unknown };
+        const input = (args[0] ?? {}) as { url?: unknown; session?: unknown; networkAuthority?: NetworkEndpointAuthority };
         if (typeof input.url !== "string") throw new Error("chromiumFetch.open requires a URL");
         const session = input.session === "browser" ? "browser" : "public";
-        return this.fetchHost!.open(input.url, session);
+        return this.fetchHost!.open(input.url, session, input.networkAuthority);
       }
       case "chromiumFetch.read": {
         const input = (args[0] ?? {}) as {

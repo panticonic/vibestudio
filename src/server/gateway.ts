@@ -33,7 +33,7 @@ import { isInternalDOSource } from "./internalDOs/internalDoLoader.js";
 import { doExecutableHeaders, type DoExecutableAdmissionResolver } from "./doExecutableDispatch.js";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import { resolveCodeIdentity } from "./services/principalIdentity.js";
-import { bridgeDuplexSockets } from "./socketBridge.js";
+import { bridgeDuplexSockets } from "@vibestudio/shared/socketBridge";
 
 const log = createDevLogger("Gateway");
 

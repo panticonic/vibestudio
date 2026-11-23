@@ -220,10 +220,14 @@ export class HeadlessHostManager {
   }
 
   /** A registered, bridge-connected headless host specifically. */
-  private availableHeadlessHost(): ClientSession | null {
+  private availableHeadlessHost(
+    clientSessionId = this.spawnedClientSessionId
+  ): ClientSession | null {
+    if (!clientSessionId) return null;
     return this.deps.coordinator.getDefaultCdpHostClient({
       isHostAvailable: (id) => this.deps.isHostAvailable(id),
       requiredPlatform: "headless",
+      requiredClientSessionId: clientSessionId,
     });
   }
 
@@ -404,7 +408,9 @@ export class HeadlessHostManager {
         this.recordFailure();
         return null;
       }
-      const host = this.availableHeadlessHost();
+      const host = reportedClientSessionId
+        ? this.availableHeadlessHost(reportedClientSessionId)
+        : null;
       if (host) {
         this.consecutiveFailures = 0;
         this.spawnedClientSessionId = host.clientSessionId;

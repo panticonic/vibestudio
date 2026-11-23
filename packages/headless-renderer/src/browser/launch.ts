@@ -132,6 +132,8 @@ export async function launchChromium(opts: {
     "--remote-debugging-port=0",
     `--user-data-dir=${profileDir}`,
     "--no-first-run",
+    "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+    "--disable-quic",
     "--no-default-browser-check",
     "--disable-background-timer-throttling",
     "--disable-backgrounding-occluded-windows",

@@ -7457,6 +7457,10 @@ async function main() {
     resolveContextOwnerLabel: contextBoundaryDeps.resolveContextOwnerLabel,
     lifecycleContextStore,
     panelRuntimeCoordinator,
+    ensureOwnedHeadlessHost: async () => {
+      const client = await getHeadlessHostManager()?.ensureHeadlessHost();
+      return client ? client.hostConnectionId ?? client.clientSessionId : null;
+    },
     ensureDefaultHeadlessHost: async () => {
       const manager = getHeadlessHostManager();
       if (!manager) return false;

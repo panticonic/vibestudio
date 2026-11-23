@@ -1,3 +1,5 @@
+import { parseConnectAuthority } from "@vibestudio/shared/networkDestination";
+import { forwardPinnedHttpRequest } from "@vibestudio/shared/pinnedHttpForward";
 import { serializeRpcFailure } from "@vibestudio/rpc";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -66,7 +68,7 @@ import { connect as netConnect, isIP } from "node:net";
 import type { ResolvedCodeIdentity } from "./principalIdentity.js";
 import { testPolicyAllowsGatedInvocation } from "./authorityRuntime.js";
 import { resolveCredentialByLabel } from "./credentialSelection.js";
-import { bridgeDuplexSockets, consumeSocketErrorsUntilClose } from "../socketBridge.js";
+import { bridgeDuplexSockets, consumeSocketErrorsUntilClose } from "@vibestudio/shared/socketBridge";
 import { CDP_INTERNAL_GRANT_HEADER } from "@vibestudio/shared/cdpGrants";
 import {
   RpcBoundaryError,
@@ -80,9 +82,9 @@ import {
   resolveNetworkDestination,
   type NetworkDestination,
   type NetworkEndpointAuthority,
-} from "./networkDestination.js";
+} from "@vibestudio/shared/networkDestination";
 
-import { EgressListener } from "./egressListener.js";
+import { EgressListener } from "@vibestudio/shared/egressListener";
 import { requestHostHttp } from "./hostHttpTransport.js";
 import {
   EGRESS_CREDENTIAL_HEADER,
@@ -2968,64 +2970,7 @@ export class EgressProxy {
     destination: NetworkDestination,
     signal: AbortSignal
   ): Promise<ForwardResult> {
-    return new Promise<ForwardResult>((resolve, reject) => {
-      const requestFn = targetUrl.protocol === "https:" ? httpsRequest : httpRequest;
-      const defaultPort = targetUrl.protocol === "https:" ? 443 : 80;
-      let statusCode = 502;
-      let bytesIn = 0;
-      let bytesOut = 0;
-      let settled = false;
-
-      const upstreamRequest = requestFn(
-        {
-          protocol: targetUrl.protocol,
-          hostname: destination.hostname,
-          lookup: destination.lookup,
-          agent: false,
-          signal,
-          port: targetUrl.port ? Number(targetUrl.port) : defaultPort,
-          method: req.method ?? "GET",
-          path: `${targetUrl.pathname}${targetUrl.search}`,
-          headers,
-        },
-        (upstreamResponse) => {
-          statusCode = upstreamResponse.statusCode ?? 502;
-          res.writeHead(statusCode, upstreamResponse.headers);
-          // `writeHead` only queues the head; it is sent with the first body
-          // chunk. A held response (an RPC whose server flushes its head to
-          // acknowledge admission and answers much later) must reach the caller
-          // now: its cancellation is ordered after that acknowledgement.
-          res.flushHeaders();
-          upstreamResponse.on("data", (chunk: Buffer | string) => {
-            bytesIn += Buffer.byteLength(chunk);
-          });
-          upstreamResponse.on("error", reject);
-          res.on("finish", () => {
-            if (!settled) {
-              settled = true;
-              resolve({ statusCode, bytesIn, bytesOut });
-            }
-          });
-          res.on("close", () => {
-            if (!settled) {
-              settled = true;
-              resolve({ statusCode, bytesIn, bytesOut });
-            }
-          });
-          upstreamResponse.pipe(res);
-        }
-      );
-
-      upstreamRequest.on("error", reject);
-      req.on("error", reject);
-      res.on("error", () => {
-        upstreamRequest.destroy();
-      });
-      req.on("data", (chunk: Buffer | string) => {
-        bytesOut += Buffer.byteLength(chunk);
-      });
-      req.pipe(upstreamRequest);
-    });
+    return forwardPinnedHttpRequest(req, res, targetUrl, headers, destination, signal);
   }
 
   private iterateHeaders(
@@ -3892,16 +3837,7 @@ function credentialUseGrantKey(grant: CredentialUseGrant): string {
   ].join("\x00");
 }
 
-/** CONNECT uses authority-form, never URL paths, credentials, or default ports. */
-export function parseConnectAuthority(value: string): { url: URL; resource: string; port: number } {
-  const match = /^(\[[0-9a-fA-F:.]+\]|[a-zA-Z0-9.-]+):([0-9]{1,5})$/.exec(value);
-  if (!match) throw new Error("Invalid CONNECT authority");
-  const port = Number(match[2]);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("Invalid CONNECT port");
-  const url = new URL(`https://${match[1]}:${port}`);
-  const resource = `${url.hostname}:${port}`;
-  return { url, resource, port };
-}
+export { parseConnectAuthority } from "@vibestudio/shared/networkDestination";
 
 interface ProxyFetchRequest<Body> {
   caller: VerifiedCaller;

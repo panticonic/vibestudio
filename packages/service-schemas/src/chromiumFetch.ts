@@ -75,6 +75,41 @@ export const chromiumFetchMethods = defineServiceMethods({
     },
     access: { sensitivity: "read" as const },
   },
+  openLocal: {
+    website: {
+      kind: "closed",
+      reason: "Local network source access is prepared and approved by the Host.",
+    } as const,
+    tier: openTier,
+    description:
+      "Read an explicitly authorized loopback source through a Host-owned Chromium provider. Cookie use is approved separately.",
+    args: z.tuple([z.string().url(), z.string().url(), z.enum(["public", "browser"])]),
+    returns: responseMetadata,
+    authority: {
+      requirement: requirementForPrincipals(["code", "host", "user"], "network.connect"),
+      resource: { kind: "literal", key: "network.connect" },
+      prepared: {
+        resolver: "chromiumFetch.openLocal.origin",
+        leaves: [
+          {
+            capability: "network.connect",
+            requirement: fixedPreparedAuthorityRequirement(
+              requirementForPrincipals(["code"], "network.connect")
+            ),
+            tier: "gated",
+          },
+          {
+            capability: BROWSER_FETCH_CAPABILITY,
+            requirement: fixedPreparedAuthorityRequirement(
+              requirementForPrincipals(["code"], BROWSER_FETCH_CAPABILITY)
+            ),
+            tier: "gated",
+          },
+        ],
+      },
+    },
+    access: { sensitivity: "read" as const },
+  },
   read: {
     website: {
       kind: "closed",

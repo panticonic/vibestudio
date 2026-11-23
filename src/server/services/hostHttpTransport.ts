@@ -1,5 +1,5 @@
 import { Agent, type Dispatcher } from "undici";
-import { resolveNetworkDestination } from "./networkDestination.js";
+import { resolveNetworkDestination } from "@vibestudio/shared/networkDestination";
 
 export interface HostHttpRequest {
   url: URL;

@@ -76,7 +76,12 @@ describe("ChromiumFetchHost", () => {
       "Storage.setCookies",
       expect.objectContaining({ browserContextId: "context-1" })
     );
-    expect(send).not.toHaveBeenCalledWith("Target.disposeBrowserContext", expect.anything());
+    expect(send).toHaveBeenCalledWith("Target.disposeBrowserContext", expect.anything());
+    expect(send).toHaveBeenCalledWith("Target.createBrowserContext", {
+      disposeOnDetach: false,
+      proxyServer: expect.stringMatching(/^http:\/\/127\.0\.0\.1:/),
+      proxyBypassList: "<-loopback>",
+    });
   });
 
   it("uses and disposes an isolated cookie-free context for public fetches", async () => {
