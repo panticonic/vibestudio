@@ -12,10 +12,13 @@ export function developmentTemplateSetSources(selection) {
   }));
 }
 
-export function developmentTemplateSetEnv(selection) {
+export function developmentTemplateSetEnv(selection, { defaultTemplatesOnly = false } = {}) {
   const sources = developmentTemplateSetSources(selection);
   return {
     VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES: JSON.stringify(selection.pins),
+    VIBESTUDIO_PREPARE_WORKSPACE_TEMPLATES: JSON.stringify(
+      defaultTemplatesOnly ? selection.pins : selection.sourcePins
+    ),
     VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE: JSON.stringify(selection.pins.system),
     VIBESTUDIO_WORKSPACE_SOURCES: JSON.stringify(sources),
   };

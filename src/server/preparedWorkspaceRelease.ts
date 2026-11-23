@@ -30,6 +30,10 @@ import { readHostBuildFingerprint, resolveRequiredHostArtifactRoot } from "./app
 import { forEachOwnedConcurrent } from "../../scripts/lib/owned-concurrency.mjs";
 import { runWithOwnedCleanup } from "../../scripts/lib/owned-cleanup.mjs";
 
+import {
+  workspacePreparationTemplatesSchema,
+  workspacePreparationNameSchema,
+} from "./workspacePreparationTemplates.js";
 const digestSchema = z.string().regex(/^[0-9a-f]{64}$/u);
 const hostBuildFingerprintSchema = z
   .object({
@@ -41,7 +45,7 @@ const hostBuildFingerprintSchema = z
   .strict();
 const runtimeBuildSchema = z
   .object({
-    workspace: z.enum(["base", "personal", "system"]),
+    workspace: workspacePreparationNameSchema,
     source: z.string().min(1),
     buildKey: digestSchema,
     builtAt: z.string().min(1),
@@ -63,21 +67,18 @@ export const preparedWorkspaceReleaseManifestSchema = z
         panelEntryProtocolFingerprint: digestSchema,
       })
       .strict(),
-    templates: z.record(z.enum(["base", "personal", "system"]), WorkspaceTemplatePinSchema),
-    layers: z.record(
-      z.enum(["base", "personal", "system"]),
-      z.array(WorkspaceTemplatePinSchema).min(1)
-    ),
+    templates: workspacePreparationTemplatesSchema,
+    layers: z.record(workspacePreparationNameSchema, z.array(WorkspaceTemplatePinSchema).min(1)),
     preparedTemplates: z
       .array(
         z
           .object({
-            workspace: z.enum(["base", "personal", "system"]),
+            workspace: workspacePreparationNameSchema,
             recordDigest: digestSchema,
           })
           .strict()
       )
-      .length(3),
+      .min(3),
     builds: z.array(runtimeBuildSchema),
   })
   .strict();
@@ -90,10 +91,8 @@ export type PreparedWorkspaceReleaseBuild = z.infer<typeof runtimeBuildSchema>;
 export interface PreparedWorkspaceReleaseInput {
   readonly appRoot: string;
   readonly output: string;
-  readonly templates: Readonly<Record<"base" | "personal" | "system", WorkspaceTemplatePin>>;
-  readonly layers: Readonly<
-    Record<"base" | "personal" | "system", readonly WorkspaceTemplatePin[]>
-  >;
+  readonly templates: Readonly<Record<string, WorkspaceTemplatePin>>;
+  readonly layers: Readonly<Record<string, readonly WorkspaceTemplatePin[]>>;
 }
 
 export async function workspaceReleaseIdentity(appRoot: string) {
@@ -125,10 +124,10 @@ export async function createPreparedWorkspaceReleaseManifest(
 ): Promise<PreparedWorkspaceReleaseManifest> {
   const resolvedIdentity = identity ?? (await workspaceReleaseIdentity(input.appRoot)).identity;
   const preparedTemplates: PreparedWorkspaceReleaseManifest["preparedTemplates"] = [];
-  for (const workspace of ["base", "personal", "system"] as const) {
+  for (const workspace of Object.keys(input.templates)) {
     const directory = preparedWorkspaceTemplatePath(
       input.output,
-      input.templates[workspace],
+      input.templates[workspace]!,
       "use"
     );
     const recordPath = path.join(directory, "template.json");
@@ -231,14 +230,17 @@ async function inspectPreparedWorkspaceRelease(
   const templateEntries = new Map(
     manifest.preparedTemplates.map((entry) => [entry.workspace, entry.recordDigest])
   );
-  if (templateEntries.size !== 3)
-    throw new Error("Prepared workspace release has incomplete roles");
+  const roles = Object.keys(input.templates);
+  if (
+    templateEntries.size !== manifest.preparedTemplates.length ||
+    canonicalJson([...templateEntries.keys()].sort()) !== canonicalJson([...roles].sort()) ||
+    canonicalJson(Object.keys(input.layers).sort()) !== canonicalJson([...roles].sort())
+  )
+    throw new Error("Prepared workspace release has incomplete selected templates");
 
-  const buildsByRole = new Map<"base" | "personal" | "system", PreparedWorkspaceReleaseBuild[]>([
-    ["base", []],
-    ["personal", []],
-    ["system", []],
-  ]);
+  const buildsByRole = new Map<string, PreparedWorkspaceReleaseBuild[]>(
+    roles.map((role) => [role, []])
+  );
   for (const build of manifest.builds) {
     const roleBuilds = buildsByRole.get(build.workspace);
     if (!roleBuilds) throw new Error(`Prepared workspace release has an unknown role`);
@@ -252,12 +254,12 @@ async function inspectPreparedWorkspaceRelease(
   }> = [];
   const descriptors = new Map<string, Awaited<ReturnType<typeof readReleaseBuildDescriptor>>>();
   const provenance: Array<{
-    workspace: "base" | "personal" | "system";
+    workspace: string;
     build: PreparedWorkspaceReleaseBuild;
     effectiveVersion: string;
   }> = [];
-  for (const workspace of ["base", "personal", "system"] as const) {
-    const pin = input.templates[workspace];
+  for (const workspace of Object.keys(input.templates)) {
+    const pin = input.templates[workspace]!;
     const directory = preparedWorkspaceTemplatePath(input.output, pin, "use");
     const recordPath = path.join(directory, "template.json");
     const recordBytes = await fs.readFile(recordPath);

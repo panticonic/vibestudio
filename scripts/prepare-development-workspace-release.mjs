@@ -72,7 +72,9 @@ await ownedEntry(async ({ ownership }) => {
     const env = {
       ...sourceEnv,
       VIBESTUDIO_HOST_ARTIFACT_ROOT: generation,
-      ...developmentTemplateSetEnv(templates),
+      ...developmentTemplateSetEnv(templates, {
+        defaultTemplatesOnly: args.includes("--default-templates-only"),
+      }),
     };
     preparation = prepareWorkspaceRelease({
       ownership,

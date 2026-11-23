@@ -22,34 +22,25 @@ import {
 } from "./preparedWorkspaceRelease.js";
 import { runWithOwnedCleanup, runOwnedCleanupSteps } from "../../scripts/lib/owned-cleanup.mjs";
 
-const roles = ["base", "personal", "system"] as const;
+import {
+  workspacePreparationTemplatesSchema,
+  workspacePreparationNameSchema,
+} from "./workspacePreparationTemplates.js";
 const digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const identitySchema = z
   .object({
     recipe: digest,
     appDependencyFingerprint: digest,
     systemEpoch: z.number().int().nonnegative(),
-    templates: z
-      .object({
-        base: WorkspaceTemplatePinSchema,
-        personal: WorkspaceTemplatePinSchema,
-        system: WorkspaceTemplatePinSchema,
-      })
-      .strict(),
-    layers: z
-      .object({
-        base: z.array(WorkspaceTemplatePinSchema).min(1),
-        personal: z.array(WorkspaceTemplatePinSchema).min(1),
-        system: z.array(WorkspaceTemplatePinSchema).min(1),
-      })
-      .strict(),
+    templates: workspacePreparationTemplatesSchema,
+    layers: z.record(workspacePreparationNameSchema, z.array(WorkspaceTemplatePinSchema).min(1)),
   })
   .strict();
 const markerSchema = z
   .object({
     format: z.literal("vibestudio-workspace-sources/1"),
     identity: identitySchema,
-    records: z.object({ base: digest, personal: digest, system: digest }).strict(),
+    records: z.record(workspacePreparationNameSchema, digest),
   })
   .strict();
 export type PreparedWorkspaceSourceIdentity = z.infer<typeof identitySchema>;
@@ -64,9 +55,15 @@ async function inspectSources(
   const top = await fs.readdir(root);
   if (top.some((entry) => entry !== "workspace-templates" && entry !== "source-release.json"))
     throw new Error("Prepared source cache contains data outside its immutable source phase");
+  const roles = Object.keys(identity.templates);
+  if (
+    canonicalJson(Object.keys(identity.layers).sort()) !== canonicalJson([...roles].sort()) ||
+    (records && canonicalJson(Object.keys(records).sort()) !== canonicalJson([...roles].sort()))
+  )
+    throw new Error("Prepared source cache has an incomplete selected-template inventory");
   const inspected = [];
   for (const role of roles) {
-    const directory = preparedWorkspaceTemplatePath(root, identity.templates[role], "use");
+    const directory = preparedWorkspaceTemplatePath(root, identity.templates[role]!, "use");
     const bytes = await fs.readFile(path.join(directory, "template.json"));
     const recordDigest = hash(bytes);
     if (records && records[role] !== recordDigest)

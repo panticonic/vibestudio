@@ -9,7 +9,7 @@ import {
 } from "@vibestudio/git";
 import { getCentralDataPath, getSharedDerivedDataPath } from "@vibestudio/env-paths";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
-import { readDefaultWorkspaceTemplates } from "@vibestudio/workspace/templateRelease";
+import { readWorkspacePreparationTemplates } from "./workspacePreparationTemplates.js";
 import { readWorkspaceSources } from "@vibestudio/workspace/workspaceSources";
 import { workspaceReleaseResourceRoot } from "./preparedWorkspaceTemplate.js";
 import {
@@ -85,8 +85,7 @@ export type WorkspacePreparationProgress =
   | { phase: "sources"; done: number; total: number; item: string }
   | { phase: "runtimes"; done: number; total: number | null; item: string };
 
-const roles = ["base", "personal", "system"] as const;
-type WorkspaceRole = (typeof roles)[number];
+type WorkspaceRole = string;
 interface PreparedRole {
   role: WorkspaceRole;
   workspaceId: string;
@@ -113,7 +112,8 @@ interface PreparationInput {
  * The output contains source and artifacts, never producer state or grants. */
 export async function prepareWorkspaceTemplates(input: PreparationInput): Promise<void> {
   input.signal?.throwIfAborted();
-  const pins = readDefaultWorkspaceTemplates(input.appRoot);
+  const pins = readWorkspacePreparationTemplates(input.appRoot);
+  const roles = Object.keys(pins);
   const sources = readWorkspaceSources();
   const bootstrapGit = createHostBootstrapGitReadClient({ signal: input.signal });
   const git = bootstrapGit.git;
@@ -212,8 +212,8 @@ export async function prepareWorkspaceTemplates(input: PreparationInput): Promis
           workspaceReleaseIdentity(input.appRoot),
           forEachOwnedConcurrent(roles, 3, async (role) => {
             plans[role] = await resolveDeclaredTemplateLayerPlan({
-              pin: pins[role],
-              root: await metadata(pins[role]),
+              pin: pins[role]!,
+              root: await metadata(pins[role]!),
               expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
               releaseTemplates: Object.values(pins),
               acquire: metadata,
@@ -234,7 +234,7 @@ export async function prepareWorkspaceTemplates(input: PreparationInput): Promis
           throw new Error("Workspace release identity capture produced no result");
         const operation = operationOutcome.value;
         const layers = Object.fromEntries(
-          roles.map((role) => [role, plans[role].layers.map(({ pin }) => pin)])
+          roles.map((role) => [role, plans[role]!.layers.map(({ pin }) => pin)])
         ) as Record<WorkspaceRole, WorkspaceTemplatePin[]>;
         if (input.scope === "existing") {
           await consumeCachedWorkspaceRelease({
@@ -284,7 +284,7 @@ export async function prepareWorkspaceTemplates(input: PreparationInput): Promis
         const prepareSources = async () => {
           const recipe = readHostPreparationRecipe(
             resolveRequiredHostArtifactRoot(),
-            process.versions.electron
+            process.versions["electron"]
               ? "prepare-workspace-templates.cjs"
               : "prepare-workspace-templates.mjs"
           );
@@ -317,10 +317,10 @@ export async function prepareWorkspaceTemplates(input: PreparationInput): Promis
           // producer only if this operation wins complete-build admission.
           const preparedCacheRoot = sourceHandle.root;
           const prepared = roles.map((role) => {
-            const directory = preparedWorkspaceTemplatePath(preparedCacheRoot, pins[role], "use");
+            const directory = preparedWorkspaceTemplatePath(preparedCacheRoot, pins[role]!, "use");
             return {
               role,
-              record: readPreparedWorkspaceTemplate(directory, pins[role], "use"),
+              record: readPreparedWorkspaceTemplate(directory, pins[role]!, "use"),
               blobsDir: path.join(directory, "blobs"),
             };
           });
@@ -478,9 +478,10 @@ async function materializeTemplateSources(input: {
   output?: string;
 }): Promise<PreparedRole[]> {
   const prepared: PreparedRole[] = [];
+  const roles = Object.keys(input.pins);
   await forEachOwnedConcurrent(roles, 3, async (role) => {
     input.input.signal?.throwIfAborted();
-    const pin = input.pins[role];
+    const pin = input.pins[role]!;
     const workspaceId = `prepare-${role}`;
     const workspacePath = path.join(input.input.scratch, "workspaces", workspaceId);
     const statePath = path.join(workspacePath, "state");
@@ -501,7 +502,7 @@ async function materializeTemplateSources(input: {
       sink: { put: (bytes) => putBootstrapBytes(blobsDir, Buffer.from(bytes)) },
       acquire: input.acquireFor(blobsDir),
       expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
-      layerPlan: input.plans[role],
+      layerPlan: input.plans[role]!,
       ...(preparedRoot
         ? {
             preparedTemplate: async () => {
@@ -565,6 +566,7 @@ async function produceWorkspaceTemplates(
   operation: WorkspaceReleaseOperation,
   sourceRoles: readonly PreparedRole[]
 ): Promise<void> {
+  const roles = sourceRoles.map((item) => item.role);
   const pins = Object.fromEntries(
     sourceRoles.map(({ role, record }) => [role, record.pin])
   ) as Record<WorkspaceRole, WorkspaceTemplatePin>;
@@ -616,162 +618,153 @@ async function produceWorkspaceTemplates(
   let operationFailure: unknown;
   let operationFailed = false;
   try {
-    const roleOutcomes = await Promise.allSettled(
-      prepared.map(
-        async ({
-          role,
-          statePath,
+    await forEachOwnedConcurrent(
+      prepared,
+      3,
+      async ({
+        role,
+        statePath,
+        workspaceId,
+        stateHash,
+        sourcePath,
+        blobsDir,
+        directory,
+        record,
+        dependencyFingerprint,
+      }) => {
+        input.signal?.throwIfAborted();
+        const preparedBuilds: import("./preparedWorkspaceTemplate.js").PreparedWorkspaceTemplate["builds"] =
+          [];
+        const vcs = new WorkspaceVcs({
           workspaceId,
-          stateHash,
-          sourcePath,
+          initialContentState: stateHash,
+          workspaceRoot: sourcePath,
           blobsDir,
-          directory,
-          record,
-          dependencyFingerprint,
-        }) => {
-          input.signal?.throwIfAborted();
-          const preparedBuilds: import("./preparedWorkspaceTemplate.js").PreparedWorkspaceTemplate["builds"] =
-            [];
-          const vcs = new WorkspaceVcs({
-            workspaceId,
-            initialContentState: stateHash,
-            workspaceRoot: sourcePath,
-            blobsDir,
-            contextProjectionsRoot: path.join(statePath, "contexts"),
-            buildSourcesRoot: path.join(statePath, "build-sources"),
-            refs: createProtectedRefStore({
-              statePath: path.join(statePath, "refs"),
-              gate: async () => {
-                throw new Error("A release producer cannot publish semantic state");
-              },
+          contextProjectionsRoot: path.join(statePath, "contexts"),
+          buildSourcesRoot: path.join(statePath, "build-sources"),
+          refs: createProtectedRefStore({
+            statePath: path.join(statePath, "refs"),
+            gate: async () => {
+              throw new Error("A release producer cannot publish semantic state");
+            },
+          }),
+        });
+        const native = await startNativeWorkspaceRuntime({
+          workspaceId,
+          statePath,
+          sourceRoot: path.join(statePath, "build-sources"),
+          scratchRoot: path.join(statePath, "scratch"),
+          buildsRoot: path.join(statePath, "builds"),
+          appRoot: input.appRoot,
+        });
+        let builds: Awaited<ReturnType<typeof initBuildSystemV2>> | undefined;
+        let retirement: ReturnType<typeof native.stop> | undefined;
+        const retireNative = () => (retirement ??= native.stop());
+        const retireExecutor = async () => {
+          const stopped = await retireNative();
+          if (!stopped.launcherExited) {
+            throw Object.assign(new Error("Template preparation still owns a native executor"), {
+              code: "EOWNERSHIP",
+            });
+          }
+        };
+        // Cancellation belongs to the requests. The process-owned shared
+        // flight may retain this role's store, workers, and native executor
+        // after its last role borrower has withdrawn.
+        roleRetirements.push(() =>
+          runOwnedCleanupSteps(
+            [() => builds?.shutdown(), retireExecutor],
+            "Template preparation resource retirement failed"
+          )
+        );
+        let operationFailure: unknown;
+        let operationFailed = false;
+        try {
+          builds = await initBuildSystemV2(sourcePath, vcs, {
+            processOwner,
+            stateRoot: statePath,
+            storeRoots: resolveBuildStoreRoots({
+              stateRoot: statePath,
+              centralDataRoot,
+              sharedDerivedRoot,
             }),
+            releaseBuildRoot: path.join(
+              workspaceReleaseResourceRoot(input.appRoot),
+              "userland-builds"
+            ),
+            signal: input.signal,
+            dependencyWorkspaceRoot: sourcePath,
+            dependencyFingerprint,
+            runNativeJob: (job) => native.runJob(job),
+            admitNativeDependencies: (deps) => native.admitDependencies(deps),
           });
-          const native = await startNativeWorkspaceRuntime({
-            workspaceId,
-            statePath,
-            sourceRoot: path.join(statePath, "build-sources"),
-            scratchRoot: path.join(statePath, "scratch"),
-            buildsRoot: path.join(statePath, "builds"),
-            appRoot: input.appRoot,
-          });
-          let builds: Awaited<ReturnType<typeof initBuildSystemV2>> | undefined;
-          let retirement: ReturnType<typeof native.stop> | undefined;
-          const retireNative = () => (retirement ??= native.stop());
-          const retireExecutor = async () => {
-            const stopped = await retireNative();
-            if (!stopped.launcherExited) {
-              throw Object.assign(new Error("Template preparation still owns a native executor"), {
-                code: "EOWNERSHIP",
-              });
-            }
-          };
-          // Cancellation belongs to the requests. The process-owned shared
-          // flight may retain this role's store, workers, and native executor
-          // after its last role borrower has withdrawn.
-          roleRetirements.push(() =>
-            runOwnedCleanupSteps(
-              [() => builds?.shutdown(), retireExecutor],
-              "Template preparation resource retirement failed"
+          const preparedAt = performance.now();
+          console.log(`[workspace-release] Preparing runtimes for ${role}`);
+          const owner = builds;
+          const runtimeBuilds = await processOwner.withWorkers(() =>
+            prepareWorkspaceRuntimeBuilds(
+              owner.getGraph().allNodes(),
+              (source) => owner.getStoredBuild(source, stateHash, { priority: "speculative" }),
+              (binding) =>
+                exportReleaseBuild(
+                  path.join(statePath, "builds", binding.buildKey),
+                  path.join(input.output, "userland-builds", binding.buildKey),
+                  binding.buildKey
+                ),
+              input.signal,
+              (event) => {
+                if (event.type === "planned") {
+                  plannedRoles += 1;
+                  plannedRuntimes += event.count;
+                } else if (event.type === "started") {
+                  console.log(`[workspace-release] Runtime ${role}/${event.source}: queued`);
+                } else if (event.type === "completed") {
+                  console.log(
+                    `[workspace-release] Runtime ${role}/${event.source}: completed in ${Math.round(event.durationMs)}ms`
+                  );
+                  input.onProgress?.({
+                    phase: "runtimes",
+                    done: ++completedRuntimes,
+                    total: plannedRoles === roles.length ? plannedRuntimes : null,
+                    item: `${role}/${event.source}`,
+                  });
+                } else {
+                  const detail =
+                    event.error instanceof Error ? event.error.message : String(event.error);
+                  console.error(
+                    `[workspace-release] Runtime ${role}/${event.source}: failed during ${event.phase}: ${detail}`
+                  );
+                }
+              }
             )
           );
-          let operationFailure: unknown;
-          let operationFailed = false;
-          try {
-            builds = await initBuildSystemV2(sourcePath, vcs, {
-              processOwner,
-              stateRoot: statePath,
-              storeRoots: resolveBuildStoreRoots({
-                stateRoot: statePath,
-                centralDataRoot,
-                sharedDerivedRoot,
-              }),
-              releaseBuildRoot: path.join(
-                workspaceReleaseResourceRoot(input.appRoot),
-                "userland-builds"
-              ),
-              signal: input.signal,
-              dependencyWorkspaceRoot: sourcePath,
-              dependencyFingerprint,
-              runNativeJob: (job) => native.runJob(job),
-              admitNativeDependencies: (deps) => native.admitDependencies(deps),
+          for (const { source, binding } of runtimeBuilds) {
+            releaseBuilds.push({
+              workspace: role,
+              source,
+              buildKey: binding.buildKey,
+              builtAt: binding.metadata.builtAt,
             });
-            const preparedAt = performance.now();
-            console.log(`[workspace-release] Preparing runtimes for ${role}`);
-            const owner = builds;
-            const runtimeBuilds = await processOwner.withWorkers(() =>
-              prepareWorkspaceRuntimeBuilds(
-                owner.getGraph().allNodes(),
-                (source) => owner.getStoredBuild(source, stateHash, { priority: "speculative" }),
-                (binding) =>
-                  exportReleaseBuild(
-                    path.join(statePath, "builds", binding.buildKey),
-                    path.join(input.output, "userland-builds", binding.buildKey),
-                    binding.buildKey
-                  ),
-                input.signal,
-                (event) => {
-                  if (event.type === "planned") {
-                    plannedRoles += 1;
-                    plannedRuntimes += event.count;
-                  } else if (event.type === "started") {
-                    console.log(`[workspace-release] Runtime ${role}/${event.source}: queued`);
-                  } else if (event.type === "completed") {
-                    console.log(
-                      `[workspace-release] Runtime ${role}/${event.source}: completed in ${Math.round(event.durationMs)}ms`
-                    );
-                    input.onProgress?.({
-                      phase: "runtimes",
-                      done: ++completedRuntimes,
-                      total: plannedRoles === roles.length ? plannedRuntimes : null,
-                      item: `${role}/${event.source}`,
-                    });
-                  } else {
-                    const detail =
-                      event.error instanceof Error ? event.error.message : String(event.error);
-                    console.error(
-                      `[workspace-release] Runtime ${role}/${event.source}: failed during ${event.phase}: ${detail}`
-                    );
-                  }
-                }
-              )
-            );
-            for (const { source, binding } of runtimeBuilds) {
-              releaseBuilds.push({
-                workspace: role,
-                source,
-                buildKey: binding.buildKey,
-                builtAt: binding.metadata.builtAt,
-              });
-              preparedBuilds.push({
-                source,
-                buildKey: binding.buildKey,
-                effectiveVersion: binding.metadata.ev,
-              });
-            }
-            console.log(
-              `[workspace-release] Prepared ${role}: ${runtimeBuilds.length} runtimes in ${Math.round(performance.now() - preparedAt)}ms`
-            );
-          } catch (error) {
-            operationFailure = error;
-            operationFailed = true;
+            preparedBuilds.push({
+              source,
+              buildKey: binding.buildKey,
+              effectiveVersion: binding.metadata.ev,
+            });
           }
-          if (operationFailed) throw operationFailure;
-          record.builds = preparedBuilds;
-          const recordPath = path.join(directory, "template.json");
-          fs.writeFileSync(`${recordPath}.publishing`, JSON.stringify(record));
-          fs.renameSync(`${recordPath}.publishing`, recordPath);
+          console.log(
+            `[workspace-release] Prepared ${role}: ${runtimeBuilds.length} runtimes in ${Math.round(performance.now() - preparedAt)}ms`
+          );
+        } catch (error) {
+          operationFailure = error;
+          operationFailed = true;
         }
-      )
+        if (operationFailed) throw operationFailure;
+        record.builds = preparedBuilds;
+        const recordPath = path.join(directory, "template.json");
+        fs.writeFileSync(`${recordPath}.publishing`, JSON.stringify(record));
+        fs.renameSync(`${recordPath}.publishing`, recordPath);
+      }
     );
-    const roleFailures = roleOutcomes.flatMap((outcome) =>
-      outcome.status === "rejected" ? [outcome.reason] : []
-    );
-    if (roleFailures.length === 1) throw roleFailures[0];
-    if (roleFailures.length > 1) {
-      throw new AggregateError(roleFailures, "Workspace runtime preparation failed", {
-        cause: roleFailures[0],
-      });
-    }
     releaseBuilds.sort(
       (a, b) => a.workspace.localeCompare(b.workspace) || a.source.localeCompare(b.source)
     );
@@ -790,7 +783,7 @@ async function produceWorkspaceTemplates(
     // it with an unrelated shutdown failure while retiring the same work.
     () => processOwner.shutdown(input.signal?.aborted ? input.signal.reason : undefined),
     async () => {
-      // The three role lifetimes are independent once their shared owner joins.
+      // Selected template lifetimes are independent once their shared owner joins.
       // Admit all cleanup, and retain every failure rather than short-circuiting.
       const outcomes = await Promise.allSettled(roleRetirements.map((retire) => retire()));
       const failures = outcomes.flatMap((outcome) =>
