@@ -60,6 +60,21 @@ it.skipIf(!process.env["VIBESTUDIO_TEST_NATLANG_COMPILER_ENTRY"])(
       expect(heap.argv).toContain("--max-old-space-size=3072");
       expect(heap.heap).toBeGreaterThanOrEqual(3072*1024*1024);
       expect(heap.heap).toBeLessThan(3200*1024*1024);
+      const previousHeap = process.env["VIBESTUDIO_COMPILER_HEAP_MIB"];
+      try {
+        process.env["VIBESTUDIO_COMPILER_HEAP_MIB"] = "0";
+        const automatic = await runtime.compileProduct({
+          bundle: 'module.exports.compileVirtualProjectProduct=()=>({heap:require("node:v8").getHeapStatistics().heap_size_limit,argv:process.execArgv});',
+          format: "cjs",
+          input: { uncachedOptOutWitness: true },
+        }) as {heap:number;argv:string[]};
+        expect(automatic.argv).toEqual([]);
+        expect(automatic.heap).toBeGreaterThan(0);
+        console.info(JSON.stringify({schema:"native.compiler-heap-witness/1",explicit:heap,automatic}));
+      } finally {
+        if (previousHeap === undefined) delete process.env["VIBESTUDIO_COMPILER_HEAP_MIB"];
+        else process.env["VIBESTUDIO_COMPILER_HEAP_MIB"] = previousHeap;
+      }
       a.build.diagnostics.push("poison");
       expect(b.build.diagnostics).toEqual([]);
       await expect(
