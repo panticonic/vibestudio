@@ -56,17 +56,6 @@ function makeStubFolderManager(root: string): ContextFolderManager {
       mkdirSync(scratch, { recursive: true });
       return scratch;
     },
-    async ensureContextFolder(contextId: string): Promise<string> {
-      const p = path.join(root, contextId);
-      mkdirSync(p, { recursive: true });
-      return p;
-    },
-    getContextFolderState(contextId: string) {
-      const p = path.join(root, contextId);
-      return existsSync(p)
-        ? { status: "ready" as const, path: p }
-        : { status: "missing" as const, path: p };
-    },
     getContextRoot(contextId: string): string | null {
       const p = path.join(root, contextId);
       return existsSync(p) ? p : null;
@@ -544,6 +533,53 @@ describe("FsService", () => {
   afterEach(async () => {
     await service.stop();
     rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  it("binds reads and handles to the selected copy of one logical context", async () => {
+    const contextId = "ctx-two-copies";
+    const caller = makeAgentCtx("shared-runtime", contextId);
+    const task = (taskId: number): ServiceContext => ({
+      ...caller,
+      caller: {
+        ...caller.caller,
+        nativeInvocation: {
+          owner: { runtimeId: caller.caller.runtime.id, authoritySessionId: "session" },
+          task: { conversationId: 1, taskId },
+          operation: { kind: "tool", assistantEntryId: 1, callId: "read" },
+        },
+      },
+    });
+    const roots = [1, 2].map((id) => path.join(tmpRoot, `copy-${id}`));
+    for (const [index, root] of roots.entries()) {
+      const repo = path.join(root, contextId, "skills", "system-testing");
+      mkdirSync(repo, { recursive: true });
+      writeFileSync(path.join(repo, "SKILL.md"), `from copy ${index + 1}`);
+    }
+    const scratch = path.join(tmpRoot, `${contextId}-scratch`);
+    mkdirSync(scratch, { recursive: true });
+    writeFileSync(path.join(scratch, "value.txt"), "private handle");
+    const bound = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+      disk: new FsDisk(bundledRipgrepPath),
+      contextAuthority: {
+        kind: "semantic",
+        async bind(ctx, resolved) {
+          expect(resolved).toBe(contextId);
+          const id = ctx.caller.nativeInvocation?.task.taskId;
+          const root = roots[(id ?? 0) - 1];
+          if (!root) throw new Error("Missing admitted task");
+          return { sourceRoot: path.join(root, contextId), bridge: makeProjectedReadBridge(root) };
+        },
+      },
+    });
+    try {
+      const read = (id: number) => bound.handleCall(task(id), "readFile", ["/skills/system-testing/SKILL.md", "utf8"]);
+      await expect(Promise.all([read(1), read(2)])).resolves.toEqual(["from copy 1", "from copy 2"]);
+      const opened = (await bound.handleCall(task(1), "open", ["value.txt", "r"])) as { handleId: number };
+      await expect(bound.handleCall(task(2), "handleStat", [opened.handleId])).rejects.toThrow("does not belong");
+      await expect(bound.handleCall(task(1), "handleStat", [opened.handleId])).resolves.toMatchObject({ isFile: true });
+    } finally {
+      await bound.stop();
+    }
   });
 
   it("reports scope and directory-operation phases without exposing path contents", async () => {
@@ -1093,7 +1129,7 @@ describe("FsService", () => {
       });
     });
 
-    it("fails fast for chained extension fs calls before context materialization", async () => {
+    it("resolves native roots without requiring or creating a source projection", async () => {
       const ctx = makeExtensionCtx("@workspace-extensions/file-tools");
       ctx.chainCaller = {
         callerId: "do:workers/agent-worker:AiChatWorker:agent-3",
@@ -1103,9 +1139,11 @@ describe("FsService", () => {
       };
       registerContext(ctx.chainCaller.callerId, "do", "ctx-not-ready");
 
-      await expect(service.handleCall(ctx, "realpath", ["/"])).rejects.toMatchObject({
-        code: "ENOTREADY",
+      await expect(service.handleCall(ctx, "nativeRoots", [])).resolves.toEqual({
+        source: path.join(tmpRoot, "ctx-not-ready"),
+        scratch: path.join(tmpRoot, "ctx-not-ready-scratch"),
       });
+      expect(existsSync(path.join(tmpRoot, "ctx-not-ready"))).toBe(false);
     });
   });
 
@@ -1604,6 +1642,29 @@ describe("FsService", () => {
   // ─── Semantic VCS reroute ─────────────────────────────────────────────────
 
   describe("exact context projection (demand + loud assertion)", () => {
+    it("renames a tracked file by exact path without listing other repositories", async () => {
+      const { bridge, files, moveCalls } = makeCanonicalSemanticBridge(["packages/one", "packages/two"]);
+      const contextId = "ctx-rename-file";
+      files.set(`${contextId}/packages/one/source.ts`, { kind: "text", text: "private edited content" });
+      files.set(`${contextId}/packages/two/unrelated.ts`, { kind: "text", text: "unrelated" });
+      const listFiles = vi.spyOn(bridge, "listFiles");
+      const service = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath), contextAuthority: { kind: "semantic", bridge },
+      });
+      const caller = makeWorkerCtx("do:src:class:rename-file");
+      registerContext(caller.caller.runtime.id, "do", contextId);
+      try {
+        await service.handleCall(caller, "rename", ["/packages/one/source.ts", "/packages/one/dest.ts"]);
+        expect(listFiles).toHaveBeenCalledTimes(1);
+        expect(listFiles).toHaveBeenCalledWith(expect.objectContaining({
+          repositoryId: "repository:packages/one", prefix: "source.ts",
+        }));
+        expect(moveCalls[0]?.moves).toMatchObject([{ destinationPath: "dest.ts" }]);
+      } finally {
+        await service.stop();
+      }
+    });
+
     it("reads a large managed corpus in bounded exact-state batches without disk projection", async () => {
       const repositories = Array.from({ length: 503 }, (_, i) => `skills/skill${i}`);
       const { bridge, files } = makeCanonicalSemanticBridge(repositories);
@@ -1612,9 +1673,6 @@ describe("FsService", () => {
       const batches = vi.spyOn(bridge, "readFiles");
       const folderManager = makeStubFolderManager(tmpRoot);
       const scratch = vi.spyOn(folderManager, "ensureContextScratch");
-      const projection = vi
-        .spyOn(folderManager, "ensureContextFolder")
-        .mockRejectedValue(new Error("Disk projection must not be required"));
       const svc = new FsService(folderManager, entityCache, {
         disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
@@ -1625,7 +1683,6 @@ describe("FsService", () => {
         { path: "/skills/skill0/SKILL.md", content: "first" },
         { path: "/skills/skill502/SKILL.md", content: "last" },
       ]);
-      expect(projection).not.toHaveBeenCalled();
       expect(scratch).not.toHaveBeenCalled();
       expect(batches.mock.calls.map(([input]) => input.files.length)).toEqual([500, 3]);
       expect(
@@ -1670,7 +1727,7 @@ describe("FsService", () => {
       const listings = vi.spyOn(bridge, "listFiles");
       const folders = makeStubFolderManager(tmpRoot);
       const project = vi
-        .spyOn(folders, "ensureContextFolder")
+        .spyOn(folders, "ensureContextScratch")
         .mockRejectedValue(new Error("unneeded disk"));
       const lineage = vi.fn(async (_ctx: ServiceContext, _inputs: readonly unknown[]) => {});
       const service = new FsService(folders, entityCache, {
@@ -2010,7 +2067,7 @@ describe("FsService", () => {
       expect(calls).toEqual([{ contextId: "ctx-glob-demand", repos: ["panels/foo"] }]);
     });
 
-    function makeChainedExtensionCtx(contextId: string, ready = true): ServiceContext {
+    function makeChainedExtensionCtx(contextId: string): ServiceContext {
       const ctx = makeExtensionCtx("@workspace-extensions/file-tools");
       ctx.chainCaller = {
         callerId: `do:workers/agent-worker:AiChatWorker:${contextId}`,
@@ -2019,47 +2076,75 @@ describe("FsService", () => {
         effectiveVersion: "ev-1",
       };
       registerContext(ctx.chainCaller.callerId, "do", contextId);
-      if (ready) mkdirSync(path.join(tmpRoot, contextId), { recursive: true });
       return ctx;
     }
 
-    it("ensureMaterialized RPC declares a narrow scope and returns the source root", async () => {
+    it("ensureMaterialized RPC bootstraps an absent projection with a narrow scope", async () => {
       const { bridge, calls } = makeMaterializeBridge({ materialize: true });
+      const materialize = bridge.ensureMaterialized;
+      bridge.ensureMaterialized = async (contextId, repos) => {
+        await materialize(contextId, repos);
+        mkdirSync(path.join(tmpRoot, contextId), { recursive: true });
+      };
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
         disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeChainedExtensionCtx("ctx-s4");
+      expect(existsSync(path.join(tmpRoot, "ctx-s4"))).toBe(false);
 
       await expect(
         svc.handleCall(ctx, "ensureMaterialized", ["panels/chat/index.tsx"])
       ).resolves.toBe(path.join(tmpRoot, "ctx-s4"));
 
       expect(calls).toEqual([{ contextId: "ctx-s4", repos: ["panels/chat"] }]);
+      expect(existsSync(path.join(tmpRoot, "ctx-s4"))).toBe(true);
     });
 
-    it("lets a chained extension explicitly materialize a deferred context", async () => {
-      const { bridge, calls } = makeMaterializeBridge({ materialize: true });
-      const ensureProjection = bridge.ensureMaterialized;
-      bridge.ensureMaterialized = async (contextId, repos) => {
-        mkdirSync(path.join(tmpRoot, contextId), { recursive: true });
-        await ensureProjection(contextId, repos);
+    it("propagates the projection owner's failure to a chained extension", async () => {
+      const { bridge } = makeMaterializeBridge({ materialize: true });
+      const failure = new Error("semantic projection failed");
+      bridge.ensureMaterialized = async () => {
+        throw failure;
       };
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
         disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
-      const ctx = makeChainedExtensionCtx("ctx-deferred-native-suite", false);
-      await expect(svc.handleCall(ctx, "nativeRoots", [])).rejects.toMatchObject({
-        code: "ENOTREADY",
+      const ctx = makeChainedExtensionCtx("ctx-projection-failure");
+
+      await expect(svc.handleCall(ctx, "ensureMaterialized", ["panels/chat"])).rejects.toBe(
+        failure
+      );
+      expect(existsSync(path.join(tmpRoot, "ctx-projection-failure"))).toBe(false);
+    });
+
+    it("materializes a chained extension's bound participant copy on demand", async () => {
+      const { bridge, calls } = makeMaterializeBridge({ materialize: true });
+      const contextId = "ctx-deferred-native-suite";
+      const sourceRoot = path.join(tmpRoot, "deferred-participant-copy");
+      const ensureProjection = bridge.ensureMaterialized;
+      bridge.ensureMaterialized = async (id, repos) => {
+        await ensureProjection(id, repos);
+        mkdirSync(sourceRoot, { recursive: true });
+      };
+      const bind = vi.fn(async () => ({ bridge, sourceRoot }));
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
+        contextAuthority: { kind: "semantic", bind },
       });
+      const ctx = makeChainedExtensionCtx(contextId);
+      await expect(svc.handleCall(ctx, "nativeRoots", [])).resolves.toMatchObject({
+        source: sourceRoot,
+      });
+      expect(existsSync(sourceRoot)).toBe(false);
       await expect(
         svc.handleCall(ctx, "ensureMaterialized", ["packages/lib/index.test.ts"])
-      ).resolves.toBe(path.join(tmpRoot, "ctx-deferred-native-suite"));
-      expect(calls).toEqual([{ contextId: "ctx-deferred-native-suite", repos: ["packages/lib"] }]);
-      await expect(svc.handleCall(ctx, "nativeRoots", [])).resolves.toMatchObject({
-        source: path.join(tmpRoot, "ctx-deferred-native-suite"),
-      });
+      ).resolves.toBe(sourceRoot);
+      expect(bind).toHaveBeenCalledWith(ctx, contextId);
+      expect(calls).toEqual([{ contextId, repos: ["packages/lib"] }]);
+      expect(existsSync(sourceRoot)).toBe(true);
+      expect(existsSync(path.join(tmpRoot, contextId))).toBe(false);
     });
 
     it("ensureMaterialized RPC ignores direct-disk scratch paths", async () => {

@@ -984,7 +984,7 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
       VIBESTUDIO_REQUIRE_CLIENTS_READY: "desktop,android",
       VIBESTUDIO_WORKSPACE_DIR: "/somewhere",
       VIBESTUDIO_ADMIN_TOKEN: "hub-operator-token",
-      VIBESTUDIO_INTERNAL_DO_PROGRAMS_PATH: "/hub/runtime/internal-do-programs.json",
+      VIBESTUDIO_RUNTIME_APP_PATH: "/hub/runtime/runtime-app.json",
     } as NodeJS.ProcessEnv,
     appRoot: "/app",
     workspaceName: "base",
@@ -1038,8 +1038,8 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
     expect(env["VIBESTUDIO_WORKSPACE_ID"]).toBe("ws_base");
     expect(env["VIBESTUDIO_GATEWAY_PORT"]).toBeUndefined();
     expect(env["VIBESTUDIO_WORKSPACE_DIR"]).toBeUndefined();
-    expect(env["VIBESTUDIO_INTERNAL_DO_PROGRAMS_PATH"]).toBe(
-      "/hub/runtime/internal-do-programs.json"
+    expect(env["VIBESTUDIO_RUNTIME_APP_PATH"]).toBe(
+      "/hub/runtime/runtime-app.json"
     );
     expect(env["PATH"]).toBe("/usr/bin");
   });
@@ -1128,7 +1128,10 @@ describe("historical workspace runtime environment", () => {
       fs.writeFileSync(binary, "retained tool");
       const env: NodeJS.ProcessEnv = {
         VIBESTUDIO_HOST_ARTIFACT_ROOT: "/new/dist",
-        VIBESTUDIO_INTERNAL_DO_PROGRAMS_PATH: "/new/hub-bundle",
+        VIBESTUDIO_RUNTIME_APP_PATH: "/new/hub-bundle",
+        VIBESTUDIO_WORKSPACE_RELEASE_ROOT: "/new/prepared-workspaces",
+        VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES: "new template pins",
+        VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE: "new initial template pin",
         ESBUILD_BINARY_PATH: "/new/esbuild",
       };
       applyWorkspaceHostRuntimeEnv(
@@ -1143,7 +1146,10 @@ describe("historical workspace runtime environment", () => {
         "2.0.0"
       );
       expect(env["VIBESTUDIO_HOST_ARTIFACT_ROOT"]).toBe(path.join(root, "dist"));
-      expect(env["VIBESTUDIO_INTERNAL_DO_PROGRAMS_PATH"]).toBeUndefined();
+      expect(env["VIBESTUDIO_RUNTIME_APP_PATH"]).toBeUndefined();
+      expect(env["VIBESTUDIO_WORKSPACE_RELEASE_ROOT"]).toBeUndefined();
+      expect(env["VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES"]).toBeUndefined();
+      expect(env["VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE"]).toBeUndefined();
       expect(env["ESBUILD_BINARY_PATH"]).toBe(binary);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
@@ -1184,7 +1190,10 @@ describe("historical workspace runtime environment", () => {
   });
 
   it("preserves the pinned artifact generation when launching a live TypeScript child", () => {
-    const env = { VIBESTUDIO_HOST_ARTIFACT_ROOT: "/host/generations/exact-source-build" };
+    const env = {
+      VIBESTUDIO_HOST_ARTIFACT_ROOT: "/host/generations/exact-source-build",
+      VIBESTUDIO_WORKSPACE_RELEASE_ROOT: "/host/prepared-workspaces",
+    };
     applyWorkspaceHostRuntimeEnv(
       env,
       {
@@ -1197,12 +1206,13 @@ describe("historical workspace runtime environment", () => {
       "2.0.0"
     );
     expect(env.VIBESTUDIO_HOST_ARTIFACT_ROOT).toBe("/host/generations/exact-source-build");
+    expect(env.VIBESTUDIO_WORKSPACE_RELEASE_ROOT).toBe("/host/prepared-workspaces");
   });
 
   it("preserves the current host runtime mode and binds its exact app version", () => {
     const env: NodeJS.ProcessEnv = {
       ELECTRON_RUN_AS_NODE: "caller-owned",
-      VIBESTUDIO_INTERNAL_DO_PROGRAMS_PATH: "/current/hub-bundle",
+      VIBESTUDIO_RUNTIME_APP_PATH: "/current/hub-bundle",
       ESBUILD_BINARY_PATH: "/current/esbuild",
     };
     applyWorkspaceHostRuntimeEnv(
@@ -1217,7 +1227,7 @@ describe("historical workspace runtime environment", () => {
       "2.0.0"
     );
     expect(env["ELECTRON_RUN_AS_NODE"]).toBe("caller-owned");
-    expect(env["VIBESTUDIO_INTERNAL_DO_PROGRAMS_PATH"]).toBe("/current/hub-bundle");
+    expect(env["VIBESTUDIO_RUNTIME_APP_PATH"]).toBe("/current/hub-bundle");
     expect(env["ESBUILD_BINARY_PATH"]).toBe("/current/esbuild");
   });
 });

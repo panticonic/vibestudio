@@ -1,4 +1,4 @@
-import type { ExactRepositorySnapshotPlan } from "../vcsHost/workspaceVcs.js";
+import type { ExactRepositorySnapshotPlan, ParticipantRepositoryAccess } from "../vcsHost/workspaceVcs.js";
 import {
   NativeDevelopmentExecutor,
   ReviewedNativeDevelopmentTools,
@@ -14,7 +14,7 @@ export async function createNativeDevelopmentController(input: {
   planSource(args: {
     developmentContextId: string;
     repositoryId: string;
-  }): Promise<ExactRepositorySnapshotPlan>;
+  }, access: ParticipantRepositoryAccess): Promise<ExactRepositorySnapshotPlan>;
   materializeSource(plan: ExactRepositorySnapshotPlan, destination: string): Promise<void>;
 }): Promise<NativeDevelopmentExecutor<ExactRepositorySnapshotPlan>> {
   return new NativeDevelopmentExecutor({

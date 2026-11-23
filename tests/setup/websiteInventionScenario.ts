@@ -2,9 +2,8 @@ import { expect, test, type Page } from "@playwright/test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as http from "node:http";
-import { buildWebsiteAssets } from "../../services/webhook-relay/build-website-assets.mjs";
-import { runWithOwnedCleanup } from "../../scripts/lib/owned-cleanup.mjs";
-import { retireUserlandProjectionProcess } from "../../scripts/lib/userland-projection-process-owner.js";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 const { handleApexLanding } = createRequire(import.meta.url)(
@@ -32,6 +31,7 @@ import type { RpcCaller } from "@vibestudio/rpc";
 
 interface WebsiteInventionFixture {
   app: TestApp;
+  assets: string;
   environment: Record<string, string>;
 }
 
@@ -50,9 +50,22 @@ export const websiteInventionTest = test.extend<WebsiteInventionFixtures>({
   websiteInventionEnvironment: [{}, { option: true }],
   websiteInvention: [
     async ({ websiteInventionEnvironment }, use) => {
+      const testRoot = process.env["VIBESTUDIO_E2E_TEMP_ROOT"];
+      if (!testRoot) throw new Error("The website acceptance requires the owned E2E temporary root");
+      const assets = path.join(testRoot, "website-assets");
+      await promisify(execFile)(
+        process.execPath,
+        [
+          "--max-old-space-size=4300",
+          "services/webhook-relay/build-website-assets.mjs",
+          "--out-dir",
+          assets,
+        ],
+        { timeout: 180_000, maxBuffer: 1024 * 1024 }
+      );
       const app = await launchManagedServerApp(websiteInventionEnvironment);
       try {
-        await use({ app, environment: websiteInventionEnvironment });
+        await use({ app, assets, environment: websiteInventionEnvironment });
       } finally {
         await app.cleanup();
       }
@@ -220,16 +233,14 @@ async function captureAgentRoutingEvidence(page: Page, app: TestApp, workspaceId
 
 /** Shared native acceptance flow. By default inference uses the configured provider;
  * smoke coverage supplies host-only scripted inference through the environment. */
-export async function websiteInventionScenario({ app, environment }: WebsiteInventionFixture) {
+export async function websiteInventionScenario({
+  app,
+  assets,
+  environment,
+}: WebsiteInventionFixture) {
   test.setTimeout(1_200_000);
   const expectsDeterministicModel = typeof environment["VIBESTUDIO_TEST_MODEL_SCRIPT"] === "string";
   test.skip(!hasOwnedX11Display(), "Requires the E2E-owned native display for approval input");
-  const assets = path.join(process.env["VIBESTUDIO_E2E_TEMP_ROOT"]!, "website-assets");
-  await runWithOwnedCleanup(
-    () => buildWebsiteAssets(assets),
-    () => retireUserlandProjectionProcess(),
-    "Website invention fixture projection cleanup failed"
-  );
   // Freeze this run's built assets: another checkout build may replace dist.
   const assetNames = [
     "/runtime.js",

@@ -620,6 +620,23 @@ describe("PanelManager", () => {
     await expect(manager.create("panels/chat", { isRoot: true })).rejects.toBe(failure);
   });
 
+  it("decorates an unpinned panel using the metadata reader's default source", async () => {
+    const registry = new PanelRegistry({ workspaceId: "workspace-test" });
+    const { deps } = makeManagerDeps("/unused");
+    const creator = new PanelManager({ registry, ...deps, allowMissingManifests: true });
+    const created = await creator.create("panels/chat", { isRoot: true, addAsRoot: true });
+    const getPanelMetadata = vi.fn(async (_source: string, ref?: string) => {
+      if (ref) throw new Error("The panel owns a different working copy");
+      return { source: "panels/chat", title: "Agentic Chat", icon: "./icon.svg" };
+    });
+    const reader = new PanelManager({ registry, ...deps, panelMetadata: { getPanelMetadata } });
+
+    await reader.getPanel(created.panelId);
+
+    expect(getPanelMetadata).toHaveBeenCalledWith("panels/chat", undefined);
+    await vi.waitFor(() => expect(registry.getPanel(created.panelId)?.icon).toBe("./icon.svg"));
+  });
+
   it("hydrates shared exact-reference icons without blocking reads or decorating a navigated slot", async () => {
     const registry = new PanelRegistry({ workspaceId: "workspace-test" });
     const { deps } = makeManagerDeps("/unused");

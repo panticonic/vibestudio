@@ -455,7 +455,7 @@ Targets are `npm-server-preflight`, `linux-installer-x64`,
 reusable workflow as CI and prepares `quality-inputs` with the selected
 `base-ref`. `application-candidate-mac` also reruns the Darwin native
 input, production-host build, macOS application candidate, installed-app
-acceptance on macos-14 and macos-26, installer packaging, and installed release
+acceptance on macos-15 and macos-26, installer packaging, and installed release
 acceptance. It calls the same reusable installer and release-acceptance
 workflows as protected CI. That target requires `release-tag` set to the exact
 `vX.Y.Z` version in `package.json`, so

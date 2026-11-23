@@ -4,6 +4,7 @@ import type { ContextCloneResult } from "@vibestudio/shared/runtime/contextEdges
  */
 
 import { z } from "zod";
+import { ByteArraySchema } from "@vibestudio/shared/binary";
 import { JsonObjectSchema } from "@vibestudio/shared/wireValues";
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import type {
@@ -572,6 +573,13 @@ export const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
         .describe(
           "Channel this runtime entity itself serves as an agent. The host derives the canonical entity and context coordinates; callers never supply them."
         ),
+      forkStorage: z
+        .object({ at: z.string().min(1).max(200) })
+        .strict()
+        .optional()
+        .describe(
+          "Start from a fork of the calling entity's own storage at this commit of its history. The entity is of the caller's class; its local state starts empty."
+        ),
     })
     .strict(),
   z
@@ -822,6 +830,25 @@ export const runtimeMethods = defineServiceMethods({
       family: "runtime.test-fault",
       rationale:
         "Hidden system-test transport admitted only through a sealed code-bearing session; the host additionally verifies the blessed harness incarnation and exact target entity.",
+    },
+    agentFacing: false,
+    access: { sensitivity: "write" },
+  },
+  forwardHistoryPacket: {
+    description: "Forward an exact native history packet for an active host-approved workspace transfer.",
+    args: z.tuple([z.object({
+      transferId: z.string().uuid(),
+      bytes: ByteArraySchema,
+    }).strict()]),
+    returns: ByteArraySchema,
+    authority: { principals: ["code"] },
+    website: { kind: "closed", reason: "Only the host-selected workspace history cell can send packets." },
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "runtime.history",
+      rationale: "One transfer, sender and remote destination are verified by the host.",
     },
     agentFacing: false,
     access: { sensitivity: "write" },
@@ -1154,6 +1181,12 @@ export const runtimeMethods = defineServiceMethods({
           .optional()
           .describe(
             "Clone the LIFECYCLE subtree of the source context (subagent worlds), re-parented to the cloned owner. Lineage (fork) edges are never followed. Cloning a context that HAS lifecycle children without this flag is an error."
+          ),
+        storageAt: z
+          .record(z.string(), z.string())
+          .optional()
+          .describe(
+            "A Dolt-class entity's object is forked at this commit of its store instead of at its newest state: canonical entity id to commit hash. The ROOT context's entities only; an entity not named, or one whose class is not a Dolt class, is copied as of now."
           ),
         targetKey: z
           .string()
@@ -1745,7 +1778,7 @@ export const runtimeMethods = defineServiceMethods({
       rationale: "Read-only release history addressed by exact release identity.",
     },
     description:
-      "List retained versions for an exact release identity, including releases with no active process. For workspace apps, use the exact name from build.listUnits() as releaseId. runtime.supervision.list() returns live entity identities for process inspection; an empty live list does not prevent release-history lookup.",
+      "List retained versions for an exact installed extension or client release, including releases with no active process. Use the exact name from build.listUnits() as releaseId. Panel and worker source history is available through vcs.history. runtime.supervision.list() returns live entity identities for process inspection.",
     args: z.tuple([RuntimeSupervisionReleaseKeySchema]),
     returns: RuntimeSupervisionReleaseVersionsSchema,
     authority: RUNTIME_AGENT_READ_POLICY,

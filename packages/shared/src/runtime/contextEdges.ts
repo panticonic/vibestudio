@@ -51,7 +51,13 @@ export interface ContextCloneCompletion {
 
 /** Immutable definition owned by the root lineage reservation of one clone. */
 export interface ContextCloneDefinition {
-  request: { sourceContextId: string; include: string[] | null; recursive: boolean };
+  request: {
+    sourceContextId: string;
+    include: string[] | null;
+    recursive: boolean;
+    /** Dolt-class entities forked at a commit of their store (canonical entity id to commit). */
+    storageAt?: Record<string, string>;
+  };
   author: {
     runtimeId: string;
     runtimeKind: string;

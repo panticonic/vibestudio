@@ -1,6 +1,30 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { visibleAgentTurnState } from "./mobile-agent-turn-state.mjs";
+import { parseHTML } from "linkedom";
+import { readRenderedAgentReply, visibleAgentTurnState } from "./mobile-agent-turn-state.mjs";
+
+test("reads the reply beyond the setup card and excludes other authors", () => {
+  const { document } = parseHTML(`
+    <div data-part="message-list">
+      <div data-message-role="player"><div class="message-content">Help me get onboarded.</div></div>
+      <div class="inline-ui-frame">Explore workspaces</div>
+      <div data-message-role="agent" data-message-tier="primary">
+        <div class="message-content" data-message-id="reply">E2E model response: initial agent turn completed.</div>
+      </div>
+      <div data-message-role="agent" data-message-tier="secondary">
+        <div class="message-content" data-message-id="diagnostic">A separate activity</div>
+      </div>
+      <div class="typing-indicator">AI Chat typing</div>
+    </div>
+  `);
+  assert.deepEqual(readRenderedAgentReply(document), {
+    id: "reply",
+    reply: "E2E model response: initial agent turn completed.",
+    typing: true,
+  });
+  document.querySelector(".typing-indicator").remove();
+  assert.equal(readRenderedAgentReply(document).typing, false);
+});
 
 test("recognizes Android subscription setup even when accessibility omits agent attribution", () => {
   const state = visibleAgentTurnState([
@@ -16,7 +40,6 @@ test("recognizes Android subscription setup even when accessibility omits agent 
   ]);
 
   assert.equal(state.hasCredentialSetupPrompt, true);
-  assert.equal(state.hasFinalVisibleOutput, false);
 });
 
 test("keeps ordinary setup overview copy from looking like a credential failure", () => {
@@ -27,7 +50,6 @@ test("keeps ordinary setup overview copy from looking like a credential failure"
   ]);
 
   assert.equal(state.hasCredentialSetupPrompt, false);
-  assert.equal(state.hasFinalVisibleOutput, true);
 });
 
 test("requires a pending generation before classifying a provider choice as a blocker", () => {
@@ -53,5 +75,4 @@ test("retains the existing real-model credential prompt detection", () => {
   ]);
 
   assert.equal(state.hasCredentialSetupPrompt, true);
-  assert.equal(state.hasFinalVisibleOutput, false);
 });

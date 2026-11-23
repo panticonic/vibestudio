@@ -1,5 +1,6 @@
 export {
-  WorkspaceDO,
+  WorkspaceStateDO,
+  WORKSPACE_STATE_DOLT_LOCAL,
   type LifecycleKey,
   type LifecycleOp,
-} from "./WorkspaceDO.js";
+} from "./WorkspaceStateDO.js";

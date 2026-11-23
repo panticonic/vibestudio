@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { assertInternalDoProgramsPublication } from "./lib/internal-do-programs.mjs";
+import { assertRuntimeAppPublication } from "./lib/runtime-app.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -138,11 +138,13 @@ const contracts = [
     runtime: "bundled sql.js runtime",
     mustStartWithBytes: [0x00, 0x61, 0x73, 0x6d],
   },
-  ...OWNERSHIP_REAPER_FILES.map((filename) => ({
-    path: `dist/${filename}`,
-    runtime: "ownership reaper (plain file beside the host bundles)",
-    format: "esm",
-  })),
+  ...["dist", "dist/cli"].flatMap((directory) =>
+    OWNERSHIP_REAPER_FILES.map((filename) => ({
+      path: `${directory}/${filename}`,
+      runtime: "ownership reaper (plain file beside the host bundles)",
+      format: "esm",
+    }))
+  ),
   ...Object.values(SERVER_WORKER_ENTRIES.standalone).map((filename) => ({
     path: `dist/${filename}`,
     runtime: "standalone Node worker",
@@ -188,8 +190,8 @@ const contracts = [
     ],
   },
   {
-    path: "dist/internal-do-programs.json",
-    runtime: "workerd/browser Durable Object bundle",
+    path: "dist/runtime-app.json",
+    runtime: "celld runtime application bundle",
     format: "esm",
     forbidden: [
       {
@@ -382,9 +384,7 @@ for (const contract of contracts) {
   checkContract(contract);
 }
 
-assertInternalDoProgramsPublication(
-  JSON.parse(readArtifact("dist/internal-do-programs.json").toString("utf8"))
-);
+assertRuntimeAppPublication(JSON.parse(readArtifact("dist/runtime-app.json").toString("utf8")));
 
 for (const smoke of importSmokes) {
   await runImportSmoke(smoke);

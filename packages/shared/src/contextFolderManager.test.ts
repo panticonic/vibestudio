@@ -18,7 +18,7 @@ describe("ContextFolderManager", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  function manager(materialize?: (contextId: string) => Promise<{ dir: string }>) {
+  function manager() {
     return new ContextFolderManager({
       contextProjectionsRoot,
       contextScratchRoot: path.join(root, "scratch"),
@@ -30,34 +30,22 @@ describe("ContextFolderManager", () => {
           await fs.rm(path.join(root, "scratch", contextId), { recursive: true, force: true });
         },
       },
-      materialize:
-        materialize ??
-        (async (contextId) => {
-          const dir = path.join(contextProjectionsRoot, contextId);
-          await fs.mkdir(dir, { recursive: true });
-          await fs.writeFile(path.join(dir, "README.md"), "materialized");
-          return { dir };
-        }),
     });
   }
 
   it("resolves validated source addresses without creating a projection or scratch", async () => {
-    const materialize = vi.fn(async () => {
-      throw new Error("Unexpected materialization");
-    });
-    const cfm = manager(materialize);
+    const cfm = manager();
     expect(cfm.contextSourcePath("ctx-empty")).toBe(path.join(contextProjectionsRoot, "ctx-empty"));
     expect(cfm.getContextRoot("ctx-empty")).toBeNull();
-    expect(materialize).not.toHaveBeenCalled();
     expect(() => cfm.contextSourcePath("../escape")).toThrow(/Invalid context ID/);
   });
 
-  it("materializes a missing context folder and returns its path", async () => {
+  it("creates scratch without opening a source projection", async () => {
     const cfm = manager();
-    const dir = await cfm.ensureContextFolder("ctx-1");
-    expect(dir).toBe(path.join(contextProjectionsRoot, "ctx-1"));
-    await expect(fs.readFile(path.join(dir, "README.md"), "utf8")).resolves.toBe("materialized");
-    expect(cfm.getContextFolderState("ctx-1")).toEqual({ status: "ready", path: dir });
+    const scratch = await cfm.ensureContextScratch("ctx-1");
+    expect(scratch).toBe(path.join(root, "scratch", "ctx-1"));
+    await expect(fs.stat(scratch)).resolves.toBeDefined();
+    expect(cfm.getContextRoot("ctx-1")).toBeNull();
   });
 
   it("retains the original scratch failure without exposing it in the semantic message", async () => {
@@ -72,7 +60,6 @@ describe("ContextFolderManager", () => {
         },
         remove: async () => {},
       },
-      materialize: async () => ({ dir: contextProjectionsRoot }),
     });
     try {
       await expect(cfm.ensureContextScratch("ctx-1")).rejects.toMatchObject({
@@ -88,56 +75,22 @@ describe("ContextFolderManager", () => {
     }
   });
 
-  it("does not re-materialize an existing folder", async () => {
-    const materialize = vi.fn(async (contextId: string) => {
-      const dir = path.join(contextProjectionsRoot, contextId);
-      await fs.mkdir(dir, { recursive: true });
-      return { dir };
-    });
-    const cfm = manager(materialize);
-    await cfm.ensureContextFolder("ctx-1");
-    await cfm.ensureContextFolder("ctx-1");
-    expect(materialize).toHaveBeenCalledTimes(1);
-  });
-
-  it("dedupes concurrent ensure calls", async () => {
-    let resolveGate: () => void = () => {};
-    const gate = new Promise<void>((res) => (resolveGate = res));
-    const materialize = vi.fn(async (contextId: string) => {
-      await gate;
-      const dir = path.join(contextProjectionsRoot, contextId);
-      await fs.mkdir(dir, { recursive: true });
-      return { dir };
-    });
-    const cfm = manager(materialize);
-    const first = cfm.ensureContextFolder("ctx-1");
-    const second = cfm.ensureContextFolder("ctx-1");
-    // `materializing` is set only AFTER `fs.access` rejects (real I/O), so a single
-    // macrotask tick is racy under full-suite load. Poll until materialization is
-    // actually in-flight — the gate holds it in "materializing" until we resolve it.
-    for (let i = 0; i < 200 && cfm.getContextFolderState("ctx-1").status !== "materializing"; i++) {
-      await new Promise((res) => setTimeout(res, 1));
-    }
-    expect(cfm.getContextFolderState("ctx-1").status).toBe("materializing");
-    resolveGate();
-    expect(await first).toBe(await second);
-    expect(materialize).toHaveBeenCalledTimes(1);
-  });
-
   it("validates context ids", async () => {
     const cfm = manager();
-    await expect(cfm.ensureContextFolder("Bad/Id")).rejects.toThrow(/Invalid context ID/);
-    await expect(cfm.ensureContextFolder("")).rejects.toThrow(/Invalid context ID/);
-    expect(() => cfm.getContextFolderState("UPPER")).toThrow(/Invalid context ID/);
+    await expect(cfm.ensureContextScratch("Bad/Id")).rejects.toThrow(/Invalid context ID/);
+    await expect(cfm.ensureContextScratch("")).rejects.toThrow(/Invalid context ID/);
+    expect(() => cfm.getContextRoot("UPPER")).toThrow(/Invalid context ID/);
   });
 
   it("reports missing state and removes contexts", async () => {
     const cfm = manager();
-    expect(cfm.getContextFolderState("ctx-9").status).toBe("missing");
     expect(cfm.getContextRoot("ctx-9")).toBeNull();
-    const dir = await cfm.ensureContextFolder("ctx-9");
-    expect(cfm.getContextRoot("ctx-9")).toBe(dir);
+    const scratch = await cfm.ensureContextScratch("ctx-9");
+    const source = cfm.contextSourcePath("ctx-9");
+    await fs.mkdir(source, { recursive: true });
+    expect(cfm.getContextRoot("ctx-9")).toBe(source);
     await cfm.removeContext("ctx-9");
-    expect(cfm.getContextFolderState("ctx-9").status).toBe("missing");
+    expect(cfm.getContextRoot("ctx-9")).toBeNull();
+    await expect(fs.stat(scratch)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

@@ -26,6 +26,7 @@ import { ByteBudgetCache } from "@vibestudio/shared/byteBudgetCache";
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { gunzip, gzip, constants as zlibConstants } from "zlib";
 import { promisify } from "util";
 import {
@@ -315,7 +316,21 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
   const activeExecutionIdentityContext = config.executionIdentity
     ? Object.freeze({ ...config.executionIdentity })
     : null;
+  const exactSource = new AsyncLocalStorage<{ stateHash: string; sourceState: ExecutionSourceStateRef }>();
   const ownPublicationTasks = new Set<Promise<void>>();
+
+  function withExactSource<T>(
+    stateHash: string,
+    sourceState: ExecutionSourceStateRef | undefined,
+    operation: () => T
+  ): T {
+    return sourceState ? exactSource.run({ stateHash, sourceState }, operation) : operation();
+  }
+
+  function exactSourceFor(stateHash: string) {
+    const selected = exactSource.getStore();
+    return selected?.stateHash === stateHash ? selected.sourceState : undefined;
+  }
 
   // ---------------------------------------------------------------------------
   // Build Store
@@ -1191,18 +1206,16 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
   }
 
   /**
-   * Executions this process has verified and since superseded. A build key's
-   * newest source-state rebinding replaces the cached descriptor, while a
-   * caller that resolved the previous execution still names it by digest; the
-   * publication journal must resolve that exact execution, not the key's latest.
+   * Verified retained executions beside the current build descriptor.
+   * An owner may publish a superseded execution it just resolved from disk.
    */
   const supersededExecutions = new ByteBudgetCache<string, StoredBuildResult>(
     8 * 1024 * 1024,
     buildDescriptorBytes
   );
 
-  function executionCacheId(buildKey: string, executionDigest: string): string {
-    return `${buildKey}\0${executionDigest}`;
+  function executionCacheId(dir: string, executionDigest: string): string {
+    return `${localBuildCacheId(dir)}\0${executionDigest}`;
   }
 
   function rememberVerifiedLocalBuild(build: StoredBuildResult): StoredBuildResult {
@@ -1214,7 +1227,7 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
       previousDigest &&
       previousDigest !== build.metadata.execution?.executionDigest
     ) {
-      supersededExecutions.set(executionCacheId(previous.buildKey, previousDigest), previous);
+      supersededExecutions.set(executionCacheId(previous.dir, previousDigest), previous);
     }
     verifiedLocalBuilds.set(cacheId, build);
     for (const style of build.metadata.sharedStyles ?? [])
@@ -1223,7 +1236,12 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
   }
 
   function forgetVerifiedLocalBuild(dir: string): void {
-    verifiedLocalBuilds.delete(localBuildCacheId(dir));
+    const cacheId = localBuildCacheId(dir);
+    verifiedLocalBuilds.delete(cacheId);
+    const prefix = `${cacheId}\0`;
+    for (const executionId of supersededExecutions.keys()) {
+      if (executionId.startsWith(prefix)) supersededExecutions.delete(executionId);
+    }
   }
 
   async function readVerifiedLocalBuild(key: string): Promise<StoredBuildResult | null> {
@@ -1238,9 +1256,10 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
     }
-    if (cached) forgetVerifiedLocalBuild(dir);
     const build = await readBuildDir(dir, key);
-    return build ? rememberVerifiedLocalBuild(build) : null;
+    if (build) return rememberVerifiedLocalBuild(build);
+    forgetVerifiedLocalBuild(dir);
+    return null;
   }
 
   const sharedStyleOwners = new ByteBudgetCache<string, string>(
@@ -1305,7 +1324,7 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
   function peekLocalExecution(key: string, executionDigest: string): StoredBuildResult | null {
     const current = peekLocal(key);
     if (current?.metadata.execution?.executionDigest === executionDigest) return current;
-    return supersededExecutions.get(executionCacheId(key, executionDigest)) ?? null;
+    return supersededExecutions.get(executionCacheId(getBuildDir(key), executionDigest)) ?? null;
   }
 
   /** Read and verify a workspace-owned build without claiming shared-cache ownership. */
@@ -1360,6 +1379,7 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
     if (sharedMetadata.sourceStateHash !== null) {
       const reboundStateHash = sourceStateHash ?? sharedMetadata.sourceStateHash;
       const sourceState =
+        exactSourceFor(reboundStateHash) ??
         activeExecutionIdentityContext?.executionStateForContent(reboundStateHash);
       if (!sourceState) return null;
       const reboundMetadata: BuildMetadata = {
@@ -1490,7 +1510,16 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
     executionDigest: string
   ): Promise<StoredBuildResult | null> {
     const current = await get(key);
-    if (!current) return null;
+    return current && readExecutionVariant(current, executionDigest);
+  }
+
+  async function readLocalByExecution(key: string, executionDigest: string) {
+    const current = await readLocal(key);
+    return current && readExecutionVariant(current, executionDigest);
+  }
+
+  async function readExecutionVariant(current: StoredBuildResult, executionDigest: string) {
+    const key = current.buildKey;
     if (current.metadata.execution?.executionDigest === executionDigest) return current;
     try {
       const stored = JSON.parse(
@@ -1513,11 +1542,9 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
         return null;
       }
       verifiedExecutionIdentity(metadata, current.artifacts);
-      return {
-        ...current,
-        sourceStateHash: metadata.sourceStateHash,
-        metadata,
-      };
+      const build = { ...current, sourceStateHash: metadata.sourceStateHash, metadata };
+      supersededExecutions.set(executionCacheId(current.dir, executionDigest), build);
+      return build;
     } catch {
       return null;
     }
@@ -1548,8 +1575,12 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
     build: StoredBuildResult,
     sourceStateHash: string
   ): Promise<StoredBuildResult> {
-    if (build.sourceStateHash === sourceStateHash) return build;
-    const sourceState = activeExecutionIdentityContext?.executionStateForContent(sourceStateHash);
+    const exact = exactSourceFor(sourceStateHash);
+    const sourceState = exact ?? activeExecutionIdentityContext?.executionStateForContent(sourceStateHash);
+    if (build.sourceStateHash === sourceStateHash &&
+        (!sourceState || canonicalJson(build.metadata.sourceState ?? null) === canonicalJson(sourceState))) {
+      return build;
+    }
     if (!sourceState) {
       throw new Error(
         `Build ${build.buildKey} cannot be rebound to source state ${sourceStateHash}: state is not present in the active workspace`
@@ -1572,7 +1603,7 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
     const localDir = getBuildDir(build.buildKey);
     if (path.resolve(build.dir) === path.resolve(localDir)) {
       await writeExecutionMetadata(localDir, metadata);
-      await writeBuildMetadata(localDir, metadata);
+      if (!exact) await writeBuildMetadata(localDir, metadata);
     }
     const rebound = {
       ...build,
@@ -1580,7 +1611,8 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
       metadata,
     };
     if (path.resolve(build.dir) === path.resolve(localDir)) {
-      rememberVerifiedLocalBuild(rebound);
+      if (exact) supersededExecutions.set(executionCacheId(localDir, execution.executionDigest), rebound);
+      else rememberVerifiedLocalBuild(rebound);
     }
     return rebound;
   }
@@ -1663,6 +1695,7 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
         : {
             ...metadata,
             sourceState:
+              exactSourceFor(metadata.sourceStateHash) ??
               metadata.sourceState ??
               activeExecutionIdentityContext?.executionStateForContent(metadata.sourceStateHash) ??
               null,
@@ -2179,10 +2212,12 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
     peekLocal,
     peekLocalExecution,
     readLocal,
+    readLocalByExecution,
     get,
     compilationMetadata,
     getOrHydrate,
     getByExecution,
+    withExactSource,
     rebindSourceState,
     primaryArtifact,
     primaryTextArtifactContent,

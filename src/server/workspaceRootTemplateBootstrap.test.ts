@@ -390,22 +390,29 @@ describe("WorkspaceRootTemplateBootstrap", () => {
     const unavailableAcquire = vi.fn(async (): Promise<ExactGitSnapshot> => {
       throw new Error("template registry unavailable");
     });
-    const restarted = new WorkspaceRootTemplateBootstrap({
+    const restartDeps = {
       workspaceId: "ws-1",
       statePath: fx.statePath,
       sourcePath: fx.sourcePath,
       acquire: unavailableAcquire,
       expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
       sink: {
-        put: async (bytes) => {
+        put: async (bytes: Uint8Array) => {
           const digest = sha256Hex(bytes);
           fx.blobs.set(digest, bytes);
           return { digest, size: bytes.byteLength };
         },
       },
-    });
+    };
+    const restarted = new WorkspaceRootTemplateBootstrap(restartDeps);
 
     await expect(restarted.prepareSource()).resolves.toEqual(fx.pin);
+    const manifest = path.join(fx.sourcePath, "meta", "vibestudio.yml");
+    fs.writeFileSync(manifest, canonicalTemplateYaml({ systemEpoch: WORKSPACE_SYSTEM_EPOCH + 1 }));
+    await expect(restarted.prepareSource()).rejects.toThrow(/requires workspace host epoch/);
+    const restored = new WorkspaceRootTemplateBootstrap({ ...restartDeps, restoredProtectedSource: true });
+    await expect(restored.prepareSource()).resolves.toEqual(fx.pin);
+    await expect(restored.prepareSource()).resolves.toEqual(fx.pin);
     expect(unavailableAcquire).not.toHaveBeenCalled();
   });
 

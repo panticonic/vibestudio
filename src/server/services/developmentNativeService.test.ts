@@ -128,6 +128,7 @@ function fixture(target: DevelopmentRun["target"] = { kind: "build-only" }) {
   const nativeClose = vi.fn().mockResolvedValue(undefined);
   const releaseLogs = vi.fn();
   const controller = createDevelopmentNativeService({
+    resolveParticipantAccess: async (contextId, ctx) => ({ caller: ctx.caller, ownerContextId: contextId }),
     native: { close: nativeClose } as unknown as Parameters<
       typeof createDevelopmentNativeService
     >[0]["native"],

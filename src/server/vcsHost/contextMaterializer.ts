@@ -99,14 +99,17 @@ export class ContextMaterializer {
     }
   ) {}
 
-  async materialize(input: ContextMaterializationCommand): Promise<ContextMaterializationReceipt> {
+  async materialize(
+    input: ContextMaterializationCommand,
+    placement?: WorkspaceStateRef,
+  ): Promise<ContextMaterializationReceipt> {
     const command = canonicalCommand(input);
     if (canonicalJson(command) !== canonicalJson(input)) {
       throw new Error("materialization command is not canonical or has an invalid identity");
     }
     await this.validateRepositories(command.repositories);
     await this.storeBlobs(command);
-    const patchRoots = await this.contentRoots(command.repositories);
+    const patchRoots = await this.contentRoots(command.repositories, placement);
 
     return this.locked(command.contextId, async () => {
       const prior = await this.readMaterializationState(command.contextId);
@@ -137,6 +140,7 @@ export class ContextMaterializer {
         if (!contextMaterializationReceiptProves(command, receipt)) {
           throw new Error("stored materialization cannot prove an idempotent retry");
         }
+        await this.ensureContextBinding(command.contextId);
         return receipt;
       }
       if (
@@ -250,7 +254,7 @@ export class ContextMaterializer {
         ...receipt,
         repositories: next,
       });
-      await this.writeContextBinding(command.contextId);
+      await this.ensureContextBinding(command.contextId);
       return receipt;
     });
   }
@@ -277,10 +281,11 @@ export class ContextMaterializer {
   }
 
   async contentRoots(
-    repositories: readonly WorkspaceMaterializationRepository[]
+    repositories: readonly WorkspaceMaterializationRepository[],
+    placement?: WorkspaceStateRef,
   ): Promise<MaterializedRepository[]> {
     await this.validateRepositories(repositories);
-    return this.deriveContentRoots(repositories);
+    return this.deriveContentRoots(repositories, placement);
   }
 
   /**
@@ -336,11 +341,12 @@ export class ContextMaterializer {
   async realizePlannedRepository(
     repository: Extract<WorkspaceMaterializationRepository, { presence: "present" }>,
     blobs: readonly WorkspaceMaterializationBlob[],
-    expectedContentRoot: string
+    expectedContentRoot: string,
+    placement?: WorkspaceStateRef,
   ): Promise<void> {
     await this.validateRepositories([repository]);
     await this.storeBlobRecords(blobs);
-    const contentRoot = await this.deriveRepositoryContentRoot(repository);
+    const contentRoot = await this.deriveRepositoryContentRoot(repository, placement);
     if (contentRoot !== expectedContentRoot) {
       throw new Error(
         `planned repository realized ${contentRoot}, expected ${expectedContentRoot}`
@@ -558,7 +564,8 @@ export class ContextMaterializer {
   }
 
   private async deriveContentRoots(
-    repositories: readonly WorkspaceMaterializationRepository[]
+    repositories: readonly WorkspaceMaterializationRepository[],
+    placement?: WorkspaceStateRef,
   ): Promise<MaterializedRepository[]> {
     const present = repositories.filter(
       (
@@ -575,7 +582,7 @@ export class ContextMaterializer {
       async (repository): Promise<MaterializedRepository> => ({
         repositoryId: repository.repositoryId,
         repoPath: repository.repoPath,
-        contentRoot: await this.deriveRepositoryContentRoot(repository),
+        contentRoot: await this.deriveRepositoryContentRoot(repository, placement),
       })
     );
     return roots.sort((left, right) =>
@@ -584,7 +591,8 @@ export class ContextMaterializer {
   }
 
   private async deriveRepositoryContentRoot(
-    repository: Extract<WorkspaceMaterializationRepository, { presence: "present" }>
+    repository: Extract<WorkspaceMaterializationRepository, { presence: "present" }>,
+    placement?: WorkspaceStateRef,
   ): Promise<string> {
     if (repository.source.kind === "content-root") {
       if (!(await hasTreeObject(this.deps.blobsDir, repository.source.contentRoot))) {
@@ -602,7 +610,8 @@ export class ContextMaterializer {
             path: file.path,
             contentHash: file.contentHash,
             mode: this.treeMode(file.mode),
-          }))
+          })),
+          { placement },
         )
       ).stateHash;
     }
@@ -654,7 +663,7 @@ export class ContextMaterializer {
         files.delete(change.path);
       }
     }
-    return (await mirrorWorktreeTree(this.deps.blobsDir, [...files.values()])).stateHash;
+    return (await mirrorWorktreeTree(this.deps.blobsDir, [...files.values()], { placement })).stateHash;
   }
 
   private treeMode(mode: number): number {
@@ -761,7 +770,7 @@ export class ContextMaterializer {
     );
   }
 
-  private async writeContextBinding(contextId: string): Promise<void> {
+  async ensureContextBinding(contextId: string): Promise<void> {
     const binding = contextBinding({ workspaceId: this.deps.workspaceId, contextId });
     await this.writeAtomicJson(this.bindingPath(contextId), encodeContextBinding(binding), 0o644);
   }

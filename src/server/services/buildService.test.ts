@@ -319,6 +319,43 @@ describe("build service extension diagnostics", () => {
     });
   });
 
+  it("compiles admitted context and content selectors at their sealed revision", async () => {
+    const buildSystem = makeBuildSystem();
+    vi.mocked(buildSystem.getBuild).mockResolvedValue({ bundle: "module.exports = {};" } as never);
+    const withExactBuildSource = vi.fn(
+      async (_stateHash: string, _sourceState: unknown, operation: () => Promise<unknown>) => operation()
+    );
+    Object.assign(buildSystem, { withExactBuildSource });
+    const source = {
+      stateHash: "state:private",
+      semanticState: { kind: "application", applicationId: "private" },
+    } as const;
+    const resolveContextBuildSource = vi.fn(async () => source);
+    const resolveContentBuildSource = vi.fn(async (request: { caller: { runtime: { id: string } } }) => {
+      if (request.caller.runtime.id !== "owner") throw new Error("Content unavailable");
+      return source;
+    });
+    const service = createBuildService({
+      buildSystem, listUnits: () => [], getCallerContextId: () => null,
+      resolveContextBuildSource, resolveContentBuildSource,
+    });
+    const ctx = { caller: createVerifiedCaller("owner", "shell") };
+    await expect(service.handler(ctx, "getBuild", [
+      "@workspace-packages/example", "ctx:working", { library: true, libraryTarget: "worker" },
+    ])).resolves.toEqual({ bundle: "module.exports = {};" });
+    expect(resolveContextBuildSource).toHaveBeenCalledWith(ctx, "working");
+    expect(withExactBuildSource).toHaveBeenCalledWith(source.stateHash, source.semanticState, expect.any(Function));
+    expect(buildSystem.getBuild).toHaveBeenCalledWith("@workspace-packages/example", source.stateHash, {
+      library: true, libraryTarget: "worker",
+    });
+    const rawArgs = ["@workspace-packages/example", source.stateHash, { library: true, libraryTarget: "worker" }];
+    await expect(service.handler(ctx, "getBuild", rawArgs)).resolves.toEqual({ bundle: "module.exports = {};" });
+    expect(resolveContentBuildSource).toHaveBeenCalledWith(ctx, source.stateHash);
+    const stranger = { caller: createVerifiedCaller("stranger", "shell") };
+    await expect(service.handler(stranger, "getBuild", rawArgs)).rejects.toThrow("Content unavailable");
+    expect(buildSystem.getBuild).toHaveBeenCalledTimes(2);
+  });
+
   it("returns compact build metadata by default", async () => {
     const buildSystem = makeBuildSystem();
     const service = createBuildService({
@@ -339,6 +376,28 @@ describe("build service extension diagnostics", () => {
       details: { kind: "extension", runtimeAbi: "4", providerContracts: {} },
     });
     expect(metadata).not.toHaveProperty("executableModules");
+  });
+
+  it("keeps metadata, inventory and bytes behind the same build visibility check", async () => {
+    const buildSystem = makeBuildSystem();
+    const service = createBuildService({
+      buildSystem,
+      listUnits: () => [],
+      getCallerContextId: () => null,
+      canReadBuild: async (ctx) => ctx.caller.runtime.id === "owner",
+    });
+    const stranger = { caller: createVerifiedCaller("stranger", "shell") };
+    for (const method of ["getBuildMetadata", "getBuildArtifacts"]) {
+      await expect(service.handler(stranger, method, ["build-key"])).resolves.toBeNull();
+    }
+    await expect(
+      service.handler(stranger, "readBuildArtifact", ["build-key", "bundle.js"])
+    ).rejects.toThrow(/Unknown immutable build/u);
+    expect(buildSystem.readBuildArtifactBytes).not.toHaveBeenCalled();
+    const owner = { caller: createVerifiedCaller("owner", "shell") };
+    await expect(service.handler(owner, "getBuildArtifacts", ["build-key"])).resolves.toMatchObject({
+      buildKey: "build-key",
+    });
   });
 
   it("returns the executable source inventory only when explicitly requested", async () => {

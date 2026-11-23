@@ -1,0 +1,3605 @@
+/**
+ * Tests for RuntimeManager — instance lifecycle, config generation,
+ * name sanitization, and rebuild handling.
+ */
+
+import {
+  RuntimeManager as ProductRuntimeManager,
+  type RuntimeManagerDeps,
+  type WorkerdWorkspaceProvider,
+} from "./runtimeManager.js";
+import { spawn } from "child_process";
+import { findServicePort } from "./hostCore/portUtils.js";
+import { SingletonRegistry } from "@vibestudio/workspace/singletonRegistry";
+import type { StoredBuildResult } from "./buildV2/buildStore.js";
+import { RouteRegistry } from "./routeRegistry.js";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { stateLayout } from "./stateLayout.js";
+import { encodeUniversalKey } from "./doDispatch.js";
+import { canonicalEntityId } from "@vibestudio/shared/runtime/entitySpec";
+import { INTERNAL_DO_CLASSES, INTERNAL_DO_SOURCE } from "./internalDOs/internalDoLoader.js";
+import { mockSchemaProbeDiskSpace, schemaProbeEnvironmentForFixture } from "../../tests/fixtures/schemaProbeEnvironment.js";
+import { stageInstalledSchemaProbeEvidence } from "../../scripts/lib/schema-probe-evidence.mjs";
+import { closeDerivedCacheCoordinators } from "@vibestudio/shared/derivedCache";
+import { DIRECT_AUTHORITY_ACCEPTED_AT_HEADER } from "@vibestudio/rpc/internal";
+import {
+  executionArtifactDigest,
+  executionSourceClosureDigest,
+  verifyExecutionArtifactRef,
+  type ExecutionArtifactRefV1,
+} from "@vibestudio/shared/execution/retention";
+import { sha256 } from "@vibestudio/shared/execution/identity";
+import { ledgerTest } from "../../tests/helpers/ledgerTest.js";
+import { internalDoProgramsForFixture } from "../../tests/fixtures/internalDoPrograms.js";
+
+// Mock child_process to prevent actual workerd spawning
+vi.mock("child_process", () => ({
+  spawn: vi.fn(() => {
+    const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
+    const stdoutListeners = new Set<(data: Buffer) => void>();
+    const stderrListeners = new Set<(data: Buffer) => void>();
+    const proc = {
+      stdout: {
+        on: vi.fn((event: string, listener: (data: Buffer) => void) => {
+          if (event === "data") stdoutListeners.add(listener);
+        }),
+      },
+      stderr: {
+        on: vi.fn((event: string, listener: (data: Buffer) => void) => {
+          if (event === "data") stderrListeners.add(listener);
+        }),
+      },
+      on: vi.fn((event: string, fn: (...args: unknown[]) => void) => {
+        if (!listeners.has(event)) listeners.set(event, new Set());
+        listeners.get(event)!.add(fn);
+        return proc;
+      }),
+      once: vi.fn((event: string, fn: (...args: unknown[]) => void) => {
+        if (!listeners.has(event)) listeners.set(event, new Set());
+        listeners.get(event)!.add(fn);
+        return proc;
+      }),
+      removeListener: vi.fn((event: string, fn: (...args: unknown[]) => void) => {
+        listeners.get(event)?.delete(fn);
+        return proc;
+      }),
+      emit: (event: string, ...args: unknown[]) => {
+        for (const fn of listeners.get(event) ?? []) fn(...args);
+      },
+      emitOutput: (stream: "stdout" | "stderr", data: string | Buffer) => {
+        const output = typeof data === "string" ? Buffer.from(data) : data;
+        for (const listener of stream === "stderr" ? stderrListeners : stdoutListeners) {
+          listener(output);
+        }
+      },
+      kill: vi.fn(() => {
+        // Simulate process exit after kill
+        setTimeout(() => {
+          for (const fn of listeners.get("exit") ?? [])
+            (fn as (code: number | null, signal: string | null) => void)(null, "SIGTERM");
+        }, 0);
+      }),
+      pid: 12345,
+      exitCode: null,
+      signalCode: null,
+    };
+    return proc;
+  }),
+}));
+
+// The node supervisor is the one place the manager touches the runtime binary.
+// Replace it with a recorder whose processes are the mocked children above, so
+// these tests exercise the manager's lifecycle, not a real node.
+const celldDeployments: Array<{
+  stateDir: string;
+  bundle: string;
+  config: Record<string, unknown> & { name: string };
+  secrets: Record<string, string>;
+}> = [];
+const celldReloads = { count: 0, fail: false };
+
+vi.mock("./celldNode.js", async () => {
+  const { spawn: mockedSpawn } = await import("child_process");
+  class FakeCelldNodeProcess {
+    hasExited = false;
+    constructor(
+      readonly child: ReturnType<typeof mockedSpawn>,
+      readonly listenPort: number,
+      readonly inspectorPort: number | null
+    ) {
+      child.on("exit", () => {
+        this.hasExited = true;
+      });
+    }
+    get pid() {
+      return this.child.pid;
+    }
+    async reload(): Promise<void> {
+      celldReloads.count += 1;
+      if (celldReloads.fail) throw new Error("celld reload failed (500): fixture");
+    }
+    async requestShutdown(): Promise<boolean> {
+      return false;
+    }
+  }
+  class FakeCelldNode {
+    constructor(
+      readonly options: {
+        stateDir: string;
+        onOutput(stream: "stdout" | "stderr", line: string): void;
+      }
+    ) {}
+    async deploy(
+      bundle: string,
+      config: Record<string, unknown> & { name: string },
+      secrets: Record<string, string> = {}
+    ): Promise<void> {
+      celldDeployments.push({ stateDir: this.options.stateDir, bundle, config, secrets });
+    }
+    start(ports: { listen: number; inspector: number | null }) {
+      const child = mockedSpawn("celld", ["--listen", String(ports.listen)]);
+      // The supervisor reports the node's output line by line.
+      for (const stream of ["stdout", "stderr"] as const) {
+        child[stream]?.on("data", (data: Buffer) => {
+          for (const line of data.toString().split("\n")) {
+            if (line.trim()) this.options.onOutput(stream, line);
+          }
+        });
+      }
+      return new FakeCelldNodeProcess(child, ports.listen, ports.inspector);
+    }
+  }
+  return {
+    CelldNode: FakeCelldNode,
+    CelldNodeProcess: FakeCelldNodeProcess,
+    resolveCelldBinary: () => "/fixture/celld",
+    celldTarget: () => "fixture",
+  };
+});
+
+// Mock port-utils
+vi.mock("./hostCore/portUtils.js", () => ({
+  findServicePort: vi.fn(async (service: string) =>
+    service === "workerdInspector" ? 49652 : 49552
+  ),
+  releaseServicePort: vi.fn(),
+}));
+
+function runtimeArtifact(
+  source: string,
+  ref = "main",
+  workspaceId = "workspace:test"
+): ExecutionArtifactRefV1 {
+  const stateHash = `state:${sha256(`state:${source}:${ref}`)}`;
+  const contentRoots = [{ repoPath: source, stateHash }];
+  const unsigned = {
+    version: 1 as const,
+    sourceState: {
+      kind: "workspace" as const,
+      workspaceId,
+      effectiveVersion: sha256(`ev:${source}:${ref}`),
+      state: { kind: "event" as const, eventId: `event:${source}:${ref}` },
+      contentRoots,
+      sourceClosureDigest: executionSourceClosureDigest(contentRoots),
+    },
+    recipeDigest: sha256(`recipe:${source}`),
+    buildKey: sha256(`build:${source}:${ref}`),
+    artifactDigest: sha256(`artifact:${source}:${ref}`),
+  };
+  return verifyExecutionArtifactRef({
+    ...unsigned,
+    executionDigest: executionArtifactDigest(unsigned),
+  });
+}
+
+function mockWorkerBuild(
+  bundle = 'export default { fetch() { return new Response("ok"); } };'
+): StoredBuildResult {
+  const execution = runtimeArtifact("workers/runtime-fixture", "build");
+  const buildKey = execution.buildKey;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-workerd-build-test-"));
+  testStatePaths.add(dir);
+  fs.writeFileSync(path.join(dir, "worker.js"), bundle);
+  return {
+    dir,
+    buildKey,
+    sourceStateHash: execution.sourceState.contentRoots[0]!.stateHash,
+    metadata: {
+      kind: "worker",
+      name: "workers/runtime-fixture",
+      buildKey,
+      sourcePath: "workers/runtime-fixture",
+      ev: execution.sourceState.effectiveVersion,
+      sourceStateHash: execution.sourceState.contentRoots[0]!.stateHash,
+      sourceState: execution.sourceState.state,
+      execution,
+      sourcemap: false,
+      authority: { requests: [], provides: [], serviceRequests: [] },
+      details: { kind: "generic" },
+      builtAt: "2026-01-01T00:00:00.000Z",
+    },
+    artifacts: [
+      {
+        path: "worker.js",
+        role: "primary",
+        contentType: "text/javascript; charset=utf-8",
+        encoding: "utf8",
+        byteLength: Buffer.byteLength(bundle),
+        integrity: `sha256-${sha256(bundle)}`,
+      },
+    ],
+  };
+}
+
+function mockWorkerBuildFor(source: string, execution: ExecutionArtifactRefV1): StoredBuildResult {
+  const base = mockWorkerBuild();
+  return {
+    ...base,
+    buildKey: execution.buildKey,
+    sourceStateHash: execution.sourceState.contentRoots[0]!.stateHash,
+    metadata: {
+      ...base.metadata,
+      name: source,
+      buildKey: execution.buildKey,
+      sourcePath: source,
+      ev: execution.sourceState.effectiveVersion,
+      sourceStateHash: execution.sourceState.contentRoots[0]!.stateHash,
+      sourceState: execution.sourceState.state,
+      execution,
+    },
+  };
+}
+
+type TestWorkerdDeps = RuntimeManagerDeps & WorkerdWorkspaceProvider;
+const testStatePaths = new Set<string>();
+
+class RuntimeManager extends ProductRuntimeManager {
+  constructor(deps: TestWorkerdDeps) {
+    super(deps);
+    this.bindWorkspaceProvider(deps);
+  }
+}
+
+function createMockDeps(overrides: Partial<TestWorkerdDeps> = {}): TestWorkerdDeps {
+  const build = mockWorkerBuild();
+  const boundBuilds = new Map<string, StoredBuildResult>();
+  const statePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-workerd-manager-test-"));
+  testStatePaths.add(statePath);
+  return {
+    schemaProbeEnvironment: schemaProbeEnvironmentForFixture("owned-mocked-runtime-app"),
+    schemaProbeReleaseRoot: path.join(statePath, "installed-resources"),
+    tokenManager: {
+      ensureToken: vi.fn().mockReturnValue("mock-token-123"),
+      revokeToken: vi.fn(),
+    } as unknown as RuntimeManagerDeps["tokenManager"],
+    fsService: {
+      closeHandlesForCaller: vi.fn(),
+    } as unknown as RuntimeManagerDeps["fsService"],
+    getServerUrl: () => "http://127.0.0.1:9999",
+    bindRuntimeImage: vi.fn(async (unitPath: string, ref?: string) => {
+      const artifact = runtimeArtifact(
+        unitPath,
+        ref ?? "main",
+        overrides.workspaceId ?? "workspace:test"
+      );
+      boundBuilds.set(artifact.buildKey, mockWorkerBuildFor(unitPath, artifact));
+      return {
+        source: unitPath,
+        unitName: unitPath,
+        artifact,
+        authority: { provides: [], requests: [], serviceRequests: [] },
+      };
+    }),
+    getBuildByKey: vi.fn(async () => build),
+    getBuildByExecution: vi.fn(async (key, executionDigest) => {
+      const candidate = boundBuilds.get(key) ?? build;
+      return candidate.metadata.execution?.executionDigest === executionDigest ? candidate : null;
+    }),
+    getManifestRoutes: () => [],
+    getManifestDoClasses: () => [],
+    singletonRegistry: new SingletonRegistry([]),
+    getInternalDoEnv: () => ({}),
+    workspaceId: "workspace:test",
+    internalDOPrograms: internalDoProgramsForFixture("manager-test"),
+    workspacePath: "/tmp/test-workspace",
+    statePath,
+    getSharedEgressPort: () => Promise.resolve(49555),
+    registerEgressCaller: () => {},
+    unregisterEgressCaller: () => {},
+    egressSecret: "mock-egress-secret",
+    getWorkerdGatewayToken: () => "mock-workerd-gateway-token",
+    ...overrides,
+    readBuildArtifactContent:
+      overrides.readBuildArtifactContent ??
+      (async (stored, artifact) =>
+        fs.promises.readFile(path.join(stored.dir, artifact.path), "utf8")),
+  };
+}
+
+async function loadCompiledRouter(): Promise<{
+  fetch(request: Request, env: Record<string, unknown>): Promise<Response>;
+}> {
+  // The router belongs to the workers type realm; it is loaded, not type-checked, here.
+  const routerPath = "./workerdPrograms/router.js";
+  const module = (await import(/* @vite-ignore */ routerPath)) as {
+    default: { fetch(request: Request, env: Record<string, unknown>): Promise<Response> };
+  };
+  return module.default;
+}
+
+type StartWorkerArgs = Parameters<RuntimeManager["startWorker"]>[0];
+
+/** Default args for the runtime-managed worker-launch path (startWorker). */
+function startArgs(overrides: Partial<StartWorkerArgs> = {}): StartWorkerArgs {
+  return {
+    source: "workers/runtime-fixture",
+    key: "hello",
+    contextId: "ctx-1",
+    ...overrides,
+  };
+}
+
+/** Status of a live worker instance by sanitized name (replaces getInstanceStatus). */
+function statusOf(mgr: RuntimeManager, name: string) {
+  return mgr.listInstances().find((instance) => instance.name === name) ?? null;
+}
+
+let restoreSchemaDisk: (() => void) | undefined;
+beforeEach(() => {
+  const derived = fs.mkdtempSync(path.join(os.tmpdir(), "workerd-schema-derived-"));
+  testStatePaths.add(derived);
+  restoreSchemaDisk = mockSchemaProbeDiskSpace(derived);
+  vi.stubEnv("VIBESTUDIO_SHARED_DERIVED_CACHE_DIR", derived);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url
+      );
+      if (url.pathname.endsWith("/__vibestudio_schema_descriptor")) {
+        const packedKey = decodeURIComponent(url.pathname.split("/")[2]!);
+        const className = decodeURIComponent(packedKey.split("|")[1]!);
+        return Response.json({
+          className,
+          version: 1,
+          freshSchemaFingerprint: `fixture:${className}`,
+          nativeOwner: false,
+          durableWorkQueues: [],
+        });
+      }
+      return new Response(null, { status: 204 });
+    })
+  );
+});
+
+afterEach(async () => {
+  celldReloads.fail = false;
+  celldReloads.count = 0;
+  celldDeployments.length = 0;
+  await closeDerivedCacheCoordinators();
+  restoreSchemaDisk?.();
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+  vi.mocked(findServicePort).mockImplementation(
+    async (service: Parameters<typeof findServicePort>[0]) =>
+      service === "workerdInspector" ? 49652 : 49552
+  );
+  for (const statePath of testStatePaths) {
+    fs.rmSync(statePath, { recursive: true, force: true });
+  }
+  testStatePaths.clear();
+});
+
+/**
+ * The runtime node as far as the manager's storage operations can see it:
+ * `/_object` (fork, restore through the router) and a UniversalDO cell's
+ * `__vibestudio_destroy`. Everything else answers as the default fetch does.
+ */
+/** The host's outbox of retired objects whose storage the node has not yet deleted. */
+function retiredOutbox(
+  mgr: RuntimeManager
+): Array<{ source: string; class_name: string; object_key: string }> {
+  return (
+    mgr as unknown as { doStorageDb: { prepare(sql: string): { all(): unknown[] } } }
+  ).doStorageDb
+    .prepare(`SELECT source, class_name, object_key FROM do_storage_retired`)
+    .all() as Array<{ source: string; class_name: string; object_key: string }>;
+}
+
+/** Backups whose fork never finished (their operation ids). */
+function unfinishedBackups(mgr: RuntimeManager): string[] {
+  return (
+    (mgr as unknown as { doStorageDb: { prepare(sql: string): { all(): unknown[] } } }).doStorageDb
+      .prepare(`SELECT operation_id FROM do_storage_backups WHERE ready = 0`)
+      .all() as Array<{ operation_id: string }>
+  ).map((row) => row.operation_id);
+}
+
+function fakeNode(options: { failFork?: boolean | string; failDestroy?: boolean } = {}) {
+  const state = {
+    failFork: options.failFork ?? false,
+    failForkCode: undefined as string | undefined,
+    failDestroy: options.failDestroy ?? false,
+    objects: [] as Array<Record<string, unknown>>,
+    destroyed: [] as Array<{ key: string; path: string; secret: string | null }>,
+  };
+  const ordinary = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation(async (input, init) => {
+    const url = new URL(
+      typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url
+    );
+    if (url.pathname === "/_object") {
+      const body = JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>;
+      if (state.failFork) {
+        return new Response(
+          typeof state.failFork === "string" ? state.failFork : "injected fork failure",
+          {
+            status: 409,
+            ...(state.failForkCode
+              ? { headers: { "X-Vibestudio-Object-Error": state.failForkCode } }
+              : {}),
+          }
+        );
+      }
+      state.objects.push(body);
+      return Response.json(body["op"] === "fork" ? { id: "abc" } : { restored: true });
+    }
+    if (url.pathname.endsWith("/__vibestudio_destroy")) {
+      if (state.failDestroy) return new Response("injected destroy failure", { status: 500 });
+      const headers = new Headers((init as RequestInit).headers);
+      state.destroyed.push({
+        key: url.pathname.split("/")[2]!,
+        path: url.pathname,
+        secret: headers.get("X-Vibestudio-Lifecycle-Secret"),
+      });
+      return new Response(null, { status: 204 });
+    }
+    return ordinary(input, init);
+  });
+  return state;
+}
+
+describe("RuntimeManager", () => {
+  it("deploys one runtime application whose class credentials are class secrets, not variables", async () => {
+    celldDeployments.length = 0;
+    const deps = createMockDeps({
+      getInternalDoEnv: (className): Record<string, string> =>
+        className === "WebhookStoreDO" ? { STORE_SOURCE: "units/store" } : {},
+    });
+    const manager = new RuntimeManager(deps);
+    try {
+      await manager.startWorker(startArgs());
+      expect(celldDeployments).toHaveLength(1);
+      const { config, secrets, stateDir } = celldDeployments[0]!;
+      expect(stateDir).toBe(stateLayout(deps.statePath).celldDir);
+      expect(config.name).toBe("vibestudio");
+      const classes = (
+        config["celld"] as {
+          durable_objects: Record<string, { secrets: string[]; codegen?: true; residency?: true }>;
+        }
+      ).durable_objects;
+      // Every product class holds its own credential and none may generate code or keep its
+      // heap resident: eval is hosted code, whose grants the entity's root holds (§7.2).
+      for (const className of INTERNAL_DO_CLASSES) {
+        expect(classes[className]!.secrets).toEqual([
+          `RPC_AUTH_TOKEN__${className}`,
+          `LIFECYCLE_SECRET__${className}`,
+        ]);
+        expect(classes[className]!.codegen).toBeUndefined();
+        expect(classes[className]!.residency).toBeUndefined();
+      }
+      // The root of every entity holds the grants it may give hosted code (§7.2).
+      expect(classes["UniversalDO"]).toEqual({
+        secrets: ["DO_LOADER_SECRET__UniversalDO"],
+        codegen: true,
+        residency: true,
+        doltRemotes: true,
+      });
+      expect(Object.keys(secrets).sort()).toEqual(
+        [
+          ...INTERNAL_DO_CLASSES.flatMap((c) => [`RPC_AUTH_TOKEN__${c}`, `LIFECYCLE_SECRET__${c}`]),
+          "DO_LOADER_SECRET__UniversalDO",
+        ].sort()
+      );
+      // Nothing a class holds alone is in the manifest or another class's env.
+      const manifest = JSON.stringify(config);
+      for (const value of Object.values(secrets)) expect(manifest).not.toContain(value);
+      expect((config["vars"] as Record<string, unknown>)["INTERNAL_DO_ENV"]).toMatchObject({
+        WebhookStoreDO: { STORE_SOURCE: "units/store" },
+      });
+      // The deployed module is the build artifact's own bytes.
+      expect(celldDeployments[0]!.bundle).toBe(deps.internalDOPrograms!.app().bundle);
+    } finally {
+      await manager.shutdown();
+    }
+  });
+
+  it("reports finite startup phases without executable payloads or credentials", async () => {
+    const deps = createMockDeps();
+    const manager = new RuntimeManager(deps);
+    const logger = vi.spyOn(console, "log");
+    try {
+      await manager.startWorker(startArgs());
+      const message = logger.mock.calls
+        .map(([message]) => String(message))
+        .find((message) => message.includes("runtimeStartupReport="));
+      expect(message).toBeDefined();
+      const report = JSON.parse(message!.split("runtimeStartupReport=")[1]!) as Record<
+        string,
+        number
+      >;
+      expect(Object.keys(report)).toEqual([
+        "generation",
+        "totalMs",
+        "deployMs",
+        "spawnToHttpReadyMs",
+      ]);
+      expect(Object.values(report).every((value) => Number.isFinite(value) && value >= 0)).toBe(
+        true
+      );
+      expect(message).not.toContain(deps.egressSecret);
+      expect(message).not.toContain(deps.getWorkerdGatewayToken());
+      expect(message).not.toContain(deps.internalDOPrograms!.app().bundle);
+    } finally {
+      logger.mockRestore();
+      await manager.shutdown();
+    }
+  });
+
+  it("waits for handle retirement and finishes worker cleanup before propagating its failure", async () => {
+    const deps = createMockDeps({
+      cleanupWebhookSubscriptions: vi.fn(),
+      unregisterEgressCaller: vi.fn(),
+    });
+    const manager = new RuntimeManager(deps);
+    const instance = await manager.startWorker(startArgs());
+    const original = new Error("native close failed");
+    let reject!: (error: unknown) => void;
+    vi.mocked(deps.fsService.closeHandlesForCaller).mockImplementationOnce(
+      () =>
+        new Promise((_, fail) => {
+          reject = fail;
+        })
+    );
+    const stopping = manager.stopWorker(instance.targetId);
+    const outcome = stopping.catch((error) => error);
+    expect(statusOf(manager, "hello")).not.toBeNull();
+    expect(deps.cleanupWebhookSubscriptions).not.toHaveBeenCalled();
+    reject(original);
+    expect(await outcome).toBe(original);
+    expect(statusOf(manager, "hello")).toBeNull();
+    expect(deps.cleanupWebhookSubscriptions).toHaveBeenCalledWith(instance.targetId);
+    expect(deps.unregisterEgressCaller).toHaveBeenCalledWith(instance.targetId);
+    await manager.shutdown();
+  });
+
+  it("keeps each workspace's node state under its own owned state", async () => {
+    celldDeployments.length = 0;
+    const firstDeps = createMockDeps();
+    const secondDeps = createMockDeps();
+    const first = new RuntimeManager(firstDeps);
+    const second = new RuntimeManager(secondDeps);
+    try {
+      await first.startWorker(startArgs());
+      await second.startWorker(startArgs());
+      const dirs = celldDeployments.map((deployment) => deployment.stateDir);
+      expect(dirs).toEqual([
+        stateLayout(firstDeps.statePath).celldDir,
+        stateLayout(secondDeps.statePath).celldDir,
+      ]);
+      expect(dirs[0]!.startsWith(firstDeps.statePath)).toBe(true);
+      expect(dirs[1]!.startsWith(secondDeps.statePath)).toBe(true);
+    } finally {
+      await first.shutdown();
+      await second.shutdown();
+    }
+  });
+
+  describe("current publication schema evidence", () => {
+    const descriptor = (version: number, fingerprint: string) => ({
+      className: "BoardDO",
+      version,
+      freshSchemaFingerprint: fingerprint,
+      nativeOwner: false,
+      durableWorkQueues: [],
+    });
+
+    it("rebuilds obsolete probe evidence and retains exact evidence across reopen", async () => {
+      const deps = createMockDeps();
+      const layout = stateLayout(deps.statePath).databases;
+      fs.mkdirSync(layout.root, { recursive: true });
+      const old = new DatabaseSync(layout.durableObjectSchemaDescriptorsDb);
+      old.exec(`
+        CREATE TABLE do_schema_descriptors (
+          source TEXT NOT NULL, effective_version TEXT NOT NULL,
+          class_name TEXT NOT NULL, descriptor_json TEXT NOT NULL,
+          PRIMARY KEY (source, effective_version, class_name)
+        );
+        INSERT INTO do_schema_descriptors VALUES ('workers/board','old','BoardDO','{}');
+      `);
+      old.close();
+      const manager = new RuntimeManager(deps);
+      const probe = vi
+        .spyOn(manager, "probeDurableObjectSchema")
+        .mockResolvedValue(descriptor(1, "fresh-shape"));
+      await manager.ensureDurableObjectEntity({
+        source: "workers/board",
+        className: "BoardDO",
+        key: "first",
+        contextId: "fresh",
+      });
+      expect(probe).toHaveBeenCalledTimes(1);
+      await manager.shutdown();
+      const reopened = new RuntimeManager(deps);
+      const secondProbe = vi.spyOn(reopened, "probeDurableObjectSchema");
+      await reopened.ensureDurableObjectEntity({
+        source: "workers/board",
+        className: "BoardDO",
+        key: "second",
+        contextId: "fresh",
+      });
+      expect(secondProbe).not.toHaveBeenCalled();
+      const code = await reopened.getDoCode(
+        "workers/board",
+        "BoardDO",
+        reopened.getDoAdmission("workers/board", "BoardDO")!.executableVersion
+      );
+      expect(code?.env["VIBESTUDIO_SCHEMA_DESCRIPTOR"]).toEqual(descriptor(1, "fresh-shape"));
+      await reopened.shutdown();
+    });
+
+    it("replays installed immutable evidence into the current workspace execution only", async () => {
+      const source = "workers/board";
+      const first = new RuntimeManager(createMockDeps({ workspaceId: "workspace:first" }));
+      const secondDeps = createMockDeps({ workspaceId: "workspace:second" });
+      const second = new RuntimeManager(secondDeps);
+      const firstProbe = vi
+        .spyOn(
+          first as unknown as { probeSchemaExecutable(): Promise<ReturnType<typeof descriptor>> },
+          "probeSchemaExecutable"
+        )
+        .mockResolvedValue(descriptor(1, "shared-shape"));
+      const secondProbe = vi
+        .spyOn(
+          second as unknown as { probeSchemaExecutable(): Promise<ReturnType<typeof descriptor>> },
+          "probeSchemaExecutable"
+        )
+        .mockResolvedValue(descriptor(1, "shared-shape"));
+      try {
+        const a = await first.ensureDurableObjectEntity({
+          source,
+          className: "BoardDO",
+          key: "a",
+          ref: "main",
+          contextId: "a",
+        });
+        await fs.promises.mkdir(secondDeps.schemaProbeReleaseRoot, { recursive: true });
+        const mutable = path.join(
+          process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"]!,
+          "schema-probes"
+        );
+        const staged = await stageInstalledSchemaProbeEvidence({
+          source: mutable,
+          output: secondDeps.schemaProbeReleaseRoot,
+          installation: secondDeps.schemaProbeEnvironment,
+          artifacts: [
+            {
+              source,
+              artifactDigest: runtimeArtifact(source, "main", "workspace:first").artifactDigest,
+            },
+          ],
+        });
+        try {
+          await staged.publish();
+        } finally {
+          await staged.close();
+        }
+        await fs.promises.rm(mutable, { recursive: true });
+        const b = await second.ensureDurableObjectEntity({
+          source,
+          className: "BoardDO",
+          key: "b",
+          ref: "main",
+          contextId: "b",
+        });
+        expect(a.executionDigest).not.toBe(b.executionDigest);
+        expect(a.buildKey).toBe(b.buildKey);
+        expect(firstProbe).toHaveBeenCalledOnce();
+        expect(secondProbe).not.toHaveBeenCalled();
+        expect(second.getDurableWorkQueues(source, "BoardDO", b.executionDigest)).toEqual([]);
+        expect(() => second.getDurableWorkQueues(source, "BoardDO", a.executionDigest)).toThrow(
+          /no admitted/
+        );
+        expect(() =>
+          second.validateAndStageDurableObjectSchemas("drift", [
+            {
+              source,
+              effectiveVersion: b.effectiveVersion,
+              executionDigest: b.executionDigest,
+              descriptor: descriptor(1, "changed-shape"),
+            },
+          ])
+        ).toThrow(/same immutable execution artifact/);
+      } finally {
+        const results = await Promise.allSettled([first.shutdown(), second.shutdown()]);
+        expect(results.every((result) => result.status === "fulfilled")).toBe(true);
+      }
+    });
+
+    it.each([
+      [false, false],
+      [true, false],
+      [false, true],
+      [true, true],
+    ])(
+      "cancels active probe HTTP and joins facet retirement before shutdown (retirement failure: %s, direct publication: %s)",
+      async (failRetirement, directPublication) => {
+        const manager = new RuntimeManager(createMockDeps());
+        const internals = manager as unknown as { stopWorkerd(): Promise<void> };
+        const stop = vi.spyOn(internals, "stopWorkerd");
+        const ordinaryFetch = vi.mocked(fetch).getMockImplementation()!;
+        let entered!: () => void;
+        const probeEntered = new Promise<void>((resolve) => {
+          entered = resolve;
+        });
+        let retiring!: () => void;
+        const retirementEntered = new Promise<void>((resolve) => {
+          retiring = resolve;
+        });
+        let release!: () => void;
+        const retirement = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        vi.mocked(fetch).mockImplementation(async (input, init) => {
+          const url = String(input);
+          if (url.endsWith("/__vibestudio_schema_descriptor")) {
+            const signal = init!.signal!;
+            entered();
+            return new Promise<Response>((_resolve, reject) => {
+              if (signal.aborted) reject(signal.reason);
+              else signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+            });
+          }
+          if (url.endsWith("/__vibestudio_retire")) {
+            retiring();
+            await retirement;
+            return new Response(failRetirement ? "independent retirement failure" : null, {
+              status: failRetirement ? 500 : 204,
+            });
+          }
+          return ordinaryFetch(input, init);
+        });
+        const admission = directPublication
+          ? manager.probeDurableObjectSchema(
+              "workers/board",
+              "BoardDO",
+              mockWorkerBuildFor("workers/board", runtimeArtifact("workers/board", "main"))
+            )
+          : manager.ensureDurableObjectEntity({
+              source: "workers/board",
+              className: "BoardDO",
+              key: "a",
+              contextId: "a",
+            });
+        const observedAdmission = admission.catch((error: unknown) => error);
+        await probeEntered;
+        // Initial DO registration may replace the initial native generation.
+        // Measure shutdown ordering from this admitted HTTP operation onward.
+        stop.mockClear();
+        const shutdown = manager.shutdown();
+        const observedShutdown = shutdown.catch((error: unknown) => error);
+        await retirementEntered;
+        try {
+          expect(stop).not.toHaveBeenCalled();
+        } finally {
+          release();
+        }
+        const cancellation = await observedAdmission;
+        const outcome = await observedShutdown;
+        expect(stop).toHaveBeenCalledOnce();
+        if (failRetirement) {
+          expect(cancellation).toBeInstanceOf(AggregateError);
+          expect(outcome).toBeInstanceOf(AggregateError);
+          const messages = (error: unknown): string[] =>
+            error instanceof AggregateError
+              ? error.errors.flatMap(messages)
+              : error instanceof Error
+                ? [error.message]
+                : [String(error)];
+          expect(
+            messages(outcome).some((message) => message.includes("independent retirement failure"))
+          ).toBe(true);
+        } else {
+          expect(cancellation).toMatchObject({ code: "ECANCELLED" });
+          expect(outcome).toBeUndefined();
+        }
+      }
+    );
+
+    it("joins admitted schema work before stopping native workerd and retains independent failures", async () => {
+      const manager = new RuntimeManager(createMockDeps());
+      const internals = manager as unknown as {
+        schemaAdmissions: Map<string, Promise<void>>;
+        stopWorkerd(): Promise<void>;
+      };
+      const probeFailure = new Error("owned probe retirement failed");
+      const nativeFailure = new Error("native stop failed");
+      let release!: () => void;
+      const admission = new Promise<void>((resolve) => {
+        release = resolve;
+      }).then(() => {
+        throw probeFailure;
+      });
+      internals.schemaAdmissions.set("owned-probe", admission);
+      const stop = vi.spyOn(internals, "stopWorkerd").mockRejectedValue(nativeFailure);
+      const shutdown = manager.shutdown();
+      const observed = shutdown.catch((error: unknown) => error);
+      await Promise.resolve();
+      expect(stop).not.toHaveBeenCalled();
+      release();
+      const failure = await observed;
+      expect(stop).toHaveBeenCalledOnce();
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect((failure as AggregateError).errors).toEqual(
+        expect.arrayContaining([probeFailure, nativeFailure])
+      );
+    });
+
+    it("uses exact executable queue evidence without probing each activated entity", async () => {
+      const deps = createMockDeps();
+      const manager = new RuntimeManager(deps);
+      const probe = vi.spyOn(manager, "probeDurableObjectSchema").mockResolvedValue({
+        ...descriptor(1, "fresh-shape"),
+        durableWorkQueues: ["channel-delivery"],
+      });
+      try {
+        const first = await manager.ensureDurableObjectEntity({
+          source: "workers/board",
+          className: "BoardDO",
+          key: "first",
+          contextId: "fresh",
+        });
+        const second = await manager.ensureDurableObjectEntity({
+          source: "workers/board",
+          className: "BoardDO",
+          key: "second",
+          contextId: "fresh",
+        });
+        expect(probe).toHaveBeenCalledTimes(1);
+        const queues = manager.getDurableWorkQueues(
+          "workers/board",
+          "BoardDO",
+          first.executionDigest
+        );
+        expect(queues).toEqual(["channel-delivery"]);
+        queues.length = 0;
+        expect(
+          manager.getDurableWorkQueues("workers/board", "BoardDO", second.executionDigest)
+        ).toEqual(["channel-delivery"]);
+        expect(() =>
+          manager.getDurableWorkQueues("workers/board", "BoardDO", "e".repeat(64))
+        ).toThrow("no admitted");
+        expect(() =>
+          manager.getDurableWorkQueues("workers/board", "OtherDO", first.executionDigest)
+        ).toThrow("no admitted");
+      } finally {
+        await manager.shutdown();
+      }
+    });
+
+    it("boots the complete product configuration once without duplicate schema probes", async () => {
+      const deps = createMockDeps();
+      const manager = new RuntimeManager(deps);
+      const before = vi.mocked(spawn).mock.calls.length;
+      const schemas = vi.spyOn(manager, "probeDurableObjectSchema");
+      await manager.registerAllDOClasses(
+        ["WorkspaceStateDO", "BrowserVaultDO", "WebhookStoreDO"].map((className) => ({
+          source: INTERNAL_DO_SOURCE,
+          className,
+        }))
+      );
+      expect(vi.mocked(spawn).mock.calls.length - before).toBe(1);
+      await manager.registerAllDOClasses(
+        ["WorkspaceStateDO", "BrowserVaultDO", "WebhookStoreDO"].map((className) => ({
+          source: INTERNAL_DO_SOURCE,
+          className,
+        }))
+      );
+      expect(vi.mocked(spawn).mock.calls.length - before).toBe(1);
+      expect(schemas).not.toHaveBeenCalled();
+      const internal = await import("./internalDOs/internalDoLoader.js");
+      for (const className of internal.INTERNAL_DO_CLASSES) {
+        const identity = internal.internalDOExecutionIdentity(deps.internalDOPrograms!, className);
+        expect(
+          manager.getDurableWorkQueues(INTERNAL_DO_SOURCE, className, identity.executionDigest)
+        ).toEqual(identity.durableWorkQueues);
+        expect(() =>
+          manager.getDurableWorkQueues(INTERNAL_DO_SOURCE, className, "f".repeat(64))
+        ).toThrow("does not match");
+      }
+      // One deployment holds every product class, whatever order they registered in.
+      const deployed = celldDeployments.at(-1)!.config as unknown as {
+        durable_objects: { bindings: Array<{ name: string; class_name: string }> };
+      };
+      expect(deployed.durable_objects.bindings.map((binding) => binding.class_name).sort()).toEqual(
+        ["BrowserVaultDO", "UniversalDO", "WebhookStoreDO", "WorkspaceStateDO"]
+      );
+      // The deployment declares the workspace state's Dolt engine and local tables.
+      const config = celldDeployments.at(-1)!.config as unknown as {
+        migrations: Array<{ new_sqlite_classes?: string[]; new_dolt_classes?: string[] }>;
+        celld: { durable_objects: Record<string, { doltLocal?: string[] }> };
+      };
+      expect(config.migrations.flatMap((migration) => migration.new_dolt_classes ?? [])).toEqual([
+        "WorkspaceStateDO",
+      ]);
+      expect(
+        config.migrations.flatMap((migration) => migration.new_sqlite_classes ?? [])
+      ).not.toContain("WorkspaceStateDO");
+      expect(config.celld.durable_objects["WorkspaceStateDO"]?.doltLocal).toEqual(
+        expect.arrayContaining(["do_alarms", "lifecycle_leases", "local_%", "vsl_%", "state"])
+      );
+      await manager.shutdown();
+    });
+
+    it("prepares schema evidence without an object and reuses it on activation", async () => {
+      const deps = createMockDeps({
+        getManifestDoClasses: (source) =>
+          source === "workers/board"
+            ? [{ className: "BoardDO", storage: "dolt", doltRemotes: true }]
+            : [],
+      });
+      const mgr = new RuntimeManager(deps);
+      const binding = await deps.bindRuntimeImage("workers/board", "state:original");
+      const build = (await deps.getBuildByExecution(
+        binding.artifact.buildKey,
+        binding.artifact.executionDigest
+      ))!;
+      const probe = vi
+        .spyOn(mgr, "probeDurableObjectSchema")
+        .mockResolvedValue(descriptor(1, "fresh-shape"));
+      const ordinaryFetch = vi.mocked(fetch).getMockImplementation()!;
+      vi.mocked(fetch).mockImplementation(async (input, init) =>
+        String(input).endsWith("/_prepare_executable")
+          ? new Response(null, { status: 204 })
+          : ordinaryFetch(input, init)
+      );
+      await mgr.prepareWorkerExecutable(build, ["BoardDO"]);
+      await mgr.prepareWorkerExecutable(build, ["BoardDO"]);
+      expect(probe).toHaveBeenCalledTimes(1);
+      expect(mgr.getDoAdmission("workers/board", "BoardDO")).toBeNull();
+      vi.mocked(deps.bindRuntimeImage).mockClear();
+      await mgr.ensureDurableObjectEntity({
+        source: "workers/board",
+        className: "BoardDO",
+        key: "first",
+        contextId: "fresh",
+        ref: "state:original",
+      });
+      expect(probe).toHaveBeenCalledTimes(1);
+      expect(deps.bindRuntimeImage).toHaveBeenCalledTimes(1);
+      expect(
+        mgr.getDoAdmission("workers/board", "BoardDO", "first")?.executableVersion
+      ).not.toBeNull();
+      expect(mgr.getDoAdmission("workers/board", "BoardDO", "first")?.engine).toMatchObject({
+        storage: "dolt",
+        doltRemotes: true,
+      });
+      await mgr.shutdown();
+    });
+
+    it("keeps the newest prepared publication when an older preparation finishes later", async () => {
+      const deps = createMockDeps();
+      const manager = new RuntimeManager(deps);
+      const source = "workers/board";
+      const first = await deps.bindRuntimeImage(source, "state:first");
+      const second = await deps.bindRuntimeImage(source, "state:second");
+      vi.spyOn(manager, "probeDurableObjectSchema").mockResolvedValue(descriptor(1, "fresh-shape"));
+      let admitFirst!: () => void;
+      const firstAdmitted = new Promise<void>((resolve) => {
+        admitFirst = resolve;
+      });
+      let finishFirst!: () => void;
+      const firstCompletion = new Promise<void>((resolve) => {
+        finishFirst = resolve;
+      });
+      const versions: string[] = [];
+      const ordinaryFetch = vi.mocked(fetch).getMockImplementation()!;
+      vi.mocked(fetch).mockImplementation(async (input, init) => {
+        if (!String(input).endsWith("/_prepare_executable")) return ordinaryFetch(input, init);
+        versions.push(JSON.parse(String(init?.body)).version);
+        if (versions.length === 1) {
+          admitFirst();
+          await firstCompletion;
+        }
+        return new Response(null, { status: 204 });
+      });
+      const older = manager.prepareWorkerExecutable(
+        (await deps.getBuildByExecution(first.artifact.buildKey, first.artifact.executionDigest))!,
+        ["BoardDO"]
+      );
+      await firstAdmitted;
+      await manager.prepareWorkerExecutable(
+        (await deps.getBuildByExecution(
+          second.artifact.buildKey,
+          second.artifact.executionDigest
+        ))!,
+        ["BoardDO"]
+      );
+      expect((await manager.getDoCode(source, "BoardDO", versions[0]!))?.version).toBe(versions[0]);
+      finishFirst();
+      await older;
+      expect(await manager.getDoCode(source, "BoardDO", versions[0]!)).toBeNull();
+      expect((await manager.getDoCode(source, "BoardDO", versions[1]!))?.version).toBe(versions[1]);
+      await manager.shutdown();
+    });
+
+    it("shares exact schema admission and retains its evidence without a publication", async () => {
+      const mgr = new RuntimeManager(createMockDeps());
+      let release!: () => void;
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const probe = vi.spyOn(mgr, "probeDurableObjectSchema").mockImplementation(async () => {
+        entered();
+        await released;
+        return descriptor(1, "fresh-shape");
+      });
+      const prepare = (key: string) =>
+        mgr.ensureDurableObjectEntity({
+          source: "workers/board",
+          className: "BoardDO",
+          key,
+          contextId: "fresh",
+        });
+      const first = prepare("first");
+      await started;
+      const second = prepare("second");
+      release();
+      await Promise.all([first, second]);
+      await prepare("third");
+      expect(probe).toHaveBeenCalledTimes(1);
+      await mgr.shutdown();
+    });
+
+    it("rejects first activation with the original schema failure", async () => {
+      const mgr = new RuntimeManager(createMockDeps());
+      const failure = new Error("schema installation failed");
+      vi.spyOn(mgr, "probeDurableObjectSchema").mockRejectedValue(failure);
+      await expect(
+        mgr.ensureDurableObjectEntity({
+          source: "workers/board",
+          className: "BoardDO",
+          key: "fresh",
+          contextId: "fresh",
+        })
+      ).rejects.toBe(failure);
+      await mgr.shutdown();
+    });
+
+    it("retires probe storage by deleting its cell on the running node", async () => {
+      const mgr = new RuntimeManager(createMockDeps());
+      await mgr.startWorker(startArgs());
+      const node = fakeNode();
+      try {
+        await expect(
+          mgr.probeDurableObjectSchema("workers/runtime-fixture", "BoardDO", mockWorkerBuild())
+        ).resolves.toMatchObject({ className: "BoardDO" });
+        // The cell is destroyed through UniversalDO under the class's own secret.
+        expect(node.destroyed).toHaveLength(1);
+        expect(decodeURIComponent(node.destroyed[0]!.key)).toContain("__vibestudio_schema_probe");
+        expect(node.destroyed[0]!.secret).toBe(mgr.getDoLoaderSecret());
+        expect(retiredOutbox(mgr)).toEqual([]);
+      } finally {
+        await mgr.shutdown();
+      }
+    });
+
+    it("keeps a retirement the node refused in the outbox and collects it at the next start", async () => {
+      const mgr = new RuntimeManager(createMockDeps());
+      await mgr.startWorker(startArgs());
+      const node = fakeNode({ failDestroy: true });
+      try {
+        await mgr.probeDurableObjectSchema("workers/runtime-fixture", "BoardDO", mockWorkerBuild());
+        expect(retiredOutbox(mgr)).toContainEqual(
+          expect.objectContaining({
+            object_key: expect.stringContaining("__vibestudio_schema_probe:"),
+          })
+        );
+        node.failDestroy = false;
+        // A replaced node's start owes the outbox's retirements.
+        await mgr.recoverUnresponsiveSandbox("test: collect retired storage");
+        expect(node.destroyed).toHaveLength(1);
+        expect(retiredOutbox(mgr)).toEqual([]);
+      } finally {
+        await mgr.shutdown();
+      }
+    });
+
+    it("preserves both probe and retirement failures and reclaims owned scratch at shutdown", async () => {
+      const mgr = new RuntimeManager(createMockDeps());
+      const ordinaryFetch = vi.mocked(fetch).getMockImplementation()!;
+      vi.mocked(fetch).mockImplementation(async (input, init) => {
+        const url = String(input);
+        if (url.endsWith("/__vibestudio_schema_descriptor"))
+          return new Response("original schema failure", { status: 500 });
+        if (url.endsWith("/__vibestudio_retire"))
+          return new Response("retirement failure", { status: 500 });
+        return ordinaryFetch(input, init);
+      });
+      let failure: unknown;
+      try {
+        await mgr.probeDurableObjectSchema("workers/runtime-fixture", "BoardDO", mockWorkerBuild());
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeInstanceOf(AggregateError);
+      const aggregate = failure as AggregateError;
+      expect(aggregate.errors).toHaveLength(2);
+      expect(aggregate.errors[0].message).toContain("original schema failure");
+      expect(aggregate.errors[1].message).toContain("retirement failure");
+      expect(aggregate.cause).toBe(aggregate.errors[0]);
+      const internals = mgr as unknown as { schemaProbeBuilds: Map<string, unknown> };
+      expect(internals.schemaProbeBuilds.size).toBe(1);
+      await mgr.shutdown();
+      expect(internals.schemaProbeBuilds.size).toBe(0);
+    });
+
+    it("binds schema evidence to the exact artifact even when source effective versions match", async () => {
+      const source = "workers/board";
+      const first = runtimeArtifact(source, "same-source");
+      const { executionDigest: _digest, ...unsigned } = first;
+      const changed = {
+        ...unsigned,
+        recipeDigest: sha256("different recipe"),
+        buildKey: sha256("different build"),
+        artifactDigest: sha256("different built schema payload"),
+      };
+      const second = verifyExecutionArtifactRef({
+        ...changed,
+        executionDigest: executionArtifactDigest(changed),
+      });
+      const builds = [first, second].map((artifact) => mockWorkerBuildFor(source, artifact));
+      const deps = createMockDeps({
+        bindRuntimeImage: vi.fn(async (_source, ref) => ({
+          source,
+          unitName: source,
+          artifact: ref === "state:b" ? second : first,
+          authority: { provides: [], requests: [], serviceRequests: [] },
+        })),
+        getBuildByExecution: vi.fn(
+          async (key, digest) =>
+            builds.find(
+              (build) =>
+                build.buildKey === key && build.metadata.execution?.executionDigest === digest
+            ) ?? null
+        ),
+      });
+      const mgr = new RuntimeManager(deps);
+      const probe = vi
+        .spyOn(mgr, "probeDurableObjectSchema")
+        .mockImplementation(async (_source, _className, build) =>
+          descriptor(
+            1,
+            build.metadata.execution?.executionDigest === first.executionDigest
+              ? "first-shape"
+              : "second-shape"
+          )
+        );
+      for (const contextId of ["a", "b"]) {
+        const prepared = await mgr.ensureDurableObjectEntity({
+          source,
+          className: "BoardDO",
+          key: contextId,
+          contextId,
+          ref: `state:${contextId}`,
+        });
+        await mgr.restoreDurableObjectEntity({
+          id: prepared.targetId,
+          kind: "do",
+          source: { repoPath: source, effectiveVersion: prepared.effectiveVersion },
+          activeBuildKey: prepared.buildKey,
+          activeExecutionDigest: prepared.executionDigest,
+          activeAuthority: prepared.authority,
+          contextId,
+          className: "BoardDO",
+          key: contextId,
+          createdAt: 1,
+          status: "active",
+          cleanupComplete: false,
+        });
+      }
+      mgr.validateAndStageDurableObjectSchemas("same-source", [
+        {
+          source,
+          effectiveVersion: first.sourceState.effectiveVersion,
+          executionDigest: first.executionDigest,
+          descriptor: descriptor(1, "first-shape"),
+        },
+        {
+          source,
+          effectiveVersion: second.sourceState.effectiveVersion,
+          executionDigest: second.executionDigest,
+          descriptor: descriptor(1, "second-shape"),
+        },
+      ]);
+      const firstCode = await mgr.getDoCode(
+        source,
+        "BoardDO",
+        mgr.getDoAdmission(source, "BoardDO", "a")!.executableVersion,
+        "a"
+      );
+      const secondCode = await mgr.getDoCode(
+        source,
+        "BoardDO",
+        mgr.getDoAdmission(source, "BoardDO", "b")!.executableVersion,
+        "b"
+      );
+      expect(probe).toHaveBeenCalledTimes(2);
+      expect(firstCode?.env["VIBESTUDIO_SCHEMA_DESCRIPTOR"]).toEqual(descriptor(1, "first-shape"));
+      expect(secondCode?.env["VIBESTUDIO_SCHEMA_DESCRIPTOR"]).toEqual(
+        descriptor(1, "second-shape")
+      );
+      expect(firstCode?.env["WORKER_EXECUTION_DIGEST"]).toBe(first.executionDigest);
+      expect(secondCode?.env["WORKER_EXECUTION_DIGEST"]).toBe(second.executionDigest);
+      expect(firstCode?.env).not.toHaveProperty("WORKER_BUILD_KEY");
+      expect(secondCode?.env).not.toHaveProperty("WORKER_BUILD_KEY");
+      expect(firstCode?.egressIdentity).not.toBe(secondCode?.egressIdentity);
+      expect(() =>
+        mgr.validateAndStageDurableObjectSchemas("conflicting-probe", [
+          {
+            source,
+            effectiveVersion: first.sourceState.effectiveVersion,
+            executionDigest: first.executionDigest,
+            descriptor: descriptor(1, "changed-first-shape"),
+          },
+        ])
+      ).toThrow(/same immutable execution artifact/);
+      expect(
+        (
+          await mgr.getDoCode(
+            source,
+            "BoardDO",
+            mgr.getDoAdmission(source, "BoardDO", "a")!.executableVersion,
+            "a"
+          )
+        )?.env["VIBESTUDIO_SCHEMA_DESCRIPTOR"]
+      ).toEqual(descriptor(1, "first-shape"));
+    });
+
+    it("stages each publication's exact current descriptor without comparing old generations", () => {
+      const mgr = new RuntimeManager(createMockDeps());
+      expect(
+        mgr.validateAndStageDurableObjectSchemas("state:first", [
+          {
+            source: "workers/board",
+            effectiveVersion: "ev-1",
+            executionDigest: sha256("execution:ev-1"),
+            descriptor: descriptor(1, "shape-v1"),
+          },
+        ])
+      ).toEqual([]);
+      mgr.commitDurableObjectSchemas("state:first");
+
+      expect(
+        mgr.validateAndStageDurableObjectSchemas("state:second", [
+          {
+            source: "workers/board",
+            effectiveVersion: "ev-2",
+            executionDigest: sha256("execution:ev-2"),
+            descriptor: descriptor(2, "shape-v2"),
+          },
+        ])
+      ).toEqual([]);
+      mgr.commitDurableObjectSchemas("state:second");
+
+      expect(
+        mgr.validateAndStageDurableObjectSchemas("state:replacement", [
+          {
+            source: "workers/board",
+            effectiveVersion: "ev-3",
+            executionDigest: sha256("execution:ev-3"),
+            descriptor: descriptor(1, "new-current-shape"),
+          },
+        ])
+      ).toEqual([]);
+    });
+  });
+
+  it("hides a backup until its fork finished, and the next operation sweeps the unfinished one", async () => {
+    const mgr = new RuntimeManager(createMockDeps());
+    await mgr.startWorker(startArgs());
+    const node = fakeNode({ failFork: true });
+    const ref = { source: "workers/board", className: "BoardDO", objectKey: "main" };
+
+    await expect(mgr.resetDOStorage(ref, "test failing reset")).rejects.toThrow(
+      "injected fork failure"
+    );
+    // The object was not touched, and the failed backup is not listed.
+    await expect(mgr.listDOStorageBackups(ref)).resolves.toEqual([]);
+    expect(node.destroyed).toEqual([]);
+    const unfinished = unfinishedBackups(mgr);
+    expect(unfinished).toHaveLength(1);
+
+    node.failFork = false;
+    const { operationId } = await mgr.resetDOStorage(ref, "retry reset");
+    await expect(mgr.listDOStorageBackups(ref)).resolves.toEqual([
+      expect.objectContaining({ operationId }),
+    ]);
+    expect(unfinishedBackups(mgr)).toEqual([]);
+    // The backup is a fork of the object into a hidden cell; the reset then
+    // deletes the object's cell (root, facet index and facets). The unfinished
+    // backup's cell was deleted first.
+    expect(node.objects.at(-1)).toMatchObject({
+      op: "fork",
+      namespace: "UNIVERSAL_DO",
+      from: encodeUniversalKey(ref),
+      to: encodeUniversalKey({ ...ref, objectKey: `__vibestudio_backup:${operationId}` }),
+      // A fork the node lost mid-publication is taken over, not renamed around.
+      replaceUnfinished: true,
+    });
+    expect(node.destroyed.map((entry) => decodeURIComponent(entry.key))).toEqual([
+      encodeUniversalKey({ ...ref, objectKey: `__vibestudio_backup:${unfinished[0]}` }),
+      encodeUniversalKey(ref),
+    ]);
+    await mgr.shutdown();
+  });
+
+  it("restores a backup into the object's own cell, stopping it, and keeps what it replaced", async () => {
+    const mgr = new RuntimeManager(createMockDeps());
+    await mgr.startWorker(startArgs());
+    const node = fakeNode();
+    const ref = { source: "workers/board", className: "BoardDO", objectKey: "main" };
+    try {
+      const { operationId: backupId } = await mgr.resetDOStorage(ref, "make a backup");
+      node.objects.length = 0;
+      const restored = await mgr.restoreDOStorageBackup(ref, backupId, "restore it");
+      expect(node.objects.map((entry) => entry["op"])).toEqual(["fork", "restore"]);
+      // The current state is backed up before it is replaced.
+      expect(node.objects[0]).toMatchObject({
+        to: encodeUniversalKey({
+          ...ref,
+          objectKey: `__vibestudio_backup:${restored.operationId}`,
+        }),
+      });
+      expect(node.objects[1]).toMatchObject({
+        op: "restore",
+        from: encodeUniversalKey({ ...ref, objectKey: `__vibestudio_backup:${backupId}` }),
+        to: encodeUniversalKey(ref),
+        stop: true,
+      });
+      // A backup of another object is not this object's.
+      await expect(
+        mgr.restoreDOStorageBackup({ ...ref, objectKey: "other" }, backupId, "wrong target")
+      ).rejects.toThrow("does not belong to the exact requested target");
+      // Product objects are owned by their classes, not by this surface.
+      await expect(
+        mgr.resetDOStorage(
+          { source: "vibestudio/internal", className: "WebhookStoreDO", objectKey: "owner" },
+          "not allowed"
+        )
+      ).rejects.toThrow("not supported for internal DO source");
+    } finally {
+      await mgr.shutdown();
+    }
+  });
+
+  it("rotates the storage identity before it replaces anything, and keeps it across a restart", async () => {
+    const deps = createMockDeps();
+    const mgr = new RuntimeManager(deps);
+    await mgr.startWorker(startArgs());
+    const node = fakeNode({ failDestroy: true });
+    const ref = { source: "workers/agent", className: "Agent", objectKey: "identity" };
+    const before = mgr.durableObjectStorageIncarnation(ref);
+    expect(mgr.durableObjectStorageIncarnation(ref)).toEqual(before);
+    // A replacement the node refuses has already rotated the identity: a host
+    // authority granted on the old storage never outlives the data it was for.
+    await expect(mgr.resetDOStorage(ref, "rotate identity")).rejects.toThrow(
+      "injected destroy failure"
+    );
+    const rotated = mgr.durableObjectStorageIncarnation(ref);
+    expect(rotated.generation).toBe(before.generation + 1);
+    expect(rotated.incarnation).not.toBe(before.incarnation);
+    node.failDestroy = false;
+    const { operationId } = await mgr.resetDOStorage(ref, "replace it");
+    const current = mgr.durableObjectStorageIncarnation(ref);
+    expect(current.generation).toBe(rotated.generation + 1);
+    await mgr.shutdown();
+
+    const reopened = new RuntimeManager(deps);
+    await reopened.startWorker(startArgs());
+    fakeNode();
+    expect(reopened.durableObjectStorageIncarnation(ref)).toEqual(current);
+    await reopened.restoreDOStorageBackup(ref, operationId, "restore earlier data");
+    // Restoring earlier data does not revive its identity.
+    expect(reopened.durableObjectStorageIncarnation(ref)).toEqual({
+      incarnation: expect.not.stringMatching(
+        new RegExp(`^(${before.incarnation}|${current.incarnation})$`)
+      ),
+      generation: current.generation + 1,
+    });
+    await reopened.shutdown();
+  });
+
+  it("publishes the object's authority on its rotated identity after a replacement", async () => {
+    const deps = createMockDeps();
+    const ref = { source: "workers/agent", className: "Agent", objectKey: "publication" };
+    const published: Array<{ incarnation: string; generation: number }> = [];
+    const manager = new RuntimeManager({
+      ...deps,
+      republishStorageOwner: async (target) => {
+        expect(target).toEqual(ref);
+        published.push(manager.durableObjectStorageIncarnation(target));
+      },
+    });
+    await manager.startWorker(startArgs());
+    fakeNode();
+    try {
+      const before = manager.durableObjectStorageIncarnation(ref);
+      await manager.resetDOStorage(ref, "replace native storage");
+      expect(published).toEqual([
+        {
+          incarnation: expect.not.stringMatching(before.incarnation),
+          generation: before.generation + 1,
+        },
+      ]);
+      expect(manager.durableObjectStorageIncarnation(ref)).toEqual(published[0]);
+    } finally {
+      await manager.shutdown();
+    }
+  });
+
+  it("keeps a backup of an object whose replacement failed, and retains only the five newest", async () => {
+    const mgr = new RuntimeManager(createMockDeps());
+    await mgr.startWorker(startArgs());
+    const node = fakeNode({ failDestroy: true });
+    const ref = { source: "workers/board", className: "BoardDO", objectKey: "retained" };
+    await expect(mgr.resetDOStorage(ref, "first attempt")).rejects.toThrow(
+      "injected destroy failure"
+    );
+    // The backup was taken and the object was not replaced: the backup is valid.
+    const [first] = await mgr.listDOStorageBackups(ref);
+    expect(first?.intent).toBe("first attempt");
+    node.failDestroy = false;
+    for (let index = 0; index < 5; index += 1) {
+      await mgr.resetDOStorage(ref, `retention ${index}`);
+    }
+    const backups = await mgr.listDOStorageBackups(ref);
+    expect(backups).toHaveLength(5);
+    expect(backups.some((backup) => backup.operationId === first!.operationId)).toBe(false);
+    // The swept backup's cell was deleted along with its record.
+    expect(
+      node.destroyed.some((entry) => decodeURIComponent(entry.key).includes(first!.operationId))
+    ).toBe(true);
+    await mgr.shutdown();
+  });
+
+  it("collects a retirement at once on a running node and at the next start otherwise", async () => {
+    const deps = createMockDeps();
+    const ref = { source: "workers/board", className: "BoardDO", objectKey: "retired" };
+    const down = new RuntimeManager(deps);
+    // No node is running: the retirement is recorded and nothing is destroyed.
+    const quiet = fakeNode();
+    await down.destroyRetiredDOStorage(ref);
+    expect(quiet.destroyed).toEqual([]);
+    expect(retiredOutbox(down)).toContainEqual(
+      expect.objectContaining({
+        source: ref.source,
+        class_name: ref.className,
+        object_key: ref.objectKey,
+      })
+    );
+    await down.shutdown();
+
+    // A later manager of the same state starts its node and owes the collection.
+    const reopened = new RuntimeManager(deps);
+    const node = fakeNode();
+    try {
+      await reopened.startWorker(startArgs());
+      expect(node.destroyed.map((entry) => decodeURIComponent(entry.key))).toEqual([
+        encodeUniversalKey(ref),
+      ]);
+      expect(retiredOutbox(reopened)).toEqual([]);
+      // With the node running, a retirement is collected in the same call.
+      await reopened.destroyRetiredDOStorage({ ...ref, objectKey: "retired-live" });
+      expect(node.destroyed).toHaveLength(2);
+    } finally {
+      await reopened.shutdown();
+    }
+  });
+
+  it("retires a product object's storage through its own class, under the lifecycle secret", async () => {
+    const mgr = new RuntimeManager(createMockDeps());
+    await mgr.startWorker(startArgs());
+    const node = fakeNode();
+    try {
+      await mgr.destroyRetiredDOStorage({
+        source: "vibestudio/internal",
+        className: "WebhookStoreDO",
+        objectKey: "ctx/run 1",
+      });
+      expect(node.destroyed).toEqual([
+        {
+          key: expect.any(String),
+          path: "/_w/vibestudio/internal/WebhookStoreDO/ctx%2Frun%201/__vibestudio_destroy",
+          secret: mgr.getDoLoaderSecret(),
+        },
+      ]);
+    } finally {
+      await mgr.shutdown();
+    }
+  });
+
+  describe("cloning a userland object's storage", () => {
+    const ref = { source: "workers/board", className: "BoardDO", objectKey: "source" };
+    const reservation = (over: Record<string, unknown> = {}) =>
+      ({
+        id: canonicalEntityId({
+          kind: "do",
+          source: ref.source,
+          className: ref.className,
+          key: "copy",
+        }),
+        kind: "do",
+        key: "copy",
+        status: "preparing",
+        className: ref.className,
+        contextId: "ctx-copy",
+        authoritySessionId: "session-1",
+        source: { repoPath: ref.source },
+        cloneProvenance: {
+          storage: "snapshot",
+          operationContextId: "ctx-op",
+          sourceEntityId: canonicalEntityId({
+            kind: "do",
+            source: ref.source,
+            className: ref.className,
+            key: ref.objectKey,
+          }),
+          sourceContextId: "ctx-source",
+          sourceAuthoritySessionId: "session-0",
+          sourceBuildKey: "b".repeat(64),
+          sourceExecutionDigest: "e".repeat(64),
+        },
+        ...over,
+      }) as unknown as import("@vibestudio/shared/runtime/entitySpec").EntityRecord;
+
+    async function cloneHarness() {
+      const mgr = new RuntimeManager(createMockDeps());
+      await mgr.startWorker(startArgs());
+      const node = fakeNode();
+      // Source identity is the runtime service's to judge; the node's fork is under test.
+      vi.spyOn(
+        mgr as unknown as { assertCloneSourceIdentity(): Promise<void> },
+        "assertCloneSourceIdentity"
+      ).mockResolvedValue(undefined);
+      return { mgr, node };
+    }
+
+    it("forks the source cell into the target's cell and records completion", async () => {
+      const { mgr, node } = await cloneHarness();
+      try {
+        const record = reservation();
+        expect(() => mgr.requireCloneStorageComplete(record)).toThrow("completion does not match");
+        const target = await mgr.forkObjectStorage(ref, "copy", {
+          reservation: record,
+          resolveSource: async () => null,
+        });
+        expect(target).toEqual({ ...ref, objectKey: "copy" });
+        expect(node.objects).toEqual([
+          {
+            op: "fork",
+            namespace: "UNIVERSAL_DO",
+            from: encodeUniversalKey(ref),
+            to: encodeUniversalKey(target),
+            replaceUnfinished: true,
+          },
+        ]);
+        expect(() => mgr.requireCloneStorageComplete(record)).not.toThrow();
+        // A repeated clone of the same reservation is a no-op.
+        await mgr.forkObjectStorage(ref, "copy", {
+          reservation: record,
+          resolveSource: async () => null,
+        });
+        expect(node.objects).toHaveLength(1);
+        // Fresh storage has nothing to copy.
+        expect(() =>
+          mgr.requireCloneStorageComplete(
+            reservation({ cloneProvenance: { ...record.cloneProvenance, storage: "fresh" } })
+          )
+        ).not.toThrow();
+      } finally {
+        await mgr.shutdown();
+      }
+    });
+
+    it("recognizes its own finished fork when a crash lost the receipt, and refuses anything else", async () => {
+      const { mgr, node } = await cloneHarness();
+      try {
+        node.failFork = "the target object BoardDO:x already exists";
+        node.failForkCode = "ERR_OBJECT_EXISTS";
+        const record = reservation();
+        // First attempt: the fork fails; the receipt is left open.
+        await expect(
+          mgr.forkObjectStorage(ref, "copy", {
+            reservation: record,
+            resolveSource: async () => null,
+          })
+        ).rejects.toThrow("already exists");
+        expect(() => mgr.requireCloneStorageComplete(record)).toThrow();
+        // A retry whose fork finds the target already exists took its own earlier fork.
+        await mgr.forkObjectStorage(ref, "copy", {
+          reservation: record,
+          resolveSource: async () => null,
+        });
+        expect(() => mgr.requireCloneStorageComplete(record)).not.toThrow();
+        // Another object's reservation is not a reserved owner of this copy.
+        await expect(
+          mgr.forkObjectStorage(ref, "copy", {
+            reservation: reservation({ status: "active" }),
+            resolveSource: async () => null,
+          })
+        ).rejects.toThrow("no exact reserved owner");
+        // The target's retirement forgets its receipt and deletes its cell.
+        await mgr.destroyRetiredDOStorage({ ...ref, objectKey: "copy" });
+        expect(() => mgr.requireCloneStorageComplete(record)).toThrow();
+        expect(node.destroyed.map((entry) => decodeURIComponent(entry.key))).toContain(
+          encodeUniversalKey({ ...ref, objectKey: "copy" })
+        );
+      } finally {
+        await mgr.shutdown();
+      }
+    });
+  });
+
+  it("binds the required process-owned egress secret", () => {
+    const mgr = new RuntimeManager(createMockDeps({ egressSecret: "owned-by-bootstrap" }));
+
+    expect(mgr.getEgressSecret()).toBe("owned-by-bootstrap");
+  });
+
+  // -------------------------------------------------------------------------
+  // Instance lifecycle
+  // -------------------------------------------------------------------------
+  describe("startWorker", () => {
+    it("binds an exact sealed workerd test artifact without rebuilding mutable source", async () => {
+      const build = mockWorkerBuild();
+      build.metadata.details = {
+        kind: "test",
+        suite: "unit",
+        runtime: "workerd",
+        selectedFiles: ["model.test.ts"],
+      };
+      const deps = createMockDeps({
+        getBuildByExecution: vi.fn(async (buildKey, executionDigest) =>
+          buildKey === build.buildKey &&
+          executionDigest === build.metadata.execution?.executionDigest
+            ? build
+            : null
+        ),
+      });
+      const mgr = new RuntimeManager(deps);
+
+      await mgr.startWorker(
+        startArgs({
+          artifact: {
+            buildKey: build.buildKey,
+            executionDigest: build.metadata.execution!.executionDigest,
+          },
+        })
+      );
+
+      expect(deps.getBuildByExecution).toHaveBeenCalledWith(
+        build.buildKey,
+        build.metadata.execution!.executionDigest
+      );
+      expect(deps.bindRuntimeImage).not.toHaveBeenCalled();
+    });
+
+    it("mints a bearer token for the worker entity callerId", async () => {
+      const deps = createMockDeps();
+      const mgr = new RuntimeManager(deps);
+
+      await mgr.startWorker(startArgs());
+
+      expect(deps.tokenManager.ensureToken).toHaveBeenCalledWith(
+        "worker:workers/runtime-fixture:hello",
+        "worker"
+      );
+    });
+
+    it("resolves canonical worker target ids to loader instance names", async () => {
+      const mgr = new RuntimeManager(createMockDeps());
+      const handle = await mgr.startWorker(
+        startArgs({ source: "workers/runtime-fixture", key: "instance:with spaces" })
+      );
+
+      await expect(mgr.resolveWorkerAdmission(handle.targetId)).resolves.toMatchObject({
+        name: "instance_with_spaces",
+      });
+      await expect(
+        mgr.resolveWorkerAdmission("worker:workers/runtime-fixture:missing")
+      ).resolves.toBeNull();
+    });
+
+    it("injects parent handle metadata into the worker runtime env", async () => {
+      const deps = createMockDeps();
+      const mgr = new RuntimeManager(deps);
+
+      await mgr.startWorker(
+        startArgs({
+          parent: {
+            parentId: "panel-parent",
+            parentEntityId: "panel:parent-entity",
+            parentKind: "panel",
+          },
+        })
+      );
+
+      // Workers load dynamically — parent metadata travels in the per-instance env
+      // served by `/_workercode`, not the workerd config.
+      const admission = await mgr.getWorkerAdmission("hello");
+      const code = await mgr.getWorkerCode("hello", admission!.version);
+      expect(code?.env["PARENT_ID"]).toBe("panel-parent");
+      expect(code?.env["PARENT_ENTITY_ID"]).toBe("panel:parent-entity");
+      expect(code?.env["PARENT_KIND"]).toBe("panel");
+      expect(code?.env["WORKER_EFFECTIVE_VERSION"]).toMatch(/^[0-9a-f]{64}$/);
+      expect(code?.env["WORKER_SOURCE_REF"]).toMatch(/^state:[0-9a-f]{64}$/);
+    });
+
+    it("serves create-time user env to the dynamically loaded worker", async () => {
+      const deps = createMockDeps();
+      const mgr = new RuntimeManager(deps);
+
+      await mgr.startWorker(startArgs({ env: { NON_SECRET_PROBE: "configured" } }));
+
+      const admission = await mgr.getWorkerAdmission("hello");
+      const code = await mgr.getWorkerCode("hello", admission!.version);
+      expect(code?.env["NON_SECRET_PROBE"]).toBe("configured");
+    });
+
+    it("keeps a leased old executable exact and rejects it after the dispatch releases", async () => {
+      const deps = createMockDeps();
+      const mgr = new RuntimeManager(deps);
+      await mgr.startWorker(startArgs({ env: { FEATURE: "old" } }));
+
+      const old = (await mgr.getWorkerAdmission("hello"))!;
+      const oldCode = await mgr.getWorkerCode("hello", old.version);
+      await mgr.updateInstance("hello", { env: { FEATURE: "new" } });
+      expect(await mgr.getWorkerCode("hello", old.version)).toBe(oldCode);
+      expect((await mgr.getWorkerCode("hello", old.version))?.env["FEATURE"]).toBe("old");
+
+      const next = (await mgr.getWorkerAdmission("hello"))!;
+      expect((await mgr.getWorkerCode("hello", next.version))?.env["FEATURE"]).toBe("new");
+      old.release?.();
+      await expect(mgr.getWorkerCode("hello", old.version)).rejects.toMatchObject({
+        code: "WORKER_ADMISSION_CHANGED",
+      });
+      next.release?.();
+    });
+
+    it("captures a cold selection before an update even when code reading finishes later", async () => {
+      let entered!: () => void;
+      let releaseRead!: () => void;
+      const reading = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        releaseRead = resolve;
+      });
+      const deps = createMockDeps();
+      const read = deps.readBuildArtifactContent;
+      deps.readBuildArtifactContent = async (build, artifact) => {
+        entered();
+        await gate;
+        return read(build, artifact);
+      };
+      const mgr = new RuntimeManager(deps);
+      await mgr.startWorker(startArgs({ env: { FEATURE: "old" } }));
+
+      const selecting = mgr.getWorkerAdmission("hello");
+      await reading;
+      const updating = mgr.updateInstance("hello", { env: { FEATURE: "new" } });
+      releaseRead();
+      const old = (await selecting)!;
+      expect((await mgr.getWorkerCode("hello", old.version))?.env["FEATURE"]).toBe("old");
+      await updating;
+      old.release?.();
+      await expect(mgr.getWorkerCode("hello", old.version)).rejects.toMatchObject({
+        code: "WORKER_ADMISSION_CHANGED",
+      });
+    });
+
+    it("is idempotent for a live duplicate of the same identity (no-op re-attach)", async () => {
+      const deps = createMockDeps();
+      const mgr = new RuntimeManager(deps);
+
+      const first = await mgr.startWorker(startArgs());
+      // Same (source, key, contextId) → returns the existing instance as a no-op.
+      const again = await mgr.startWorker(startArgs());
+
+      expect(again).toEqual(first);
+      expect(mgr.listInstances()).toHaveLength(1);
+    });
+
+    it("rejects a sanitized-name collision from a different identity (full targetId match required)", async () => {
+      const deps = createMockDeps();
+      const mgr = new RuntimeManager(deps);
+
+      await mgr.startWorker(startArgs());
+      // Same key (→ same sanitized name) but a different source ⇒ different
+      // targetId ⇒ genuine collision, not a re-attach.
+      await expect(mgr.startWorker(startArgs({ source: "workers/other" }))).rejects.toThrow(
+        /different identity/
+      );
+      // Distinct raw keys that sanitize to the SAME name (`a:b` and `a_b`) ⇒
+      // different targetId ⇒ must throw, not silently reuse the first worker.
+      await mgr.startWorker(startArgs({ source: "workers/x", key: "a:b" }));
+      await expect(mgr.startWorker(startArgs({ source: "workers/x", key: "a_b" }))).rejects.toThrow(
+        /different identity/
+      );
+    });
+
+    it("rejects the same (source, key) in another context (no silent cross-context reuse)", async () => {
+      const deps = createMockDeps();
+      const mgr = new RuntimeManager(deps);
+
+      await mgr.startWorker(startArgs());
+      // Same source+key maps to the same (context-free) targetId, but a launch in
+      // a DIFFERENT context must NOT silently reuse the ctx-1 worker — reattach
+      // requires a contextId match too. Callers must use context-unique keys
+      // until worker canonical ids include contextId (tracked follow-up).
+      await expect(mgr.startWorker(startArgs({ contextId: "ctx-2" }))).rejects.toThrow(
+        /different identity/
+      );
+      expect(mgr.listInstances()).toHaveLength(1);
+    });
+
+    it("records a lifecycle event and lastError on failed start, cleared by a later success", async () => {
+      const recordLifecycleEvent = vi.fn();
+      const bindRuntimeImage = vi.fn().mockRejectedValueOnce(new Error("boom"));
+      const deps = createMockDeps({ bindRuntimeImage, recordLifecycleEvent });
+      const mgr = new RuntimeManager(deps);
+
+      await expect(mgr.startWorker(startArgs())).rejects.toThrow("boom");
+
+      expect(recordLifecycleEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: "workers/runtime-fixture",
+          callerId: "worker:workers/runtime-fixture:hello",
+          level: "error",
+          message: "Worker failed to start: boom",
+          fields: expect.objectContaining({ event: "worker-start-failed" }),
+        })
+      );
+      expect(mgr.getLastWorkerError("workers/runtime-fixture")).toEqual(
+        expect.objectContaining({ message: "boom", timestamp: expect.any(Number) })
+      );
+
+      // Subsequent successful start clears the recorded failure.
+      bindRuntimeImage.mockResolvedValue({
+        source: "workers/runtime-fixture",
+        unitName: "workers/runtime-fixture",
+        artifact: runtimeArtifact("workers/runtime-fixture", "main"),
+        authority: { provides: [], requests: [], serviceRequests: [] },
+      });
+      await mgr.startWorker(startArgs());
+
+      expect(mgr.getLastWorkerError("workers/runtime-fixture")).toBeNull();
+      expect(recordLifecycleEvent).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          source: "workers/runtime-fixture",
+          level: "info",
+          fields: expect.objectContaining({ event: "worker-started" }),
+        })
+      );
+    });
+
+    it("rolls back on build failure", async () => {
+      const deps = createMockDeps({
+        bindRuntimeImage: vi.fn().mockRejectedValue(new Error("build failed")),
+      });
+      const mgr = new RuntimeManager(deps);
+
+      await expect(mgr.startWorker(startArgs())).rejects.toThrow("build failed");
+
+      expect(deps.tokenManager.revokeToken).toHaveBeenCalledWith(
+        "worker:workers/runtime-fixture:hello"
+      );
+      expect(mgr.listInstances()).toHaveLength(0);
+    });
+
+    it("sanitizes special characters in the entity key", async () => {
+      const deps = createMockDeps();
+      const mgr = new RuntimeManager(deps);
+
+      await mgr.startWorker(startArgs({ key: 'hello"; process.exit();//' }));
+      const [instance] = mgr.listInstances();
+      // All non-alphanumeric/dash/underscore chars replaced
+      expect(instance?.name).not.toContain('"');
+      expect(instance?.name).not.toContain(";");
+      expect(instance?.name).toMatch(/^[a-zA-Z0-9_-]+$/);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Ref-specific builds
+  // -------------------------------------------------------------------------
+  describe("ref builds", () => {
+    it("stores explicit state ref when provided", async () => {
+      const deps = createMockDeps();
+      const mgr = new RuntimeManager(deps);
+
+      await mgr.startWorker(startArgs({ ref: "state:abc123" }));
+
+      expect(statusOf(mgr, "hello")?.scopeRef).toBe("state:abc123");
+      expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/runtime-fixture", "state:abc123");
+    });
+
+    it("binds protected main only when explicitly requested", async () => {
+      const deps = createMockDeps();
+      const mgr = new RuntimeManager(deps);
+
+      await mgr.startWorker(startArgs({ ref: "main" }));
+
+      expect(statusOf(mgr, "hello")?.scopeRef).toBe("main");
+      expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/runtime-fixture", "main");
+    });
+
+    it("binds runtime-managed workers to protected main by default", async () => {
+      const deps = createMockDeps();
+      const mgr = new RuntimeManager(deps);
+
+      const prepared = await mgr.startWorker({
+        source: "workers/new",
+        key: "new-worker",
+        contextId: "ctx-agent",
+      });
+
+      const artifact = runtimeArtifact("workers/new", "main");
+      expect(prepared.effectiveVersion).toBe(artifact.sourceState.effectiveVersion);
+      expect(prepared.buildKey).toBe(artifact.buildKey);
+      expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/new", "main");
+      expect(statusOf(mgr, "new-worker")?.scopeRef).toBe("main");
+    });
+
+    it("honors explicit context refs for runtime-managed workers", async () => {
+      const deps = createMockDeps();
+      const mgr = new RuntimeManager(deps);
+
+      await mgr.startWorker({
+        source: "workers/new",
+        key: "new-worker",
+        contextId: "ctx-agent",
+        ref: "ctx:ctx-agent",
+      });
+
+      expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/new", "ctx:ctx-agent");
+      expect(statusOf(mgr, "new-worker")?.scopeRef).toBe("ctx:ctx-agent");
+    });
+
+    it("binds runtime-managed DOs to protected main by default", async () => {
+      const deps = createMockDeps();
+      const mgr = new RuntimeManager(deps);
+
+      await mgr.ensureDurableObjectEntity({
+        source: "workers/new-do",
+        className: "NewDO",
+        key: "k1",
+        contextId: "ctx-agent",
+      });
+
+      expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/new-do", "main");
+    });
+
+    it("keeps a participant's first DO image out of the class default", async () => {
+      const deps = createMockDeps();
+      const mgr = new RuntimeManager(deps);
+      const source = "workers/participant";
+      const className = "ParticipantDO";
+      const ref = "state:participant";
+      const artifact = runtimeArtifact(source, ref);
+      const sourceState = { kind: "event", eventId: `event:${source}:${ref}` } as const;
+      const prepared = await mgr.ensureDurableObjectEntity({
+        source, className, key: "private", contextId: "ctx-1", ref, sourceState,
+      });
+
+      expect(deps.bindRuntimeImage).toHaveBeenCalledWith(source, ref, sourceState);
+      expect(prepared.executionDigest).toBe(artifact.executionDigest);
+      expect(mgr.getDoAdmission(source, className, "private")).not.toBeNull();
+      expect(mgr.getDoAdmission(source, className, "public")).toBeNull();
+      expect(await mgr.describeDoRpcCatalog(source, className, "public")).toEqual({
+        activeBuildKey: null, declaredMethods: [],
+      });
+
+      await mgr.ensureDOClass(source, className, { scopeRef: "main" });
+      expect(deps.bindRuntimeImage).toHaveBeenLastCalledWith(source, "main");
+      expect(mgr.getDoAdmission(source, className, "public")).not.toBeNull();
+      expect(mgr.getDoAdmission(source, className, "private")?.props.image?.sourceRef).toBe(
+        artifact.sourceState.contentRoots[0]?.stateHash
+      );
+    });
+
+    it("restores an internal entity directly from its sealed service identity", async () => {
+      const deps = createMockDeps();
+      const mgr = new RuntimeManager(deps);
+      const prepared = await mgr.ensureDurableObjectEntity({
+        source: "vibestudio/internal",
+        className: "BrowserVaultDO",
+        key: "browser-environment",
+        contextId: "ctx-internal",
+      });
+
+      await expect(
+        mgr.restoreDurableObjectEntity({
+          id: "do:vibestudio/internal:BrowserVaultDO:browser-environment",
+          kind: "do",
+          source: {
+            repoPath: "vibestudio/internal",
+            effectiveVersion: prepared.effectiveVersion,
+          },
+          activeBuildKey: prepared.buildKey,
+          activeExecutionDigest: prepared.executionDigest,
+          activeAuthority: prepared.authority,
+          contextId: "ctx-internal",
+          className: "BrowserVaultDO",
+          key: "browser-environment",
+          createdAt: 1,
+          status: "active",
+          cleanupComplete: false,
+        })
+      ).resolves.toBeUndefined();
+      expect(deps.bindRuntimeImage).not.toHaveBeenCalled();
+      expect(
+        mgr
+          .listRuntimeImages()
+          .some(({ id }) => id === "do:vibestudio/internal:BrowserVaultDO:browser-environment")
+      ).toBe(false);
+    });
+
+    ledgerTest("execution.workerd-start-worker", async () => {
+      const deps = createMockDeps();
+      const first = new RuntimeManager(deps);
+      const prepared = await first.ensureDurableObjectEntity({
+        source: "workers/new-do",
+        className: "NewDO",
+        key: "k1",
+        contextId: "ctx-agent",
+        ref: "state:ctx-agent",
+      });
+      const sealedArtifact = runtimeArtifact("workers/new-do", "state:ctx-agent");
+      vi.mocked(deps.getBuildByExecution).mockImplementation(async (buildKey, executionDigest) =>
+        buildKey === sealedArtifact.buildKey && executionDigest === sealedArtifact.executionDigest
+          ? mockWorkerBuildFor("workers/new-do", sealedArtifact)
+          : null
+      );
+      vi.mocked(deps.bindRuntimeImage).mockClear();
+      const restored = new RuntimeManager(deps);
+      const record = {
+        id: "do:workers/new-do:NewDO:k1",
+        kind: "do" as const,
+        source: {
+          repoPath: "workers/new-do",
+          effectiveVersion: prepared.effectiveVersion,
+        },
+        activeBuildKey: prepared.buildKey,
+        activeExecutionDigest: prepared.executionDigest,
+        activeAuthority: { ...prepared.authority },
+        contextId: "ctx-agent",
+        className: "NewDO",
+        key: "k1",
+        createdAt: 1,
+        status: "active" as const,
+        cleanupComplete: false,
+        stateArgs: { agentConfig: { instructions: "admitted instructions" } },
+      };
+
+      await expect(restored.restoreDurableObjectEntity(record)).resolves.toBeUndefined();
+      const version = restored.getDoAdmission("workers/new-do", "NewDO", "k1")?.executableVersion;
+      const admission = restored.getDoAdmission("workers/new-do", "NewDO", "k1")!;
+      const admittedCode = await restored.getDoCode(
+        "workers/new-do",
+        "NewDO",
+        restored.getDoAdmission("workers/new-do", "NewDO", "k1")!.executableVersion,
+        "k1"
+      );
+      record.stateArgs.agentConfig.instructions = "caller mutated instructions";
+      expect(restored.getDoAdmission("workers/new-do", "NewDO", "k1")).toEqual(admission);
+      expect(() => {
+        (admission.props.stateArgs!["agentConfig"] as { instructions: string }).instructions =
+          "facade mutated instructions";
+      }).toThrow(TypeError);
+      expect(restored.getDoAdmission("workers/new-do", "NewDO", "k1")).toBe(admission);
+      expect(restored.getDoAdmission("workers/new-do", "NewDO", "k1")?.props.stateArgs).toEqual({
+        agentConfig: { instructions: "admitted instructions" },
+      });
+      expect(restored.getDoAdmission("workers/new-do", "NewDO", "k1")?.executableVersion).toBe(
+        version
+      );
+      expect(
+        await restored.getDoCode(
+          "workers/new-do",
+          "NewDO",
+          restored.getDoAdmission("workers/new-do", "NewDO", "k1")!.executableVersion,
+          "k1"
+        )
+      ).toEqual(admittedCode);
+      record.stateArgs.agentConfig.instructions = "admitted instructions";
+      await expect(restored.restoreDurableObjectEntity(record)).resolves.toBeUndefined();
+      expect(restored.getDoAdmission("workers/new-do", "NewDO", "k1")?.executableVersion).toBe(
+        version
+      );
+      expect(restored.listRuntimeImages().some(({ id }) => id === record.id)).toBe(false);
+      expect(deps.bindRuntimeImage).not.toHaveBeenCalled();
+      const code = await restored.getDoCode(
+        "workers/new-do",
+        "NewDO",
+        restored.getDoAdmission("workers/new-do", "NewDO", "k1")!.executableVersion,
+        "k1"
+      );
+      expect(code).not.toBeNull();
+    });
+
+    it("restores and retires a sealed DO after its workspace source ref changes", async () => {
+      const recordLifecycleEvent = vi.fn();
+      const deps = createMockDeps({ recordLifecycleEvent });
+      const first = new RuntimeManager(deps);
+      const prepared = await first.ensureDurableObjectEntity({
+        source: "workers/new-do",
+        className: "NewDO",
+        key: "k1",
+        contextId: "ctx-agent",
+        ref: "state:ctx-agent",
+      });
+      const sealedArtifact = runtimeArtifact("workers/new-do", "state:ctx-agent");
+      const changedSource = runtimeArtifact("workers/new-do", "changed");
+      const changedUnsigned = {
+        ...changedSource,
+        recipeDigest: sealedArtifact.recipeDigest,
+        buildKey: sealedArtifact.buildKey,
+        artifactDigest: sealedArtifact.artifactDigest,
+      };
+      const changedArtifact = verifyExecutionArtifactRef({
+        ...changedUnsigned,
+        executionDigest: executionArtifactDigest(changedUnsigned),
+      });
+      vi.mocked(deps.getBuildByKey).mockImplementation(async (buildKey) =>
+        buildKey === sealedArtifact.buildKey
+          ? mockWorkerBuildFor("workers/new-do", changedArtifact)
+          : null
+      );
+      deps.getBuildByExecution = vi.fn(async (buildKey, executionDigest) =>
+        buildKey === sealedArtifact.buildKey && executionDigest === sealedArtifact.executionDigest
+          ? mockWorkerBuildFor("workers/new-do", sealedArtifact)
+          : null
+      );
+      vi.mocked(deps.bindRuntimeImage).mockImplementation(async (unitPath: string) => ({
+        source: unitPath,
+        unitName: unitPath,
+        artifact: runtimeArtifact(unitPath, "changed"),
+        authority: { provides: [], requests: [], serviceRequests: [] },
+      }));
+      vi.mocked(deps.bindRuntimeImage).mockClear();
+      const unregisterEgressCaller = vi.fn();
+      deps.unregisterEgressCaller = unregisterEgressCaller;
+      const restored = new RuntimeManager(deps);
+
+      await restored.restoreDurableObjectEntity({
+        id: "do:workers/new-do:NewDO:k1",
+        kind: "do",
+        source: {
+          repoPath: "workers/new-do",
+          effectiveVersion: prepared.effectiveVersion,
+        },
+        activeBuildKey: prepared.buildKey,
+        activeExecutionDigest: prepared.executionDigest,
+        activeAuthority: {
+          ...prepared.authority,
+        },
+        contextId: "ctx-agent",
+        className: "NewDO",
+        key: "k1",
+        createdAt: 1,
+        status: "active",
+        cleanupComplete: false,
+      });
+
+      expect(deps.bindRuntimeImage).not.toHaveBeenCalled();
+      expect(deps.getBuildByExecution).toHaveBeenCalledWith(
+        sealedArtifact.buildKey,
+        sealedArtifact.executionDigest
+      );
+      expect(recordLifecycleEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          entityId: "do:workers/new-do:NewDO:k1",
+          kind: "do",
+          fields: expect.objectContaining({
+            event: "runtime-image-attached",
+            buildKey: sealedArtifact.buildKey,
+            executionDigest: sealedArtifact.executionDigest,
+          }),
+        })
+      );
+      await expect(
+        restored.retireDOEntity({
+          source: "workers/new-do",
+          className: "NewDO",
+          objectKey: "k1",
+        })
+      ).resolves.toBeUndefined();
+      expect(unregisterEgressCaller).toHaveBeenCalledWith(
+        expect.stringMatching(/^do-code:workers\/new-do:NewDO:[a-f0-9]{64}$/)
+      );
+      expect(recordLifecycleEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          entityId: "do:workers/new-do:NewDO:k1",
+          fields: expect.objectContaining({ event: "runtime-image-evicted" }),
+        })
+      );
+    });
+
+    it("fails a requested fault abort when workerd is not running", async () => {
+      const manager = new RuntimeManager(createMockDeps());
+
+      await expect(
+        manager.faultAbortUserlandDOFacet({
+          source: "workers/agent-worker",
+          className: "AiChatWorker",
+          objectKey: "agent:test",
+        })
+      ).rejects.toThrow("workerd is not running");
+    });
+
+    it("registers every userland DO egress caller with its complete sealed image", async () => {
+      const registerEgressCaller = vi.fn();
+      const deps = createMockDeps({ registerEgressCaller });
+      const mgr = new RuntimeManager(deps);
+
+      await mgr.registerAllDOClasses([
+        { source: "workers/agent-worker", className: "AiChatWorker" },
+      ]);
+
+      expect(registerEgressCaller).toHaveBeenCalledWith(
+        expect.stringMatching(/^do-code:workers\/agent-worker:AiChatWorker:[a-f0-9]{64}$/),
+        expect.objectContaining({
+          runtime: expect.objectContaining({ kind: "worker" }),
+          code: expect.objectContaining({
+            repoPath: "workers/agent-worker",
+            executionDigest: runtimeArtifact("workers/agent-worker", "main").executionDigest,
+            requested: [],
+          }),
+        })
+      );
+    });
+
+    it("attributes equal DO code images to the same sealed network principal", async () => {
+      const registerEgressCaller = vi.fn();
+      const manager = new RuntimeManager(createMockDeps({ registerEgressCaller }));
+      await manager.registerAllDOClasses([
+        { source: "workers/agent-worker", className: "AiChatWorker" },
+      ]);
+      const first = await manager.getDoCode(
+        "workers/agent-worker",
+        "AiChatWorker",
+        manager.getDoAdmission("workers/agent-worker", "AiChatWorker", "first")!.executableVersion,
+        "first"
+      );
+      const second = await manager.getDoCode(
+        "workers/agent-worker",
+        "AiChatWorker",
+        manager.getDoAdmission("workers/agent-worker", "AiChatWorker", "second")!.executableVersion,
+        "second"
+      );
+      expect(first?.egressIdentity).toMatch(/^do-code:/);
+      // Request-time admission resolves the exact sealed image the identity names.
+      const artifact = runtimeArtifact("workers/agent-worker", "main");
+      expect(manager.resolveDoCodeExecutable(first!.egressIdentity!)).toEqual({
+        source: "workers/agent-worker",
+        effectiveVersion: artifact.sourceState.effectiveVersion,
+        buildKey: artifact.buildKey,
+        executionDigest: artifact.executionDigest,
+      });
+      expect(manager.resolveDoCodeExecutable("do-code:unregistered")).toBeNull();
+      expect(first?.egressIdentity).toBe(second?.egressIdentity);
+      expect(first?.version).toBe(second?.version);
+      const units = manager as unknown as {
+        loadedDoCodeUnits: Map<string, unknown>;
+        retiredDynamicIsolateIds: Set<string>;
+      };
+      expect(units.loadedDoCodeUnits.size).toBe(1);
+      expect(units.retiredDynamicIsolateIds.size).toBe(0);
+      const caller = registerEgressCaller.mock.calls.at(-1)![1];
+      expect(caller.runtime).toEqual({ id: first!.egressIdentity, kind: "worker" });
+      expect(caller.code.executionDigest).toBe(first!.env["WORKER_EXECUTION_DIGEST"]);
+      expect(caller.agentBinding).toBeUndefined();
+      expect(caller.taskAuthority).toBeUndefined();
+      expect(caller.executionSession).toBeUndefined();
+      expect(registerEgressCaller.mock.calls.every(([id]) => !id.startsWith("do:"))).toBe(true);
+    });
+
+    it("retains a shared executable while its class binding remains admitted", async () => {
+      const unregisterEgressCaller = vi.fn();
+      const manager = new RuntimeManager(createMockDeps({ unregisterEgressCaller }));
+      const source = "workers/new-do";
+      const className = "NewDO";
+      for (const key of ["first", "second"]) {
+        const prepared = await manager.ensureDurableObjectEntity({
+          source,
+          className,
+          key,
+          contextId: "ctx-shared",
+          stateArgs: { instructions: "same" },
+        });
+        await manager.restoreDurableObjectEntity({
+          id: prepared.targetId,
+          kind: "do",
+          key,
+          className,
+          source: { repoPath: source, effectiveVersion: prepared.effectiveVersion },
+          activeBuildKey: prepared.buildKey,
+          activeExecutionDigest: prepared.executionDigest,
+          activeAuthority: prepared.authority,
+          contextId: "ctx-shared",
+          stateArgs: { instructions: "same" },
+          createdAt: 1,
+          status: "active",
+          cleanupComplete: false,
+        });
+      }
+      const first = await manager.getDoCode(
+        source,
+        className,
+        manager.getDoAdmission(source, className, "first")!.executableVersion,
+        "first"
+      );
+      const second = await manager.getDoCode(
+        source,
+        className,
+        manager.getDoAdmission(source, className, "second")!.executableVersion,
+        "second"
+      );
+      expect(first?.version).toBe(second?.version);
+      expect(first?.egressIdentity).toBe(second?.egressIdentity);
+      const units = manager as unknown as {
+        loadedDoCodeUnits: Map<string, unknown>;
+        retiredDynamicIsolateIds: Set<string>;
+      };
+      expect(units.loadedDoCodeUnits.size).toBe(1);
+      unregisterEgressCaller.mockClear();
+      await manager.retireDOEntity({ source, className, objectKey: "first" });
+      expect(units.retiredDynamicIsolateIds.size).toBe(0);
+      expect(unregisterEgressCaller).not.toHaveBeenCalledWith(first!.egressIdentity);
+      await manager.retireDOEntity({ source, className, objectKey: "second" });
+      // Object configuration no longer creates separate executable units.
+      // The still-admitted class default owns the same code after both objects retire.
+      expect(units.retiredDynamicIsolateIds.size).toBe(0);
+      const serviceCode = await manager.getDoCode(
+        source,
+        className,
+        manager.getDoAdmission(source, className)!.executableVersion
+      );
+      expect(serviceCode?.egressIdentity).toBe(first!.egressIdentity);
+      expect(unregisterEgressCaller).not.toHaveBeenCalledWith(first!.egressIdentity);
+    });
+
+    it("serves object-specific state and source coordinates in the admitted facet props", async () => {
+      const deps = createMockDeps();
+      const mgr = new RuntimeManager(deps);
+
+      const prepared = await mgr.ensureDurableObjectEntity({
+        source: "workers/new-do",
+        className: "NewDO",
+        key: "subagent-object",
+        contextId: "ctx-agent",
+        ref: "state:ctx-agent",
+        stateArgs: {
+          subagent: {
+            runId: "run-1",
+            parentRef: "do:workers/agent-worker:AiChatWorker:ai-chat",
+            parentChannelId: "ch-parent",
+          },
+        },
+      });
+      const sealedArtifact = runtimeArtifact("workers/new-do", "state:ctx-agent");
+      vi.mocked(deps.getBuildByExecution).mockImplementation(async (buildKey, executionDigest) =>
+        buildKey === sealedArtifact.buildKey && executionDigest === sealedArtifact.executionDigest
+          ? mockWorkerBuildFor("workers/new-do", sealedArtifact)
+          : null
+      );
+      await mgr.restoreDurableObjectEntity({
+        id: prepared.targetId,
+        kind: "do",
+        source: {
+          repoPath: "workers/new-do",
+          effectiveVersion: prepared.effectiveVersion,
+        },
+        activeBuildKey: prepared.buildKey,
+        activeExecutionDigest: prepared.executionDigest,
+        activeAuthority: prepared.authority,
+        contextId: "ctx-agent",
+        className: "NewDO",
+        key: "subagent-object",
+        stateArgs: {
+          subagent: {
+            runId: "run-1",
+            parentRef: "do:workers/agent-worker:AiChatWorker:ai-chat",
+            parentChannelId: "ch-parent",
+          },
+        },
+        createdAt: 1,
+        status: "active",
+        cleanupComplete: false,
+      });
+
+      const code = await mgr.getDoCode(
+        "workers/new-do",
+        "NewDO",
+        mgr.getDoAdmission("workers/new-do", "NewDO", "subagent-object")!.executableVersion,
+        "subagent-object"
+      );
+      expect(code?.env).not.toHaveProperty("WORKER_EFFECTIVE_VERSION");
+      expect(code?.env).not.toHaveProperty("WORKER_SOURCE_REF");
+      expect(mgr.getDoAdmission("workers/new-do", "NewDO", "subagent-object")?.props.image).toEqual(
+        {
+          effectiveVersion: prepared.effectiveVersion,
+          sourceRef: expect.stringMatching(/^state:[0-9a-f]{64}$/),
+        }
+      );
+      expect(code?.env).not.toHaveProperty("STATE_ARGS");
+      expect(
+        mgr.getDoAdmission("workers/new-do", "NewDO", "subagent-object")?.props.stateArgs
+      ).toEqual({
+        subagent: {
+          runId: "run-1",
+          parentRef: "do:workers/agent-worker:AiChatWorker:ai-chat",
+          parentChannelId: "ch-parent",
+        },
+      });
+      expect(
+        mgr.getDoAdmission("workers/new-do", "NewDO", "subagent-object")?.executableVersion
+      ).toMatch(/^[a-f0-9]{64}$/);
+    });
+
+    it("honors explicit context refs for runtime-managed DO object images", async () => {
+      const deps = createMockDeps();
+      const mgr = new RuntimeManager(deps);
+
+      await mgr.ensureDurableObjectEntity({
+        source: "workers/new-do",
+        className: "NewDO",
+        key: "main-object",
+        contextId: "ctx-agent",
+      });
+      vi.mocked(deps.bindRuntimeImage).mockClear();
+
+      await mgr.ensureDurableObjectEntity({
+        source: "workers/new-do",
+        className: "NewDO",
+        key: "branch-object",
+        contextId: "ctx-agent",
+        ref: "ctx:ctx-agent",
+      });
+
+      expect(deps.bindRuntimeImage).toHaveBeenCalledTimes(1);
+      expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/new-do", "ctx:ctx-agent");
+      expect(
+        mgr.getDoAdmission("workers/new-do", "NewDO", "branch-object")?.executableVersion
+      ).not.toBeNull();
+    });
+
+    it("binds bootstrap-style singleton DOs to explicit main instead of synthetic context refs", async () => {
+      const deps = createMockDeps();
+      const mgr = new RuntimeManager(deps);
+      const syntheticContextId = "5b0784b0a6d5b81c3ba856394cb1eb6e456e4716ab43030e62d2e8de77a6d2de";
+
+      const prepared = await mgr.ensureDurableObjectEntity({
+        source: "workers/model-settings",
+        className: "ModelSettingsDO",
+        key: "workspace-model-settings",
+        contextId: syntheticContextId,
+        ref: "main",
+      });
+
+      expect(prepared.targetId).toBe(
+        "do:workers/model-settings:ModelSettingsDO:workspace-model-settings"
+      );
+      expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/model-settings", "main");
+    });
+  });
+
+  describe("authority-first workspace stage", () => {
+    it("fails closed for every workspace runtime before provider binding", async () => {
+      const deps = createMockDeps();
+      const mgr = new ProductRuntimeManager(deps);
+
+      expect(mgr.getStage()).toBe("control-plane");
+      await expect(mgr.ensureDOClass("workers/agent", "AgentDO")).rejects.toThrow(
+        /sealed control-plane stage/
+      );
+      await expect(mgr.startWorker(startArgs())).rejects.toThrow(/sealed control-plane stage/);
+      await expect(
+        mgr.ensureDurableObjectEntity({
+          source: "workers/workspace-source",
+          className: "GadWorkspaceDO",
+          key: "alternate-authority",
+          contextId: "control-plane:test",
+        })
+      ).rejects.toThrow(/sealed control-plane stage/);
+    });
+
+    it("registers the manifest-declared source provider after bootstrap binding", async () => {
+      const deps = createMockDeps();
+      const mgr = new ProductRuntimeManager(deps);
+      mgr.bindWorkspaceProvider(deps);
+
+      await mgr.ensureDOClass("workers/workspace-source", "GadWorkspaceDO");
+
+      expect(mgr.getStage()).toBe("workspace");
+      expect(deps.bindRuntimeImage).toHaveBeenCalled();
+    });
+
+    it("prepares the source provider from the bootstrap workspace image", async () => {
+      const deps = createMockDeps();
+      const mgr = new ProductRuntimeManager(deps);
+      mgr.bindWorkspaceProvider(deps);
+
+      const prepared = await mgr.ensureDurableObjectEntity({
+        source: "workers/workspace-source",
+        className: "GadWorkspaceDO",
+        key: "workspace",
+        contextId: "control-plane:workspace",
+      });
+
+      expect(prepared).toMatchObject({
+        targetId: "do:workers/workspace-source:GadWorkspaceDO:workspace",
+        effectiveVersion: expect.stringMatching(/^[0-9a-f]{64}$/),
+        buildKey: expect.stringMatching(/^[0-9a-f]{64}$/),
+        executionDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+        authority: { provides: [], requests: [], serviceRequests: [] },
+      });
+      expect(deps.bindRuntimeImage).toHaveBeenCalled();
+    });
+
+    it("binds the semantic-main-backed workspace provider exactly once", () => {
+      const deps = createMockDeps();
+      const mgr = new ProductRuntimeManager(deps);
+
+      mgr.bindWorkspaceProvider(deps);
+
+      expect(mgr.getStage()).toBe("workspace");
+      expect(() => mgr.bindWorkspaceProvider(deps)).toThrow(/already bound/);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // updateInstance (internal: codeVersion bump / ref retarget, no userland RPC)
+  // -------------------------------------------------------------------------
+  describe("updateInstance", () => {
+    it("updates env", async () => {
+      const deps = createMockDeps();
+      const mgr = new RuntimeManager(deps);
+
+      await mgr.startWorker(startArgs({ ref: "main" }));
+      const updated = await mgr.updateInstance("hello", {
+        env: { FOO: "bar" },
+      });
+
+      expect(updated.env).toEqual({ FOO: "bar" });
+    });
+
+    it("sets ref on update", async () => {
+      const deps = createMockDeps();
+      const mgr = new RuntimeManager(deps);
+
+      await mgr.startWorker(startArgs({ ref: "main" }));
+      const updated = await mgr.updateInstance("hello", { ref: "state:feature-x" });
+
+      expect(updated.scopeRef).toBe("state:feature-x");
+    });
+
+    it("restores protected-main tracking on update with an empty selector", async () => {
+      const deps = createMockDeps();
+      const mgr = new RuntimeManager(deps);
+
+      await mgr.startWorker(startArgs({ ref: "state:abc123" }));
+      const updated = await mgr.updateInstance("hello", { ref: "" });
+
+      expect(updated.scopeRef).toBe("main");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // listInstances
+  // -------------------------------------------------------------------------
+  describe("listing", () => {
+    it("preserves the original workerd spawn error cause before readiness", async () => {
+      let nextPort = 49552;
+      vi.mocked(findServicePort).mockImplementation(async (service) =>
+        service === "workerdInspector" ? 49652 : nextPort++
+      );
+      const inheritedFetch = globalThis.fetch;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+          const href =
+            typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+          if (href.endsWith("/__vibestudio_workerd_ready")) throw new TypeError("fetch failed");
+          return await inheritedFetch(input, init);
+        })
+      );
+      const manager = new RuntimeManager(createMockDeps());
+      const spawnCountBefore = vi.mocked(spawn).mock.results.length;
+      const started = manager.startWorker(startArgs());
+      const originalErrors = Array.from(
+        { length: 3 },
+        (_, index) => new Error(`spawn pipe failed ${index + 1}`)
+      );
+      for (let attempt = 0; attempt < originalErrors.length; attempt += 1) {
+        await vi.waitFor(() =>
+          expect(vi.mocked(spawn).mock.results.length).toBe(spawnCountBefore + attempt + 1)
+        );
+        const child = vi.mocked(spawn).mock.results[spawnCountBefore + attempt]!.value as {
+          emit(event: string, ...args: unknown[]): void;
+        };
+        child.emit("error", originalErrors[attempt]!);
+      }
+
+      await expect(started).rejects.toMatchObject({ cause: originalErrors.at(-1) });
+    });
+
+    it("rejects a non-router readiness response instead of waiting on a live wrong endpoint", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response(null, { status: 401 }))
+      );
+      const mgr = new RuntimeManager(createMockDeps());
+      const internals = mgr as unknown as {
+        port: number;
+        waitForHttpReady(abandoned: () => boolean, signal: AbortSignal): Promise<void>;
+      };
+      internals.port = 49552;
+
+      await expect(
+        internals.waitForHttpReady(() => false, new AbortController().signal)
+      ).rejects.toThrow("workerd readiness returned HTTP 401 (expected 204)");
+    });
+
+    it("listInstances strips tokens", async () => {
+      const mgr = new RuntimeManager(createMockDeps());
+      await mgr.startWorker(startArgs());
+
+      const list = mgr.listInstances();
+      expect(list).toHaveLength(1);
+      expect(list[0]).not.toHaveProperty("token");
+      expect(list[0]!.name).toBe("hello");
+    });
+
+    it("listInstances has no entry for an unknown name", () => {
+      const mgr = new RuntimeManager(createMockDeps());
+      expect(statusOf(mgr, "nope")).toBeNull();
+    });
+
+    it("starts the node with its inspector and exposes it for running workers", async () => {
+      const mgr = new RuntimeManager(createMockDeps());
+
+      await mgr.startWorker(startArgs());
+
+      expect(mgr.getInspectorUrl()).toBe("http://127.0.0.1:49652");
+      expect(mgr.getWorkerInspectorUrl("workers/runtime-fixture")).toBe("http://127.0.0.1:49652");
+      expect(mgr.getWorkerInspectorUrl("workers/missing")).toBeNull();
+    });
+
+    it("retries startup on a fresh port when workerd exits before accepting HTTP", async () => {
+      let workerdPortCalls = 0;
+      vi.mocked(findServicePort).mockImplementation(
+        async (service: Parameters<typeof findServicePort>[0]) => {
+          if (service === "workerdInspector") return 49652;
+          return workerdPortCalls++ === 0 ? 49552 : 49553;
+        }
+      );
+      const fetchMock = vi.fn(async (url: string | URL | Request) => {
+        const href = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+        if (href.includes(":49552/")) throw new TypeError("fetch failed");
+        return new Response(null, { status: 204 });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const spawnsBefore = vi.mocked(spawn).mock.results.length;
+
+      const mgr = new RuntimeManager(createMockDeps());
+      const started = mgr.startWorker(startArgs());
+      // The first process is never ready on its port; a slow start would keep
+      // waiting, so only its exit (here, a bind failure) triggers the retry.
+      await vi.waitFor(() =>
+        expect(fetchMock).toHaveBeenCalledWith(
+          "http://127.0.0.1:49552/__vibestudio_workerd_ready",
+          expect.any(Object)
+        )
+      );
+      const first = vi.mocked(spawn).mock.results[spawnsBefore]!.value as {
+        emit(event: string, ...args: unknown[]): void;
+      };
+      first.emit("exit", 1, null);
+      await started;
+
+      expect(mgr.getPort()).toBe(49553);
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://127.0.0.1:49552/__vibestudio_workerd_ready",
+        expect.any(Object)
+      );
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://127.0.0.1:49553/__vibestudio_workerd_ready",
+        expect.any(Object)
+      );
+    });
+
+    it("adopts a planned generation in place: same process, same ports, one more deployment", async () => {
+      celldDeployments.length = 0;
+      celldReloads.count = 0;
+      const mgr = new RuntimeManager(createMockDeps());
+      await mgr.startWorker(startArgs());
+      const spawns = vi.mocked(spawn).mock.calls.length;
+      const generation = mgr.getBootGeneration();
+      const port = mgr.getPort();
+
+      await (mgr as unknown as { restartWorkerd(): Promise<void> }).restartWorkerd();
+
+      expect(vi.mocked(spawn).mock.calls.length).toBe(spawns);
+      expect(mgr.getPort()).toBe(port);
+      expect(celldReloads.count).toBe(1);
+      expect(celldDeployments).toHaveLength(2);
+      expect(
+        (celldDeployments[1]!.config["vars"] as Record<string, unknown>)["WORKERD_BOOT_GENERATION"]
+      ).toBe(String(generation + 1));
+      expect(mgr.getBootGeneration()).toBe(generation + 1);
+      await mgr.shutdown();
+    });
+
+    it("replaces a node that cannot adopt a generation, moving off its predecessor's ports", async () => {
+      celldReloads.count = 0;
+      celldReloads.fail = true;
+      vi.mocked(findServicePort).mockImplementation(
+        async (service, _host, excludedPorts = new Set()) => {
+          const start = service === "workerdInspector" ? 49652 : 49552;
+          return excludedPorts.has(start) ? start + 1 : start;
+        }
+      );
+      const mgr = new RuntimeManager(createMockDeps());
+      try {
+        await mgr.startWorker(startArgs());
+        expect(mgr.getPort()).toBe(49552);
+
+        await (mgr as unknown as { restartWorkerd(): Promise<void> }).restartWorkerd();
+
+        expect(celldReloads.count).toBe(1);
+        expect(mgr.getPort()).toBe(49553);
+        expect(vi.mocked(findServicePort)).toHaveBeenCalledWith(
+          "workerd",
+          "127.0.0.1",
+          new Set([49552])
+        );
+        expect(vi.mocked(findServicePort)).toHaveBeenCalledWith(
+          "workerdInspector",
+          "127.0.0.1",
+          new Set([49652])
+        );
+      } finally {
+        celldReloads.fail = false;
+        await mgr.shutdown();
+      }
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // reconcileMutableSourceBuild
+  // -------------------------------------------------------------------------
+  describe("reconcileMutableSourceBuild", () => {
+    ledgerTest("execution.worker-push-rebuild", async () => {
+      const deps = createMockDeps();
+      const mgr = new RuntimeManager(deps);
+
+      await mgr.startWorker(startArgs({ ref: "main" }));
+      const before = (await mgr.getWorkerAdmission("hello"))?.version;
+      await mgr.reconcileMutableSourceBuild(
+        "workers/runtime-fixture",
+        null,
+        {
+          publicationId: "publication:next",
+          resultHostRefsBasisDigest: "host-refs:next",
+          appliedAt: 42,
+          workspaceStateHash: "state:next",
+          changedPaths: ["workers/runtime-fixture/index.ts"],
+          repositories: [
+            {
+              repoPath: "workers/runtime-fixture",
+              previousStateHash: "state:prev",
+              nextStateHash: "state:next",
+              fileChanges: [],
+            },
+          ],
+        },
+        "build:workers/runtime-fixture:main"
+      );
+
+      // No restart — the worker host reloads on its next request because the
+      // loader-cache version bumped. The instance stays "running" throughout.
+      expect(statusOf(mgr, "hello")?.status).toBe("running");
+      expect((await mgr.getWorkerAdmission("hello"))?.version).toBe(
+        `${before!.split(":")[0]}:${Number(before!.split(":")[1]) + 1}`
+      );
+    });
+
+    it("keeps rebuild codeVersion strictly above prior env-only updates", async () => {
+      const deps = createMockDeps();
+      const mgr = new RuntimeManager(deps);
+
+      await mgr.startWorker(startArgs({ ref: "main" }));
+      await mgr.updateInstance("hello", { env: { FEATURE: "enabled" } });
+      const beforeRebuild = (await mgr.getWorkerAdmission("hello"))?.version;
+
+      await mgr.reconcileMutableSourceBuild(
+        "workers/runtime-fixture",
+        null,
+        {
+          publicationId: "publication:next",
+          resultHostRefsBasisDigest: "host-refs:next",
+          appliedAt: 42,
+          workspaceStateHash: "state:next",
+          changedPaths: ["workers/runtime-fixture/index.ts"],
+          repositories: [
+            {
+              repoPath: "workers/runtime-fixture",
+              previousStateHash: "state:prev",
+              nextStateHash: "state:next",
+              fileChanges: [],
+            },
+          ],
+        },
+        "build:workers/runtime-fixture:main"
+      );
+
+      expect((await mgr.getWorkerAdmission("hello"))?.version).toBe(
+        `${beforeRebuild!.split(":")[0]}:${Number(beforeRebuild!.split(":")[1]) + 1}`
+      );
+    });
+
+    it("marks failed runtime image rebinds terminal after the warm attempt fails", async () => {
+      const bindRuntimeImage = vi
+        .fn()
+        .mockResolvedValueOnce({
+          source: "workers/runtime-fixture",
+          unitName: "workers/runtime-fixture",
+          artifact: runtimeArtifact("workers/runtime-fixture", "main"),
+          authority: { provides: [], requests: [], serviceRequests: [] },
+        })
+        .mockRejectedValueOnce(new Error("Unknown vcs ref: ctx:deleted"));
+      const deps = createMockDeps({
+        bindRuntimeImage,
+        getBuildByKey: vi.fn(async () => null),
+        statePath: fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-runtime-image-error-")),
+      });
+      const mgr = new RuntimeManager(deps);
+
+      await mgr.startWorker(startArgs());
+
+      await expect(mgr.getWorkerAdmission("hello")).rejects.toMatchObject({
+        code: "RUNTIME_IMAGE_WARMING",
+      });
+      await vi.waitFor(() => expect(bindRuntimeImage).toHaveBeenCalledTimes(2));
+      await expect(mgr.getWorkerAdmission("hello")).rejects.toMatchObject({
+        code: "RUNTIME_IMAGE_UNAVAILABLE",
+        message: expect.stringContaining("Unknown vcs ref: ctx:deleted"),
+      });
+    });
+
+    it("skips ref-targeted instances", async () => {
+      const deps = createMockDeps();
+      const mgr = new RuntimeManager(deps);
+
+      await mgr.startWorker(startArgs({ ref: "state:abc123" }));
+      const callsBefore = vi.mocked(deps.bindRuntimeImage).mock.calls.length;
+
+      // Ref-targeted instance should not restart on HEAD push
+      await mgr.reconcileMutableSourceBuild(
+        "workers/runtime-fixture",
+        null,
+        {
+          publicationId: "publication:next",
+          resultHostRefsBasisDigest: "host-refs:next",
+          appliedAt: 42,
+          workspaceStateHash: "state:next",
+          changedPaths: ["workers/runtime-fixture/index.ts"],
+          repositories: [
+            {
+              repoPath: "workers/runtime-fixture",
+              previousStateHash: "state:prev",
+              nextStateHash: "state:next",
+              fileChanges: [],
+            },
+          ],
+        },
+        "build:workers/runtime-fixture:main"
+      );
+
+      const status = statusOf(mgr, "hello");
+      expect(status?.status).toBe("running");
+      // No additional bind calls — rebuild was skipped
+      expect(deps.bindRuntimeImage).toHaveBeenCalledTimes(callsBefore);
+    });
+
+    it("does not restart workerd on a source rebuild", async () => {
+      const deps = createMockDeps();
+      const mgr = new RuntimeManager(deps);
+
+      await mgr.startWorker(startArgs());
+      const spawnsBefore = vi.mocked(spawn).mock.calls.length;
+
+      await mgr.reconcileMutableSourceBuild("workers/runtime-fixture", null);
+
+      // Dynamic loading: a rebuild is a loader-cache eviction, never a restart.
+      expect(vi.mocked(spawn).mock.calls.length).toBe(spawnsBefore);
+      expect(statusOf(mgr, "hello")?.status).toBe("running");
+    });
+
+    it("ignores unrelated sources", async () => {
+      const deps = createMockDeps();
+      const mgr = new RuntimeManager(deps);
+
+      await mgr.startWorker(startArgs());
+      const callsBefore = vi.mocked(deps.bindRuntimeImage).mock.calls.length;
+
+      await mgr.reconcileMutableSourceBuild("workers/other", null);
+
+      // No additional bind calls (no restart triggered)
+      expect(vi.mocked(deps.bindRuntimeImage).mock.calls.length).toBe(callsBefore);
+    });
+
+    it("tears down stale DO services when a class is removed from the manifest", async () => {
+      const deps = createMockDeps();
+      const mgr = new RuntimeManager(deps);
+
+      // Pre-register two DO classes from the same source.
+      await mgr.registerAllDOClasses([
+        { source: "workers/agent", className: "AgentDO" },
+        { source: "workers/agent", className: "LegacyDO" },
+      ]);
+
+      const revokeSpy = vi.spyOn(deps.tokenManager, "revokeToken");
+
+      // Manifest is re-read after a rebuild and now only declares AgentDO.
+      await mgr.reconcileMutableSourceBuild("workers/agent", [{ className: "AgentDO" }]);
+
+      // LegacyDO's service-level token was revoked.
+      expect(revokeSpy).toHaveBeenCalledWith("do-service:workers/agent:LegacyDO");
+      // The entry is gone from the map — config regeneration won't emit it.
+      expect(revokeSpy).not.toHaveBeenCalledWith("do-service:workers/agent:AgentDO");
+    });
+
+    it("reconciles provider definitions and receiver classes before activating a rebuilt source", async () => {
+      const resourceHandleLifecycle = {
+        reconcileProviderDefinitions: vi.fn(),
+        reconcileReceiverClasses: vi.fn(),
+      };
+      const deps = createMockDeps({ resourceHandleLifecycle });
+      const mgr = new RuntimeManager(deps);
+
+      await mgr.reconcileMutableSourceBuild(
+        "workers/agent",
+        [{ className: "AgentDO" }],
+        undefined,
+        "build:workers/agent:main"
+      );
+
+      expect(resourceHandleLifecycle.reconcileProviderDefinitions).toHaveBeenCalledWith(
+        "workers/agent",
+        []
+      );
+      expect(resourceHandleLifecycle.reconcileReceiverClasses).toHaveBeenCalledWith(
+        "workers/agent",
+        ["AgentDO"]
+      );
+    });
+
+    it("leaves DO services alone for a non-authoritative rebuild", async () => {
+      const deps = createMockDeps();
+      const mgr = new RuntimeManager(deps);
+
+      await mgr.registerAllDOClasses([{ source: "workers/agent", className: "AgentDO" }]);
+
+      const revokeSpy = vi.spyOn(deps.tokenManager, "revokeToken");
+      await mgr.reconcileMutableSourceBuild("workers/agent", null);
+
+      // No revokes — null explicitly means this rebuild does not own the main manifest.
+      expect(revokeSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining("do-service:workers/agent")
+      );
+    });
+
+    it("tears down all DO services when manifest drops the durable block entirely", async () => {
+      const deps = createMockDeps();
+      const mgr = new RuntimeManager(deps);
+
+      await mgr.registerAllDOClasses([
+        { source: "workers/agent", className: "A" },
+        { source: "workers/agent", className: "B" },
+      ]);
+
+      const revokeSpy = vi.spyOn(deps.tokenManager, "revokeToken");
+      // Empty array = "manifest declares no DO classes now" → remove all.
+      await mgr.reconcileMutableSourceBuild("workers/agent", []);
+
+      expect(revokeSpy).toHaveBeenCalledWith("do-service:workers/agent:A");
+      expect(revokeSpy).toHaveBeenCalledWith("do-service:workers/agent:B");
+    });
+
+    it("keeps DO routes for lazily registered userland classes", async () => {
+      const routeRegistry = new RouteRegistry();
+      const singletonRegistry = new SingletonRegistry([
+        { source: "workers/agent", className: "AgentDO", key: "agent" },
+      ]);
+      const deps = createMockDeps({
+        routeRegistry,
+        singletonRegistry,
+        getManifestRoutes: (source) =>
+          source === "workers/agent"
+            ? [
+                {
+                  source: "workers/agent",
+                  path: "/agent",
+                  methods: ["POST"],
+                  durableObject: { className: "AgentDO" },
+                },
+              ]
+            : [],
+      });
+      const mgr = new RuntimeManager(deps);
+
+      await mgr.reconcileMutableSourceBuild("workers/agent", [{ className: "AgentDO" }]);
+
+      expect(vi.mocked(deps.bindRuntimeImage)).not.toHaveBeenCalled();
+      expect(routeRegistry.lookup("/_r/w/workers/agent/agent", "POST", false)).toMatchObject({
+        kind: "worker-do",
+        source: "workers/agent",
+        className: "AgentDO",
+        objectKey: "agent",
+      });
+    });
+
+    it("reconciles route table changes from meta-only manifest reloads", () => {
+      const routeRegistry = new RouteRegistry();
+      const singletonRegistry = new SingletonRegistry([
+        { source: "workers/agent", className: "AgentDO", key: "agent" },
+      ]);
+      let routes = [
+        {
+          source: "workers/agent",
+          path: "/agent",
+          methods: ["POST" as const],
+          durableObject: { className: "AgentDO" },
+        },
+      ];
+      const deps = createMockDeps({
+        routeRegistry,
+        singletonRegistry,
+        getManifestRoutes: (source) => (source === "workers/agent" ? routes : []),
+        getManifestDoClasses: (source) =>
+          source === "workers/agent" ? [{ className: "AgentDO" }] : [],
+      });
+      const mgr = new RuntimeManager(deps);
+
+      mgr.reconcileManifestRoutes(["workers/agent"]);
+
+      expect(vi.mocked(deps.bindRuntimeImage)).not.toHaveBeenCalled();
+      expect(routeRegistry.lookup("/_r/w/workers/agent/agent", "POST", false)).toMatchObject({
+        kind: "worker-do",
+        source: "workers/agent",
+        className: "AgentDO",
+        objectKey: "agent",
+      });
+
+      routes = [
+        {
+          source: "workers/agent",
+          path: "/poems",
+          methods: ["POST" as const],
+          durableObject: { className: "AgentDO" },
+        },
+      ];
+      mgr.reconcileManifestRoutes(["workers/agent"]);
+
+      expect(routeRegistry.lookup("/_r/w/workers/agent/agent", "POST", false)).toBeNull();
+      expect(routeRegistry.lookup("/_r/w/workers/agent/poems", "POST", false)).toMatchObject({
+        kind: "worker-do",
+        objectKey: "agent",
+      });
+
+      routes = [];
+      mgr.reconcileManifestRoutes([]);
+
+      expect(routeRegistry.lookup("/_r/w/workers/agent/poems", "POST", false)).toBeNull();
+    });
+
+    it("rejects mutable userland ensureDO attachment", async () => {
+      const deps = createMockDeps();
+      const mgr = new RuntimeManager(deps);
+
+      // Bring workerd up first (a worker create starts the static host); then
+      // register a userland DO class — which by itself never restarts.
+      await mgr.startWorker(startArgs());
+      await mgr.registerAllDOClasses([{ source: "workers/agent", className: "AgentDO" }]);
+
+      const restartBegin = vi.fn();
+      mgr.onRestartBegin(restartBegin);
+
+      // Route and lifecycle callers must attach through the sealed entity
+      // record; this legacy API remains only for host-owned internal DOs.
+      const fetchMock = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
+      vi.stubGlobal("fetch", fetchMock);
+
+      try {
+        await expect(mgr.ensureDO("workers/agent", "AgentDO", "object-1")).rejects.toThrow(
+          /requires a sealed entity record/
+        );
+      } finally {
+        vi.unstubAllGlobals();
+      }
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(restartBegin).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("restart lifecycle hooks and boot generation", () => {
+    it("skips restart hooks on initial start but emits them for real restarts", async () => {
+      const statePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-workerd-test-"));
+      const mgr = new RuntimeManager(createMockDeps({ statePath }));
+      const begin = vi.fn();
+      const ready = vi.fn();
+      mgr.onRestartBegin(begin);
+      mgr.onRestartReady(ready);
+
+      await mgr.startWorker(startArgs());
+      expect(begin).not.toHaveBeenCalled();
+      expect(ready).not.toHaveBeenCalled();
+      expect(mgr.getBootGeneration()).toBe(1);
+
+      // Worker update no longer restarts (the host is static); a real restart
+      // (e.g. an internal-config change) still emits the begin/ready hooks and
+      // bumps the boot generation. restartWorkerd is the internal restart entry.
+      await (mgr as unknown as { restartWorkerd(): Promise<void> }).restartWorkerd();
+
+      expect(begin).toHaveBeenCalledTimes(1);
+      expect(ready).toHaveBeenCalledTimes(1);
+      expect(ready.mock.calls[0]?.[0]).toMatchObject({
+        generation: 2,
+        previousGeneration: 1,
+        reason: "planned",
+      });
+      expect(fs.readFileSync(path.join(statePath, ".boot-generation"), "utf8").trim()).toBe("2");
+
+      const nextMgr = new RuntimeManager(createMockDeps({ statePath }));
+      expect(nextMgr.getBootGeneration()).toBe(2);
+    });
+
+    it("publishes transport before earlier-registered lease recovery hooks dispatch", async () => {
+      const mgr = new RuntimeManager(createMockDeps());
+      let relayPort: number | null = null;
+      const recovery = vi.fn(async () => {
+        expect(relayPort).not.toBeNull();
+        expect(relayPort).toBe(mgr.getPort());
+        await mgr.ensureTransportReady();
+      });
+      // Production lifecycle recovery subscribes before index wires relay.
+      mgr.onRestartReady(recovery);
+      mgr.onGenerationClosing(() => {relayPort=null;});
+      mgr.onGenerationReady(({port}) => {relayPort=port;});
+      await mgr.startWorker(startArgs());
+      expect(recovery).not.toHaveBeenCalled();
+      await (mgr as unknown as {restartWorkerd():Promise<void>}).restartWorkerd();
+      expect(recovery).toHaveBeenCalledOnce();
+    });
+
+    it("joins generation closing while the old process is still alive", async () => {
+      const mgr = new RuntimeManager(createMockDeps());
+      await mgr.startWorker(startArgs());
+      let joining: Promise<void> | undefined;
+      let joined = false;
+      mgr.onGenerationClosing(() => {
+        expect(mgr.isGenerationTransitionInFlight()).toBe(true);
+        joining = mgr.ensureTransportReady().then(() => {joined=true;});
+        expect(joined).toBe(false);
+      });
+      await (mgr as unknown as {restartWorkerd():Promise<void>}).restartWorkerd();
+      await joining;
+      expect(joined).toBe(true);
+      expect(mgr.isGenerationTransitionInFlight()).toBe(false);
+    });
+
+    it("publishes relay transport on an idle-stop lazy boot without fabricating lease recovery", async () => {
+      const mgr = new RuntimeManager(createMockDeps());
+      const ready = vi.fn();
+      const transport = vi.fn();
+      mgr.onGenerationReady(transport);
+      mgr.onRestartReady(ready);
+      await mgr.startWorker(startArgs());
+      expect(transport).toHaveBeenCalledTimes(1);
+      const internal = mgr as unknown as {
+        instances: Map<string, unknown>;
+        stopWorkerdIfIdle(): Promise<void>;
+      };
+      internal.instances.clear();
+      await internal.stopWorkerdIfIdle();
+      expect(mgr.getPort()).toBeNull();
+      await mgr.startWorker(startArgs());
+      expect(transport).toHaveBeenCalledTimes(2);
+      expect(transport.mock.lastCall?.[0]).toEqual({generation:2,port:mgr.getPort()});
+      expect(ready).not.toHaveBeenCalled();
+    });
+
+    it("propagates original activation recovery failure after joining independent hooks without restarting the ready process", async () => {
+      const mgr = new RuntimeManager(createMockDeps());
+      await mgr.startWorker(startArgs());
+      const spawnCount = vi.mocked(spawn).mock.calls.length;
+      const generation = mgr.getBootGeneration();
+      const original = new Error("Original native activation recovery refused");
+      mgr.onRestartReady(() => {
+        throw original;
+      });
+      let entered!: () => void;
+      const independentEntered = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      let release!: () => void;
+      const independentReleased = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const independent = vi.fn(async () => {
+        entered();
+        await independentReleased;
+      });
+      mgr.onRestartReady(independent);
+      let settled = false;
+      const restart = (mgr as unknown as { restartWorkerd(): Promise<void> }).restartWorkerd().then(
+        () => {
+          settled = true;
+          return null;
+        },
+        (error: unknown) => {
+          settled = true;
+          return error;
+        }
+      );
+      await independentEntered;
+      expect(settled).toBe(false);
+      expect(mgr.getBootGeneration()).toBe(generation + 1);
+      expect(mgr.getPort()).not.toBeNull();
+      // The generation was adopted in place: the node was never replaced.
+      expect(vi.mocked(spawn)).toHaveBeenCalledTimes(spawnCount);
+      release();
+      expect(await restart).toBe(original);
+      expect(independent).toHaveBeenCalledOnce();
+      expect(vi.mocked(spawn)).toHaveBeenCalledTimes(spawnCount);
+    });
+
+    it("replaces an unresponsive sandbox without a graceful begin RPC and reports crash recovery", async () => {
+      const mgr = new RuntimeManager(createMockDeps());
+      const begin = vi.fn();
+      const ready = vi.fn();
+      mgr.onRestartBegin(begin);
+      mgr.onRestartReady(ready);
+
+      await mgr.startWorker(startArgs());
+      const initialGeneration = mgr.getBootGeneration();
+      await Promise.all([
+        mgr.recoverUnresponsiveSandbox("eval inv-loop exceeded its deadline"),
+        mgr.recoverUnresponsiveSandbox("eval inv-other observed the same stalled runtime"),
+      ]);
+
+      expect(begin).not.toHaveBeenCalled();
+      expect(ready).toHaveBeenCalledOnce();
+      expect(ready).toHaveBeenCalledWith(
+        expect.objectContaining({
+          generation: initialGeneration + 1,
+          previousGeneration: initialGeneration,
+          reason: "crash",
+        })
+      );
+      expect(mgr.getBootGeneration()).toBe(initialGeneration + 1);
+    });
+
+    it("lets crash recovery preempt a hung graceful prepare", async () => {
+      const mgr = new RuntimeManager(createMockDeps());
+      const ready = vi.fn();
+      mgr.onRestartReady(ready);
+      await mgr.startWorker(startArgs());
+
+      let entered!: () => void;
+      const beginEntered = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      mgr.onRestartBegin(() => {
+        entered();
+        return new Promise<void>(() => {});
+      });
+
+      const planned = (mgr as unknown as { restartWorkerd(): Promise<void> }).restartWorkerd();
+      await beginEntered;
+      const crash = mgr.recoverUnresponsiveSandbox("liveness probe failed during prepare");
+
+      await expect(Promise.all([planned, crash])).resolves.toBeDefined();
+      expect(ready).toHaveBeenCalledOnce();
+      expect(ready).toHaveBeenCalledWith(expect.objectContaining({ reason: "crash" }));
+    });
+
+    it("retries a queued crash recovery in its own transition after the owner transition fails", async () => {
+      // A node that cannot adopt the generation is replaced, which is the path
+      // whose start can fail.
+      celldReloads.fail = true;
+      const mgr = new RuntimeManager(createMockDeps());
+      const ready = vi.fn();
+      mgr.onRestartReady(ready);
+      await mgr.startWorker(startArgs());
+      const internal = mgr as unknown as {
+        restartWorkerd(): Promise<void>;
+        startWorkerdOnce(): Promise<void>;
+        restartRequests: Map<number, unknown>;
+      };
+      const originalStart = internal.startWorkerdOnce.bind(mgr);
+      let starts = 0;
+      vi.spyOn(internal, "startWorkerdOnce").mockImplementation(async () => {
+        starts += 1;
+        if (starts <= 3) throw new Error(`first transition start failure ${starts}`);
+        await originalStart();
+      });
+      let queued: Promise<void> | null = null;
+      mgr.onGenerationClosing(() => {
+        queued ??= mgr.recoverUnresponsiveSandbox("crash queued during stopping");
+      });
+
+      await expect(internal.restartWorkerd()).rejects.toThrow(/first transition start failure 3/);
+      expect(queued).not.toBeNull();
+      await expect(queued!).resolves.toBeUndefined();
+      expect(starts).toBe(4);
+      expect(internal.restartRequests.size).toBe(0);
+      expect(mgr.getPort()).not.toBeNull();
+      expect(ready).toHaveBeenCalledWith(expect.objectContaining({ reason: "crash" }));
+      celldReloads.fail = false;
+    });
+
+    it("refuses to overlap generations when SIGKILL cannot be confirmed", async () => {
+      celldReloads.fail = true;
+      const mgr = new RuntimeManager(
+        createMockDeps({ workerdStopTimeoutsMs: { sigtermMs: 1, sigkillMs: 1 } })
+      );
+      await mgr.startWorker(startArgs());
+      const spawnCount = vi.mocked(spawn).mock.calls.length;
+      const internal = mgr as unknown as {
+        process: { kill: ReturnType<typeof vi.fn> } | null;
+        restartWorkerd(): Promise<void>;
+        isPidAlive(pid: number): boolean;
+      };
+      internal.process!.kill = vi.fn(() => true);
+      vi.spyOn(internal, "isPidAlive").mockReturnValue(true);
+
+      await expect(internal.restartWorkerd()).rejects.toThrow(/refusing to overlap/u);
+      expect(vi.mocked(spawn)).toHaveBeenCalledTimes(spawnCount);
+      celldReloads.fail = false;
+    });
+
+    it("recovers an unexpectedly exited runtime and reports a crash generation", async () => {
+      const recordLifecycleEvent = vi.fn();
+      const mgr = new RuntimeManager(createMockDeps({ recordLifecycleEvent }));
+      const begin = vi.fn();
+      const ready = vi.fn();
+      mgr.onRestartBegin(begin);
+      mgr.onRestartReady(ready);
+
+      await mgr.startWorker(startArgs());
+      const initialGeneration = mgr.getBootGeneration();
+      const crashed = vi.mocked(spawn).mock.results.at(-1)?.value as {
+        emit(event: string, ...args: unknown[]): void;
+        emitOutput(stream: "stdout" | "stderr", data: string | Buffer): void;
+      };
+
+      const output = Buffer.from("fatal fixture diagnostic\nencoded café\r\nfinal line\n");
+      const split = output.indexOf(Buffer.from("é")) + 1;
+      crashed.emitOutput("stderr", output.subarray(0, split));
+      crashed.emitOutput("stderr", output.subarray(split));
+      crashed.emit("exit", 1, null);
+
+      await vi.waitFor(() => {
+        expect(mgr.getBootGeneration()).toBe(initialGeneration + 1);
+      });
+      expect(begin).not.toHaveBeenCalled();
+      expect(ready).toHaveBeenCalledOnce();
+      expect(ready).toHaveBeenCalledWith(
+        expect.objectContaining({
+          generation: initialGeneration + 1,
+          previousGeneration: initialGeneration,
+          reason: "crash",
+        })
+      );
+      expect(recordLifecycleEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: INTERNAL_DO_SOURCE,
+          entityId: "workspace:test",
+          level: "error",
+          fields: expect.objectContaining({
+            event: "workerd-process-exited",
+            generation: initialGeneration,
+            port: 49552,
+            startedAt: expect.any(Number),
+            code: 1,
+            signal: null,
+            recentOutput: [
+              "stderr: fatal fixture diagnostic",
+              "stderr: encoded café",
+              "stderr: final line",
+            ],
+          }),
+        })
+      );
+    });
+
+    it("closes restart admission before shutdown takes process ownership", async () => {
+      const mgr = new RuntimeManager(createMockDeps());
+      await mgr.startWorker(startArgs());
+      const spawnCountBeforeRestart = vi.mocked(spawn).mock.calls.length;
+      let releaseBegin!: () => void;
+      let markBeginEntered!: () => void;
+      const beginEntered = new Promise<void>((resolve) => {
+        markBeginEntered = resolve;
+      });
+      const holdBegin = new Promise<void>((resolve) => {
+        releaseBegin = resolve;
+      });
+      mgr.onRestartBegin(async () => {
+        markBeginEntered();
+        await holdBegin;
+      });
+
+      const restart = (mgr as unknown as { restartWorkerd(): Promise<void> }).restartWorkerd();
+      await beginEntered;
+      const shutdown = mgr.shutdown();
+      releaseBegin();
+
+      await Promise.all([restart, shutdown]);
+      expect(vi.mocked(spawn)).toHaveBeenCalledTimes(spawnCountBeforeRestart);
+      expect(mgr.getPort()).toBeNull();
+      await expect(
+        (mgr as unknown as { restartWorkerd(): Promise<void> }).restartWorkerd()
+      ).rejects.toThrow("RuntimeManager is shutting down");
+    });
+
+    it("publishes the generation-closing edge before shutting down workerd", async () => {
+      const mgr = new RuntimeManager(createMockDeps());
+      await mgr.startWorker(startArgs());
+      const closing = vi.fn();
+      mgr.onGenerationClosing(closing);
+
+      await mgr.shutdown();
+
+      expect(closing).toHaveBeenCalledOnce();
+      expect(closing).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: "shutdown", generation: mgr.getBootGeneration() + 1 })
+      );
+      const process = vi.mocked(spawn).mock.results.at(-1)?.value;
+      // The node is asked to stop itself; only a node that cannot be asked is signalled.
+      expect(process.kill).toHaveBeenCalledWith("SIGTERM");
+    });
+  });
+
+  describe("router generation", () => {
+    it("routes source-scoped DO requests with arbitrary-depth source paths", async () => {
+      const mgr = new RuntimeManager(createMockDeps());
+      const router = await loadCompiledRouter();
+      const fetchedUrls: string[] = [];
+      const fetchedHeaders: Headers[] = [];
+      const env = {
+        RUNTIME_GATEWAY_TOKEN: "mock-workerd-gateway-token",
+        RUNTIME_DISPATCH_SECRET: mgr.getDispatchSecret(),
+        RUNTIME_DO_BINDINGS: {
+          "workspace/workers/example-store:EventStore":
+            "do_workspace_workers_example_store_EventStore",
+        },
+        do_workspace_workers_example_store_EventStore: {
+          idFromName: vi.fn((name: string) => ({ name })),
+          get: vi.fn(() => ({
+            fetch: vi.fn(async (request: Request) => {
+              fetchedUrls.push(request.url);
+              fetchedHeaders.push(new Headers(request.headers));
+              return new Response("ok");
+            }),
+          })),
+        },
+      };
+
+      const response = await router.fetch(
+        new Request(
+          "http://router/_w/workspace/workers/example-store/EventStore/ctx%2Fchat/appendEvents?x=1",
+          {
+            headers: {
+              Authorization: "Bearer mock-workerd-gateway-token",
+              "X-Vibestudio-Dispatch-Secret": mgr.getDispatchSecret(),
+              [DIRECT_AUTHORITY_ACCEPTED_AT_HEADER]: "1",
+            },
+          }
+        ),
+        env
+      );
+
+      expect(response.status).toBe(200);
+      expect(env.do_workspace_workers_example_store_EventStore.idFromName).toHaveBeenCalledWith(
+        "ctx/chat"
+      );
+      expect(fetchedUrls).toEqual(["http://router/ctx%2Fchat/appendEvents?x=1"]);
+      expect(fetchedHeaders[0]?.has("X-Vibestudio-Dispatch-Secret")).toBe(false);
+      expect(Number(fetchedHeaders[0]?.get(DIRECT_AUTHORITY_ACCEPTED_AT_HEADER))).toBeGreaterThan(
+        1
+      );
+    });
+
+    it("rejects source-scoped DO requests without the dispatch secret", async () => {
+      const mgr = new RuntimeManager(createMockDeps());
+      const router = await loadCompiledRouter();
+      const doFetch = vi.fn(async () => new Response("ok"));
+      const env = {
+        RUNTIME_GATEWAY_TOKEN: "mock-workerd-gateway-token",
+        RUNTIME_DISPATCH_SECRET: mgr.getDispatchSecret(),
+        RUNTIME_DO_BINDINGS: {
+          "workspace/workers/example-store:EventStore":
+            "do_workspace_workers_example_store_EventStore",
+        },
+        do_workspace_workers_example_store_EventStore: {
+          idFromName: vi.fn((name: string) => ({ name })),
+          get: vi.fn(() => ({ fetch: doFetch })),
+        },
+      };
+
+      const response = await router.fetch(
+        new Request(
+          "http://router/_w/workspace/workers/example-store/EventStore/ctx/appendEvents",
+          {
+            headers: { Authorization: "Bearer mock-workerd-gateway-token" },
+          }
+        ),
+        env
+      );
+
+      expect(response.status).toBe(403);
+      expect(doFetch).not.toHaveBeenCalled();
+    });
+
+    it("preserves a regular worker named _w when no static DO bindings exist", async () => {
+      const router = await loadCompiledRouter();
+      const workerHostFetch = vi.fn(async (request: Request) => {
+        expect(request.headers.has("Authorization")).toBe(false);
+        return new Response("regular worker");
+      });
+
+      const response = await router.fetch(
+        new Request("http://router/_w/__rpc", {
+          headers: {
+            Authorization: "Bearer mock-workerd-gateway-token",
+            "X-Vibestudio-Dispatch-Secret": "dispatch-secret",
+          },
+        }),
+        {
+          RUNTIME_GATEWAY_TOKEN: "mock-workerd-gateway-token",
+          RUNTIME_DISPATCH_SECRET: "dispatch-secret",
+          RUNTIME_DO_BINDINGS: {},
+          WORKER_HOST: { fetch: workerHostFetch },
+        }
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("regular worker");
+      expect(workerHostFetch).toHaveBeenCalledOnce();
+    });
+  });
+});

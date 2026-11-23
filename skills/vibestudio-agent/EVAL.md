@@ -1,7 +1,8 @@
 # Eval: Running Code Against the Server
 
 `vibestudio eval run` executes TypeScript/JavaScript **server-side** in your CLI
-session's sandbox (a per-owner EvalDO behind the `eval` service), with a
+session's sandbox (a per-owner eval kernel, hosted by a session entity and
+admitted through the `dynamicCode` service), with a
 **persistent REPL scope** per agent session. It is the fastest way to explore
 live data or do anything the dedicated commands don't cover.
 
@@ -57,8 +58,8 @@ vibestudio eval run -e '
 
 ## Persistent scope
 
-- Assignments to `scope` (e.g. `scope.x = ...`) are persisted in the EvalDO's
-  own SQLite after every run and restored on the next run for the same session.
+- Assignments to `scope` (e.g. `scope.x = ...`) are persisted in the kernel's
+  own storage after every run and restored on the next run for the same session.
   One scope per session.
 - `--fresh-scope` resets the persistent scope (and the user `db`) before the
   run, so the snippet starts empty; `vibestudio eval repl-reset` does the same
@@ -131,7 +132,7 @@ import {
   the descriptor: `rpc.call("main", mainRpcMethods["svc.method"], args)`,
   importing `mainRpcMethods` from `@vibestudio/service-schemas/mainRpc`.
 - `services`, `hosts`, and `runtime` are ordinary portable runtime exports,
-  not EvalDO-only helpers. You can import them for code intended to run in a
+  not eval-only helpers. You can import them for code intended to run in a
   panel, worker, Durable Object, or eval session.
 - `gatewayFetch` is for Vibestudio gateway routes: it accepts `/path` and an
   absolute URL on the configured gateway origin, but rejects a different
@@ -163,7 +164,7 @@ import {
 
 ## Output
 
-The `eval` service returns `{success, console, returnValue?, error?, scopeKeys?}`,
+A run returns `{success, console, returnValue?, error?, scopeKeys?}`,
 where `console` is the formatted console output captured during the run and
 `scopeKeys` lists the keys currently held in the persistent scope.
 
@@ -184,11 +185,11 @@ where `console` is the formatted console output captured during the run and
 ## Timeouts and exit codes
 
 - `--timeout MS` opts into a bound on how long the CLI waits; it is unbounded
-  when omitted. The same deadline is passed to the EvalDO. On timeout the CLI
+  when omitted. The same deadline is passed to the kernel. On timeout the CLI
   stops waiting and exits `4`; cancellation is requested server-side, though a
   wedged downstream operation may take additional time to unwind.
 - Exit codes: `0` success · `1` eval threw / RPC error · `2` usage (bad
   flags, conflicting code sources) · `3` not paired/unreachable · `4` timeout ·
   `5` stale session.
 - Split long work into shorter runs and carry state in `scope` (persisted in
-  the EvalDO between runs).
+  the kernel between runs).

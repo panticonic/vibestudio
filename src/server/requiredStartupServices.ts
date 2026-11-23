@@ -6,6 +6,7 @@
 export function requiredStartupServices(isRegistered: (name: string) => boolean): string[] {
   return [
     "vcsAttach",
+    "semanticWorkspace",
     "runtime",
     "workspace-state",
     "build",

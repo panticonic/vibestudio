@@ -1555,14 +1555,15 @@ export class PanelManager {
     if (!panel) return;
     const snapshot = getCurrentSnapshot(panel);
     if (browserUrlFromPanelSource(snapshot.source) !== null) return;
-    const ref = getPanelRef(panel) ?? `ctx:${snapshot.contextId}`;
+    // An unpinned lookup uses the metadata reader's own working copy.
+    const ref = getPanelRef(panel);
     this.refreshPanelMetadata(panel.id, snapshot.source, ref, panel.buildKey ?? null);
   }
 
   private refreshPanelMetadata(
     panelId: string,
     source: string,
-    ref: string,
+    ref: string | undefined,
     buildKey: string | null
   ): void {
     // References such as latest and ctx: are mutable. A new active build must
@@ -1604,7 +1605,7 @@ export class PanelManager {
   private applyPanelMetadataTree(
     panel: Panel,
     source: string,
-    ref: string,
+    ref: string | undefined,
     buildKey: string | null,
     metadata: PanelMetadata
   ): void {
@@ -1616,14 +1617,14 @@ export class PanelManager {
   private applyPanelMetadata(
     panelId: string,
     source: string,
-    ref: string,
+    ref: string | undefined,
     buildKey: string | null,
     metadata: PanelMetadata
   ): void {
     const current = this.registry.getPanel(panelId);
     if (!current) return;
     const snapshot = getCurrentSnapshot(current);
-    const currentRef = getPanelRef(current) ?? `ctx:${snapshot.contextId}`;
+    const currentRef = getPanelRef(current);
     if (snapshot.source !== source || currentRef !== ref || (current.buildKey ?? null) !== buildKey)
       return;
     // Late metadata belongs to this exact active identity. Retain the full

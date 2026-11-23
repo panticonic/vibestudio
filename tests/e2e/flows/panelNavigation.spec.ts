@@ -2,12 +2,14 @@ import { expect, test } from "@playwright/test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import YAML from "yaml";
+import { createPanelDeepLink } from "@vibestudio/shared/panelLocation";
 
 import {
-  clickPanelText,
+  clickPanelSelector,
   createManagedTestWorkspace,
   ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE,
   ensureHostedShellReady,
+  executePanelScript,
   getPanelDiagnostics,
   getPanelReadiness,
   getPanelText,
@@ -22,6 +24,7 @@ import {
   typePanelText,
   type TestApp,
 } from "../../setup/electronSetup";
+import { declineFirstRunReporting, findWorkspaceShellPage } from "../support/workspaceCreation";
 
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 
@@ -36,33 +39,11 @@ async function shellStatus(owner: TestApp): Promise<{
   buildingCount: number;
   hasOperationFailure: boolean;
 }> {
-  const { app } = owner;
-  return app.evaluate(async ({ webContents }) => {
-    const contents = webContents
-      .getAllWebContents()
-      .find(
-        (candidate) => !candidate.isDestroyed() && candidate.getURL().startsWith("vs-client://")
-      );
-    if (!contents) return { buildingCount: 0, hasOperationFailure: false };
-    try {
-      const status = await Promise.race([
-        contents.executeJavaScript(
-          `(() => ({
-            buildingCount: document.querySelectorAll('.app-tree-spinner,[aria-label="Building"]').length,
-            hasOperationFailure: (document.body?.innerText ?? '').includes('A Vibestudio operation failed'),
-          }))()`,
-          true
-        ),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 2_000)),
-      ]);
-      return {
-        buildingCount: Number(status?.buildingCount ?? 0),
-        hasOperationFailure: status?.hasOperationFailure === true,
-      };
-    } catch {
-      return { buildingCount: 0, hasOperationFailure: false };
-    }
-  });
+  const shell = await findWorkspaceShellPage(owner);
+  return shell.evaluate(() => ({
+    buildingCount: document.querySelectorAll('.app-tree-spinner,[aria-label="Building"]').length,
+    hasOperationFailure: (document.body?.innerText ?? "").includes("A Vibestudio operation failed"),
+  }));
 }
 
 async function navigatePanel(owner: TestApp, panelId: string, source: string): Promise<void> {
@@ -144,6 +125,7 @@ test.describe("Panel navigation convergence", () => {
   test("same-panel navigation converges without leaked failures or stuck build state", async () => {
     test.setTimeout(240_000);
     const workspacePath = await createManagedTestWorkspace({
+      workspaceKind: "system",
       configureSource: (sourceRoot) => configureInitialPanel(sourceRoot, "about/new"),
     });
     let testApp: TestApp | null = null;
@@ -152,22 +134,32 @@ test.describe("Panel navigation convergence", () => {
         workspace: workspacePath,
         launchTimeout: 180_000,
       });
-      await approvePendingStartupUnits(testApp);
       await approvePendingWorkspaceCreationReview(testApp);
+      await approvePendingStartupUnits(testApp);
+      await declineFirstRunReporting(testApp);
+      const shell = await findWorkspaceShellPage(testApp);
+      await shell.getByRole("button", { name: "Open System", exact: true }).click();
       const initialReadiness = await ensureHostedShellReady(testApp, {
         panelSource: "about/new",
       });
       const initialPanelId = initialReadiness.panelId;
       await startPanelDiagnostics(testApp, initialPanelId);
       await expect
-        .poll(() => getPanelText(testApp!, initialPanelId).catch(() => ""), {
-          timeout: 30_000,
-          intervals: [250, 500, 1_000],
-        })
-        .toContain("Jump to a panel, revisit a page, or ask an agent.");
+        .poll(
+          () =>
+            executePanelScript<boolean>(
+              testApp!,
+              initialPanelId,
+              `!!document.querySelector('[role="combobox"]:enabled')`
+            ).catch(() => false),
+          { timeout: 30_000, intervals: [250, 500, 1_000] }
+        )
+        .toBe(true);
       // Utility pages are searchable, but intentionally stay out of the idle
       // app suggestions.
       await typePanelText(testApp, initialPanelId, "About Vibestudio");
+      const aboutLink = createPanelDeepLink({ source: "about/about" });
+      const aboutOption = `a[role="option"][href=${JSON.stringify(aboutLink)}]`;
       await expect
         .poll(
           async () => {
@@ -185,12 +177,7 @@ test.describe("Panel navigation convergence", () => {
               // A dispatched native click is not the navigation outcome. Keep
               // the idempotent user action coupled to the authoritative panel
               // tree until the same panel has actually converged.
-              await clickPanelText(
-                testApp!,
-                initialPanelId,
-                ".launcher-title",
-                "About Vibestudio"
-              ).catch(() => false);
+              await clickPanelSelector(testApp!, initialPanelId, aboutOption).catch(() => false);
               return {
                 source: panel?.snapshot?.source ?? null,
                 state: readiness.presentation.state,

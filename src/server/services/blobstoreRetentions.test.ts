@@ -26,20 +26,32 @@ async function fixture() {
   roots.push(root);
   const blobsDir = path.join(root, "blobs");
   ensureLayout(blobsDir);
+  const refs = createProtectedRefStore({
+    statePath: path.join(root, "refs"),
+    gate: vi.fn(async () => undefined),
+  });
   const vcs = new WorkspaceVcs({
     workspaceId: "workspace:test",
     blobsDir,
     workspaceRoot: path.join(root, "source"),
     contextProjectionsRoot: path.join(root, "contexts"),
     buildSourcesRoot: path.join(root, "builds"),
-    refs: createProtectedRefStore({
-      statePath: path.join(root, "refs"),
-      gate: vi.fn(async () => undefined),
-    }),
+    refs,
   });
-  await vcs.attachGad({
-    contentGcRoots: async () => ({ contentRoots: [], contentHashes: [] }),
-  } as never);
+  const eventId = "event:blob-retention-main";
+  vi.spyOn(refs, "readMainSemanticState").mockReturnValue({ kind: "event", eventId });
+  await vcs.attachParticipantHistory({
+    canonical: { source: "workers/workspace-source", className: "GadHistoryDO", objectKey: "canonical" },
+    dispatch: {
+      dispatch: async (_target, method) => {
+        if (method === "readHistoryMain") return { head: "main", eventId };
+        if (method === "listHistoryAppliedPublications" ||
+            method === "listHistoryRetainedParticipants" || method === "readHistoryContentRoots")
+          return [];
+        throw new Error(`Unexpected history method ${method}`);
+      },
+    },
+  });
   let epoch = 0;
   const gc = () => vcs.runGc({ minAgeMs: 0, epoch: ++epoch, executionSourceRoots: [] });
   const call = (callerId: string, method: string, input: unknown) => {
@@ -123,7 +135,7 @@ describe("retained workspace blobs", () => {
     };
     await expect(
       b.call("owner", "retain", { digest: stored.digest, owner: "asset" })
-    ).rejects.toThrow("absent from this workspace");
+    ).rejects.toThrow("Cannot retain content unavailable in this workspace");
     expect(retainedBlobDigests(b.blobsDir)).toEqual([]);
   });
 

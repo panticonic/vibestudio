@@ -2,6 +2,7 @@ import { deserializeRpcFailure } from "@vibestudio/rpc";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { channel } from "node:diagnostics_channel";
 import { doTargetId, type DORefParam } from "@vibestudio/shared/workspaceServiceRpc";
+import { retryOnStaleAttestation } from "@vibestudio/shared/directRpcEnforcement";
 import {
   decodeRpcJson,
   encodeRpcJson,
@@ -739,24 +740,30 @@ export async function postToDurableObject(
   const targetId = doTargetId(ref);
   const finishRelay = beginDurableObjectRelay(targetId);
   try {
-    const caller = callerFromDeps(deps);
-    const envelope = envelopeFromMessage({
-      selfId: caller.callerId,
-      from: caller.callerId,
-      target: doTargetId(ref),
-      caller,
-      ...(deps.idempotencyKey ? { idempotencyKey: deps.idempotencyKey } : {}),
-      ...(deps.readOnly ? { readOnly: true } : {}),
-      message: {
-        type: "request",
-        requestId: deps.requestId ?? generateRequestId(),
-        fromId: caller.callerId,
-        method,
-        args,
-        ...(deps.causalParent ? { causalParent: deps.causalParent } : {}),
-      },
+    const requestId = deps.requestId ?? generateRequestId();
+    // A receiver refuses an attestation that predates its activation before it
+    // runs anything; the host re-stamps it and sends it once more.
+    return await retryOnStaleAttestation(deps.authorization, async (authorization) => {
+      const attemptDeps = authorization ? { ...deps, authorization } : deps;
+      const caller = callerFromDeps(attemptDeps);
+      const envelope = envelopeFromMessage({
+        selfId: caller.callerId,
+        from: caller.callerId,
+        target: doTargetId(ref),
+        caller,
+        ...(deps.idempotencyKey ? { idempotencyKey: deps.idempotencyKey } : {}),
+        ...(deps.readOnly ? { readOnly: true } : {}),
+        message: {
+          type: "request",
+          requestId,
+          fromId: caller.callerId,
+          method,
+          args,
+          ...(deps.causalParent ? { causalParent: deps.causalParent } : {}),
+        },
+      });
+      return unwrapResponseEnvelope(await postEnvelopeToDO(ref, envelope, attemptDeps, signal));
     });
-    return unwrapResponseEnvelope(await postEnvelopeToDO(ref, envelope, deps, signal));
   } finally {
     finishRelay();
   }
@@ -773,26 +780,31 @@ export async function streamFromDurableObject(
 ): Promise<Response> {
   const targetId = doTargetId(ref);
   const finishRelay = beginDurableObjectRelay(targetId);
-  const caller = callerFromDeps(deps);
-  const envelope = envelopeFromMessage({
-    selfId: caller.callerId,
-    from: caller.callerId,
-    target: doTargetId(ref),
-    caller,
-    ...(deps.idempotencyKey ? { idempotencyKey: deps.idempotencyKey } : {}),
-    ...(deps.readOnly ? { readOnly: true } : {}),
-    message: {
-      type: "stream-request",
-      requestId: deps.requestId ?? generateRequestId(),
-      fromId: caller.callerId,
-      method,
-      args,
-      ...(deps.causalParent ? { causalParent: deps.causalParent } : {}),
-    },
-  });
+  const requestId = deps.requestId ?? generateRequestId();
   try {
-    const response = await fetchEnvelopeFromDO(ref, envelope, deps, signal);
-    await assertDurableObjectResponseOk(ref, response);
+    const response = await retryOnStaleAttestation(deps.authorization, async (authorization) => {
+      const attemptDeps = authorization ? { ...deps, authorization } : deps;
+      const caller = callerFromDeps(attemptDeps);
+      const envelope = envelopeFromMessage({
+        selfId: caller.callerId,
+        from: caller.callerId,
+        target: doTargetId(ref),
+        caller,
+        ...(deps.idempotencyKey ? { idempotencyKey: deps.idempotencyKey } : {}),
+        ...(deps.readOnly ? { readOnly: true } : {}),
+        message: {
+          type: "stream-request",
+          requestId,
+          fromId: caller.callerId,
+          method,
+          args,
+          ...(deps.causalParent ? { causalParent: deps.causalParent } : {}),
+        },
+      });
+      const attempt = await fetchEnvelopeFromDO(ref, envelope, attemptDeps, signal);
+      await assertDurableObjectResponseOk(ref, attempt);
+      return attempt;
+    });
     const encodedReady = response.headers.get(DURABLE_WORK_READY_HEADER);
     if (encodedReady) {
       try {

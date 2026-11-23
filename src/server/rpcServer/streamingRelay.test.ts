@@ -132,7 +132,7 @@ describe("StreamingRelay HTTP response ownership", () => {
   });
 
   it("keeps the per-request evaluated caller through HTTP stream authority and egress", async () => {
-    const resident = createVerifiedCaller("do:vibestudio/internal:EvalDO:owner", "do");
+    const resident = createVerifiedCaller("do:workers/session:SessionDO:owner", "do");
     const evaluated = {
       ...resident,
       executionSession: {
@@ -160,7 +160,7 @@ describe("StreamingRelay HTTP response ownership", () => {
       authenticateHttp: () => ({
         ok: true,
         caller: {
-          callerId: "do:vibestudio/internal:EvalDO:owner",
+          callerId: "do:workers/session:SessionDO:owner",
           callerKind: "do",
         },
       }),

@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { requiredStartupServices } from "./requiredStartupServices.js";
 
 describe("requiredStartupServices", () => {
+  it("loads the protected workspace configuration before admitting startup panels", () => {
+    expect(requiredStartupServices(() => false)).toContain("semanticWorkspace");
+  });
+
   it("omits the ClientHost where none is registered", () => {
     const required = requiredStartupServices(() => false);
     expect(required).not.toContain("clientHost");

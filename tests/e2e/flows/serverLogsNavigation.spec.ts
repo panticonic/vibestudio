@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import YAML from "yaml";
+import { createPanelDeepLink } from "@vibestudio/shared/panelLocation";
 
 import {
   clickPanelSelector,
@@ -20,6 +21,7 @@ import {
   typePanelText,
   type TestApp,
 } from "../../setup/electronSetup";
+import { declineFirstRunReporting, findWorkspaceShellPage } from "../support/workspaceCreation";
 
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 
@@ -31,20 +33,25 @@ function configureInitialPanel(sourceRoot: string): void {
 }
 
 async function clickServerLogs(owner: TestApp, panelId: string): Promise<boolean> {
-  return clickPanelSelector(owner, panelId, 'a[href*="/about/server-logs/"]');
+  const link = createPanelDeepLink({ source: "about/server-logs" });
+  return clickPanelSelector(owner, panelId, `a[role="option"][href=${JSON.stringify(link)}]`);
 }
 
 test.describe("Server Logs navigation", () => {
   test("opens from About/New without leaving a stuck pending spinner", async () => {
     test.setTimeout(240_000);
     const workspacePath = await createManagedTestWorkspace({
+      workspaceKind: "system",
       configureSource: configureInitialPanel,
     });
     let testApp: TestApp | null = null;
     try {
       testApp = await launchTestApp({ workspace: workspacePath, launchTimeout: 180_000 });
-      await approvePendingStartupUnits(testApp);
       await approvePendingWorkspaceCreationReview(testApp);
+      await approvePendingStartupUnits(testApp);
+      await declineFirstRunReporting(testApp);
+      const shell = await findWorkspaceShellPage(testApp);
+      await shell.getByRole("button", { name: "Open System", exact: true }).click();
 
       const readiness = await ensureHostedShellReady(testApp, { panelSource: "about/new" });
       const panelId = readiness.panelId;

@@ -114,12 +114,15 @@ export async function buildWebsiteRuntime(
         write: false,
         metafile: true,
       });
-      if (
-        Object.values(result.metafile!.outputs).some((file) =>
-          file.imports.some((item) => item.external)
+      const externalImports = new Set(
+        Object.values(result.metafile!.outputs).flatMap((file) =>
+          file.imports.filter((item) => item.external).map((item) => item.path)
         )
-      )
-        throw new Error("Website runtime bundle contains an unresolved external dependency");
+      );
+      if (externalImports.size)
+        throw new Error(
+          `Website runtime bundle contains unresolved external dependencies: ${[...externalImports].join(", ")}`
+        );
       const [declaration] = generateDtsBundle(
         [
           {

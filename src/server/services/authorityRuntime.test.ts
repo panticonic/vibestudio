@@ -904,9 +904,9 @@ describe("authority runtime", () => {
     const attestation = attestDirectRpc({
       caller: createHostCaller("main"),
       source: "workers/untrusted",
-      className: "EvalDO",
+      className: "WorkspaceStateDO",
       objectKey: "owner",
-      method: "executeRun",
+      method: "entityResolve",
       workspaceId: "ws-1",
       workspaceMember: true,
       sessionId: "host:userland-eval-collision",
@@ -914,7 +914,7 @@ describe("authority runtime", () => {
     });
 
     expect(attestation).toMatchObject({
-      capability: "rpc:executeRun",
+      capability: "rpc:entityResolve",
       effect: { kind: "open" },
     });
     expect(attestation.capability).not.toBe("runtime.code-execution.manage");

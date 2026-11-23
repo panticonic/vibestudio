@@ -1,9 +1,11 @@
 import YAML from "yaml";
 import { describe, expect, it, vi } from "vitest";
-import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import { createHostCaller, createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import type { WorkspaceVcs } from "./vcsHost/workspaceVcs.js";
 import { workspaceConfigDigest } from "@vibestudio/workspace/preparedConfig";
+import { sha256HexSyncText } from "@vibestudio/content-addressing";
+import { workspaceParticipantIdentity } from "./vcsHost/workspaceHistoryHost.js";
 import {
   createWorkspaceConfigMainWriter,
   renderWorkspaceConfigYaml,
@@ -15,361 +17,107 @@ const INTERNAL_AUTHORIZATION = {} as unknown as NonNullable<ServiceContext["auth
 const mainState = { kind: "event" as const, eventId: "event:main" };
 const editedState = { kind: "application" as const, applicationId: "application:config" };
 const committedState = { kind: "event" as const, eventId: "event:config" };
-const repositoryRef = {
-  kind: "repository" as const,
-  state: mainState,
-  repositoryId: "repository:meta",
-};
-const withProtectedMainMutation = <T>(operation: () => Promise<T>): Promise<T> => operation();
-
-function configReader(initialYaml: string) {
-  return vi.fn<(method: string, input: unknown) => Promise<unknown>>(
-    async (method: string, input: unknown) => {
-      if (method === "vcsStatus") {
-        return {
-          contextId: (input as { contextId: string }).contextId,
-          committed: mainState,
-          workingHead: mainState,
-          clean: true,
-          mainEventId: mainState.eventId,
-          mainRelation: "at",
+function configFixture(initialYaml: string) {
+  const author = createHostCaller("server", "server", { userId: "system", handle: "system" });
+  const canonical = { source: "workers/workspace-source", className: "GadHistoryDO", objectKey: "canonical" };
+  const content = { kind: "text" as const, text: initialYaml };
+  const openParticipantScope = vi.fn<WorkspaceVcs["openParticipantScope"]>(async ({ contextId, caller }) => ({
+    caller, contextId, ownerContextId: contextId, canonical, workingHead: "native-main",
+    owner: { ...canonical, objectKey: `work-${sha256HexSyncText(workspaceParticipantIdentity(caller, contextId))}` },
+    dispatch: {
+      async dispatch(_target, method) {
+        if (method === "readHistoryStatus") return {
+          contextId, committed: mainState, workingHead: mainState, clean: true,
+          mainEventId: mainState.eventId, mainRelation: "at",
           workingCounts: { applications: 0, workUnits: 0, changes: 0 },
         };
-      }
-      if (method === "vcsNeighbors") {
-        return {
-          root: mainState,
-          edges: [
-            {
-              kind: "contains-repository",
-              from: mainState,
-              to: repositoryRef,
-            },
-          ],
-          nextCursor: null,
-        };
-      }
-      if (method === "vcsInspect") {
-        return {
-          root: repositoryRef,
-          node: {
-            kind: "repository",
-            state: mainState,
-            value: {
-              kind: "present",
-              repositoryId: "repository:meta",
-              repoPath: "meta",
-              manifestId: "manifest:meta",
-            },
-          },
-          edges: [],
-          hasMoreEdges: false,
-        };
-      }
-      if (method === "vcsListFiles") {
-        return {
-          state: mainState,
-          repositoryId: "repository:meta",
-          files: [
-            {
-              fileId: "file:config",
-              path: "vibestudio.yml",
-              contentHash: "blob:before",
-              mode: 0o644,
-              size: initialYaml.length,
-              binary: false,
-            },
-          ],
-          nextCursor: null,
-        };
-      }
-      if (method === "vcsReadFile") {
-        return {
-          repositoryId: "repository:meta",
-          fileId: "file:config",
-          repoPath: "meta",
-          path: "vibestudio.yml",
-          contentHash: "blob:before",
-          mode: 0o644,
-          content: { kind: "text", text: initialYaml },
-        };
-      }
-      if (method === "vcsEdit") {
-        return {
-          contextId: (input as { contextId: string }).contextId,
-          workUnitId: "work-unit:config",
-          applicationId: editedState.applicationId,
-          changeIds: ["change:config"],
-          incorporatedChangeIds: [],
-          workingHead: editedState,
-        };
-      }
-      if (method === "vcsCommit") {
-        return {
-          contextId: (input as { contextId: string }).contextId,
-          event: committedState,
-          committedApplicationIds: [editedState.applicationId],
-          integrationSourceEventIds: [],
-        };
-      }
-      throw new Error(`unexpected semantic call ${method}`);
-    }
-  );
+        if (method === "resolveHistoryRepository")
+          return { state: mainState, repositoryId: "repository:meta", repoPath: "meta" };
+        throw new Error(`Unexpected native history call ${method}`);
+      },
+    },
+  }));
+  const vcs = {
+    whenSemanticReady: vi.fn<WorkspaceVcs["whenSemanticReady"]>(async () => {}),
+    withProtectedMainMutation: <T>(operation: () => Promise<T>): Promise<T> => operation(),
+    openParticipantScope,
+    dropContext: vi.fn<WorkspaceVcs["dropContext"]>(async () => {}),
+    ensureFresh: vi.fn<WorkspaceVcs["ensureFresh"]>(async () => ({ stateHash: "state:protected" })),
+    readFile: vi.fn<WorkspaceVcs["readFile"]>(async () => ({
+      content, stateHash: "state:protected", contentHash: "blob:before", mode: 0o644,
+      size: Buffer.byteLength(initialYaml),
+    })),
+    readParticipantFiles: vi.fn<WorkspaceVcs["readParticipantFiles"]>(async () => [{
+      repositoryId: "repository:meta", fileId: "file:config", repoPath: "meta",
+      path: "vibestudio.yml", contentHash: "blob:before", mode: 0o644, content,
+      authoredChangeId: null, authoredByWorkUnitId: null, contentClass: "internal", externalKeys: [],
+    }]),
+    editParticipantContext: vi.fn<WorkspaceVcs["editParticipantContext"]>(async ({ edit }) => ({
+      head: "native-edited",
+      result: {
+        contextId: edit.contextId, commandId: edit.commandId, workUnitId: "work-unit:config",
+        applicationId: editedState.applicationId, workingHead: editedState,
+        changeCount: 1, changeIds: ["change:config"], incorporatedChangeCount: 0,
+        incorporatedChangeIds: [], decisionIds: [],
+      },
+    })),
+    saveParticipantContext: vi.fn<WorkspaceVcs["saveParticipantContext"]>(async ({ commit }) => ({
+      contextId: commit.contextId, event: committedState,
+      committedApplicationIds: [editedState.applicationId], integrationSourceEventIds: [],
+    })),
+    publishParticipantContext: vi.fn<WorkspaceVcs["publishParticipantContext"]>(async ({ push }) => ({
+      contextId: push.contextId, effectId: "effect:config", appliedAt: "2026-11-20T00:00:00.000Z",
+      eventId: committedState.eventId, mainEventId: committedState.eventId,
+    })),
+  };
+  return { author, vcs, writer: createWorkspaceConfigMainWriter({ workspaceId: WORKSPACE_ID, vcs, authoringCaller: author }) };
 }
 
 describe("workspaceConfigWriter", () => {
-  it("uses a fresh context, one whole-chain commit, and an exact protected push", async () => {
-    const initialYaml = `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ndefaultRepo: panels/old\n`;
-    const semanticCausalCall = configReader(initialYaml);
-    const semanticPublishCall = vi.fn(async () => ({
-      contextId: "context:config",
-      eventId: committedState.eventId,
-      mainEventId: committedState.eventId,
-      effectId: "effect:publish",
-      appliedAt: "2026-07-15T12:00:00.000Z",
-    }));
-    const ensureSemanticContext = vi.fn(async (_contextId: string) => mainState);
-    const vcs = {
-      withProtectedMainMutation,
-      ensureSemanticContext,
-      dropContext: vi.fn(async () => undefined),
-      semanticCausalCall,
-      semanticPublishCall,
-    } as unknown as WorkspaceVcs;
-    const writer = createWorkspaceConfigMainWriter({ workspaceId: WORKSPACE_ID, vcs });
-    const ctx = {
-      caller: createVerifiedCaller("shell:dev", "shell"),
-      requestId: "request:config",
-      authorization: INTERNAL_AUTHORIZATION,
-    } satisfies ServiceContext;
-
-    const result = await writer.applyMutation({
-      ctx,
-      mutate: (config) => ({ ...config, defaultRepo: "panels/new" }),
-      summary: "change default repo",
-    });
-
-    expect(result).toMatchObject({ changed: true, nextConfig: { defaultRepo: "panels/new" } });
-    expect(result.nextConfig.id).toBe(WORKSPACE_ID);
-    const contextId = vi.mocked(vcs.ensureSemanticContext).mock.calls[0]?.[0];
-    expect(contextId).toMatch(/^system:workspace-config:/);
-    expect(vcs.dropContext).toHaveBeenCalledWith(contextId);
-    expect(semanticCausalCall.mock.calls.map(([method]) => method)).toEqual([
-      "vcsStatus",
-      "vcsNeighbors",
-      "vcsInspect",
-      "vcsListFiles",
-      "vcsReadFile",
-      "vcsEdit",
-      "vcsCommit",
-    ]);
-    expect(
-      semanticCausalCall.mock.calls.find(([method]) => method === "vcsEdit")?.[1]
-    ).toMatchObject({
-      contextId,
-      expectedWorkingHead: mainState,
-      changes: [
-        {
-          kind: "text-edit",
-          repositoryId: "repository:meta",
-          fileId: "file:config",
-        },
-      ],
-    });
-    expect(
-      semanticCausalCall.mock.calls.find(([method]) => method === "vcsCommit")?.[1]
-    ).toMatchObject({ expectedWorkingHead: editedState });
-    expect(semanticPublishCall).toHaveBeenCalledWith(
-      expect.objectContaining({
-        expectedCommittedEventId: committedState.eventId,
-        expectedMainEventId: mainState.eventId,
-      }),
-      null,
-      expect.objectContaining({
-        runtime: expect.objectContaining({ id: "shell:dev", kind: "shell" }),
-      })
-    );
-  });
-
-  it("advances the authenticated eval execution context so config writes do not strand the caller", async () => {
-    const initialYaml = `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ndefaultRepo: panels/old\n`;
-    const semanticCausalCall = configReader(initialYaml);
-    const semanticPublishCall = vi.fn(async () => ({
-      contextId: "context:agent-task",
-      eventId: committedState.eventId,
-      mainEventId: committedState.eventId,
-      effectId: "effect:publish",
-      appliedAt: "2026-07-15T12:00:00.000Z",
-    }));
-    const ensureSemanticContext = vi.fn(async () => mainState);
-    const vcs = {
-      withProtectedMainMutation,
-      ensureSemanticContext,
-      dropContext: vi.fn(async () => undefined),
-      semanticCausalCall,
-      semanticPublishCall,
-    } as unknown as WorkspaceVcs;
-    const writer = createWorkspaceConfigMainWriter({ workspaceId: WORKSPACE_ID, vcs });
-    const executionSession = {
-      contextId: "context:agent-task",
-    } as unknown as NonNullable<ServiceContext["caller"]["executionSession"]>;
-    const ctx = {
-      caller: {
-        ...createVerifiedCaller("do:eval", "do"),
-        executionSession,
-      },
-      requestId: "request:agent-config",
-      authorization: INTERNAL_AUTHORIZATION,
-    } satisfies ServiceContext;
-
-    await expect(
-      writer.applyMutation({
-        ctx,
-        mutate: (config) => ({ ...config, defaultRepo: "panels/new" }),
-        summary: "change default repo",
-      })
-    ).resolves.toMatchObject({ changed: true });
-
-    expect(vcs.ensureSemanticContext).not.toHaveBeenCalled();
-    expect(vcs.dropContext).not.toHaveBeenCalled();
-    expect(
-      semanticCausalCall.mock.calls.find(([method]) => method === "vcsEdit")?.[1]
-    ).toMatchObject({ contextId: "context:agent-task" });
-    expect(semanticPublishCall).toHaveBeenCalledWith(
-      expect.objectContaining({ contextId: "context:agent-task" }),
-      null,
-      expect.anything()
-    );
-  });
-
-  it("preserves the authenticated authorizing caller across an extension provider relay", async () => {
-    const semanticCausalCall = configReader(
+  it("authors settings in a temporary participant copy and preserves the approving caller", async () => {
+    const { author, writer, vcs } = configFixture(
       `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ndefaultRepo: panels/old\n`
     );
-    const semanticPublishCall = vi.fn(async () => ({
-      contextId: "context:paired-shell",
-      eventId: committedState.eventId,
-      mainEventId: committedState.eventId,
-      effectId: "effect:publish",
-      appliedAt: "2026-07-15T12:00:00.000Z",
+    const approver = createVerifiedCaller("shell:owner", "shell");
+    const { openParticipantScope, editParticipantContext, saveParticipantContext, publishParticipantContext, dropContext } = vcs;
+    await expect(writer.wouldMutate((config) => ({ ...config, defaultRepo: "panels/new" }))).resolves.toBe(true);
+    expect(openParticipantScope).not.toHaveBeenCalled();
+    await expect(writer.applyMutation({
+      ctx: { caller: createVerifiedCaller("do:relay", "do"), authorizingCaller: approver },
+      mutate: (config) => ({ ...config, defaultRepo: "panels/new" }),
+      summary: "change default repo",
+    })).resolves.toMatchObject({ changed: true, nextConfig: { defaultRepo: "panels/new" } });
+    const contextId = openParticipantScope.mock.calls[0]![0].contextId;
+    expect(contextId).toMatch(/^system:workspace-config:/u);
+    expect(editParticipantContext).toHaveBeenCalledWith(expect.objectContaining({
+      head: "native-main", edit: expect.objectContaining({ contextId, expectedWorkingHead: mainState }),
     }));
-    const vcs = {
-      withProtectedMainMutation,
-      ensureSemanticContext: vi.fn(async () => mainState),
-      dropContext: vi.fn(async () => undefined),
-      semanticCausalCall,
-      semanticPublishCall,
-    } as unknown as WorkspaceVcs;
-    const writer = createWorkspaceConfigMainWriter({ workspaceId: WORKSPACE_ID, vcs });
-    const authorizingCaller = {
-      ...createVerifiedCaller("shell:dev", "shell"),
-      executionSession: {
-        contextId: "context:paired-shell",
-      } as NonNullable<ServiceContext["caller"]["executionSession"]>,
-    };
-    const ctx = {
-      caller: createVerifiedCaller("@workspace-extensions/git-bridge", "extension"),
-      authorizingCaller,
-      requestId: "request:provider-config",
-      authorization: INTERNAL_AUTHORIZATION,
-    } satisfies ServiceContext;
-
-    await expect(
-      writer.applyMutation({
-        ctx,
-        mutate: (config) => ({ ...config, defaultRepo: "panels/new" }),
-        summary: "record provider remote",
-      })
-    ).resolves.toMatchObject({ changed: true });
-
-    expect(vcs.ensureSemanticContext).not.toHaveBeenCalled();
-    expect(vcs.dropContext).not.toHaveBeenCalled();
-    expect(
-      semanticCausalCall.mock.calls.find(([method]) => method === "vcsEdit")?.[1]
-    ).toMatchObject({ contextId: "context:paired-shell" });
-    expect(semanticPublishCall).toHaveBeenCalledWith(
-      expect.objectContaining({ contextId: "context:paired-shell" }),
-      null,
-      authorizingCaller
-    );
-  });
-
-  it("falls back to an isolated config context rather than publishing dirty caller work", async () => {
-    const semanticCausalCall = configReader(`systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n`);
-    semanticCausalCall.mockImplementationOnce(async (_method, input) => ({
-      contextId: (input as { contextId: string }).contextId,
-      committed: mainState,
-      workingHead: editedState,
-      clean: false,
-      mainEventId: mainState.eventId,
-      mainRelation: "at",
-      workingCounts: { applications: 1, workUnits: 1, changes: 1 },
+    expect(saveParticipantContext).toHaveBeenCalledWith(expect.objectContaining({
+      head: "native-edited", commit: expect.objectContaining({ contextId, expectedWorkingHead: editedState }),
     }));
-    const ensureSemanticContext = vi.fn(async (_contextId: string) => mainState);
-    const vcs = {
-      withProtectedMainMutation,
-      ensureSemanticContext,
-      dropContext: vi.fn(async () => undefined),
-      semanticCausalCall,
-      semanticPublishCall: vi.fn(),
-    } as unknown as WorkspaceVcs;
-    const writer = createWorkspaceConfigMainWriter({ workspaceId: WORKSPACE_ID, vcs });
-    const executionSession = {
-      contextId: "context:dirty-agent-task",
-    } as unknown as NonNullable<ServiceContext["caller"]["executionSession"]>;
-    const ctx = {
-      caller: {
-        ...createVerifiedCaller("do:eval", "do"),
-        executionSession,
-      },
-      requestId: "request:dirty-config",
-      authorization: INTERNAL_AUTHORIZATION,
-    } satisfies ServiceContext;
-
-    await expect(
-      writer.applyMutation({
-        ctx,
-        mutate: (config) => ({ ...config, defaultRepo: "panels/new" }),
-        summary: "change default repo",
-      })
-    ).resolves.toMatchObject({ changed: true });
-    expect(vcs.ensureSemanticContext).toHaveBeenCalledOnce();
-    expect(vcs.dropContext).toHaveBeenCalledOnce();
-    const isolatedContextId = ensureSemanticContext.mock.calls[0]?.[0];
-    expect(isolatedContextId).toMatch(/^system:workspace-config:/u);
-    expect(
-      semanticCausalCall.mock.calls.find(
-        ([method, input]) =>
-          method === "vcsEdit" && (input as { contextId?: string }).contextId === isolatedContextId
-      )
-    ).toBeDefined();
-    expect(vcs.semanticPublishCall).toHaveBeenCalledWith(
-      expect.objectContaining({ contextId: isolatedContextId }),
-      null,
-      ctx.caller
-    );
+    expect(publishParticipantContext).toHaveBeenCalledWith(expect.objectContaining({
+      storageCaller: author, gateContext: { kind: "caller", caller: approver },
+      push: expect.objectContaining({
+        contextId, expectedMainEventId: mainState.eventId, expectedCommittedEventId: committedState.eventId,
+      }),
+    }));
+    expect(dropContext).toHaveBeenCalledExactlyOnceWith(contextId);
   });
 
   it("does not author content when rendering is unchanged", async () => {
-    const semanticCausalCall = configReader(`systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n`);
-    const vcs = {
-      withProtectedMainMutation,
-      ensureSemanticContext: vi.fn(async () => mainState),
-      dropContext: vi.fn(async () => undefined),
-      semanticCausalCall,
-      semanticPublishCall: vi.fn(),
-    } as unknown as WorkspaceVcs;
-    const writer = createWorkspaceConfigMainWriter({ workspaceId: WORKSPACE_ID, vcs });
+    const { writer, vcs } = configFixture(`systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n`);
 
     await expect(writer.wouldMutate((config) => config)).resolves.toBe(false);
-    expect(semanticCausalCall.mock.calls.map(([method]) => method)).toEqual([
-      "vcsStatus",
-      "vcsNeighbors",
-      "vcsInspect",
-      "vcsListFiles",
-      "vcsReadFile",
-    ]);
-    expect(vcs.dropContext).toHaveBeenCalledOnce();
+    expect(vcs.openParticipantScope).not.toHaveBeenCalled();
+    await expect(writer.applyMutation({
+      ctx: { caller: createVerifiedCaller("shell:dev", "shell") },
+      mutate: (config) => config,
+      summary: "unchanged settings",
+    })).resolves.toMatchObject({ changed: false });
+    expect(vcs.editParticipantContext).not.toHaveBeenCalled();
+    expect(vcs.publishParticipantContext).not.toHaveBeenCalled();
+    const contextId = vcs.openParticipantScope.mock.calls[0]![0].contextId;
+    expect(vcs.dropContext).toHaveBeenCalledExactlyOnceWith(contextId);
   });
 
   it("keeps an operation failure primary when temporary-context cleanup also fails", async () => {
@@ -383,19 +131,9 @@ describe("workspaceConfigWriter", () => {
       errorKind: "access",
       errorData: { authorityFailure: { reasonCode: "missing-grant" } },
     });
-    const semanticCausalCall = configReader(`systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n`);
-    const vcs = {
-      withProtectedMainMutation,
-      ensureSemanticContext: vi.fn(async () => mainState),
-      dropContext: vi.fn(async () => {
-        throw cleanupFailure;
-      }),
-      semanticCausalCall,
-      semanticPublishCall: vi.fn(async () => {
-        throw operationFailure;
-      }),
-    } as unknown as WorkspaceVcs;
-    const writer = createWorkspaceConfigMainWriter({ workspaceId: WORKSPACE_ID, vcs });
+    const { writer, vcs } = configFixture(`systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n`);
+    vcs.dropContext.mockRejectedValueOnce(cleanupFailure);
+    vcs.publishParticipantContext.mockRejectedValueOnce(operationFailure);
     const ctx = {
       caller: createVerifiedCaller("shell:dev", "shell"),
       requestId: "request:config-failure",
@@ -461,16 +199,7 @@ describe("workspaceConfigWriter", () => {
   });
 
   it("rejects stale, forged, and out-of-scope prepared config mutations before authoring", async () => {
-    const initialYaml = `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n`;
-    const semanticCausalCall = configReader(initialYaml);
-    const vcs = {
-      withProtectedMainMutation,
-      ensureSemanticContext: vi.fn(async () => mainState),
-      dropContext: vi.fn(async () => undefined),
-      semanticCausalCall,
-      semanticPublishCall: vi.fn(),
-    } as unknown as WorkspaceVcs;
-    const writer = createWorkspaceConfigMainWriter({ workspaceId: WORKSPACE_ID, vcs });
+    const { writer, vcs } = configFixture(`systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n`);
     const ctx = {
       caller: createVerifiedCaller("shell:dev", "shell"),
       requestId: "request:prepared-config",
@@ -515,8 +244,8 @@ describe("workspaceConfigWriter", () => {
       })
     ).rejects.toThrow(/defaultRepo outside its allowed scope/);
 
-    expect(semanticCausalCall.mock.calls.map(([method]) => method)).not.toContain("vcsEdit");
-    expect(vcs.semanticPublishCall).not.toHaveBeenCalled();
+    expect(vcs.editParticipantContext).not.toHaveBeenCalled();
+    expect(vcs.publishParticipantContext).not.toHaveBeenCalled();
   });
 });
 

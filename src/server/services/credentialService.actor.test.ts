@@ -49,7 +49,7 @@ function workerCaller(userId = DARA) {
 const agentId = "do:workers/agent-worker:AiChatWorker:conversation-1";
 
 function agentCaller(userId = DARA) {
-  const callerId = "do:vibestudio/internal:EvalDO:hash-1";
+  const callerId = "do:workers/session:SessionDO:hash-1";
   return asUser(agentCallerWithoutUser(callerId), userId);
 }
 

@@ -55,9 +55,6 @@ function fakeWorkspaceSource(workspaceRoot: string): WorkspaceStateSource & Buil
     async unitHashes(_stateHash, relPaths) {
       return Object.fromEntries(relPaths.map((relPath) => [relPath, `h:${relPath}`]));
     },
-    async resolveContextState() {
-      return TEST_STATE;
-    },
     async readFile() {
       return null;
     },
@@ -801,11 +798,42 @@ describe("BuildSystemV2 startup", () => {
       buildRoots(workspaceRoot, [path.join(process.cwd(), "node_modules")])
     );
 
+    const left = { kind: "event", eventId: "event:left" } as const;
+    const right = { kind: "event", eventId: "event:right" } as const;
+    const [leftBinding, rightBinding] = await Promise.all([
+      buildSystem.bindRuntimeImage("workers/retained", TEST_STATE, left),
+      buildSystem.bindRuntimeImage("workers/retained", TEST_STATE, right),
+    ]);
     const warmBinding = await buildSystem.bindRuntimeImage("workers/retained", TEST_STATE);
     const warmBuild = await buildSystem.getBuildByKey(warmBinding.artifact.buildKey);
     expect(warmBuild).not.toBeNull();
     const warmBundle = await buildSystem.primaryTextArtifactContent(warmBuild!);
     expect(warmBundle).toContain("cold-cache-runtime-loaded");
+    expect(leftBinding.artifact.buildKey).toBe(warmBinding.artifact.buildKey);
+    expect(rightBinding.artifact.buildKey).toBe(warmBinding.artifact.buildKey);
+    expect(leftBinding.artifact.sourceState.state).toEqual(left);
+    expect(rightBinding.artifact.sourceState.state).toEqual(right);
+    expect(leftBinding.artifact.executionDigest).not.toBe(rightBinding.artifact.executionDigest);
+    for (const binding of [leftBinding, rightBinding, warmBinding]) {
+      const { buildKey, executionDigest, sourceState } = binding.artifact;
+      expect(
+        (await buildSystem.getBuildByExecution(buildKey, executionDigest))?.metadata.sourceState
+      ).toEqual(sourceState.state);
+    }
+    expect(await buildSystem.bindRuntimeImage("workers/retained", TEST_STATE, left)).toEqual(leftBinding);
+    expect(await buildSystem.bindRuntimeImage("workers/retained", TEST_STATE)).toEqual(warmBinding);
+    const canReadLeft = async (artifact: typeof leftBinding.artifact) =>
+      artifact.sourceState.state?.kind === "event" && artifact.sourceState.state.eventId === left.eventId;
+    await expect(
+      buildSystem.inspectExecution(leftBinding.artifact.executionDigest, canReadLeft)
+    ).resolves.toMatchObject({ artifact: leftBinding.artifact });
+    const missingExecution = { artifact: null, roots: [], reconstructible: false, missing: ["artifact"] };
+    await expect(
+      buildSystem.inspectExecution(rightBinding.artifact.executionDigest, canReadLeft)
+    ).resolves.toEqual(missingExecution);
+    await expect(buildSystem.inspectExecution("0".repeat(64), canReadLeft)).resolves.toEqual(
+      missingExecution
+    );
 
     await buildSystem.shutdown();
     buildSystem = null;
@@ -1022,15 +1050,18 @@ describe("BuildSystemV2 startup", () => {
     );
 
     const source = fakeWorkspaceSource(workspaceRoot);
-    source.resolveContextState = async () => "state:context";
     const discoverGraph = vi.spyOn(source, "discoverGraph");
     const unitHashes = vi.spyOn(source, "unitHashes");
     const { initBuildSystemV2 } = await import("./index.js");
     buildSystem = await initBuildSystemV2(workspaceRoot, source, buildRoots(workspaceRoot));
 
+    await expect(buildSystem.resolveBuildUnit("panels/context", "ctx:first")).rejects.toMatchObject({
+      code: "invalid_build_ref",
+    });
+
     const [first, second] = await Promise.all([
-      buildSystem.resolveBuildUnit("panels/context", "ctx:first"),
-      buildSystem.resolveBuildUnitIdentity("panels/context", "ctx:second"),
+      buildSystem.resolveBuildUnit("panels/context", "state:context"),
+      buildSystem.resolveBuildUnitIdentity("panels/context", "state:context"),
     ]);
 
     expect(first?.stateHash).toBe("state:context");

@@ -2,32 +2,27 @@ import { createHash } from "node:crypto";
 import { serializeRpcFailure, type RpcFailure } from "@vibestudio/rpc";
 import { AMBIGUOUS_DO_DISPATCH, type DORef } from "@vibestudio/shared/doDispatcher";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
-import { vcsMethods, vcsStateNodeRefSchema } from "@vibestudio/service-schemas/vcs";
-import { gadWireMethods } from "@vibestudio/service-schemas/workspaceSource";
+import {
+  vcsListDirectoryInputSchema,
+  vcsListFilesInputSchema,
+  vcsReadFilesInputSchema,
+  vcsResolveRepositoryInputSchema,
+} from "@vibestudio/service-schemas/vcs";
+import { z } from "zod";
+
+const contextId = z.string().min(1).nullable();
+const pinnedReads = {
+  readHistoryFiles: z.object({ contextId, read: vcsReadFilesInputSchema }).strict(),
+  resolveHistoryRepository: z.object({ contextId, repository: vcsResolveRepositoryInputSchema }).strict(),
+  listHistoryFiles: z.object({ contextId, list: vcsListFilesInputSchema }).strict(),
+  listHistoryDirectory: z.object({ contextId, list: vcsListDirectoryInputSchema }).strict(),
+  readHistoryTemplateInstallation: z.object({ eventId: z.string().min(1) }).strict(),
+};
 
 /** Recovery belongs to the versioned read protocol, never the generic POST dispatcher. */
 export function isPinnedWorkspaceRead(method: string, args: readonly unknown[]): boolean {
-  if (method === "vcsReferencesReachable" || method === "vcsIsStateDescendant" ||
-      method === "workspaceSourceTemplateInstallation") {
-    // These read exact references or recheck receiver-side authorization.
-    return gadWireMethods[method].args.safeParse(args).success;
-  }
-  if (!method.startsWith("vcs")) return false;
-  const name = method[3]?.toLowerCase() + method.slice(4);
-  if (!Object.hasOwn(vcsMethods, name)) return false;
-  const definition = vcsMethods[name as keyof typeof vcsMethods];
-  if (definition.operationClass !== "read") return false;
-  const stateRefs = definition.references.filter(reference => reference.kind === "state-node");
-  if (!stateRefs.length) return false;
-  const request = args[0] as { input?: unknown } | undefined;
-  return stateRefs.every(reference => {
-    let value: unknown = request?.input;
-    for (const part of reference.path as readonly string[]) {
-      if (part === "*" || !value || typeof value !== "object") return false;
-      value = (value as Record<string, unknown>)[part];
-    }
-    return vcsStateNodeRefSchema.safeParse(value).success;
-  });
+  return args.length === 1 && Object.hasOwn(pinnedReads, method) &&
+    pinnedReads[method as keyof typeof pinnedReads].safeParse(args[0]).success;
 }
 
 /** Only structured local transport loss, never a semantic, protocol or cancellation verdict. */

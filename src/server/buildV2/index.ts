@@ -73,7 +73,7 @@ import {
 } from "./builder.js";
 import { joinedFailure } from "./builderLifetime.js";
 import { collectTransitiveInternalDeps, type BuildSourceProvider } from "./buildSource.js";
-import { validateBuildRef } from "./refs.js";
+import { validateResolvedBuildRef } from "./refs.js";
 import { TypecheckWorkerClient } from "./typecheckWorkerClient.js";
 import {
   BuildDiagnosticsError,
@@ -147,6 +147,7 @@ import type {
   ExecutionArtifactRefV1,
   ExecutionRootProvider,
   ExecutionSourceContentRoot,
+  ExecutionSourceStateRef,
 } from "@vibestudio/shared/execution/retention";
 import {
   ExecutionRootProviderRegistry,
@@ -382,7 +383,7 @@ export interface BuildSystemV2 {
   /**
    * Get build result for a panel/worker/extension/library.
    * `ref` selects the workspace state to build from: undefined = main HEAD
-   * (scan-on-demand), a head name (e.g. `ctx:abc`), or an immutable
+   * (scan-on-demand) or an immutable
    * `state:…` hash.
    */
   getBuild(
@@ -418,7 +419,7 @@ export interface BuildSystemV2 {
     stateRef?: string
   ): Promise<ResolvedUnitIcon | null>;
 
-  /** Resolve a build unit at `main`, a `ctx:*` context selector, or `state:*`. */
+  /** Resolve a build unit at protected `main` or an exact `state:*`. */
   resolveBuildUnit(unitPath: string, ref?: string): Promise<BuildUnitResolution | null>;
 
   /**
@@ -465,7 +466,8 @@ export interface BuildSystemV2 {
   listAffectedBuildUnits(
     stateHash: string,
     changedPaths: readonly string[],
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    options?: { workspaceServiceBindingsChanged?: boolean }
   ): Promise<string[]>;
 
   /** Stage the complete authority index for an exact candidate state. */
@@ -523,7 +525,13 @@ export interface BuildSystemV2 {
    * exact state off the hot path, builds the unit from that immutable state, and
    * returns the global artifact identity the loader can fetch by key.
    */
-  bindRuntimeImage(unitPath: string, ref?: string): Promise<RuntimeImageBinding>;
+  bindRuntimeImage(
+    unitPath: string, ref?: string, sourceState?: ExecutionSourceStateRef
+  ): Promise<RuntimeImageBinding>;
+
+  withExactBuildSource<T>(
+    stateHash: string, sourceState: ExecutionSourceStateRef, operation: () => Promise<T>
+  ): Promise<T>;
 
   /** Build an npm package as a CJS library bundle for sandbox use. */
   getBuildNpm(specifier: string, version: string, externals?: string[]): Promise<BuildBundleResult>;
@@ -603,7 +611,10 @@ export interface BuildSystemV2 {
   /** Prepare the private, two-collector retention commit for one host epoch. */
   prepareGc(options: { epoch: number }): Promise<PreparedBuildGc>;
 
-  inspectExecution(executionDigest: string): Promise<{
+  inspectExecution(
+    executionDigest: string,
+    canRead?: (artifact: ExecutionArtifactRefV1) => Promise<boolean>
+  ): Promise<{
     artifact: ExecutionArtifactRefV1 | null;
     roots: Array<{ owner: string; ownerId: string; reason: string }>;
     reconstructible: boolean;
@@ -1611,10 +1622,12 @@ export async function initBuildSystemV2(
   const runtimeBindingFlights = new Map<string, Promise<RuntimeImageBinding>>();
   const runtimeBindingKey = (stateHash: string, unitName: string, ev: string) =>
     `${stateHash}\0${unitName}\0${ev}`;
-  const usableCachedBinding = async (key: string): Promise<RuntimeImageBinding | null> => {
+  const usableCachedBinding = async (key: string, exact = false): Promise<RuntimeImageBinding | null> => {
     const binding = runtimeBindingCache.get(key);
     if (!binding) return null;
-    const build = await store.get(binding.artifact.buildKey);
+    const build = exact
+      ? await store.getByExecution(binding.artifact.buildKey, binding.artifact.executionDigest)
+      : await store.get(binding.artifact.buildKey);
     // BuildV2 reuses artifact bytes across semantic states, so the build
     // directory's metadata may have been rebound since this binding was
     // cached. A build-key hit alone is not enough: returning the old sealed
@@ -1631,9 +1644,12 @@ export async function initBuildSystemV2(
     return null;
   };
 
-  const bindRuntimeImage: BuildSystemV2["bindRuntimeImage"] = async (unitPath, requestedRef) => {
+  const bindRuntimeImage: BuildSystemV2["bindRuntimeImage"] = async (unitPath, requestedRef, sourceState) => {
     const bindingStartedAt = performance.now();
-    const ref = validateBuildRef(requestedRef);
+    const ref = validateResolvedBuildRef(requestedRef);
+    if (sourceState && !ref?.startsWith("state:")) {
+      throw new Error("An exact runtime source requires its immutable content state");
+    }
 
     if ((!ref || ref === MAIN_HEAD) && trigger.isSettled()) {
       const snapshot = currentState();
@@ -1662,15 +1678,7 @@ export async function initBuildSystemV2(
       evMapAtState = snapshot.evMap;
       stateHash = snapshot.stateHash;
     } else {
-      if (ref.startsWith("state:")) {
-        stateHash = ref;
-      } else if (ref.startsWith("ctx:")) {
-        // `ctx:` is a user-facing build selector. Resolve the semantic
-        // context's exact working frontier before graph discovery.
-        stateHash = await source.resolveContextState(ref.slice(4));
-      } else {
-        throw new Error(`Invalid build ref after validation: ${ref}`);
-      }
+      stateHash = ref;
       const view = await viewAt(stateHash);
       graphAtState = view.graph;
       evMapAtState = view.evMap;
@@ -1689,8 +1697,9 @@ export async function initBuildSystemV2(
     const ev = evMapAtState[node.name];
     if (!ev) throw new Error(`No effective version for ${node.name} at ${stateHash}`);
 
-    const identityKey = runtimeBindingKey(stateHash, node.name, ev);
-    const cached = await usableCachedBinding(identityKey);
+    const bindingKey = runtimeBindingKey(stateHash, node.name, ev);
+    const identityKey = sourceState ? `${bindingKey}\0${canonicalJson(sourceState)}` : bindingKey;
+    const cached = await usableCachedBinding(identityKey, sourceState !== undefined);
     if (cached) return cached;
     const existingFlight = runtimeBindingFlights.get(identityKey);
     if (existingFlight) return existingFlight;
@@ -1700,13 +1709,8 @@ export async function initBuildSystemV2(
         "BuildV2",
         `Runtime binding build started for ${node.relativePath} at ${stateHash}`
       );
-      const build = await buildUnitStored(
-        builderSession,
-        node,
-        ev,
-        graphAtState,
-        workspaceRoot,
-        stateHash
+      const build = await store.withExactSource(stateHash, sourceState, () =>
+        buildUnitStored(builderSession, node, ev, graphAtState, workspaceRoot, stateHash)
       );
       logVerbose(
         "BuildV2",
@@ -1717,10 +1721,15 @@ export async function initBuildSystemV2(
       if (!authority) {
         throw new Error(`Runtime build ${build.buildKey} is missing its sealed authority envelope`);
       }
+      const artifact = executionArtifactRefFromBuild(source.workspaceId, build);
+      if (!store.peekLocalExecution(artifact.buildKey, artifact.executionDigest) &&
+          !await store.readLocalByExecution(artifact.buildKey, artifact.executionDigest)) {
+        throw new Error(`Cannot verify the bound runtime execution for ${node.relativePath}`);
+      }
       const binding: RuntimeImageBinding = {
         source: node.relativePath,
         unitName: node.name,
-        artifact: executionArtifactRefFromBuild(source.workspaceId, build),
+        artifact,
         authority,
       };
       runtimeBindingCache.set(identityKey, binding);
@@ -2295,18 +2304,10 @@ export async function initBuildSystemV2(
     options?: BuildUnitOptions,
     storedOnly = false
   ): Promise<BuildResult | StoredBuildResult | BuildBundleResult> {
-    ref = validateBuildRef(ref);
-    // ── Exact state / semantic-context build selector ──
+    ref = validateResolvedBuildRef(ref);
+    // Exact state build selector.
     if (ref && ref !== MAIN_HEAD) {
-      let buildState: string;
-      if (ref.startsWith("state:")) {
-        buildState = ref;
-      } else if (ref.startsWith("ctx:")) {
-        buildState = await source.resolveContextState(ref.slice(4));
-      } else {
-        throw new Error(`Invalid build ref after validation: ${ref}`);
-      }
-
+      const buildState = ref;
       const view = await viewAt(buildState);
       const graphAtState = view.graph;
       const resolvePinnedUnit = (): { node: GraphNode | null; libraryEntrySubpath?: string } => {
@@ -2473,17 +2474,15 @@ export async function initBuildSystemV2(
     requestedRef: string,
     requestedSuite?: string
   ) => {
-    const ref = validateBuildRef(requestedRef);
-    if (!ref || (!ref.startsWith("ctx:") && !ref.startsWith("state:"))) {
+    const ref = validateResolvedBuildRef(requestedRef);
+    if (!ref?.startsWith("state:")) {
       throw new BuildRequestError(
         "test_artifact_requires_exact_ref",
-        "Test artifacts require an exact ctx: or state: reference",
+        "Test artifacts require an exact state: reference",
         { ref: requestedRef }
       );
     }
-    const stateHash = ref.startsWith("state:")
-      ? ref
-      : await source.resolveContextState(ref.slice("ctx:".length));
+    const stateHash = ref;
     const view = await viewAt(stateHash);
     const node = resolveUnit(view.graph, unitPath, workspaceRoot);
     if (!node) {
@@ -2616,6 +2615,8 @@ export async function initBuildSystemV2(
     resolveTestSuite,
     getUnitIcon,
     bindRuntimeImage,
+    withExactBuildSource: (stateHash, sourceState, operation) =>
+      store.withExactSource(stateHash, sourceState, operation),
 
     async prepareTypecheck(unitPath, requestedRef) {
       if (retiringDependencies) throw new Error("Build system is retiring");
@@ -2623,7 +2624,7 @@ export async function initBuildSystemV2(
       if (!admitDependencies)
         throw new Error("Native dependency admission is unavailable for this build system");
       const preparation = (async () => {
-        const ref = validateBuildRef(requestedRef);
+        const ref = validateResolvedBuildRef(requestedRef);
         const exactRef = !ref || ref === MAIN_HEAD ? (await source.ensureFresh()).stateHash : ref;
         const resolution = await buildSystem.resolveBuildUnit(unitPath, exactRef);
         if (!resolution)
@@ -2745,7 +2746,7 @@ export async function initBuildSystemV2(
       unitPath: string,
       requestedRef?: string
     ): Promise<BuildUnitResolution | null> {
-      const ref = validateBuildRef(requestedRef);
+      const ref = validateResolvedBuildRef(requestedRef);
       const toResolution = (
         node: GraphNode,
         stateHash: string,
@@ -2759,9 +2760,7 @@ export async function initBuildSystemV2(
       });
 
       if (ref && ref !== MAIN_HEAD) {
-        const stateHash = ref.startsWith("state:")
-          ? ref
-          : await source.resolveContextState(ref.slice("ctx:".length));
+        const stateHash = ref;
         const { graph, evMap } = await viewAt(stateHash);
         const node = resolveUnit(graph, unitPath, workspaceRoot);
         if (!node) return null;
@@ -2799,7 +2798,7 @@ export async function initBuildSystemV2(
       unitPaths: readonly string[],
       requestedRef: string
     ): Promise<Array<BuildUnitResolution | null>> {
-      const ref = validateBuildRef(requestedRef);
+      const ref = validateResolvedBuildRef(requestedRef);
       if (!ref || ref === MAIN_HEAD) {
         const snapshot = currentState();
         return unitPaths.map((unitPath) => {
@@ -2819,9 +2818,7 @@ export async function initBuildSystemV2(
         });
       }
 
-      const stateHash = ref.startsWith("state:")
-        ? ref
-        : await source.resolveContextState(ref.slice("ctx:".length));
+      const stateHash = ref;
       const { graph, evMap } = await viewAt(stateHash);
       return unitPaths.map((unitPath) => {
         const node = resolveUnit(graph, unitPath, workspaceRoot);
@@ -2844,14 +2841,12 @@ export async function initBuildSystemV2(
       unitPath: string,
       requestedRef?: string
     ): Promise<BuildUnitIdentityResolution | null> {
-      const ref = validateBuildRef(requestedRef);
+      const ref = validateResolvedBuildRef(requestedRef);
       let stateHash: string;
       let graph: PackageGraph;
       let evMap: EffectiveVersionMap;
       if (ref && ref !== MAIN_HEAD) {
-        stateHash = ref.startsWith("state:")
-          ? ref
-          : await source.resolveContextState(ref.slice("ctx:".length));
+        stateHash = ref;
         ({ graph, evMap } = await viewAt(stateHash));
       } else {
         const snapshot = currentState();
@@ -2901,14 +2896,12 @@ export async function initBuildSystemV2(
       requestedRef?: string,
       kinds?: readonly GraphNode["kind"][]
     ): Promise<BuildUnitIdentityResolution[]> {
-      const ref = validateBuildRef(requestedRef);
+      const ref = validateResolvedBuildRef(requestedRef);
       let stateHash: string;
       let graph: PackageGraph;
       let evMap: EffectiveVersionMap;
       if (ref && ref !== MAIN_HEAD) {
-        stateHash = ref.startsWith("state:")
-          ? ref
-          : await source.resolveContextState(ref.slice("ctx:".length));
+        stateHash = ref;
         ({ graph, evMap } = await viewAt(stateHash));
       } else {
         const snapshot = currentState();
@@ -2959,14 +2952,12 @@ export async function initBuildSystemV2(
       requestedRef?: string,
       kinds?: readonly GraphNode["kind"][]
     ): Promise<BuildUnitCatalogEntry[]> {
-      const ref = validateBuildRef(requestedRef);
+      const ref = validateResolvedBuildRef(requestedRef);
       let stateHash: string;
       let graph: PackageGraph;
       let evMap: EffectiveVersionMap;
       if (ref && ref !== MAIN_HEAD) {
-        stateHash = ref.startsWith("state:")
-          ? ref
-          : await source.resolveContextState(ref.slice("ctx:".length));
+        stateHash = ref;
         ({ graph, evMap } = await viewAt(stateHash));
       } else {
         const snapshot = currentState();
@@ -3000,14 +2991,12 @@ export async function initBuildSystemV2(
       className: string,
       requestedRef?: string
     ): Promise<ResolvedWorkspaceRpcCatalog> {
-      const ref = validateBuildRef(requestedRef);
+      const ref = validateResolvedBuildRef(requestedRef);
       let stateHash: string;
       let graph: PackageGraph;
       let evMap: EffectiveVersionMap;
       if (ref && ref !== MAIN_HEAD) {
-        stateHash = ref.startsWith("state:")
-          ? ref
-          : await source.resolveContextState(ref.slice("ctx:".length));
+        stateHash = ref;
         ({ graph, evMap } = await viewAt(stateHash));
       } else {
         const snapshot = currentState();
@@ -3171,9 +3160,10 @@ export async function initBuildSystemV2(
     async listAffectedBuildUnits(
       stateHash: string,
       changedPaths: readonly string[],
-      signal?: AbortSignal
+      signal?: AbortSignal,
+      options?: { workspaceServiceBindingsChanged?: boolean }
     ): Promise<string[]> {
-      const ref = validateBuildRef(stateHash);
+      const ref = validateResolvedBuildRef(stateHash);
       if (!ref) throw new Error(`Missing exact state for affected-unit lookup`);
       const view = await viewAt(ref);
       const publishedGraph = currentState().graph;
@@ -3219,13 +3209,11 @@ export async function initBuildSystemV2(
       // to prove: consulting the currently published state from inside the
       // protected-main host effect would re-enter the workspace source DO that
       // is awaiting this validation and deadlock a cold process.
-      const authorityRelevant = changedPaths.some(
-        (changed) =>
-          changed === "meta" ||
-          changed === "meta/vibestudio.yml" ||
-          changed.startsWith("meta/") ||
-          changed.startsWith("workers/")
-      );
+      const serviceConfigChanged =
+        options?.workspaceServiceBindingsChanged !== false &&
+        changedPaths.some((changed) => changed === "meta" || changed.startsWith("meta/"));
+      const authorityRelevant =
+        serviceConfigChanged || changedPaths.some((changed) => changed.startsWith("workers/"));
       if (authorityRelevant) {
         const candidateIndex = candidateAuthorityIndex!;
         const candidateProviderUnits = new Set(
@@ -3263,16 +3251,7 @@ export async function initBuildSystemV2(
         const removedProvider = [...publishedProviderUnits].some(
           (provider) => !candidateProviderUnits.has(provider)
         );
-        if (
-          !exactPublishedIndex &&
-          (removedProvider ||
-            changedPaths.some(
-              (changed) =>
-                changed === "meta" ||
-                changed === "meta/vibestudio.yml" ||
-                changed.startsWith("meta/")
-            ))
-        ) {
+        if (!exactPublishedIndex && (removedProvider || serviceConfigChanged)) {
           // A removed provider has no candidate provider mapping. Recheck all
           // surviving service consumers; this remains bounded by the exact
           // candidate authority index and avoids reconstructing old source.
@@ -3311,7 +3290,7 @@ export async function initBuildSystemV2(
     },
 
     async stageAuthorityIndex(stateHash: string, signal?: AbortSignal): Promise<void> {
-      const ref = validateBuildRef(stateHash);
+      const ref = validateResolvedBuildRef(stateHash);
       if (!ref) throw new Error("Missing exact state for authority index staging");
       const view = await viewAt(ref);
       const index = await authorityIndexAt(ref, view, signal);
@@ -3376,7 +3355,7 @@ export async function initBuildSystemV2(
       onProgress?: (progress: BuildReportProgress) => void,
       options?: { priority?: "interactive" | "background" | "speculative" }
     ): Promise<UnitBuildReport> {
-      const ref = validateBuildRef(stateHash);
+      const ref = validateResolvedBuildRef(stateHash);
       let view: GraphView;
       let viewStateHash: string;
       if (!ref || ref === MAIN_HEAD) {
@@ -3389,16 +3368,8 @@ export async function initBuildSystemV2(
         view = { graph: snapshot.graph, evMap: snapshot.evMap };
         viewStateHash = snapshot.stateHash;
       } else {
-        let resolvedState: string;
-        if (ref.startsWith("state:")) {
-          resolvedState = ref;
-        } else if (ref.startsWith("ctx:")) {
-          resolvedState = await source.resolveContextState(ref.slice(4));
-        } else {
-          throw new Error(`Invalid build ref after validation: ${ref}`);
-        }
-        viewStateHash = resolvedState;
-        view = await viewAt(resolvedState);
+        viewStateHash = ref;
+        view = await viewAt(ref);
       }
       const node = resolveUnit(view.graph, unitName, workspaceRoot);
       if (!node) {
@@ -3637,7 +3608,7 @@ export async function initBuildSystemV2(
       return (await buildSystem.prepareGc({ epoch: 0 })).report;
     },
 
-    async inspectExecution(executionDigest: string) {
+    async inspectExecution(executionDigest, canRead) {
       if (!/^[0-9a-f]{64}$/u.test(executionDigest)) {
         throw new Error("Execution digest must be a full lowercase SHA-256 digest");
       }
@@ -3649,8 +3620,8 @@ export async function initBuildSystemV2(
       if (!artifact) {
         const scan = await store.scanRetention();
         for (const stored of scan.builds) {
-          const build = await store.readLocal(stored.key);
-          if (build?.metadata.execution?.executionDigest === executionDigest) {
+          const build = await store.readLocalByExecution(stored.key, executionDigest);
+          if (build) {
             try {
               artifact = executionArtifactRefFromBuild(source.workspaceId, build);
             } catch {
@@ -3659,6 +3630,9 @@ export async function initBuildSystemV2(
             break;
           }
         }
+      }
+      if (canRead && (!artifact || !(await canRead(artifact)))) {
+        return { artifact: null, roots: [], reconstructible: false, missing: ["artifact"] };
       }
       const missing: string[] = [];
       if (!artifact) missing.push("artifact");

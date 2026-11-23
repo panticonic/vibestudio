@@ -21,6 +21,7 @@ import { deserializeRpcFailure } from "@vibestudio/rpc";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import { contextIdForTargetKey } from "@vibestudio/shared/runtime/contextIdentity";
+import { SYSTEM_USER_ID } from "@vibestudio/identity/types";
 import type {
   PreparedAuthoritySelection,
   ServiceDefinition,
@@ -74,6 +75,7 @@ import {
 import { isOpenPanelBrowserUrl } from "@vibestudio/shared/panelChrome";
 import type { WorkspaceEntityStore } from "../workspaceEntityStore.js";
 import { isTrustedDeviceCaller, isInteractiveClient } from "./clientTrust.js";
+import { admittedEvalContextOwner } from "./principalIdentity.js";
 import {
   prepareContextBoundarySelection,
   type ContextBoundaryAction,
@@ -150,6 +152,8 @@ export interface RuntimeEntityHooks {
      * be snapshotted online without trying to retire the caller mid-invocation.
      */
     cooperativelyPaused?: boolean;
+    /** A Dolt class's object is forked at this commit of its store (the newest when absent). */
+    at?: string;
   }) => Promise<void>;
 
   destroyDurableStorage?: (args: {
@@ -159,10 +163,18 @@ export interface RuntimeEntityHooks {
   }) => Promise<void>;
 }
 
+interface RuntimeWorkspaceSource {
+  stateHash: string;
+  semanticState: VcsStateNodeRef;
+}
+
 export interface RuntimePreparationInput<S extends RuntimeEntityCreateSpec> {
   spec: S;
   key: string;
   contextId: string;
+  sourceAuthority?: { caller: VerifiedCaller; contextId: string | null };
+  /** Exact workspace revision selected by this context clone's admission. */
+  cloneWorkspaceSource?: RuntimeWorkspaceSource;
   existingBuildKey?: string;
   parent?: {
     parentId: string;
@@ -207,9 +219,18 @@ export type PreparedFor<E> = E extends CodeExecution
       : never;
 
 export interface RuntimeServiceInternal {
-  createEntity(caller: VerifiedCaller, spec: RuntimeEntityCreateSpec): Promise<RuntimeEntityHandle>;
+  /**
+   * `trusted.agentBinding` is a relationship the host has already verified (the eval
+   * service binds the session entity of an agent's kernel to that agent); a
+   * caller's own `spec.agentBinding` stays restricted to host callers.
+   */
+  createEntity(
+    caller: VerifiedCaller,
+    spec: RuntimeEntityCreateSpec,
+    trusted?: { agentBinding?: RuntimeAgentBinding }
+  ): Promise<RuntimeEntityHandle>;
   /** Complete a durable code reservation from the server-owned reconciler. */
-  activateReservedEntity(spec: RuntimeCodeEntityCreateSpec): Promise<RuntimeEntityHandle>;
+  activateReservedEntity(spec: RuntimeCodeEntityCreateSpec, caller?: VerifiedCaller): Promise<RuntimeEntityHandle>;
   /** Preparing panel reservations that must be resumed after server startup. */
   listPreparingPanels(): Promise<EntityRecord[]>;
   retireEntity(id: string): Promise<void>;
@@ -230,7 +251,7 @@ export interface RuntimeServiceInternal {
     ownerRuntimeId: string;
     parentContextId: string;
     targetContextId: string;
-  }): Promise<{
+  }, caller: VerifiedCaller): Promise<{
     contextId: string;
     parentContextId: string;
     parentWorkingHead: VcsStateNodeRef;
@@ -254,10 +275,14 @@ interface RuntimeCreationActors {
   signal?: AbortSignal;
   /** Scope retained when copying an existing executable entity. */
   retainedExecutionAuthority?: import("@vibestudio/rpc").ExecutionAuthorityOrigin;
+  /** A binding the host verified itself; it replaces the restricted `spec.agentBinding`. */
+  trustedAgentBinding?: RuntimeAgentBinding;
   /** Authenticated principal that owns and controls the new runtime lifecycle. */
   lifecycleCaller: VerifiedCaller;
   /** Host-verified root initiator whose human subject owns the new runtime. */
   initiatingCaller: VerifiedCaller;
+  /** Sealed and admitted by cloneContext before it activates any copied runtime. */
+  readCloneWorkspaceSource?: () => Promise<RuntimeWorkspaceSource>;
 }
 
 export interface PreparedRuntimeExecution {
@@ -267,9 +292,8 @@ export interface PreparedRuntimeExecution {
   authorityRequests?: readonly import("@vibestudio/shared/authorityManifest").UnitAuthorityRequest[];
 }
 
-/** Disposable host projection directories for semantic contexts. */
+/** Host directory cleanup for retired contexts. */
 export interface RuntimeContextFolders {
-  ensureContextFolder(contextId: string): Promise<string>;
   removeContext(contextId: string): Promise<void>;
 }
 
@@ -279,13 +303,21 @@ export interface RuntimeSemanticContexts {
   ensureContext(contextId: string): Promise<void>;
   /** Drop the semantic context and its disposable host projection. */
   dropContext(contextId: string): Promise<void>;
-  /**
-   * Fork the source context's exact working frontier into an independent target
-   * semantic context. Used by clone/subagent lifecycle orchestration.
-   */
-  forkContext(sourceContextId: string, targetContextId: string): Promise<void>;
-  /** Exact semantic state pointer without materializing a native projection. */
-  resolveWorkingState(contextId: string): Promise<VcsStateNodeRef>;
+  /** Fork the caller's exact working revision into an independent context. */
+  forkParticipantContext(input: {
+    caller: VerifiedCaller;
+    sourceContextId: string;
+    targetContextId: string;
+    ownerContextId?: string;
+    retainForRuntime?: boolean;
+  }): Promise<VcsStateNodeRef>;
+  /** Resolve build input at the exact revision retained by the admitted fork. */
+  readForkSource(input: {
+    caller: VerifiedCaller;
+    contextId: string;
+    ownerContextId: string;
+    state: VcsStateNodeRef;
+  }): Promise<RuntimeWorkspaceSource>;
   /** Enumerate durable semantic contexts, optionally restricted by exact prefix. */
   listContexts(prefix?: string): Promise<string[]>;
 }
@@ -319,13 +351,17 @@ export interface RuntimeServiceDeps {
   contextFolders: RuntimeContextFolders;
   /** Required semantic-context lifecycle owned by the semantic workspace. */
   semanticContexts: RuntimeSemanticContexts;
+  forwardHistoryPacket?: (
+    caller: VerifiedCaller,
+    input: { transferId: string; bytes: Uint8Array }
+  ) => Promise<Uint8Array>;
   onContextCreated?: (input: {
     contextId: string;
     ownerContextId: string | null;
     /**
      * A resident host-attested policy carried by the verified creator. This is
      * required when a trusted deputy creates a context for a runtime id that
-     * has no entity row of its own (for example an EvalDO opening a root
+     * has no entity row of its own (for example an eval kernel opening a root
      * panel), so semantic ownership alone cannot recover the creator context.
      */
     inheritedTestPolicy?: import("@vibestudio/rpc").AgentExecutionTestPolicy;
@@ -660,12 +696,14 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       }
       const requestedContextId =
         spec.contextId == null || spec.contextId === "" ? undefined : spec.contextId;
-      const agentBinding = await resolveAgentBinding(
-        caller,
-        "createEntity",
-        requestedContextId,
-        bindingFromSpec(spec)
-      );
+      const agentBinding =
+        actors.trustedAgentBinding ??
+        (await resolveAgentBinding(
+          caller,
+          "createEntity",
+          requestedContextId,
+          bindingFromSpec(spec)
+        ));
       if (
         preparedResourceBindings &&
         requestedContextId !== undefined &&
@@ -683,13 +721,17 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       const contextId =
         preparedResourceBindings?.contextId ??
         (await resolveTargetContext(caller, spec.contextId, agentBinding));
+      const forkSource =
+        spec.kind === "do" && spec.forkStorage
+          ? await reserveForkedStorage(actors, { ...spec, contextId }, canonicalId)
+          : undefined;
       return activateEntityOnce(
         actors,
         spec,
         contextId,
         agentBinding,
         selfAgentChannelFromSpec(spec),
-        undefined,
+        forkSource,
         async (record, previous) => {
           try {
             actors.signal?.throwIfAborted();
@@ -697,9 +739,11 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
             await preparedResourceBindings?.bind(record);
             if (spec.kind !== "do" || !spec.agentInitialization) return undefined;
             if (!deps.hooks.initializeAgent) throw new Error("Agent initialization is unavailable");
+            // Channel membership is a routed operation by the authenticated
+            // creator. The initiating account still owns the admitted entity.
             const result = await deps.hooks.initializeAgent({
               record,
-              caller: actors.initiatingCaller,
+              caller: actors.lifecycleCaller,
               signal: actors.signal,
               initialization: spec.agentInitialization,
             });
@@ -727,6 +771,76 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       );
     };
     return serializeByKey(entityTransitions, canonicalId, create);
+  }
+
+  /**
+   * Reserve an entity that starts from a fork of the caller's own storage and copy that storage into
+   * it, before the ordinary creation path activates it. The caller is the source: an entity forks
+   * itself at one of its own commits, into its own class, so no entity can read another's storage
+   * through this. A retry finds the reservation and the receipt of the copy and does neither again.
+   */
+  async function reserveForkedStorage(
+    actors: RuntimeCreationActors,
+    spec: Extract<RuntimeEntityCreateSpec, { kind: "do" }> & { key: string },
+    canonicalId: string
+  ): Promise<EntityRecord> {
+    const caller = actors.lifecycleCaller;
+    const at = spec.forkStorage!.at;
+    const source = await store.resolveRecord(caller.runtime.id);
+    if (!source || source.kind !== "do" || source.status !== "active" || !source.className) {
+      throw new Error("runtime.createEntity forkStorage requires the caller to be an active DO");
+    }
+    if (source.source.repoPath !== spec.execution.source || source.className !== spec.className) {
+      throw new Error("runtime.createEntity forkStorage creates the caller's own class");
+    }
+    if (!source.authoritySessionId || !source.activeBuildKey || !source.activeExecutionDigest) {
+      throw new Error(`Fork source ${source.id} has no sealed incarnation ownership`);
+    }
+    if (!deps.hooks.cloneDurableStorage) {
+      throw new Error("runtime.createEntity forkStorage is unavailable");
+    }
+    const provenance: EntityCloneProvenance = {
+      storage: "snapshot",
+      storageCommit: at,
+      operationContextId: spec.contextId || source.contextId,
+      sourceEntityId: source.id,
+      sourceContextId: source.contextId,
+      sourceAuthoritySessionId: source.authoritySessionId,
+      sourceBuildKey: source.activeBuildKey,
+      sourceExecutionDigest: source.activeExecutionDigest,
+    };
+    const existing = await store.resolveRecord(canonicalId);
+    const reservedCommit = existing?.cloneProvenance?.storageCommit;
+    if (reservedCommit !== undefined && reservedCommit !== at) {
+      throw new IdentityCollisionError(canonicalId, {
+        field: "storageCommit",
+        existing: reservedCommit,
+        attempted: at,
+      });
+    }
+    if (existing && existing.status !== "preparing") return source;
+    if (!existing) {
+      await reserveEntityOnce(actors, spec, spec.key, canonicalId, provenance);
+    } else if (
+      canonicalJson(existing.cloneProvenance ?? null) !==
+      canonicalJson({ ...provenance, storageCommit: reservedCommit })
+    ) {
+      throw new IdentityCollisionError(canonicalId, {
+        field: "cloneProvenance",
+        existing: existing.cloneProvenance ?? null,
+        attempted: provenance,
+      });
+    }
+    await deps.hooks.cloneDurableStorage({
+      source: source.source.repoPath,
+      className: source.className,
+      fromKey: source.key,
+      toKey: spec.key,
+      reservation: (await store.resolveRecord(canonicalId))!,
+      cooperativelyPaused: true,
+      at,
+    });
+    return source;
   }
 
   async function releaseResourceBindings(caller: VerifiedCaller, id: string): Promise<void> {
@@ -915,11 +1029,16 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         : {}),
     });
     inheritTaskAuthority(record.id, actors, contextId);
-    // The reservation owns an isolated child frontier, not a fresh main
-    // snapshot. The canonical fork command is replayable after interruption
-    // and retains the first selected frontier on reservation retries.
+    // The reservation retains the parent's selected revision for the child
+    // runtime, including on a retry of the same reservation.
     if (ownerContextId && ownerContextId !== contextId) {
-      await deps.semanticContexts.forkContext(ownerContextId, contextId);
+      await deps.semanticContexts.forkParticipantContext({
+        caller: contextOwner,
+        sourceContextId: ownerContextId,
+        targetContextId: contextId,
+        ownerContextId,
+        retainForRuntime: true,
+      });
     }
     // An implicit reservation is the semantic creation boundary for its
     // derived lifecycle context. Register it immediately, before activation
@@ -992,13 +1111,16 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     }
 
     await setUpContext(existing.contextId);
+    const reservedRef = `ctx:${existing.contextId}`;
+    const ref = spec.execution.ref ?? (caller ? reservedRef : "main");
+    const sourceContextId = caller && ref !== reservedRef
+      ? await store.resolveWorkContext(caller.runtime.id)
+      : existing.contextId;
     const prepared = await deps.hooks.prepare({
-      spec: {
-        ...spec,
-        execution: { ...spec.execution, ref: spec.execution.ref ?? `ctx:${existing.contextId}` },
-      },
+      spec: { ...spec, execution: { ...spec.execution, ref } },
       key: spec.key,
       contextId: existing.contextId,
+      ...(caller ? { sourceAuthority: { caller, contextId: sourceContextId } } : {}),
     });
     if (prepared.surface !== "code") {
       throw new Error(`Reserved entity ${canonicalId} did not prepare a code incarnation`);
@@ -1175,24 +1297,29 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         ? await store.resolveWorkContext(actors.initiatingCaller.runtime.id)
         : null;
     let prepared: PreparedIncarnation;
-    if (cloneSource && existing?.activeBuildKey) {
+    const inheritForkExecutable = cloneSource && spec.kind === "do" && spec.forkStorage && spec.execution.ref === undefined;
+    const sealedExecutable = cloneSource && existing?.activeBuildKey ? existing
+      : inheritForkExecutable ? cloneSource : undefined;
+    if (sealedExecutable) {
+      if (!sealedExecutable.activeBuildKey) throw new Error(`Clone ${canonicalId} has no sealed build`);
       const identity = requireActiveExecutionIdentity(
         {
-          executionDigest: existing.activeExecutionDigest,
-          authority: existing.activeAuthority,
+          executionDigest: sealedExecutable.activeExecutionDigest,
+          authority: sealedExecutable.activeAuthority,
         },
         `Clone preparation ${canonicalId}`
       );
-      await deps.hooks.recoverExactExecution(existing);
+      if (sealedExecutable === existing) await deps.hooks.recoverExactExecution(existing);
       prepared = {
         surface: "code",
         target: { id: canonicalId },
-        effectiveVersion: existing.source.effectiveVersion,
-        buildKey: existing.activeBuildKey,
+        effectiveVersion: sealedExecutable.source.effectiveVersion,
+        buildKey: sealedExecutable.activeBuildKey,
         executionDigest: identity.activeExecutionDigest,
         authority: identity.activeAuthority,
       };
-    } else
+    } else {
+      const cloneWorkspaceSource = await actors.readCloneWorkspaceSource?.();
       prepared = (await deps.hooks.prepare({
         spec:
           spec.kind !== "session" && spec.execution.surface === "code"
@@ -1200,12 +1327,19 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
                 ...spec,
                 execution: {
                   ...spec.execution,
-                  ref: spec.execution.ref ?? (sourceContextId ? `ctx:${sourceContextId}` : "main"),
+                  ref: cloneWorkspaceSource?.stateHash ??
+                    spec.execution.ref ?? (sourceContextId ? `ctx:${sourceContextId}` : "main"),
                 },
               }
             : spec,
         key,
         contextId,
+        ...(cloneWorkspaceSource ? { cloneWorkspaceSource } : {}),
+        // A storage fork can be provisioning the participant work cell itself.
+        // Its source selection must not open that same work cell.
+        ...(spec.kind !== "session" && spec.execution.surface === "code" && !cloneSource
+          ? { sourceAuthority: { caller: actors.initiatingCaller, contextId: sourceContextId } }
+          : {}),
         ...(existing?.activeBuildKey ? { existingBuildKey: existing.activeBuildKey } : {}),
         parent: {
           parentId: caller.runtime.id,
@@ -1216,6 +1350,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
               : undefined,
         },
       })) as PreparedIncarnation;
+    }
     if (prepared.surface !== spec.execution.surface) {
       throw new Error(
         `Runtime preparation surface mismatch for ${canonicalId}: requested ${spec.execution.surface}, prepared ${prepared.surface}`
@@ -1308,6 +1443,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       if (!sealed.authoritySessionId) {
         throw new Error(`Preparing clone ${canonicalId} has no authority lifecycle`);
       }
+      if (sealedExecutable === cloneSource) await deps.hooks.recoverExactExecution(sealed);
       await deps.hooks.initializeDurableClone({
         provenance: sealed.cloneProvenance!,
         source: {
@@ -1589,15 +1725,19 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
   }
 
   async function retireEntity(id: string, removeContext?: boolean): Promise<void> {
-    const record = await retireRecord(id);
-    if (!record) return;
-    if (removeContext) {
+    await serializeByKey(entityTransitions, id, async () => {
+      const retired = await retireRecordOnce(id);
+      if (!removeContext) return;
+      // A context cleanup can fail after the entity was durably retired.
+      // Retry from that same record so the archive and removal can finish.
+      const record = retired ?? (await store.resolveRecord(id));
+      if (record?.status !== "retired") return;
       const live = await store.listActive();
       if (!live.some((e) => e.contextId === record.contextId)) {
         await deps.semanticContexts.dropContext(record.contextId);
         await deps.contextFolders.removeContext(record.contextId);
       }
-    }
+    });
   }
 
   async function recoverExecution(
@@ -1616,7 +1756,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         state: "started",
         attemptCount,
       });
-      return recoverExecutionOnce(input)
+      return recoverExecutionOnce(caller, input)
         .then((result) => {
           deps.onExecutionRecovery?.({
             entityId: input.entityId,
@@ -1647,6 +1787,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
   }
 
   async function recoverExecutionOnce(
+    caller: VerifiedCaller,
     input: RuntimeExecutionRecoveryRequest
   ): Promise<RuntimeExecutionRecoveryResult> {
     const record = await store.resolveActiveRecord(input.entityId);
@@ -1676,12 +1817,19 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       };
     }
 
+    const ownerUserId = record.ownerUserId;
+    const privateContext = ownerUserId != null && ownerUserId !== SYSTEM_USER_ID;
+    if (privateContext && caller.subject?.userId !== ownerUserId) {
+      throw Object.assign(new Error("Replacing a private runtime requires its workspace owner"), {
+        code: "EACCES",
+      });
+    }
     const spec: Extract<RuntimeEntityCreateSpec, { kind: "do" }> = {
       kind: "do",
       execution: {
         surface: "code",
         source: record.source.repoPath,
-        ref: `ctx:${record.contextId}`,
+        ref: privateContext ? `ctx:${record.contextId}` : "main",
       },
       className: record.className,
       key: record.key,
@@ -1700,6 +1848,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       spec,
       key: record.key,
       contextId: record.contextId,
+      ...(privateContext ? { sourceAuthority: { caller, contextId: record.contextId } } : {}),
       ...(record.parentId
         ? {
             parent: {
@@ -1748,9 +1897,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
   }
 
   /** Build a clone spec from a source record: same source + class, new key/context.
-   * `ref` selects the clone's semantic context explicitly, independent of the
-   * requesting caller's authoring context. The clone follows that context's exact
-   * working head. Code and cloned durable state therefore share one boundary. */
+   * Preparation binds the exact workspace revision admitted for the fork. */
   function buildCloneSpec(
     src: EntityRecord,
     contextId: string,
@@ -1762,7 +1909,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       }
       return {
         kind: "do",
-        execution: { surface: "code", source: src.source.repoPath, ref: `ctx:${contextId}` },
+        execution: { surface: "code", source: src.source.repoPath },
         className: src.className,
         key: newKey,
         contextId,
@@ -1771,7 +1918,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     }
     return {
       kind: "worker",
-      execution: { surface: "code", source: src.source.repoPath, ref: `ctx:${contextId}` },
+      execution: { surface: "code", source: src.source.repoPath },
       key: newKey,
       contextId,
       stateArgs: src.stateArgs,
@@ -1780,7 +1927,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
 
   /**
    * Clone a whole context's durable substrate into a fresh, isolated context:
-   * generic DO storage (server-internal cloneDO) + a VCS snapshot of the
+   * generic DO storage (server-internal object fork) + a VCS snapshot of the
    * source's working files. Returns the new contextId + source→clone map.
    * Prepares copied receiver storage through authenticated lifecycle control before
    * admitting execution. Callers then apply domain semantics (the fork's `postClone`).
@@ -1793,6 +1940,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       sourceContextId: string;
       include?: string[];
       recursive?: boolean;
+      storageAt?: Record<string, string>;
       targetKey?: string;
     }
   ): Promise<CloneContextResult> {
@@ -1806,6 +1954,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       sourceContextId: string;
       include?: string[];
       recursive?: boolean;
+      storageAt?: Record<string, string>;
       targetKey?: string;
     }
   ): Promise<CloneContextResult> {
@@ -1816,6 +1965,15 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       sourceContextId,
       include: args.include ? [...new Set(args.include)].sort() : null,
       recursive: args.recursive === true,
+      ...(args.storageAt && Object.keys(args.storageAt).length > 0
+        ? {
+            storageAt: Object.fromEntries(
+              Object.entries(args.storageAt).sort(([left], [right]) =>
+                left < right ? -1 : left > right ? 1 : 0
+              )
+            ),
+          }
+        : {}),
     };
     const initiatingEntity = await store.resolveRecord(actors.initiatingCaller.runtime.id);
     if (
@@ -1979,13 +2137,11 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         throw new Error(`Clone source ${source.id} has no sealed incarnation ownership`);
       }
       return {
-        // Native session state contains execution ownership and channel/task
-        // provenance. Conversation transfer owns its semantic copy; raw file
-        // snapshots are reserved for independently cloneable ordinary DOs.
-        storage:
-          source.kind === "do" && !source.nativeOwner && !source.agentBinding
-            ? "snapshot"
-            : "fresh",
+        // A DO's storage is forked, an agent's included: the versioned conversation comes with
+        // the fork (at the commit `storageAt` names) and the cell's local state, which holds
+        // execution ownership and channel/task provenance, starts empty, so the fork binds a
+        // new owner of its own on its first activation.
+        storage: source.kind === "do" ? "snapshot" : "fresh",
         operationContextId: rootTarget,
         sourceEntityId: source.id,
         sourceContextId: source.contextId,
@@ -2061,13 +2217,24 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         });
         ownsDefinition = true;
       }
+      const semanticCaller = actors.initiatingCaller;
+      const semanticOwner = semanticCaller.agentBinding?.contextId ?? await store.resolveWorkContext(semanticCaller.runtime.id);
       for (const srcCtx of sourceContexts) {
         const isRoot = srcCtx === sourceContextId;
         const targetCtx = newContextIdOf.get(srcCtx) as string;
         // Fork semantic state first so every cloned runtime observes the exact
         // source working frontier and can then diverge independently.
+        const selectedState = await deps.semanticContexts.forkParticipantContext({
+          caller: semanticCaller, sourceContextId: srcCtx, targetContextId: targetCtx,
+          retainForRuntime: true,
+          ...(semanticOwner ? { ownerContextId: semanticOwner } : {}),
+        });
+        let workspaceSource: Promise<RuntimeWorkspaceSource> | undefined;
+        const readCloneWorkspaceSource = () => workspaceSource ??= deps.semanticContexts.readForkSource({
+          caller: semanticCaller, contextId: targetCtx, ownerContextId: semanticOwner ?? srcCtx,
+          state: selectedState,
+        });
         if (!existingContexts.has(targetCtx)) {
-          await deps.semanticContexts.forkContext(srcCtx, targetCtx);
           if (isRoot) {
             await store.recordContextEdge({
               contextId: targetCtx,
@@ -2079,8 +2246,6 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
             });
           }
         }
-        await deps.contextFolders.ensureContextFolder(targetCtx);
-
         for (const src of clonableIn(srcCtx, isRoot ? rootInclude : null)) {
           const capturedMember = definition!.members.find((member) => member.source.id === src.id)!;
           const newKey = capturedMember.targetKey;
@@ -2102,6 +2267,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
               lifecycleCaller: caller,
               initiatingCaller: caller,
               retainedExecutionAuthority: src.executionAuthority,
+              readCloneWorkspaceSource,
             };
             const spec = buildCloneSpec(src, targetCtx, newKey);
             const cloneProvenance = capturedProvenance(src);
@@ -2135,11 +2301,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
               // a sealed record resumes initialization of that exact image.
               if (!existing)
                 await reserveEntityOnce(cloneActors, spec, newKey, targetId, cloneProvenance);
-              if (
-                (!existing || existing.status === "preparing") &&
-                src.kind === "do" &&
-                !src.agentBinding
-              ) {
+              if ((!existing || existing.status === "preparing") && src.kind === "do") {
                 const className = src.className;
                 if (className == null) {
                   throw new Error(`cloneContext: DO entity ${src.id} has no className`);
@@ -2151,6 +2313,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
                   toKey: newKey,
                   reservation: (await store.resolveRecord(targetId))!,
                   ...(src.id === caller.runtime.id ? { cooperativelyPaused: true } : {}),
+                  ...(request.storageAt?.[src.id] ? { at: request.storageAt[src.id] } : {}),
                 });
               }
               const activated = await activateEntityOnce(
@@ -2512,9 +2675,12 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     await assertSubagentOwnerAllowed(caller, args);
 
     const contextId = contextIdForTargetKey(args.targetKey);
-    // Order mirrors cloneContext: fork semantic state, then materialize its projection.
-    await deps.semanticContexts.forkContext(args.parentContextId, contextId);
-    await deps.contextFolders.ensureContextFolder(contextId);
+    await deps.semanticContexts.forkParticipantContext({
+      caller, sourceContextId: args.parentContextId, targetContextId: contextId,
+      ownerContextId: caller.agentBinding?.contextId ??
+        await store.resolveWorkContext(caller.runtime.id) ?? args.parentContextId,
+      retainForRuntime: true,
+    });
     await store.recordContextEdge({
       contextId,
       ownerContextId: args.parentContextId,
@@ -2532,11 +2698,10 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     return { contextId };
   }
 
-  async function forkSemanticContext(input: {
-    ownerRuntimeId: string;
-    parentContextId: string;
-    targetContextId: string;
-  }): Promise<{
+  async function forkSemanticContext(
+    input: { ownerRuntimeId: string; parentContextId: string; targetContextId: string },
+    caller: VerifiedCaller
+  ): Promise<{
     contextId: string;
     parentContextId: string;
     parentWorkingHead: VcsStateNodeRef;
@@ -2553,10 +2718,9 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     }
     const parentContextId = input.parentContextId;
     const contextId = input.targetContextId;
-    const parentWorkingHead = await deps.semanticContexts.resolveWorkingState(parentContextId);
-    // Semantic state only: do not create a projection folder and do not touch
-    // entity/DO state. forkContext is valid even when the parent is empty.
-    await deps.semanticContexts.forkContext(parentContextId, contextId);
+    const selected = await deps.semanticContexts.forkParticipantContext({
+      caller, sourceContextId: parentContextId, targetContextId: contextId,
+    });
     await store.recordContextEdge({
       contextId,
       ownerContextId: parentContextId,
@@ -2564,8 +2728,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       ownerEntityId: input.ownerRuntimeId,
     });
     await deps.onContextCreated?.({ contextId, ownerContextId: parentContextId });
-    const childBaseState = await deps.semanticContexts.resolveWorkingState(contextId);
-    return { contextId, parentContextId, parentWorkingHead, childBaseState };
+    return { contextId, parentContextId, parentWorkingHead: selected, childBaseState: selected };
   }
 
   async function dropSemanticContext(contextId: string): Promise<void> {
@@ -2812,6 +2975,10 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         await deps.faultAbortAgentVessel(ctx.caller, target);
         return { aborted: true as const };
       },
+      forwardHistoryPacket: (ctx, [input]) => {
+        if (!deps.forwardHistoryPacket) throw new Error("Workspace history transfer is unavailable");
+        return deps.forwardHistoryPacket(ctx.caller, input);
+      },
       retireEntity: async (_ctx, [{ id, removeContext }]) => {
         await retireEntity(id, removeContext);
       },
@@ -2847,7 +3014,17 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       destroyContext: async (_ctx, [{ contextId, recursive }]) => {
         await destroyContext({ contextId, recursive });
       },
-      forkSemanticContext: (_ctx, [input]) => forkSemanticContext(input),
+      forkSemanticContext: (ctx, [input]) => {
+        const caller = [ctx.caller, ctx.authorizingCaller].find((principal) => {
+          if (!principal) return false;
+          if (principal.runtime.id === input.ownerRuntimeId ||
+              principal.agentBinding?.entityId === input.ownerRuntimeId) return true;
+          const owner = admittedEvalContextOwner(store.cache, principal);
+          return owner?.runtimeId === input.ownerRuntimeId && owner.contextId === input.parentContextId;
+        });
+        if (!caller) throw new Error("The verified caller must own the workspace context being forked");
+        return forkSemanticContext(input, caller);
+      },
       dropSemanticContext: async (_ctx, [{ contextId }]) => {
         await dropSemanticContext(contextId);
       },
@@ -2912,9 +3089,16 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
   return {
     definition,
     internal: {
-      createEntity: (caller, spec) =>
-        createEntity({ lifecycleCaller: caller, initiatingCaller: caller }, spec),
-      activateReservedEntity: (spec) => activateReservedEntity(null, spec),
+      createEntity: (caller, spec, trusted) =>
+        createEntity(
+          {
+            lifecycleCaller: caller,
+            initiatingCaller: caller,
+            ...(trusted?.agentBinding ? { trustedAgentBinding: trusted.agentBinding } : {}),
+          },
+          spec
+        ),
+      activateReservedEntity: (spec, caller) => activateReservedEntity(caller ?? null, spec),
       listPreparingPanels: () => store.listPreparing("panel"),
       retireEntity: (id) => retireEntity(id),
       createContext,

@@ -506,20 +506,14 @@ test("configures two workspace boundaries in the shell and calls an exported rec
         launchTimeout: 300_000,
       })
     );
+    await diagnosticPhase("resolve the workspace creation reviews", () =>
+      approvePendingWorkspaceCreationReview(app!)
+    );
     await diagnosticPhase("resolve selected workspace launch approvals", () =>
       approvePendingStartupUnits(app!)
     );
     await diagnosticPhase("record the first-run reporting choice", () =>
       declineFirstRunReporting(app!)
-    );
-    await diagnosticPhase("resolve the project workspace creation review", () =>
-      approvePendingWorkspaceCreationReview(app!)
-    );
-    await diagnosticPhase("resolve the System workspace creation review", () =>
-      approvePendingWorkspaceCreationReview({
-        app: app!.app,
-        workspaceId: app!.systemWorkspaceId,
-      })
     );
     const shellPage = await diagnosticPhase("find the hosted workspace shell", () =>
       findWorkspaceShellPage(app!)

@@ -32,6 +32,8 @@ export interface InternalConnectionlessRpcConfig extends ConnectionlessRpcConfig
   onOutboundOperation?: (operation: Promise<unknown>) => void;
   /** Cancellation of the currently executing receiver request. */
   invocationSignal?: () => AbortSignal | null | undefined;
+  /** False for a hosted class: a call to the entity whose identity it presents leaves the process. */
+  loopback?: boolean;
 }
 
 export interface ConnectionlessRpcClient {
@@ -273,6 +275,7 @@ function createConnectionlessRpcClientCore(
     ...(config.authorityParentNonce ? { authorityParentNonce: config.authorityParentNonce } : {}),
     ...(config.onOutboundOperation ? { onOutboundOperation: config.onOutboundOperation } : {}),
     ...(config.invocationSignal ? { invocationSignal: config.invocationSignal } : {}),
+    ...(config.loopback === false ? { loopback: false } : {}),
   });
 
   return {

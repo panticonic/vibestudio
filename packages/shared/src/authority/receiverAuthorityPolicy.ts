@@ -53,6 +53,7 @@ const SHARING = new Set<string>([
   "website.publish",
   "push.send",
   "webhooks.manage",
+  "chronolog.write",
 ]);
 
 export function receiverAuthorityPolicy(
@@ -76,7 +77,7 @@ export function receiverAuthorityPolicy(
   const irreversible = IRREVERSIBLE.has(capability);
   const agentScope = AGENT_SCOPE_OFFERABLE.has(capability) && !irreversible ? "offer" : "never";
   return {
-    preferredContinuity: irreversible
+    preferredContinuity: irreversible || capability === "chronolog.write"
       ? "operation"
       : capability === "credential.use"
         ? "reviewed-version"
@@ -90,7 +91,8 @@ export function receiverAuthorityPolicy(
       ? "deletion"
       : capability === "git.publish" ||
           capability === "website.publish" ||
-          capability === "workspace.publish"
+          capability === "workspace.publish" ||
+          capability === "chronolog.write"
         ? "change-set"
         : capability === "push.send"
           ? "send"

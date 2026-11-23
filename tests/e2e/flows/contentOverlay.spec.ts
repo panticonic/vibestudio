@@ -12,6 +12,8 @@ import {
   type TestApp,
 } from "../../setup/electronSetup";
 import { retryIdempotentAutomationRead } from "../../setup/automationContext";
+import { waitHostedShellReady } from "../support/commandOverlay";
+import { declineFirstRunReporting } from "../support/workspaceCreation";
 
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 
@@ -36,47 +38,6 @@ async function callShellView(testApp: TestApp, method: string, arg?: unknown): P
     },
     { method, arg }
   );
-}
-
-/** Wait for the hosted shell chrome, approving the bootstrap launch gate if shown. */
-async function waitHostedShellReady(testApp: TestApp): Promise<void> {
-  await expect
-    .poll(
-      async () =>
-        testApp.app.evaluate(async ({ webContents }) => {
-          const candidates = webContents.getAllWebContents().filter((contents) => {
-            if (contents.isDestroyed()) return false;
-            const title = contents.getTitle();
-            return contents.getURL().startsWith("vs-client://") || title === "Vibestudio Launch";
-          });
-          for (const contents of candidates) {
-            try {
-              const result = await Promise.race([
-                contents.executeJavaScript(
-                  `(() => {
-                    if (document.querySelector(".titlebar-breadcrumb-scroll")
-                      || document.querySelector('[aria-label="Menu"]')) return "ready";
-                    const approve = Array.from(document.querySelectorAll("button"))
-                      .find((b) => /^(Start|Add to workspace|Add template|Update|Use the new version|Trust and start|Approve and start)$/.test((b.textContent ?? "").trim()));
-                    if (approve) { approve.click(); return "approved"; }
-                    return "waiting";
-                  })()`,
-                  true
-                ),
-                new Promise<"waiting">((resolve) => setTimeout(() => resolve("waiting"), 2_000)),
-              ]);
-              // Only "ready" ends the wait — "approved" just clicks the gate and
-              // keeps polling until the hosted shell chrome actually loads.
-              if (result === "ready") return true;
-            } catch {
-              // Non-DOM webContents.
-            }
-          }
-          return false;
-        }),
-      { timeout: 120_000, intervals: [500, 1000, 2000] }
-    )
-    .toBe(true);
 }
 
 /** Probe the content-overlay webContents, identified by its preload bridge
@@ -245,6 +206,7 @@ test.describe("Content overlay", () => {
     });
     testApp = await launchTestApp({ workspace: workspacePath, launchTimeout: 240_000 });
     await waitHostedShellReady(testApp);
+    await declineFirstRunReporting(testApp);
 
     // Drive the reusable content overlay directly (the test API authenticates as
     // the shell app, a view host) with a consequential agent approval. This is

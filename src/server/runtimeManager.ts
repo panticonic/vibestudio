@@ -1,0 +1,4875 @@
+/**
+ * RuntimeManager — the workspace's isolate runtime: one celld node (the
+ * panticonic fork) per workspace, running one deployed runtime application.
+ *
+ * Manages:
+ * - Worker and Durable Object executable selection (create, update, destroy)
+ * - Context/token provisioning per instance
+ * - The runtime application's deployment (one module, per-generation vars)
+ * - The node process (start, reload by deploy, crash recovery, stop)
+ *
+ * The class keeps its historical name; the runtime underneath is celld.
+ */
+
+import type { WorkerExecutableAdmission } from "./workerExecutableDispatch.js";
+import type { WorkspaceReleaseIdentity } from "./preparedWorkspaceRelease.js";
+import {
+  acquireSchemaProbeEvidence,
+  readInstalledSchemaProbeEvidence,
+  type InstalledSchemaProbeEvidence,
+} from "./services/schemaProbeEvidence.js";
+import { deserializeRpcFailure, encodeRpcJson } from "@vibestudio/rpc";
+import type { ChildProcess } from "child_process";
+import { parseDurableWorkReady, type DurableWorkQueue } from "@vibestudio/shared/durableWork";
+import * as crypto from "crypto";
+import * as fs from "fs";
+import * as path from "path";
+import { DatabaseSync } from "node:sqlite";
+import { stateLayout } from "./stateLayout.js";
+import type { TokenManager } from "@vibestudio/shared/tokenManager";
+import { createVerifiedCaller, type VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import type { FsService } from "./services/fsService.js";
+import type { ExecutionPublicationPort, ExecutionSourceStateRef } from "@vibestudio/shared/execution/retention";
+import { canonicalEntityId, type EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
+import type { StoredBuildResult } from "./buildV2/buildStore.js";
+import { executionArtifactRefFromBuild } from "./executionRootProviders.js";
+import type { WorkspaceRpcMethodDoc } from "./buildV2/workspaceRpcCatalog.js";
+import type { ProtectedPublicationEvent, RuntimeImageBinding } from "./buildV2/index.js";
+import { validateBuildRef } from "./buildV2/refs.js";
+import type { RouteRegistry, ManifestRouteDecl } from "./routeRegistry.js";
+import type { SingletonRegistry } from "@vibestudio/workspace/singletonRegistry";
+import { createDevLogger } from "@vibestudio/dev-log";
+import { productBuiltinByIdentity } from "@vibestudio/shared/productBuiltinCatalog.generated";
+import {
+  INTERNAL_DO_SOURCE,
+  getInternalDOPrograms,
+  internalDOExecutionIdentity,
+  isInternalDOSource,
+  type InternalDOPrograms,
+} from "./internalDOs/internalDoLoader.js";
+import { encodeUniversalKey } from "./doDispatch.js";
+import { doExecutableHeaders, type DoExecutableAdmission } from "./doExecutableDispatch.js";
+import type { DoEngineAdmission } from "./workerdPrograms/executableVersion.js";
+import { DO_FACET } from "./workerdPrograms/doFacets.js";
+import { doltLocalPatterns } from "@vibestudio/durable/dolt";
+import type { HostedCodeAdmission } from "./workerdPrograms/executableVersion.js";
+import type { HostedClassManifest } from "@vibestudio/shared/types";
+import { assertPresent } from "../lintHelpers";
+import { RuntimeImageStore, type RuntimeImageRecord } from "./runtimeImageStore.js";
+import { canonicalJson } from "@vibestudio/shared/canonicalJson";
+import { CelldNode, CelldNodeProcess, resolveCelldBinary } from "./celldNode.js";
+import { DurableObjectCloneReceipts } from "./durableObjectCloneReceipts.js";
+import { buildRuntimeDeployment, type RuntimeDeployment } from "./runtimeDeployment.js";
+import { DESTROY_METHOD } from "./runtimeNames.js";
+import {
+  DurableObjectStorage,
+  type DurableObjectStorageBackup,
+  type DurableObjectStorageIncarnation,
+} from "./durableObjectStorage.js";
+import {
+  destroyWorkerdConnections,
+  getWorkerdConnectionDispatcher,
+  releaseDurableObjectRelaySeal,
+  sealAndDrainDurableObjectRelays,
+} from "./workerdRpcRelay.js";
+import {
+  RUNTIME_IMAGE_UNAVAILABLE_ERROR_CODE,
+  RUNTIME_IMAGE_WARMING_ERROR_CODE,
+} from "./runtimeReadinessError.js";
+import type { WorkerdPerformanceSnapshot } from "@vibestudio/service-schemas/hostPerformance";
+
+const log = createDevLogger("RuntimeManager");
+// The node's own stop request and process signals normally settle promptly.
+// These are catastrophic containment fallbacks, not lifecycle budgets: give
+// the node ample time to make its cells durable before escalating, and ample
+// time for the kernel to reap it before declaring a generation unsafe to
+// replace.
+const DEFAULT_RUNTIME_SIGTERM_TIMEOUT_MS = 60_000;
+const DEFAULT_RUNTIME_SIGKILL_TIMEOUT_MS = 30_000;
+const RUNTIME_STARTUP_OUTPUT_LINES = 40;
+interface WorkerdProcessReceipt {
+  pid: number | undefined;
+  port: number | null;
+  startedAt: number;
+  generation: number;
+  output: string[];
+}
+declare const __filename: string | undefined;
+declare const __dirname: string | undefined;
+
+/**
+ * Materialize the immutable JavaScript portion of a worker build as the exact
+ * module map consumed by workerd's workerLoader. The primary artifact keeps
+ * the historical `worker.js` loader identity; relative imports from it resolve
+ * against chunk artifact paths at the module-map root.
+ */
+async function workerJavaScriptModules(
+  build: StoredBuildResult,
+  readArtifactContent: WorkerdWorkspaceProvider["readBuildArtifactContent"]
+): Promise<Record<string, string>> {
+  const primary = build.artifacts.find(
+    (artifact) => artifact.role === "primary" && artifact.encoding === "utf8"
+  );
+  if (!primary) throw new Error(`Build ${build.metadata.buildKey} has no primary text artifact`);
+  const modules: Record<string, string> = {
+    "worker.js": await readArtifactContent(build, primary),
+  };
+  const chunks = build.artifacts.filter(
+    (artifact) =>
+      artifact.role === "asset" && artifact.encoding === "utf8" && artifact.path.endsWith(".js")
+  );
+  const contents = await Promise.all(
+    chunks.map((artifact) => readArtifactContent(build, artifact))
+  );
+  for (const [index, artifact] of chunks.entries()) {
+    modules[artifact.path] = contents[index]!;
+  }
+  return modules;
+}
+
+/** Immutable workspace selector for the source that produced a runtime image.
+ * Effective versions identify compiled units; runtime refs identify source
+ * snapshots. Keeping both in worker env prevents callers from conflating the
+ * two hashes when they need to recreate their own execution later. */
+function workerSourceRef(image: RuntimeImageRecord, source: string): string {
+  const root = image.artifact.sourceState.contentRoots.find((entry) => entry.repoPath === source);
+  if (!root) {
+    throw new Error(`Runtime image ${image.id} has no source root for ${source}`);
+  }
+  return root.stateHash;
+}
+
+export class RuntimeImageWarmingError extends Error {
+  readonly code = RUNTIME_IMAGE_WARMING_ERROR_CODE;
+}
+
+export class RuntimeImageUnavailableError extends Error {
+  readonly code = RUNTIME_IMAGE_UNAVAILABLE_ERROR_CODE;
+}
+
+export interface DurableObjectPublishedSchemaDescriptor {
+  className: string;
+  version: number;
+  freshSchemaFingerprint: string;
+  durableWorkQueues: readonly DurableWorkQueue[];
+  nativeOwner: boolean;
+}
+
+type DurableObjectRuntimeSchemaDescriptor = DurableObjectPublishedSchemaDescriptor;
+
+const SCHEMA_PROBE_CACHE_VERSION = 3;
+
+interface SchemaProbeBuild {
+  source: string;
+  className: string;
+  version: string;
+  modules: Record<string, string>;
+}
+
+/** Diagnostic env vars forwarded from the host process into every worker's
+ *  env bindings, so runtime-side tracing (e.g. the model-call stage trace)
+ *  can be enabled by launching the server with the flag set. */
+const FORWARDED_DIAGNOSTIC_ENV_VARS = ["VIBESTUDIO_MODEL_CALL_TRACE", "VIBESTUDIO_LOG_LEVEL"];
+
+function forwardDiagnosticEnv(env: Record<string, unknown>): void {
+  for (const key of FORWARDED_DIAGNOSTIC_ENV_VARS) {
+    const value = process.env[key];
+    if (value) env[key] = value;
+  }
+}
+
+/** The workerd runtime target every user worker and DO module is built for. */
+const USER_CODE_COMPATIBILITY = {
+  compatibilityDate: "2025-12-01",
+  compatibilityFlags: ["nodejs_compat"],
+  mainModule: "worker.js",
+} as const;
+
+/** Env every loaded user worker and DO receives regardless of its kind. */
+function addSharedRuntimeEnv(
+  env: Record<string, unknown>,
+  gatewayAliases: readonly string[]
+): void {
+  if (process.env["VIBESTUDIO_TEST_MODE"]) {
+    env["VIBESTUDIO_TEST_MODE"] = process.env["VIBESTUDIO_TEST_MODE"];
+    if (
+      process.env["VIBESTUDIO_TEST_MODE"] === "1" &&
+      process.env["VIBESTUDIO_TEST_MODEL_SCRIPT"]
+    ) {
+      env["VIBESTUDIO_TEST_MODEL_SCRIPT"] = process.env["VIBESTUDIO_TEST_MODEL_SCRIPT"];
+    }
+  }
+  forwardDiagnosticEnv(env);
+  // Loaded code receives parsed values, matching workerd `json` bindings.
+  if (gatewayAliases.length > 0) env["GATEWAY_URL_ALIASES"] = [...gatewayAliases];
+}
+
+function explicitScopeRef(explicitRef?: string): string | undefined {
+  return explicitRef && explicitRef.length > 0
+    ? assertPresent(validateBuildRef(explicitRef))
+    : undefined;
+}
+
+/** Participant builds enter with a resolved source. Host defaults track protected main. */
+function entityScopeRef(explicitRef?: string): string {
+  return explicitScopeRef(explicitRef) ?? "main";
+}
+
+function scopeTracksProtectedMain(scopeRef: string | undefined): boolean {
+  const normalized = scopeRef && scopeRef.length > 0 ? scopeRef : "main";
+  return normalized === "main";
+}
+
+/** The router reports the runtime's stable object-operation error code in this header. */
+const OBJECT_ERROR_HEADER = "X-Vibestudio-Object-Error";
+
+function objectErrorCode(error: unknown): string | undefined {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "string" ? code : undefined;
+}
+
+function errorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
+/** DO reference — matches DORef from @workspace/runtime/worker. */
+interface DORef {
+  source: string;
+  className: string;
+  objectKey: string;
+}
+
+export type {
+  DurableObjectStorageBackup,
+  DurableObjectStorageIncarnation,
+} from "./durableObjectStorage.js";
+
+interface DOService {
+  buildKey: string;
+  className: string;
+  imageId?: string;
+  serviceName: string;
+  source: string;
+  /** Class-level/default follower scope. Object-specific scopes live in doObjectBuilds. */
+  scopeRef?: string;
+}
+
+interface DOObjectBuild {
+  /** Code and authority are shared independently of this object configuration. */
+  admission: DoExecutableAdmission;
+  buildKey: string;
+  imageId: string;
+  scopeRef?: string;
+}
+
+function recordStateArgs(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+export interface DoCodeExecutable {
+  readonly source: string;
+  readonly effectiveVersion: string;
+  readonly buildKey: string;
+  readonly executionDigest: string;
+}
+
+function runtimeExecutableVersion(
+  image: Pick<RuntimeImageRecord, "artifact" | "authority">
+): string {
+  return crypto
+    .createHash("sha256")
+    .update(
+      canonicalJson({
+        executionDigest: image.artifact.executionDigest,
+        authority: image.authority,
+      })
+    )
+    .digest("hex");
+}
+
+function runtimeIncarnationVersion(
+  image: RuntimeImageRecord,
+  stateArgs?: Record<string, unknown>,
+  nativeOwner: import("@vibestudio/shared/runtime/entitySpec").NativeOwnerAdmission | null = null,
+  engine: DoEngineAdmission | null = null
+): string {
+  return crypto
+    .createHash("sha256")
+    .update(
+      canonicalJson({
+        executionDigest: image.artifact.executionDigest,
+        authority: image.authority,
+        stateArgs: stateArgs ?? null,
+        nativeOwner,
+        image: {
+          effectiveVersion: image.artifact.sourceState.effectiveVersion,
+          sourceRef: workerSourceRef(image, image.source),
+        },
+        // Only a Dolt class names its engine, so no other object's version moves.
+        ...(engine ? { engine } : {}),
+      })
+    )
+    .digest("hex");
+}
+
+function freezeAdmissionValue<T>(value: T): T {
+  if (value && typeof value === "object") {
+    for (const child of Object.values(value)) freezeAdmissionValue(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+function doAdmission(
+  image: RuntimeImageRecord,
+  stateArgs?: Record<string, unknown>,
+  nativeOwner: import("@vibestudio/shared/runtime/entitySpec").NativeOwnerAdmission | null = null,
+  engine: DoEngineAdmission | null = null
+): DoExecutableAdmission {
+  const ownedStateArgs = stateArgs ? structuredClone(stateArgs) : undefined;
+  return freezeAdmissionValue({
+    executableVersion: runtimeExecutableVersion(image),
+    incarnationVersion: runtimeIncarnationVersion(image, ownedStateArgs, nativeOwner, engine),
+    engine: engine ? structuredClone(engine) : null,
+    props: {
+      nativeOwner: nativeOwner ? structuredClone(nativeOwner) : null,
+      stateArgs: ownedStateArgs ?? null,
+      image: {
+        effectiveVersion: image.artifact.sourceState.effectiveVersion,
+        sourceRef: workerSourceRef(image, image.source),
+      },
+    },
+  });
+}
+
+function doServiceKey(source: string, className: string): string {
+  return `${source}:${className}`;
+}
+
+function doObjectBuildKey(source: string, className: string, objectKey: string): string {
+  return `${source}:${className}/${objectKey}`;
+}
+
+export interface RestartBeginEvent {
+  correlationId: string;
+  generation: number;
+  reason: string;
+  /**
+   * Aborted when crash recovery preempts this graceful preparation. Prep is
+   * advisory — the process is being replaced either way — so hooks should
+   * stop dispatching into the old generation as soon as this fires.
+   */
+  signal?: AbortSignal;
+}
+
+export interface RestartReadyEvent {
+  correlationId: string;
+  generation: number;
+  reason: string;
+  previousGeneration: number | null;
+}
+
+/**
+ * In-process notification that the current workerd generation is closing.
+ * Runs for BOTH planned and crash transitions (and idle stops). Hooks must be
+ * purely in-process (drop relay URLs, close inspector bridges, …) and must
+ * NEVER dispatch into workerd — the process may already be gone.
+ */
+export interface GenerationClosingEvent {
+  correlationId: string;
+  generation: number;
+  reason: string;
+}
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+// Worker→worker calls go through the RPC relay, not a live workerd capability,
+// so there is no `service` binding — only serializable data bindings.
+export type WorkerBinding = { type: "text"; value: string } | { type: "json"; value: unknown };
+
+export interface WorkerCreateOptions {
+  source: string;
+  contextId: string;
+  name?: string;
+  /** Parent panel/worker id injected into the runtime for getParent(). */
+  parentId?: string;
+  /** Parent runtime entity id, when the display/control id differs from the RPC id. */
+  parentEntityId?: string;
+  /** Parent runtime kind for constructing the correct unified handle shape. */
+  parentKind?: "panel" | "worker" | "do";
+  env?: Record<string, string>;
+  bindings?: Record<string, WorkerBinding>;
+  stateArgs?: Record<string, unknown>;
+  /** Explicit build ref. Omit to track main; use "ctx:<id>" only when selecting a real VCS head. */
+  ref?: string;
+}
+
+export interface WorkerInstance {
+  /** Public lifecycle handle. Use this for status/update/destroy calls. */
+  id: string;
+  name: string;
+  source: string;
+  contextId: string;
+  callerId: string;
+  parentId?: string;
+  parentEntityId?: string;
+  parentKind?: "panel" | "worker" | "do";
+  token: string;
+  env: Record<string, string>;
+  bindings: Record<string, WorkerBinding>;
+  stateArgs?: Record<string, unknown>;
+  buildKey?: string;
+  /** Immutable artifact identity used for code principals. */
+  executionDigest?: string;
+  /** Signed effective version of the bound image — the identity egress/approval
+   *  scoping must use (buildKey is the artifact key, not the signed EV). */
+  effectiveVersion?: string;
+  runtimeImageId: string;
+  /** Head/state this instance follows. The loader never resolves it. */
+  scopeRef?: string;
+  /** Non-reusable identity of this worker lifetime, independent of its public name. */
+  admissionLifetime: string;
+  /** Every code/env/binding/ref/state update advances this lifetime's selection. */
+  codeVersion: number;
+  status: "building" | "starting" | "running" | "stopped" | "error";
+}
+
+export interface RuntimeManagerDeps {
+  /** Existing admitted host/SDK installation capture; never rescan at admission. */
+  readonly schemaProbeEnvironment: WorkspaceReleaseIdentity;
+  readonly schemaProbeReleaseRoot: string;
+  tokenManager: TokenManager;
+  fsService: FsService;
+  /**
+   * Opaque workspace identity issued by the hub. The manager hosts exactly one
+   * workspace, and binds this process-owned identity into host-sealed
+   * authority attestations; a Durable Object id is a storage coordinate, not a workspace
+   * identity.
+   */
+  workspaceId: string;
+  /**
+   * URL workers use to reach the server's RPC endpoint via HTTP POST.
+   * Always points at an in-process loopback HTTP listener — workers are
+   * spawned on the same host as the server, so the back-channel never
+   * leaves the box. External panel/mobile traffic uses the TLS gateway;
+   * this URL is deliberately distinct from it.
+   */
+  getServerUrl: () => string;
+  /** Additional externally advertised gateway URLs that map to this server. */
+  getServerAliasUrls?: () => readonly string[];
+  /**
+   * Immutable runtime application paired with this manager (router, worker
+   * host, UniversalDO and every internal class, as one module). Production
+   * loads the build artifact; tests inject an in-memory build so they cannot
+   * replace a concurrently running source server's program on disk.
+   */
+  readonly internalDOPrograms?: InternalDOPrograms;
+  /** Host-owned environment for immutable internal Durable Object programs. */
+  getInternalDoEnv(className: string): Record<string, string>;
+  /** Workspace source root — used for WORKER_SOURCE binding. */
+  workspacePath: string;
+  /** State directory — holds the node's state and the workspace blob root. */
+  statePath: string;
+  executionPublicationPort?: ExecutionPublicationPort;
+  republishStorageOwner?: (ref: DORef) => Promise<void>;
+  /** Route registry for `/_r/` dispatch — optional; when absent, route
+   *  registration is a no-op and routes in package manifests have no effect. */
+  routeRegistry?: RouteRegistry;
+  /** The node's egress proxy listener port. The node sends every outbound
+   *  request of every isolate there, with a caller identity it stamps and
+   *  authenticates (HMAC over `egressSecret`). */
+  getSharedEgressPort: () => Promise<number>;
+  /** Register/unregister a live executable's VerifiedCaller so the egress
+   *  proxy can resolve an authenticated node identity → full caller. */
+  registerEgressCaller: (callerId: string, caller: VerifiedCaller) => void;
+  unregisterEgressCaller: (callerId: string) => void;
+  /** Node egress HMAC secret, shared with the egress proxy's verifier. */
+  egressSecret: string;
+  getWorkerdGatewayToken: () => string;
+  /** Overrides for tests; production uses the default SIGTERM/SIGKILL windows. */
+  workerdStopTimeoutsMs?: { sigtermMs?: number; sigkillMs?: number };
+  /** Product install root; locates the staged runtime binary. */
+  appRoot?: string;
+  cleanupWebhookSubscriptions?: (callerId: string) => Promise<void>;
+  resourceHandleLifecycle?: {
+    reconcileProviderDefinitions(
+      provider: string,
+      activeDefinitionDigests: readonly string[]
+    ): void;
+    reconcileReceiverClasses(receiverSource: string, activeClassNames: readonly string[]): void;
+  };
+  /**
+   * Structured lifecycle sink (start/stop/update/failure per worker). The
+   * server feeds this into the runtime-diagnostics store so worker startup
+   * failures are queryable through runtime supervision instead of
+   * living only in the server console.
+   */
+  recordLifecycleEvent?: (event: {
+    source: string;
+    callerId: string;
+    entityId?: string;
+    kind?: "worker" | "do";
+    level: "info" | "error";
+    message: string;
+    fields?: Record<string, unknown>;
+  }) => void;
+}
+
+/**
+ * Workspace-authored runtime capabilities become available only after the
+ * semantic authority has activated exact protected main. Until this provider
+ * is bound, RuntimeManager is a sealed control-plane host, not a general
+ * worker/build host.
+ */
+export interface WorkerdWorkspaceProvider {
+  bindRuntimeImage(unitPath: string, ref?: string, sourceState?: ExecutionSourceStateRef): Promise<RuntimeImageBinding>;
+  getBuildByKey(key: string): Promise<StoredBuildResult | null>;
+  readBuildArtifactContent(
+    build: Pick<StoredBuildResult, "dir">,
+    artifact: StoredBuildResult["artifacts"][number]
+  ): Promise<string>;
+  /** Resolve the exact retained execution named by a sealed durable entity. */
+  getBuildByExecution(key: string, executionDigest: string): Promise<StoredBuildResult | null>;
+  getManifestRoutes(source: string): ReadonlyArray<ManifestRouteDecl>;
+  getManifestDoClasses(source: string): ReadonlyArray<{
+    className: string;
+    hosts?: ReadonlyArray<{ source: string; className: string }>;
+    hosted?: HostedClassManifest;
+    storage?: "dolt";
+    doltLocal?: readonly string[];
+    doltRemotes?: boolean;
+  }>;
+  readonly singletonRegistry: SingletonRegistry;
+}
+
+export type WorkerdStage = "control-plane" | "workspace";
+
+type ResolvedRuntimeManagerDeps = RuntimeManagerDeps;
+
+type WorkerdRestartRequest =
+  | { kind: "planned" }
+  | { kind: "crash"; reason: string; alreadyExited: boolean }
+  | { kind: "stop-if-idle" };
+
+type GenerationTransitionState = "preparing" | "stopping" | "reaping" | "starting";
+
+/**
+ * One run of the generation-transition owner. Exactly one exists at a time
+ * (`activeTransition`); every process stop or start happens inside it. The
+ * run's lifecycle is: idle → preparing → stopping → reaping → starting →
+ * ready | failed, with the preemption rule that a crash request aborts a
+ * planned run's "preparing" phase and escalates the run to crash kind.
+ */
+interface GenerationTransition {
+  correlationId: string;
+  kind: "planned" | "crash" | "stop-if-idle";
+  state: GenerationTransitionState;
+  reason: string;
+  alreadyExited: boolean;
+  /** Fired when a crash request preempts this run's graceful preparation. */
+  prepAbort: AbortController;
+  /** Highest requested epoch this run has consumed (it may grow at re-drain). */
+  covered: number;
+  failed: boolean;
+  error: unknown;
+  promise: Promise<void>;
+}
+
+/** The canonical regular-worker instance name for a source. Matches the
+ *  sanitization that startWorker applies to the entity key. */
+function canonicalInstanceNameForSource(source: string): string {
+  const raw = source.split("/").pop() ?? "worker";
+  return raw.replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
+function workerdInspectorEnabled(): boolean {
+  // Always on by default: Vibestudio is a continuous-development system, and
+  // userland profiling (workerdInspector service) depends on the inspector.
+  // The socket binds 127.0.0.1 and is only reachable from userland through
+  // the token-authenticated, approval-gated inspector bridge.
+  return process.env["VIBESTUDIO_DISABLE_WORKERD_INSPECTOR"] !== "1";
+}
+
+// WorkerLoader does not expose per-isolate disposal. Keep ordinary retirement
+// restart-free, but compact a generation once unreachable isolates contribute
+// to material sandbox pressure or reach a bounded cross-platform count.
+const RUNTIME_DYNAMIC_ISOLATE_COMPACTION_RSS_BYTES = 768 * 1024 * 1024;
+const RUNTIME_DYNAMIC_ISOLATE_COMPACTION_COUNT = 16;
+
+// ---------------------------------------------------------------------------
+// RuntimeManager
+// ---------------------------------------------------------------------------
+
+export class RuntimeManager {
+  private internalDOPrograms(): InternalDOPrograms {
+    return this.deps.internalDOPrograms ?? getInternalDOPrograms();
+  }
+
+  private instances = new Map<string, WorkerInstance>();
+  /** Exact executable selections admitted to this workerd process generation. */
+  private readonly workerAdmissions = new Map<
+    string,
+    {
+      code: NonNullable<Awaited<ReturnType<RuntimeManager["getWorkerCode"]>>>;
+      leases: number;
+      retired: boolean;
+    }
+  >();
+  private readonly preparingWorkerAdmissions = new Map<
+    string,
+    Promise<NonNullable<Awaited<ReturnType<RuntimeManager["getWorkerCode"]>>>>
+  >();
+  private workerAdmissionEpoch = 0;
+  private readonly workerSelectionTails = new Map<string, Promise<void>>();
+
+  private async withWorkerSelection<T>(name: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.workerSelectionTails.get(name);
+    let release!: () => void;
+    const tail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.workerSelectionTails.set(name, tail);
+    if (previous) await previous;
+    try {
+      return await operation();
+    } finally {
+      if (this.workerSelectionTails.get(name) === tail) this.workerSelectionTails.delete(name);
+      release();
+    }
+  }
+  // Most recent startup/update failure per worker source. Survives the
+  // instance row (which is deleted on failed start) so `units.list` can
+  // report lastError for workers that never came up.
+  private lastWorkerErrors = new Map<string, { message: string; timestamp: number }>();
+  private process: ChildProcess | null = null;
+  /** The running node of the current generation (`process` is its child). */
+  private node: CelldNodeProcess | null = null;
+  /** The workspace's node supervisor; created with the first generation. */
+  private celld: CelldNode | null = null;
+  // Restart coalescing: callers mutate doServices/instances then call
+  // restartWorkerd(). `requestedEpoch` increments per call; `appliedEpoch` is the
+  // highest config epoch a completed restart has applied. Concurrent callers
+  // within one restart window share it; a config change made during a restart
+  // triggers at most one follow-up restart. Prevents the un-coalesced restart
+  // storm (N failed relays ⇒ N racing restarts) that fed the server OOM.
+  private requestedEpoch = 0;
+  private appliedEpoch = 0;
+  /** The single generation-transition owner run currently in flight, if any. */
+  private activeTransition: GenerationTransition | null = null;
+  private readonly restartRequests = new Map<number, WorkerdRestartRequest>();
+  /** Permanently closes process-start admission once shutdown begins. */
+  private shuttingDown = false;
+  /** Coalesces host watchdogs that observe the same unresponsive workerd. */
+  private unresponsiveRecovery: Promise<void> | null = null;
+  private port: number | null = null;
+  /** Immediate predecessor excluded from the next generation's lease. */
+  private retiredPort: number | null = null;
+  private inspectorPort: number | null = null;
+  /** Immediate predecessor excluded from the next generation's inspector lease. */
+  private retiredInspectorPort: number | null = null;
+  private deps: ResolvedRuntimeManagerDeps;
+  /** Derived exact DO attachments. WorkspaceDO entity rows are their durable owner. */
+  private readonly sealedDoImages = new Map<string, RuntimeImageRecord>();
+  private readonly runtimeImages: RuntimeImageStore;
+  private readonly runtimeImageRebinds = new Map<string, Promise<void>>();
+  /** Derived lookup index keyed by immutable build objects; entries disappear with the build. */
+  private readonly workspaceRpcCatalogIndexes = new WeakMap<
+    StoredBuildResult,
+    ReadonlyMap<string, WorkspaceRpcMethodDoc>
+  >();
+  private lastWorkerdStartupOutput: string[] = [];
+  private currentWorkerdReceipt: WorkerdProcessReceipt | null = null;
+  private workerdStartedAtMs: number | null = null;
+  private workerdMemorySampleTimer: ReturnType<typeof setInterval> | null = null;
+  private workerdMemorySamplePid: number | null = null;
+  private lastWorkerdRssBytes: number | null = null;
+  private workerdRssSamples: Array<{ at: number; rssBytes: number }> = [];
+  private retiredDynamicIsolateGeneration: number | null = null;
+  private readonly retiredDynamicIsolateIds = new Set<string>();
+  private readonly loadedDoCodeUnits = new Map<
+    string,
+    { source: string; className: string; version: string }
+  >();
+  /** Latest prepared exact executable per declared class; demand uses the same unit. */
+  private readonly preparedDoExecutables = new Map<
+    string,
+    { image: RuntimeImageRecord; build: StoredBuildResult; version: string }
+  >();
+  private readonly executablePreparations = new Map<string, Promise<void>>();
+  private readonly latestExecutablePreparation = new Map<string, string>();
+  private readonly preparingDoExecutables = new Map<
+    string,
+    { image: RuntimeImageRecord; build: StoredBuildResult; version: string }
+  >();
+  private readonly doCodeEgressCallers = new Map<
+    string,
+    {
+      source: string;
+      className: string;
+      version: string;
+      /** The sealed image this identity was registered for. */
+      executable: DoCodeExecutable;
+    }
+  >();
+  private dynamicIsolateCompactionFlight: Promise<void> | null = null;
+
+  // DO support: shared services (one per source)
+  /** Shared DO services — keyed by `${source}:${className}`. Source-scoped: two workers CAN have same className if different source. */
+  private doServices = new Map<string, DOService>();
+  /** Userland DO object-specific code refs — keyed by `${source}:${className}/${objectKey}`. */
+  private doObjectBuilds = new Map<string, DOObjectBuild>();
+  private doAdmissions = new WeakMap<
+    RuntimeImageRecord | SchemaProbeBuild,
+    DoExecutableAdmission
+  >();
+  /** Session ID — generated once per RuntimeManager lifetime, used for restart detection in bootstrap. */
+  private sessionId = crypto.randomUUID();
+  private bootGeneration: number;
+  private pendingBootGeneration: number | null = null;
+  private readonly bootGenerationFile: string;
+  private restartBeginHooks = new Set<(event: RestartBeginEvent) => Promise<void> | void>();
+  private generationReadyHooks = new Set<(event: { generation: number; port: number }) => void>();
+  private restartReadyHooks = new Set<(event: RestartReadyEvent) => Promise<void> | void>();
+  private generationClosingHooks = new Set<
+    (event: GenerationClosingEvent) => Promise<void> | void
+  >();
+  /** Per-manager secret required by the generated router for direct DO dispatch. */
+  private readonly dispatchSecret = crypto.randomBytes(32).toString("hex");
+  private readonly chronologToken = crypto.randomBytes(32).toString("hex");
+  /** Per-process secret gating the loopback `/_workercode`
+   *  endpoints. Bound only into the static worker-host service, so worker code +
+   *  per-instance env (RPC tokens, STATE_ARGS) are unreachable with ordinary
+   *  panel/worker credentials. */
+  private readonly loaderSecret = crypto.randomBytes(32).toString("hex");
+  /** The UniversalDO class's own loader and lifecycle secret: a class secret,
+   *  so only that class (not the router, the worker host or a product class)
+   *  can fetch executable code or retire an object. */
+  private readonly doLoaderSecret = crypto.randomBytes(32).toString("hex");
+  /** Per-process secret the host's EgressGateway stamps on forwarded egress so
+   *  the shared egress listener trusts the `X-Vibestudio-Egress-Caller` header. */
+  private readonly egressSecret: string;
+  private workspaceProvider: WorkerdWorkspaceProvider | null = null;
+  private readonly doStorageDb: DatabaseSync;
+  private readonly storage: DurableObjectStorage;
+  private readonly doSchemaDescriptorDb: DatabaseSync;
+  private readonly schemaProbeBuilds = new Map<string, SchemaProbeBuild>();
+  private readonly schemaAdmissionLifetime = new AbortController();
+  private installedSchemaEvidence: Promise<InstalledSchemaProbeEvidence> | undefined;
+  private readonly schemaProbeOperations = new Set<
+    Promise<DurableObjectPublishedSchemaDescriptor>
+  >();
+  private readonly shutdownCancellation = Object.assign(
+    new Error("RuntimeManager is shutting down"),
+    { code: "ECANCELLED" }
+  );
+  private readonly schemaAdmissions = new Map<string, Promise<void>>();
+  private readonly cloneReceipts: DurableObjectCloneReceipts;
+  /** A graceful `stop` ran with live services: the next start owes a
+   *  crash-style restart-ready so released lifecycle leases resume. */
+  private resumeLifecycleAfterStop = false;
+
+  constructor(deps: RuntimeManagerDeps) {
+    this.deps = deps;
+    this.egressSecret = deps.egressSecret;
+    this.runtimeImages = new RuntimeImageStore(deps.statePath, deps.executionPublicationPort);
+    this.bootGenerationFile = stateLayout(this.deps.statePath).bootGenerationFile;
+    this.bootGeneration = this.readBootGeneration();
+    const layout = stateLayout(this.deps.statePath).databases;
+    fs.mkdirSync(layout.root, { recursive: true });
+    this.doStorageDb = new DatabaseSync(path.toNamespacedPath(layout.durableObjectMaintenanceDb));
+    this.cloneReceipts = new DurableObjectCloneReceipts(this.doStorageDb);
+    this.storage = new DurableObjectStorage({
+      db: this.doStorageDb,
+      objectOperation: (input) => this.objectOperation(input),
+      destroyCell: (ref) => this.destroyCell(ref),
+      abortFacet: (ref) => this.abortUserlandDOFacet(ref, "__vibestudio_retire"),
+      ensureNodeRunning: () => this.ensureWorkerdRunning(),
+      nodeRunning: () =>
+        Boolean(this.process && this.process.exitCode === null && !this.shuttingDown),
+      republishOwner: (ref) => this.republishStorageOwner(ref),
+      seal: (targetId, ownerId, error) => sealAndDrainDurableObjectRelays(targetId, ownerId, error),
+      release: (targetId, ownerId) => releaseDurableObjectRelaySeal(targetId, ownerId),
+    });
+    this.doSchemaDescriptorDb = new DatabaseSync(
+      path.toNamespacedPath(layout.durableObjectSchemaDescriptorsDb)
+    );
+    // These rows are reproducible probe evidence, never execution state.
+    // Effective version alone cannot attest a build: recipes/artifacts can differ.
+    this.doSchemaDescriptorDb.exec("PRAGMA journal_mode = WAL");
+    this.doSchemaDescriptorDb.exec("BEGIN IMMEDIATE");
+    try {
+      const epoch = this.doSchemaDescriptorDb.prepare("PRAGMA user_version").get() as {
+        user_version: number;
+      };
+      if (epoch.user_version !== SCHEMA_PROBE_CACHE_VERSION) {
+        // Cache generations are disposable; never reinterpret source-version
+        // evidence as evidence for an immutable execution digest.
+        this.doSchemaDescriptorDb.exec(`
+          DROP TABLE IF EXISTS do_schema_descriptors;
+          DROP TABLE IF EXISTS do_schema_installed;
+          DROP TABLE IF EXISTS do_schema_candidates;
+        `);
+      }
+      this.doSchemaDescriptorDb.exec(`
+      CREATE TABLE IF NOT EXISTS do_schema_descriptors (
+        source TEXT NOT NULL,
+        effective_version TEXT NOT NULL,
+        execution_digest TEXT NOT NULL,
+        class_name TEXT NOT NULL,
+        descriptor_json TEXT NOT NULL,
+        PRIMARY KEY (source, execution_digest, class_name)
+      );
+      CREATE TABLE IF NOT EXISTS do_schema_installed (
+        source TEXT NOT NULL,
+        class_name TEXT NOT NULL,
+        effective_version TEXT NOT NULL,
+        PRIMARY KEY (source, class_name)
+      );
+      CREATE TABLE IF NOT EXISTS do_schema_candidates (
+        state_hash TEXT NOT NULL,
+        source TEXT NOT NULL,
+        class_name TEXT NOT NULL,
+        effective_version TEXT NOT NULL,
+        PRIMARY KEY (state_hash, source, class_name)
+      );
+      PRAGMA user_version = ${SCHEMA_PROBE_CACHE_VERSION};
+      `);
+      this.doSchemaDescriptorDb.exec("COMMIT");
+    } catch (error) {
+      this.doSchemaDescriptorDb.exec("ROLLBACK");
+      this.doSchemaDescriptorDb.close();
+      throw error;
+    }
+  }
+
+  getStage(): WorkerdStage {
+    return this.workspaceProvider ? "workspace" : "control-plane";
+  }
+
+  /**
+   * The sealed executable a plain Durable Object's egress identity (`do-code:…`)
+   * was registered for, so request-time admission can judge the exact image
+   * rather than look for an entity the identity does not name.
+   */
+  resolveDoCodeExecutable(identity: string): DoCodeExecutable | null {
+    return this.doCodeEgressCallers.get(identity)?.executable ?? null;
+  }
+
+  /** Persisted mutable selectors whose immutable artifacts must remain resolvable. */
+  listRuntimeImages(): RuntimeImageRecord[] {
+    return this.runtimeImages.list();
+  }
+
+  /** Bind the one semantic-main-backed workspace provider exactly once. */
+  bindWorkspaceProvider(provider: WorkerdWorkspaceProvider): void {
+    if (this.workspaceProvider) {
+      throw new Error("Workerd workspace provider is already bound");
+    }
+    this.workspaceProvider = provider;
+  }
+
+  private requireWorkspaceProvider(operation: string): WorkerdWorkspaceProvider {
+    if (!this.workspaceProvider) {
+      throw new Error(
+        `${operation} is unavailable while workerd is in the sealed control-plane stage`
+      );
+    }
+    return this.workspaceProvider;
+  }
+
+  private ensureWorkerBearer(callerId: string): string {
+    const manager = this.deps.tokenManager as TokenManager & {
+      ensureWorkerBearer?: (callerId: string) => string;
+    };
+    return manager.ensureWorkerBearer?.(callerId) ?? manager.ensureToken(callerId, "worker");
+  }
+
+  private revokeWorkerBearer(callerId: string): boolean {
+    const manager = this.deps.tokenManager as TokenManager & {
+      revokeWorkerBearer?: (callerId: string) => boolean;
+    };
+    return manager.revokeWorkerBearer?.(callerId) ?? manager.revokeToken(callerId);
+  }
+
+  private async bindRuntimeImage(
+    imageId: string,
+    source: string,
+    scopeRef?: string,
+    sourceState?: ExecutionSourceStateRef
+  ): Promise<RuntimeImageRecord> {
+    const binding = await this.requireWorkspaceProvider("runtime image binding").bindRuntimeImage(
+      source,
+      scopeRef,
+      ...(sourceState ? [sourceState] as const : [])
+    );
+    if (sourceState && canonicalJson(binding.artifact.sourceState.state) !== canonicalJson(sourceState)) {
+      throw new Error("Runtime build did not retain the selected participant revision");
+    }
+    return this.persistRuntimeImage(imageId, binding, scopeRef);
+  }
+
+  private async bindExactWorkerImage(
+    imageId: string,
+    source: string,
+    artifact: { buildKey: string; executionDigest: string }
+  ): Promise<RuntimeImageRecord> {
+    const provider = this.requireWorkspaceProvider("exact worker image binding");
+    const build = await provider.getBuildByExecution(artifact.buildKey, artifact.executionDigest);
+    if (!build) {
+      throw new Error(`Exact worker artifact ${artifact.buildKey} is unavailable`);
+    }
+    if (
+      build.metadata.kind !== "worker" ||
+      build.metadata.sourcePath !== source ||
+      build.metadata.details.kind !== "test" ||
+      build.metadata.details.runtime !== "workerd"
+    ) {
+      throw new Error(`Build ${artifact.buildKey} is not a workerd test artifact for ${source}`);
+    }
+    return this.persistRuntimeImage(imageId, {
+      source,
+      unitName: build.metadata.name,
+      artifact: executionArtifactRefFromBuild(this.deps.workspaceId, build),
+      authority: assertPresent(build.metadata.authority),
+    });
+  }
+
+  private persistRuntimeImage(
+    imageId: string,
+    binding: RuntimeImageBinding,
+    scopeRef?: string
+  ): RuntimeImageRecord {
+    return this.runtimeImages.upsert({
+      id: imageId,
+      source: binding.source,
+      unitName: binding.unitName,
+      artifact: binding.artifact,
+      authority: binding.authority,
+      ...(scopeRef ? { scopeRef } : {}),
+    });
+  }
+
+  private persistInternalRuntimeImage(imageId: string, className: string): RuntimeImageRecord {
+    const identity = internalDOExecutionIdentity(this.internalDOPrograms(), className);
+    return this.runtimeImages.upsert({
+      id: imageId,
+      source: identity.source,
+      unitName: identity.unitName,
+      artifact: identity.artifact,
+      authority: identity.authority,
+    });
+  }
+
+  private advanceWorkerCodeVersion(instance: WorkerInstance, generation?: number): void {
+    instance.codeVersion = Math.max(instance.codeVersion + 1, generation ?? 0);
+  }
+
+  /** Resolve a mutable selector. Missing CAS content schedules a rebuild from its tracked scope. */
+  private async getMutableRuntimeImageBuild(
+    imageId: string,
+    onRebound?: (record: RuntimeImageRecord) => void,
+    workerName?: string
+  ): Promise<{ image: RuntimeImageRecord; build: StoredBuildResult }> {
+    const image = this.runtimeImages.get(imageId);
+    if (!image) {
+      throw new RuntimeImageWarmingError(`Runtime image is not bound yet: ${imageId}`);
+    }
+    const build = await this.requireWorkspaceProvider("runtime image loading").getBuildByKey(
+      image.artifact.buildKey
+    );
+    if (build) return { image, build };
+    if (image.error) {
+      throw new RuntimeImageUnavailableError(
+        `Runtime image ${imageId} is unavailable: ${image.error.message}`
+      );
+    }
+
+    this.scheduleRuntimeImageRebind(image, onRebound, workerName);
+    throw new RuntimeImageWarmingError(
+      `Runtime image ${imageId} points at missing artifact ${image.artifact.buildKey}; warming`
+    );
+  }
+
+  /** Resolve an exact durable incarnation. It can never be rebuilt from a mutable selector. */
+  private async getSealedRuntimeImageBuild(imageId: string): Promise<{
+    image: RuntimeImageRecord;
+    build: StoredBuildResult;
+  }> {
+    const image = this.sealedDoImages.get(imageId);
+    if (!image) {
+      throw new RuntimeImageUnavailableError(`Sealed runtime image is not attached: ${imageId}`);
+    }
+    const provider = this.requireWorkspaceProvider("sealed runtime image loading");
+    const build = await provider.getBuildByExecution(
+      image.artifact.buildKey,
+      image.artifact.executionDigest
+    );
+    if (!build) {
+      throw new RuntimeImageUnavailableError(
+        `Sealed runtime image ${imageId} is missing artifact ${image.artifact.buildKey}`
+      );
+    }
+    return { image, build };
+  }
+
+  private scheduleRuntimeImageRebind(
+    image: RuntimeImageRecord,
+    onRebound?: (record: RuntimeImageRecord) => void,
+    workerName?: string
+  ): void {
+    if (this.runtimeImageRebinds.has(image.id)) return;
+    const bind = async () => {
+      const record = await this.bindRuntimeImage(image.id, image.source, image.scopeRef);
+      onRebound?.(record);
+      if (workerName) {
+        const instance = this.instances.get(workerName);
+        if (instance) {
+          this.retireWorkerAdmissions(
+            workerName,
+            `${instance.admissionLifetime}:${instance.codeVersion}`
+          );
+        }
+      }
+    };
+    const flight = (workerName ? this.withWorkerSelection(workerName, bind) : bind())
+      .then(
+        () => {},
+        (error) => {
+          const message = errorMessage(error);
+          this.runtimeImages.markError(image.id, {
+            code: "rebind_failed",
+            message,
+          });
+          log.warn(`Runtime image rebind failed for ${image.id}:`, error);
+        }
+      )
+      .finally(() => {
+        this.runtimeImageRebinds.delete(image.id);
+      });
+    this.runtimeImageRebinds.set(image.id, flight);
+  }
+
+  // =========================================================================
+  // Instance management
+  // =========================================================================
+
+  /**
+   * Ensure a DO class is registered with workerd and return the targetId +
+   * effectiveVersion that the runtime service will record on the entity row.
+   *
+   * Does NOT write an entity row — that's runtimeService.createEntity's job.
+   */
+  async ensureDurableObjectEntity(args: {
+    source: string;
+    ref?: string;
+    sourceState?: ExecutionSourceStateRef;
+    className: string;
+    key: string;
+    contextId: string;
+    stateArgs?: unknown;
+  }): Promise<{
+    targetId: string;
+    effectiveVersion: string;
+    buildKey: string;
+    executionDigest: string;
+    authority: RuntimeImageRecord["authority"];
+  }> {
+    const startedAt = performance.now();
+    this.requireWorkspaceProvider("Durable Object entity activation");
+    const targetId = canonicalEntityId({
+      kind: "do",
+      source: args.source,
+      className: args.className,
+      key: args.key,
+    });
+    const scopeRef = entityScopeRef(args.ref);
+    await this.ensureDOClass(args.source, args.className, {
+      scopeRef,
+      sourceState: args.sourceState,
+      objectKey: args.key,
+      imageId: targetId,
+      stateArgs: args.stateArgs,
+    });
+    log.info(
+      `Durable Object runtime binding ready for ${args.source}:${args.className} in ` +
+        `${Math.round(performance.now() - startedAt)}ms`
+    );
+    const serviceKey = doServiceKey(args.source, args.className);
+    const svc = this.doServices.get(serviceKey);
+    if (!svc) {
+      throw new Error(
+        `ensureDurableObjectEntity: DO class ${serviceKey} missing from doServices after ensureDOClass`
+      );
+    }
+    const image =
+      this.runtimeImages.get(targetId) ??
+      (svc.imageId ? this.runtimeImages.get(svc.imageId) : null);
+    if (!image) {
+      throw new Error(
+        `ensureDurableObjectEntity: no sealed runtime image for concrete object ${targetId}`
+      );
+    }
+    if (!isInternalDOSource(args.source)) {
+      await this.admitDurableObjectSchema(image, args.className);
+      const build = await this.requireWorkspaceProvider("Durable Object execution preparation")
+        .getBuildByExecution(image.artifact.buildKey, image.artifact.executionDigest);
+      if (!build) {
+        throw new RuntimeImageUnavailableError(
+          `Durable Object ${targetId} is missing its sealed executable ${image.artifact.buildKey}`
+        );
+      }
+    }
+    return {
+      targetId,
+      effectiveVersion: image.artifact.sourceState.effectiveVersion,
+      buildKey: image.artifact.buildKey,
+      executionDigest: image.artifact.executionDigest,
+      authority: image.authority,
+    };
+  }
+
+  /**
+   * Re-materialize one durable incarnation from its persisted runtime-image
+   * binding before alarms or lifecycle callbacks are admitted after restart.
+   * The content-addressed artifact must match the exact sealed identity
+   * recorded by WorkspaceDO; a missing artifact or unknown class is a startup
+   * integrity failure, never an implicit rebuild or upgrade.
+   */
+  async restoreDurableObjectEntity(record: EntityRecord): Promise<void> {
+    if (record.kind !== "do" || !record.className) {
+      throw new Error(`Cannot restore non-DO runtime entity ${record.id}`);
+    }
+    if (!record.activeBuildKey || !record.activeExecutionDigest || !record.activeAuthority) {
+      throw new Error(`Durable Object ${record.id} has no sealed active execution identity`);
+    }
+    if (isInternalDOSource(record.source.repoPath)) {
+      // Internal classes execute in their host-bundle service. The entity
+      // ledger seals that service identity directly; it does not need a second
+      // object-shaped runtime-image record that can drift from the service.
+      const identity = internalDOExecutionIdentity(this.internalDOPrograms(), record.className);
+      if (
+        identity.artifact.buildKey !== record.activeBuildKey ||
+        identity.artifact.executionDigest !== record.activeExecutionDigest ||
+        identity.artifact.sourceState.effectiveVersion !== record.source.effectiveVersion ||
+        canonicalJson(identity.authority) !== canonicalJson(record.activeAuthority)
+      ) {
+        throw new RuntimeImageUnavailableError(
+          `Internal Durable Object ${record.id} does not match its sealed host service identity`
+        );
+      }
+      await this.ensureDOClass(record.source.repoPath, record.className, {
+        objectKey: record.key,
+        stateArgs: record.stateArgs,
+      });
+      return;
+    }
+
+    const provider = this.requireWorkspaceProvider("sealed runtime image restoration");
+    const build = await provider.getBuildByExecution(
+      record.activeBuildKey,
+      record.activeExecutionDigest
+    );
+    if (
+      !build ||
+      build.metadata.kind !== "worker" ||
+      build.metadata.sourcePath !== record.source.repoPath
+    ) {
+      this.recordDurableObjectImageEvent(
+        record,
+        "error",
+        "runtime-image-unavailable",
+        "Sealed Durable Object image is unavailable",
+        "missing"
+      );
+      throw new RuntimeImageUnavailableError(
+        `Durable Object ${record.id} is missing its sealed build artifact ${record.activeBuildKey}`
+      );
+    }
+    const artifact = executionArtifactRefFromBuild(this.deps.workspaceId, build);
+    if (
+      artifact.executionDigest !== record.activeExecutionDigest ||
+      artifact.sourceState.effectiveVersion !== record.source.effectiveVersion ||
+      canonicalJson(build.metadata.authority) !== canonicalJson(record.activeAuthority)
+    ) {
+      this.recordDurableObjectImageEvent(
+        record,
+        "error",
+        "runtime-image-unavailable",
+        "Sealed Durable Object image failed identity verification",
+        "identity-mismatch"
+      );
+      throw new RuntimeImageUnavailableError(
+        `Durable Object ${record.id} build ${record.activeBuildKey} does not reproduce its sealed execution identity`
+      );
+    }
+    const previous = this.sealedDoImages.get(record.id) ?? this.runtimeImages.get(record.id);
+    const sameIncarnation =
+      previous?.artifact.executionDigest === artifact.executionDigest &&
+      canonicalJson(previous.authority) === canonicalJson(record.activeAuthority);
+    const sealedImage: RuntimeImageRecord = {
+      id: record.id,
+      source: record.source.repoPath,
+      unitName: build.metadata.name,
+      artifact,
+      authority: record.activeAuthority,
+      generation: sameIncarnation ? previous!.generation : (previous?.generation ?? 0) + 1,
+      updatedAt: Date.now(),
+      ...(previous?.scopeRef ? { scopeRef: previous.scopeRef } : {}),
+    };
+    this.sealedDoImages.set(record.id, sealedImage);
+    // Preparation may have persisted a selector for this id. Once the entity
+    // commit succeeds it is derived state and must not remain a second owner.
+    this.runtimeImages.delete(record.id);
+    await this.restoreSealedUserlandDOClass(record, sealedImage);
+    await this.ensureWorkerdRunning();
+    await this.admitDurableObjectSchema(sealedImage, record.className);
+
+    const restored = this.sealedDoImages.get(record.id);
+    if (!restored) throw new Error(`Durable Object ${record.id} did not attach a runtime image`);
+    if (
+      restored.artifact.buildKey !== record.activeBuildKey ||
+      restored.artifact.executionDigest !== record.activeExecutionDigest ||
+      restored.artifact.sourceState.effectiveVersion !== record.source.effectiveVersion ||
+      canonicalJson(restored.authority) !== canonicalJson(record.activeAuthority)
+    ) {
+      throw new Error(
+        `Durable Object ${record.id} could not restore its sealed active execution identity`
+      );
+    }
+    this.recordDurableObjectImageEvent(
+      record,
+      "info",
+      "runtime-image-attached",
+      "Sealed Durable Object image attached",
+      "retained",
+      { generation: restored.generation }
+    );
+  }
+
+  private recordDurableObjectImageEvent(
+    record: EntityRecord,
+    level: "info" | "error",
+    event: string,
+    message: string,
+    retentionState: string,
+    fields: Record<string, unknown> = {}
+  ): void {
+    this.deps.recordLifecycleEvent?.({
+      source: record.source.repoPath,
+      callerId: record.id,
+      entityId: record.id,
+      kind: "do",
+      level,
+      message,
+      fields: {
+        event,
+        retentionState,
+        buildKey: record.activeBuildKey,
+        executionDigest: record.activeExecutionDigest,
+        ...fields,
+      },
+    });
+  }
+
+  /**
+   * Restore the routing metadata for an active userland Durable Object from
+   * the content-addressed runtime image recorded at activation time.
+   *
+   * This deliberately never calls bindRuntimeImage(). The workspace ref may
+   * have advanced, been reverted, or disappeared since the object started;
+   * rebuilding from that mutable ref would silently upgrade the object (or
+   * make cleanup impossible). The exact build artifact is therefore a durable
+   * part of the active entity identity and must still be available by key.
+   */
+  private async restoreSealedUserlandDOClass(
+    record: EntityRecord,
+    image: RuntimeImageRecord
+  ): Promise<void> {
+    const source = record.source.repoPath;
+    const className = assertPresent(record.className);
+    const sourceSegments = source.split("/").filter(Boolean);
+    if (sourceSegments.length !== 2) {
+      throw new Error(`DO source path must be exactly 2 segments, got: "${source}"`);
+    }
+    const provider = this.requireWorkspaceProvider("sealed runtime image restoration");
+    if (
+      !(await provider.getBuildByExecution(image.artifact.buildKey, image.artifact.executionDigest))
+    ) {
+      throw new RuntimeImageUnavailableError(
+        `Durable Object ${record.id} is missing its sealed build artifact ${image.artifact.buildKey}`
+      );
+    }
+
+    const serviceKey = doServiceKey(source, className);
+    let service = this.doServices.get(serviceKey);
+    if (!service) {
+      const sourceSanitized = source.replace(/[^a-zA-Z0-9_]/g, "_");
+      service = {
+        buildKey: image.artifact.buildKey,
+        className,
+        serviceName: `do_${sourceSanitized}_${className.replace(/[^a-zA-Z0-9_]/g, "_")}`,
+        source,
+      };
+      this.doServices.set(serviceKey, service);
+      this.registerRoutesForDoClass(source, className);
+    }
+
+    const stateArgs = recordStateArgs(record.stateArgs);
+    this.doObjectBuilds.set(doObjectBuildKey(source, className, record.key), {
+      imageId: image.id,
+      buildKey: image.artifact.buildKey,
+      admission: doAdmission(
+        image,
+        stateArgs,
+        this.nativeOwnerAdmission(record),
+        this.classEngine(source, className)
+      ),
+      ...(image.scopeRef ? { scopeRef: image.scopeRef } : {}),
+    });
+    this.registerDoEgressCaller(source, className, image);
+    this.reconcileDoCodeUnitOwnership();
+  }
+
+  /**
+   * Bring up a worker process for an entity managed by the runtime service.
+   *
+   * Wraps the regular worker creation path but uses an entity-scoped callerId
+   * for token minting and bearer binding. Does not write an entity row.
+   */
+  async startWorker(args: {
+    source: string;
+    ref?: string;
+    sourceState?: ExecutionSourceStateRef;
+    artifact?: { buildKey: string; executionDigest: string };
+    key: string;
+    contextId: string;
+    stateArgs?: unknown;
+    env?: Record<string, string>;
+    parent?: { parentId: string; parentEntityId: string; parentKind?: "panel" | "worker" | "do" };
+  }): Promise<{
+    targetId: string;
+    effectiveVersion: string;
+    buildKey: string;
+    executionDigest: string;
+    authority: RuntimeImageRecord["authority"];
+  }> {
+    this.requireWorkspaceProvider("worker start");
+    const targetId = canonicalEntityId({ kind: "worker", source: args.source, key: args.key });
+    const name = args.key.replace(/[^a-zA-Z0-9_-]/g, "_");
+
+    // Idempotent re-attach: `canonicalEntityId` is context-free, so the same
+    // (source, key) maps to the same targetId/name in any context. If a live
+    // instance already matches this identity (same source AND contextId), return
+    // it as a no-op — this covers spawn retries/races where the entity create is
+    // replayed. A different identity colliding on the sanitized name (a different
+    // source, or the same source in another context — workers are NOT
+    // context-isolated until their canonical id includes contextId) is a genuine
+    // collision and throws rather than silently reusing the wrong worker.
+    const existingInstance = this.instances.get(name);
+    if (existingInstance) {
+      // Reattach ONLY on a FULL-identity match: the canonical targetId
+      // (`runtimeImageId` = worker:source:key) AND the contextId. targetId is
+      // context-free, so both checks are needed — the targetId guards distinct
+      // raw keys that sanitize to the same `name` (e.g. `a:b`/`a_b`), and the
+      // contextId prevents silently handing a launch a worker running in a
+      // DIFFERENT context (same source+key in another context maps to the same
+      // targetId). Workers are not context-isolated until their canonical id
+      // includes contextId — callers must use context-unique keys; anything
+      // short of a full match is a genuine collision and throws.
+      if (
+        existingInstance.runtimeImageId === targetId &&
+        existingInstance.contextId === args.contextId
+      ) {
+        const image = this.runtimeImages.get(existingInstance.runtimeImageId);
+        if (!image) {
+          throw new Error(
+            `Worker ${targetId} is running without its sealed runtime image; restart it to rebind`
+          );
+        }
+        return {
+          targetId,
+          effectiveVersion: image.artifact.sourceState.effectiveVersion,
+          buildKey: image.artifact.buildKey,
+          executionDigest: image.artifact.executionDigest,
+          authority: image.authority,
+        };
+      }
+      throw new Error(
+        `Worker instance "${name}" already exists with a different identity ` +
+          `(existing targetId=${existingInstance.runtimeImageId} source=${existingInstance.source} ` +
+          `context=${existingInstance.contextId}; requested targetId=${targetId} ` +
+          `source=${args.source} context=${args.contextId})`
+      );
+    }
+
+    const callerId = targetId;
+    const token = this.ensureWorkerBearer(callerId);
+    const scopeRef = entityScopeRef(args.ref);
+
+    const stateArgs =
+      args.stateArgs && typeof args.stateArgs === "object" && !Array.isArray(args.stateArgs)
+        ? (args.stateArgs as Record<string, unknown>)
+        : undefined;
+
+    const instance: WorkerInstance = {
+      id: callerId,
+      name,
+      source: args.source,
+      contextId: args.contextId,
+      callerId,
+      token,
+      env: args.env ?? {},
+      bindings: {},
+      stateArgs,
+      runtimeImageId: targetId,
+      scopeRef,
+      admissionLifetime: crypto.randomUUID(),
+      codeVersion: 1,
+      status: "building",
+      // Launch parent (from the verified caller) → PARENT_* env (built later from
+      // these fields), so an entity-created worker's `parent` resolves like a
+      // `workers.create` one.
+      parentId: args.parent?.parentId,
+      parentEntityId: args.parent?.parentEntityId,
+      parentKind: args.parent?.parentKind,
+    };
+
+    this.instances.set(name, instance);
+
+    try {
+      instance.status = "starting";
+      const [image] = await Promise.all([
+        args.artifact
+          ? Promise.resolve(this.bindExactWorkerImage(targetId, args.source, args.artifact))
+          : this.bindRuntimeImage(targetId, args.source, scopeRef, args.sourceState),
+        this.ensureWorkerdRunning(),
+      ]);
+      instance.scopeRef = image.scopeRef;
+      instance.buildKey = image.artifact.buildKey;
+      instance.executionDigest = image.artifact.executionDigest;
+      instance.effectiveVersion = image.artifact.sourceState.effectiveVersion;
+      this.advanceWorkerCodeVersion(instance, image.generation);
+      // Register egress AFTER bind so the caller carries the signed effective
+      // version (not "unknown"/an artifact key) for version-scoped approvals/audit.
+      this.registerEgressCaller(instance);
+
+      instance.status = "running";
+      this.lastWorkerErrors.delete(args.source);
+      this.deps.recordLifecycleEvent?.({
+        source: args.source,
+        callerId,
+        level: "info",
+        message: `Worker started (build ${image.artifact.buildKey})`,
+        fields: {
+          event: "worker-started",
+          buildKey: image.artifact.buildKey,
+          executionDigest: image.artifact.executionDigest,
+          generation: image.generation,
+          effectiveVersion: image.artifact.sourceState.effectiveVersion,
+        },
+      });
+      log.info(`Worker entity "${targetId}" started (source: ${args.source})`);
+
+      if (this.deps.routeRegistry) {
+        const canonical = canonicalInstanceNameForSource(args.source);
+        if (name === canonical) {
+          const routes = this.requireWorkspaceProvider(
+            "worker route registration"
+          ).getManifestRoutes(args.source);
+          if (routes.length > 0) {
+            this.deps.routeRegistry.registerWorkerRoutes(args.source, name, Array.from(routes));
+          }
+        }
+      }
+
+      return {
+        targetId,
+        effectiveVersion: image.artifact.sourceState.effectiveVersion,
+        buildKey: image.artifact.buildKey,
+        executionDigest: image.artifact.executionDigest,
+        authority: image.authority,
+      };
+    } catch (error) {
+      instance.status = "error";
+      this.instances.delete(name);
+      this.runtimeImages.delete(targetId);
+      this.deps.unregisterEgressCaller(callerId);
+      this.revokeWorkerBearer(callerId);
+      const message = error instanceof Error ? error.message : String(error);
+      this.lastWorkerErrors.set(args.source, { message, timestamp: Date.now() });
+      this.deps.recordLifecycleEvent?.({
+        source: args.source,
+        callerId,
+        level: "error",
+        message: `Worker failed to start: ${message}`,
+        fields: { event: "worker-start-failed" },
+      });
+      log.error(`Failed to start worker entity "${targetId}":`, error);
+      throw error;
+    }
+  }
+
+  /** Resolve a canonical runtime worker id to the loader's opaque instance name. */
+  async resolveWorkerAdmission(targetId: string): Promise<WorkerExecutableAdmission | null> {
+    for (const instance of this.instances.values()) {
+      if (instance.runtimeImageId === targetId) return this.getWorkerAdmission(instance.name);
+    }
+    return null;
+  }
+
+  /**
+   * Idempotent worker teardown invoked by the runtime-service retire hook.
+   * Revokes the bearer token, drops the worker instance, runs handle/webhook
+   * cleanup, and restarts (or stops) workerd as appropriate.
+   */
+  async stopWorker(callerId: string): Promise<void> {
+    let foundInstance: WorkerInstance | null = null;
+    let foundName: string | null = null;
+    for (const [name, instance] of this.instances) {
+      if (instance.callerId === callerId) {
+        foundInstance = instance;
+        foundName = name;
+        break;
+      }
+    }
+
+    const failures: unknown[] = [];
+    const attempt = async (operation: () => Promise<unknown>): Promise<void> => {
+      try {
+        await operation();
+      } catch (error) {
+        failures.push(error);
+      }
+    };
+    this.deps.unregisterEgressCaller(callerId);
+    this.revokeWorkerBearer(callerId);
+    await attempt(() => this.deps.fsService.closeHandlesForCaller(callerId));
+    await attempt(async () => this.deps.cleanupWebhookSubscriptions?.(callerId));
+
+    if (foundInstance && foundName) {
+      if (this.deps.routeRegistry) {
+        const canonical = canonicalInstanceNameForSource(foundInstance.source);
+        if (foundInstance.name === canonical) {
+          this.deps.routeRegistry.unregisterWorkerRoutes(foundInstance.source);
+        }
+      }
+
+      foundInstance.status = "stopped";
+      this.instances.delete(foundName);
+      this.runtimeImages.delete(foundInstance.runtimeImageId);
+      this.retireWorkerAdmissions(foundName);
+
+      // No restart: the worker host is static and loads code on demand, so a
+      // destroyed worker simply stops being addressable (its exact loader admission
+      // 404s and its cached isolate idles out). Only stop workerd when nothing
+      // is left to serve.
+      await attempt(() => this.stopWorkerdIfIdle());
+
+      log.info(`Worker entity "${callerId}" stopped`);
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) throw new AggregateError(failures, "Worker cleanup failed");
+  }
+
+  private async abortUserlandDOFacet(
+    ref: DORef,
+    operation: "__vibestudio_retire" | "__vibestudio_restart" | "__vibestudio_fault_abort"
+  ): Promise<void> {
+    if (!this.process || this.process.exitCode !== null || !this.port) return;
+    const key = encodeUniversalKey(ref);
+    const response = await fetch(
+      `http://127.0.0.1:${this.port}/_u/${encodeURIComponent(key)}/${operation}`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.deps.getWorkerdGatewayToken()}`,
+          "X-Vibestudio-Dispatch-Secret": this.dispatchSecret,
+          "X-Vibestudio-Lifecycle-Secret": this.doLoaderSecret,
+        },
+        dispatcher: getWorkerdConnectionDispatcher(`http://127.0.0.1:${assertPresent(this.port)}`),
+      } as RequestInit
+    );
+    if (!response.ok) {
+      throw new Error(
+        `Failed to ${
+          operation === "__vibestudio_retire"
+            ? "retire"
+            : operation === "__vibestudio_restart"
+              ? "restart"
+              : "fault-abort"
+        } ` +
+          `userland DO facet ${ref.source}:${ref.className}/${ref.objectKey} ` +
+          `(${response.status}): ${await response.text()}`
+      );
+    }
+  }
+
+  /**
+   * Test-only host seam: evict one userland DO facet without deleting its
+   * durable state or changing its runtime image. Admission is owned by the
+   * hidden runtime service method; this low-level owner accepts only the
+   * already-resolved canonical DO reference.
+   */
+  async faultAbortUserlandDOFacet(ref: DORef): Promise<void> {
+    if (!this.process || this.process.exitCode !== null || !this.port) {
+      throw new Error(
+        `Cannot fault-abort userland DO facet ${ref.source}:${ref.className}/${ref.objectKey}: ` +
+          "workerd is not running"
+      );
+    }
+    await this.abortUserlandDOFacet(ref, "__vibestudio_fault_abort");
+  }
+
+  async restartUserlandDOFacet(ref: DORef): Promise<void> {
+    if (!this.process || this.process.exitCode !== null || !this.port) {
+      throw new Error(
+        `Cannot restart userland DO facet ${ref.source}:${ref.className}/${ref.objectKey}: ` +
+          "workerd is not running"
+      );
+    }
+    await this.abortUserlandDOFacet(ref, "__vibestudio_restart");
+  }
+
+  /**
+   * Idempotent DO runtime teardown invoked by the runtime-service retire hook.
+   * Aborting the live facet releases its object-owned state while deliberately
+   * preserving durable storage for a later reattach. WorkerLoader has no
+   * per-worker unload operation: its dynamically loaded isolate remains resident
+   * until the workerd process generation ends. Mark the generation reclaimable;
+   * the memory sampler compacts it under material RSS pressure, with a bounded
+   * retired-isolate count for platforms without process RSS sampling. This
+   * keeps ordinary create/delete UX restart-free while bounding accumulation
+   * during long-running build and system-test campaigns.
+   */
+  retireEgressCaller(callerId: string): void {
+    this.deps.unregisterEgressCaller(callerId);
+  }
+
+  async retireDOEntity(ref: DORef): Promise<void> {
+    const targetId = canonicalEntityId({
+      kind: "do",
+      source: ref.source,
+      className: ref.className,
+      key: ref.objectKey,
+    });
+    const failures: unknown[] = [];
+    const attempt = async (operation: () => Promise<unknown>): Promise<void> => {
+      try {
+        await operation();
+      } catch (error) {
+        failures.push(error);
+      }
+    };
+    if (!isInternalDOSource(ref.source)) {
+      try {
+        await this.abortUserlandDOFacet(ref, "__vibestudio_retire");
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    this.revokeWorkerBearer(targetId);
+    await attempt(() => this.deps.fsService.closeHandlesForCaller(targetId));
+    await attempt(async () => this.deps.cleanupWebhookSubscriptions?.(targetId));
+    const removedImage = this.sealedDoImages.get(targetId) ?? this.runtimeImages.get(targetId);
+    this.runtimeImages.delete(targetId);
+    this.sealedDoImages.delete(targetId);
+    for (const [key, objectBuild] of Array.from(this.doObjectBuilds.entries())) {
+      if (objectBuild.imageId === targetId) this.doObjectBuilds.delete(key);
+    }
+    if (removedImage) {
+      this.deps.recordLifecycleEvent?.({
+        source: ref.source,
+        callerId: targetId,
+        entityId: targetId,
+        kind: "do",
+        level: "info",
+        message: "Durable Object runtime image evicted",
+        fields: {
+          event: "runtime-image-evicted",
+          retentionState: "released",
+          buildKey: removedImage.artifact.buildKey,
+          executionDigest: removedImage.artifact.executionDigest,
+        },
+      });
+    }
+    if (!isInternalDOSource(ref.source)) {
+      this.reconcileDoCodeUnitOwnership();
+      const rssBytes = this.process?.pid ? this.readProcessRssBytes(this.process.pid) : null;
+      this.maybeCompactRetiredDynamicIsolates(rssBytes);
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) throw new AggregateError(failures, "Durable Object cleanup failed");
+  }
+
+  /**
+   * Build a VerifiedCaller for a live worker instance and register it for
+   * attributed egress through the shared listener. Called on create; matched by
+   * `unregisterEgressCaller(callerId)` on destroy.
+   */
+  private registerEgressCaller(instance: WorkerInstance): void {
+    const image = this.runtimeImages.get(instance.runtimeImageId);
+    if (!image || image.artifact.executionDigest !== instance.executionDigest) {
+      throw new Error(
+        `Cannot register egress for ${instance.callerId} without its exact sealed runtime image`
+      );
+    }
+    const caller = createVerifiedCaller(instance.callerId, "worker", {
+      callerId: instance.callerId,
+      callerKind: "worker",
+      repoPath: instance.source,
+      effectiveVersion: image.artifact.sourceState.effectiveVersion,
+      executionDigest: image.artifact.executionDigest,
+      requested: image.authority.requests,
+    });
+    this.deps.registerEgressCaller(instance.callerId, caller);
+  }
+
+  /**
+   * Start workerd if it isn't already running. Idempotent. Unlike
+   * `restartWorkerd`, this never tears down a live process — the worker host and
+   * router are static, so worker lifecycle never needs a restart.
+   */
+  private async ensureWorkerdRunning(): Promise<void> {
+    for (;;) {
+      if (
+        this.process && this.process.exitCode === null && this.pendingBootGeneration === null &&
+        this.activeTransition?.state !== "stopping" && this.activeTransition?.state !== "reaping"
+      ) return;
+      // A generation transition is already in flight (or queued): joining it is
+      // mandatory. Minting a fresh restart epoch here would race the stop→spawn
+      // window and force a needless second full restart cycle.
+      const running = this.activeTransition;
+      if (running) {
+        await running.promise.catch(() => {});
+        if (running.failed) throw running.error;
+        continue;
+      }
+      if (this.appliedEpoch < this.requestedEpoch) {
+        await this.ensureRestartAtLeast(this.requestedEpoch);
+        continue;
+      }
+      await this.restartWorkerd();
+      return;
+    }
+  }
+
+  /** Join the generation owner before admitting an unsent relay. Startup
+   * failures propagate unchanged; already-dispatched calls are never retried. */
+  async ensureTransportReady(): Promise<void> {
+    if (this.shuttingDown) throw new Error("workerd is shutting down");
+    await this.ensureWorkerdRunning();
+  }
+
+  /**
+   * Stop workerd only when no workers and no DO services remain to serve.
+   * Routed through the generation-transition owner — NO process stop happens
+   * outside it — so an idle stop serializes with (and is subsumed by) any
+   * concurrent planned or crash transition.
+   */
+  private async stopWorkerdIfIdle(): Promise<void> {
+    // Closing owns the final process stop, after all admitted probes retire.
+    if (this.shuttingDown) return;
+    if (
+      this.instances.size > 0 ||
+      this.doServices.size > 0 ||
+      this.schemaProbeBuilds.size > 0 ||
+      this.preparedDoExecutables.size > 0 ||
+      this.preparingDoExecutables.size > 0
+    )
+      return;
+    await this.restartWorkerd({ kind: "stop-if-idle" });
+  }
+
+  async updateInstance(
+    name: string,
+    updates: Partial<WorkerCreateOptions>
+  ): Promise<WorkerInstance> {
+    const resolvedName = this.resolveInstanceName(name);
+    if (!resolvedName) throw new Error(`Worker instance "${name}" not found`);
+    return this.withWorkerSelection(resolvedName, () =>
+      this.updateInstanceSelected(resolvedName, updates)
+    );
+  }
+
+  private async updateInstanceSelected(
+    name: string,
+    updates: Partial<WorkerCreateOptions>
+  ): Promise<WorkerInstance> {
+    const resolvedName = name;
+    const instance = resolvedName ? this.instances.get(resolvedName) : undefined;
+    if (!instance) {
+      throw new Error(`Worker instance "${name}" not found`);
+    }
+
+    if (updates.env) instance.env = updates.env;
+    if (updates.bindings) instance.bindings = updates.bindings;
+    if (updates.stateArgs !== undefined) instance.stateArgs = updates.stateArgs;
+    if (updates.ref !== undefined) {
+      instance.scopeRef = entityScopeRef(updates.ref);
+      const image = await this.bindRuntimeImage(
+        instance.runtimeImageId,
+        instance.source,
+        instance.scopeRef
+      );
+      instance.buildKey = image.artifact.buildKey;
+      instance.executionDigest = image.artifact.executionDigest;
+      instance.effectiveVersion = image.artifact.sourceState.effectiveVersion;
+      this.advanceWorkerCodeVersion(instance, image.generation);
+      this.registerEgressCaller(instance); // refresh egress EV after a rebind
+    }
+
+    // Bump the loader-cache version so the host reloads fresh code+env on the
+    // next request. No workerd restart — the host is static.
+    if (updates.ref === undefined) this.advanceWorkerCodeVersion(instance);
+    this.retireWorkerAdmissions(
+      instance.name,
+      `${instance.admissionLifetime}:${instance.codeVersion}`
+    );
+
+    this.deps.recordLifecycleEvent?.({
+      source: instance.source,
+      callerId: instance.callerId,
+      level: "info",
+      message: `Worker updated (codeVersion ${instance.codeVersion})`,
+      fields: { event: "worker-updated", codeVersion: instance.codeVersion },
+    });
+    log.info(`Worker instance "${resolvedName}" updated (codeVersion ${instance.codeVersion})`);
+    return instance;
+  }
+
+  /** Most recent startup/update failure for a worker source, if any. */
+  getLastWorkerError(source: string): { message: string; timestamp: number } | null {
+    return this.lastWorkerErrors.get(source) ?? null;
+  }
+
+  listInstances(): Omit<WorkerInstance, "token">[] {
+    return Array.from(this.instances.values()).map(({ token: _token, ...rest }) => rest);
+  }
+
+  private resolveInstanceName(idOrName: string): string | null {
+    if (this.instances.has(idOrName)) return idOrName;
+    for (const [name, instance] of this.instances) {
+      if (
+        instance.id === idOrName ||
+        instance.callerId === idOrName ||
+        instance.runtimeImageId === idOrName
+      ) {
+        return name;
+      }
+    }
+    return null;
+  }
+
+  getPort(): number | null {
+    return this.port;
+  }
+
+  getInspectorUrl(): string | null {
+    if (!this.process || !this.inspectorPort) return null;
+    return `http://127.0.0.1:${this.inspectorPort}`;
+  }
+
+  getWorkerInspectorUrl(nameOrSource: string): string | null {
+    const hasInstance = [...this.instances.values()].some(
+      (instance) =>
+        instance.name === nameOrSource ||
+        instance.source === nameOrSource ||
+        instance.callerId === nameOrSource
+    );
+    return hasInstance ? this.getInspectorUrl() : null;
+  }
+
+  getWorkerdGatewayToken(): string {
+    return this.deps.getWorkerdGatewayToken();
+  }
+
+  getBootGeneration(): number {
+    return this.bootGeneration;
+  }
+
+  /** Transport publication for every successful boot, including lazy starts
+   * after an idle stop. Separate from lease recovery's restart-only event. */
+  onGenerationReady(fn: (event: { generation: number; port: number }) => void): () => void {
+    this.generationReadyHooks.add(fn);
+    return () => this.generationReadyHooks.delete(fn);
+  }
+
+  onRestartBegin(fn: (event: RestartBeginEvent) => Promise<void> | void): () => void {
+    this.restartBeginHooks.add(fn);
+    return () => this.restartBeginHooks.delete(fn);
+  }
+
+  onRestartReady(fn: (event: RestartReadyEvent) => Promise<void> | void): () => void {
+    this.restartReadyHooks.add(fn);
+    return () => this.restartReadyHooks.delete(fn);
+  }
+
+  /**
+   * In-process generation-closing hooks: run for planned AND crash transitions
+   * (and idle stops), right before the old process is stopped. Hooks must not
+   * dispatch into workerd. Failures are logged, never propagated — closing the
+   * old generation cannot be vetoed.
+   */
+  onGenerationClosing(fn: (event: GenerationClosingEvent) => Promise<void> | void): () => void {
+    this.generationClosingHooks.add(fn);
+    return () => this.generationClosingHooks.delete(fn);
+  }
+
+  /**
+   * True while the generation-transition owner is replacing workerd AND the
+   * old generation is no longer dispatchable (stopping/reaping/starting).
+   * Deliberately false during graceful "preparing": prep hooks must still be
+   * able to dispatch into the live old generation.
+   */
+  isGenerationTransitionInFlight(): boolean {
+    return (
+      this.activeTransition !== null && (
+        this.activeTransition.state === "stopping" || this.activeTransition.state === "reaping" ||
+        this.pendingBootGeneration !== null || !(this.process !== null && this.process.exitCode === null)
+      )
+    );
+  }
+
+  /**
+   * Recover an unresponsive sandbox without first asking workerd-hosted
+   * lifecycle targets to prepare. A synchronous unsafe-eval loop prevents
+   * those RPCs from running, so graceful restart would deadlock before it
+   * reached the process boundary. Durable objects reconcile from SQLite after
+   * the replacement process starts, and listeners receive a crash-style ready
+   * event so runtime leases are resumed from durable state.
+   */
+  async recoverUnresponsiveSandbox(reason: string): Promise<void> {
+    return this.recoverSandbox(reason, false);
+  }
+
+  /**
+   * Recover a runtime generation that has already exited. The exit observer
+   * cannot await this work, so failures are logged at that boundary; callers
+   * reaching the new generation still receive ordinary transport terminals
+   * from the destroyed connection pool.
+   */
+  private recoverExitedSandbox(reason: string): Promise<void> {
+    return this.recoverSandbox(reason, true);
+  }
+
+  private async recoverSandbox(reason: string, alreadyExited: boolean): Promise<void> {
+    if (this.unresponsiveRecovery) return this.unresponsiveRecovery;
+    log.error(`recovering unresponsive workerd sandbox: ${reason}`);
+    const recovery = this.restartWorkerd({ kind: "crash", reason, alreadyExited });
+    this.unresponsiveRecovery = recovery;
+    try {
+      await recovery;
+    } finally {
+      if (this.unresponsiveRecovery === recovery) this.unresponsiveRecovery = null;
+    }
+  }
+
+  getDispatchSecret(): string {
+    return this.dispatchSecret;
+  }
+
+  /** Secret gating `/_workercode`. The gateway validates
+   *  the inbound `X-Vibestudio-Loader-Secret` header against this. */
+  getLoaderSecret(): string {
+    return this.loaderSecret;
+  }
+
+  /** Secret of the UniversalDO class's `/_docode` and `/_doadmission` calls. */
+  getDoLoaderSecret(): string {
+    return this.doLoaderSecret;
+  }
+
+  /** Secret the shared egress listener requires on attributed requests. */
+  getEgressSecret(): string {
+    return this.egressSecret;
+  }
+
+  /** Resolve authoritative mutable code before selecting an immutable lifetime/configuration. */
+  async getWorkerAdmission(name: string): Promise<WorkerExecutableAdmission | null> {
+    return this.withWorkerSelection(name, () => this.getWorkerAdmissionSelected(name));
+  }
+
+  private async getWorkerAdmissionSelected(
+    name: string
+  ): Promise<WorkerExecutableAdmission | null> {
+    const instance = this.instances.get(name);
+    if (!instance) return null;
+    const { image, build } = await this.selectWorkerImage(instance);
+    if (
+      this.instances.get(name) !== instance ||
+      this.runtimeImages.get(instance.runtimeImageId) !== image
+    ) {
+      throw Object.assign(new Error("Worker admission changed before code selection"), {
+        code: "WORKER_ADMISSION_CHANGED",
+      });
+    }
+    const version = `${instance.admissionLifetime}:${instance.codeVersion}`;
+    const identity = `${name}@${version}`;
+    if (!this.workerAdmissions.has(identity)) {
+      const epoch = this.workerAdmissionEpoch;
+      let preparation = this.preparingWorkerAdmissions.get(identity);
+      if (!preparation) {
+        // Capture mutable instance configuration before reading any code bytes.
+        // A concurrent update may then publish a new version without changing
+        // this admission's exact image and environment.
+        const env: Record<string, unknown> = {
+          RPC_AUTH_TOKEN: instance.token,
+          WORKER_ID: instance.name,
+          WORKER_SOURCE: instance.source,
+          WORKER_EFFECTIVE_VERSION: image.artifact.sourceState.effectiveVersion,
+          WORKER_SOURCE_REF: workerSourceRef(image, instance.source),
+          CONTEXT_ID: instance.contextId,
+          WORKSPACE_ID: this.deps.workspaceId,
+          GATEWAY_URL: this.deps.getServerUrl(),
+          WORKERD_BOOT_GENERATION: String(this.configBootGeneration()),
+        };
+        addSharedRuntimeEnv(env, this.deps.getServerAliasUrls?.() ?? []);
+        if (instance.parentId) env["PARENT_ID"] = instance.parentId;
+        if (instance.parentEntityId) env["PARENT_ENTITY_ID"] = instance.parentEntityId;
+        if (instance.parentKind) env["PARENT_KIND"] = instance.parentKind;
+        if (instance.stateArgs && Object.keys(instance.stateArgs).length > 0) {
+          env["STATE_ARGS"] = structuredClone(instance.stateArgs);
+        }
+        Object.assign(env, instance.env);
+        for (const [key, binding] of Object.entries(instance.bindings)) {
+          env[key] = structuredClone(binding.value);
+        }
+        const callerId = instance.callerId;
+        const provider = this.requireWorkspaceProvider("worker code loading");
+        preparation = workerJavaScriptModules(build, provider.readBuildArtifactContent).then(
+          (modules) =>
+            freezeAdmissionValue({
+              ...USER_CODE_COMPATIBILITY,
+              compatibilityFlags: [...USER_CODE_COMPATIBILITY.compatibilityFlags],
+              modules,
+              env,
+              callerId,
+            })
+        );
+        this.preparingWorkerAdmissions.set(identity, preparation);
+      }
+      try {
+        const code = await preparation;
+        if (epoch !== this.workerAdmissionEpoch) {
+          throw new Error("Worker process generation ended during code selection");
+        }
+        if (!this.workerAdmissions.has(identity)) {
+          this.workerAdmissions.set(identity, { code, leases: 0, retired: false });
+        }
+      } finally {
+        if (this.preparingWorkerAdmissions.get(identity) === preparation) {
+          this.preparingWorkerAdmissions.delete(identity);
+        }
+      }
+    }
+    const admitted = this.workerAdmissions.get(identity)!;
+    admitted.leases++;
+    if (
+      this.instances.get(name) !== instance ||
+      `${instance.admissionLifetime}:${instance.codeVersion}` !== version
+    ) {
+      this.retireWorkerAdmissions(name);
+    }
+    let released = false;
+    return {
+      name,
+      version,
+      release: () => {
+        if (released) return;
+        released = true;
+        admitted.leases--;
+        if (
+          admitted.retired &&
+          admitted.leases === 0 &&
+          this.workerAdmissions.get(identity) === admitted
+        ) {
+          this.workerAdmissions.delete(identity);
+        }
+      },
+    };
+  }
+
+  private selectWorkerImage(instance: WorkerInstance) {
+    return this.getMutableRuntimeImageBuild(
+      instance.runtimeImageId,
+      (record) => {
+        instance.buildKey = record.artifact.buildKey;
+        instance.executionDigest = record.artifact.executionDigest;
+        instance.effectiveVersion = record.artifact.sourceState.effectiveVersion;
+        this.advanceWorkerCodeVersion(instance, record.generation);
+        this.registerEgressCaller(instance);
+      },
+      instance.name
+    );
+  }
+
+  /**
+   * Serializable code + env for a worker instance, for the dynamic worker host.
+   * Carries only data — capability bindings (globalOutbound) are attached by the
+   * host at load time. Returns null if no such instance exists.
+   */
+  async getWorkerCode(
+    name: string,
+    version: string
+  ): Promise<{
+    compatibilityDate: string;
+    compatibilityFlags: string[];
+    mainModule: string;
+    modules: Record<string, string>;
+    env: Record<string, unknown>;
+    callerId: string;
+  } | null> {
+    const code = this.workerAdmissions.get(`${name}@${version}`);
+    if (code) return code.code;
+    if (!this.instances.has(name)) return null;
+    throw Object.assign(new Error("Worker admission changed before code selection"), {
+      code: "WORKER_ADMISSION_CHANGED",
+    });
+  }
+
+  private retireWorkerAdmissions(name: string, currentVersion?: string): void {
+    for (const [identity, admission] of this.workerAdmissions) {
+      if (!identity.startsWith(`${name}@`) || identity === `${name}@${currentVersion}`) continue;
+      admission.retired = true;
+      if (admission.leases === 0) this.workerAdmissions.delete(identity);
+    }
+  }
+
+  getDoCodeIdentity(
+    source: string,
+    className: string
+  ): { repoPath: string; effectiveVersion: string } | null {
+    const service = this.doServices.get(doServiceKey(source, className));
+    if (!service?.imageId) {
+      return null;
+    }
+    const image = this.runtimeImages.get(service.imageId);
+    return {
+      repoPath: service.source,
+      effectiveVersion: image?.artifact.sourceState.effectiveVersion ?? service.buildKey,
+    };
+  }
+
+  /**
+   * Atomically capture the selected executable and object configuration. Code
+   * units are shared; a changed incarnation replaces only this object facet.
+   */
+  getDoAdmission(
+    source: string,
+    className: string,
+    objectKey?: string
+  ): DoExecutableAdmission | null {
+    const probe = objectKey ? this.schemaProbeBuilds.get(objectKey) : undefined;
+    if (probe && probe.source === source && probe.className === className) {
+      let admission = this.doAdmissions.get(probe);
+      if (!admission) {
+        const version = `${probe.version}:schema-probe`;
+        admission = freezeAdmissionValue({
+          executableVersion: version,
+          incarnationVersion: version,
+          props: { nativeOwner: null, stateArgs: null, image: null },
+        });
+        this.doAdmissions.set(probe, admission);
+      }
+      return admission;
+    }
+    if (objectKey) {
+      const binding = this.doObjectBuilds.get(doObjectBuildKey(source, className, objectKey));
+      if (binding) return binding.admission;
+    }
+    const service = this.doServices.get(doServiceKey(source, className));
+    if (!service?.imageId || isInternalDOSource(source)) return null;
+    const image = this.runtimeImages.get(service.imageId);
+    if (!image) throw new Error(`Durable Object ${source}:${className} has no admitted image`);
+    let admission = this.doAdmissions.get(image);
+    if (!admission) {
+      admission = doAdmission(
+        image,
+        undefined,
+        null,
+        this.classEngine(service.source, service.className)
+      );
+      this.doAdmissions.set(image, admission);
+    }
+    return admission;
+  }
+
+  /**
+   * The storage engine the class's manifest declares (`durable.classes[].storage`).
+   * Product classes and a runtime without a workspace provider declare none.
+   */
+  private classEngine(source: string, className: string): DoEngineAdmission | null {
+    if (isInternalDOSource(source) || !this.workspaceProvider) return null;
+    const declared = this.workspaceProvider
+      .getManifestDoClasses(source)
+      .find((entry) => entry.className === className);
+    return declared?.storage === "dolt"
+      ? {
+          storage: "dolt",
+          doltLocal: doltLocalPatterns(declared.doltLocal ?? []),
+          ...(declared.doltRemotes === true ? { doltRemotes: true as const } : {}),
+        }
+      : null;
+  }
+
+  declaresRemoteDoltClass(source: string, className: string): boolean {
+    return this.classEngine(source, className)?.doltRemotes === true;
+  }
+
+  /**
+   * Admit a class an entity hosts in its own cell (docs/dolt-redesign.md §7.2).
+   * Two manifests decide it: the host class declares `hosts` (this code), the
+   * hosted class declares `hosted` (the grants it needs). The result is the
+   * exact executable, the grants, and the hosting entity's identity: a hosted
+   * class acts as the entity that hosts it, so no other principal exists for
+   * the run and the entity's own context and lineage apply.
+   */
+  async admitHostedCode(
+    host: { source: string; className: string; objectKey: string },
+    hosted: { source: string; className: string }
+  ): Promise<HostedCodeAdmission> {
+    const refuse = (code: string, message: string): never => {
+      throw Object.assign(new Error(message), { code });
+    };
+    if (isInternalDOSource(host.source) || isInternalDOSource(hosted.source))
+      refuse("EACCES", "Product classes do not host or get hosted through hostCode");
+    const entityId = canonicalEntityId({
+      kind: "do",
+      source: host.source,
+      className: host.className,
+      key: host.objectKey,
+    });
+    if (!this.doObjectBuilds.has(doObjectBuildKey(host.source, host.className, host.objectKey)))
+      refuse("ENOTFOUND", `${entityId} is not an admitted object of this runtime`);
+    const provider = this.requireWorkspaceProvider("hosted code admission");
+    const declared = provider
+      .getManifestDoClasses(host.source)
+      .find((entry) => entry.className === host.className);
+    if (
+      !declared?.hosts?.some(
+        (entry) => entry.source === hosted.source && entry.className === hosted.className
+      )
+    )
+      refuse(
+        "EACCES",
+        `${host.source}:${host.className} does not declare that it hosts ${hosted.source}:${hosted.className}`
+      );
+    const hostedDeclaration = provider
+      .getManifestDoClasses(hosted.source)
+      .find((entry) => entry.className === hosted.className)?.hosted;
+    if (!hostedDeclaration)
+      refuse("EINVAL", `${hosted.source}:${hosted.className} is not a hostable class`);
+    await this.ensureDOClass(hosted.source, hosted.className);
+    const admission = this.getDoAdmission(hosted.source, hosted.className);
+    if (!admission)
+      return refuse("ENOTFOUND", `${hosted.source}:${hosted.className} has no executable`);
+    const grants = hostedDeclaration as HostedClassManifest;
+    return {
+      executableVersion: admission.executableVersion,
+      grants: {
+        codegen: grants.codegen === true,
+        residency: grants.residency === true,
+        storage: grants.storage === "dolt" ? "dolt" : null,
+        doltLocal: [...(grants.doltLocal ?? [])],
+        cpuMs: grants.limits?.cpuMs ?? null,
+      },
+      props: {
+        ...admission.props,
+        host: { entityId, token: this.deps.tokenManager.ensureToken(entityId, "do") },
+      },
+    };
+  }
+
+  /** Resolve a userland DO method from the exact build bound to this object. */
+  private workspaceRpcCatalogIndex(
+    build: StoredBuildResult
+  ): ReadonlyMap<string, WorkspaceRpcMethodDoc> {
+    const cached = this.workspaceRpcCatalogIndexes.get(build);
+    if (cached) return cached;
+    const index = new Map<string, WorkspaceRpcMethodDoc>();
+    for (const declaration of build.metadata.workspaceRpcCatalog ?? []) {
+      const key = `${declaration.className}\0${declaration.name}`;
+      if (!index.has(key)) index.set(key, declaration);
+    }
+    this.workspaceRpcCatalogIndexes.set(build, index);
+    return index;
+  }
+
+  private doCatalogImage(source: string, className: string, objectKey: string) {
+    const object = this.doObjectBuilds.get(doObjectBuildKey(source, className, objectKey));
+    if (object) return this.sealedDoImages.get(object.imageId) ?? this.runtimeImages.get(object.imageId);
+    const service = this.doServices.get(doServiceKey(source, className));
+    return service?.imageId ? this.runtimeImages.get(service.imageId) : undefined;
+  }
+
+  async resolveDoRpcMethodAuthority(
+    source: string,
+    className: string,
+    objectKey: string,
+    method: string
+  ): Promise<
+    | (Pick<
+        WorkspaceRpcMethodDoc,
+        "effect" | "access" | "userlandCapability" | "producesHandle"
+      > & { providerExecutionDigest: string })
+    | null
+  > {
+    if (isInternalDOSource(source)) return null;
+    const artifact = this.doCatalogImage(source, className, objectKey)?.artifact;
+    if (!artifact) return null;
+    const build = await this.requireWorkspaceProvider("direct DO authority").getBuildByExecution(
+      artifact.buildKey, artifact.executionDigest
+    );
+    if (!build || build.metadata.kind !== "worker") return null;
+    const declaration = this.workspaceRpcCatalogIndex(build).get(`${className}\0${method}`) ?? null;
+    return declaration && build.metadata.execution?.executionDigest
+      ? {
+          ...declaration,
+          providerExecutionDigest: build.metadata.execution.executionDigest,
+        }
+      : null;
+  }
+
+  async describeDoRpcCatalog(
+    source: string,
+    className: string,
+    objectKey: string
+  ): Promise<{ activeBuildKey: string | null; declaredMethods: string[] }> {
+    if (isInternalDOSource(source)) return { activeBuildKey: null, declaredMethods: [] };
+    const artifact = this.doCatalogImage(source, className, objectKey)?.artifact;
+    if (!artifact) return { activeBuildKey: null, declaredMethods: [] };
+    const { buildKey: activeBuildKey, executionDigest } = artifact;
+    const build = await this.requireWorkspaceProvider("direct DO catalog").getBuildByExecution(
+      activeBuildKey, executionDigest
+    );
+    if (!build || build.metadata.kind !== "worker") {
+      return { activeBuildKey, declaredMethods: [] };
+    }
+    return {
+      activeBuildKey,
+      declaredMethods: (build.metadata.workspaceRpcCatalog ?? [])
+        .filter((entry) => entry.className === className)
+        .map((entry) => entry.name)
+        .sort(),
+    };
+  }
+
+  /**
+   * Serializable code + env for a userland DO class, for the UniversalDO facet
+   * host. Mirrors the per-class DO service bindings the old static config
+   * generated. Capability bindings (globalOutbound) are attached by the host.
+   * Returns null if the class isn't a registered userland DO.
+   */
+  async getDoCode(
+    source: string,
+    className: string,
+    version: string,
+    objectKey?: string
+  ): Promise<{
+    version: string;
+    /** Raw network attribution belongs to the sealed code unit, not an object. */
+    egressIdentity: string | null;
+    compatibilityDate: string;
+    compatibilityFlags: string[];
+    mainModule: string;
+    modules: Record<string, string>;
+    env: Record<string, unknown>;
+  } | null> {
+    const probe = objectKey ? this.schemaProbeBuilds.get(objectKey) : undefined;
+    if (
+      probe &&
+      probe.source === source &&
+      probe.className === className &&
+      `${probe.version}:schema-probe` === version
+    ) {
+      return {
+        version: `${probe.version}:schema-probe`,
+        egressIdentity: null,
+        ...USER_CODE_COMPATIBILITY,
+        compatibilityFlags: [...USER_CODE_COMPATIBILITY.compatibilityFlags],
+        modules: probe.modules,
+        env: {
+          WORKER_SOURCE: source,
+          WORKER_CLASS_NAME: className,
+          VIBESTUDIO_SCHEMA_PROBE: true,
+        },
+      };
+    }
+    if (isInternalDOSource(source)) return null;
+    const serviceKey = doServiceKey(source, className);
+    const svc = this.doServices.get(serviceKey);
+    const prepared =
+      this.preparingDoExecutables.get(canonicalJson([source, className, version])) ??
+      this.preparedDoExecutables.get(serviceKey);
+    const serviceImage = svc?.imageId ? this.runtimeImages.get(svc.imageId) : null;
+    const objectEntry = [...this.doObjectBuilds.entries()].find(
+      ([key, binding]) =>
+        key.startsWith(`${serviceKey}/`) &&
+        binding.admission.executableVersion === version &&
+        this.sealedDoImages.has(binding.imageId)
+    );
+    const objectBuild = objectEntry?.[1];
+    const resolved = await (prepared?.version === version
+      ? prepared
+      : serviceImage && runtimeExecutableVersion(serviceImage) === version
+        ? this.getMutableRuntimeImageBuild(serviceImage.id)
+        : objectBuild
+          ? this.getSealedRuntimeImageBuild(objectBuild.imageId)
+          : null);
+    if (!resolved) return null;
+    const { image, build: buildResult } = resolved;
+    if (runtimeExecutableVersion(image) !== version) return null;
+    const workspaceProvider = this.requireWorkspaceProvider("DO code loading");
+    const modules = await workerJavaScriptModules(
+      buildResult,
+      workspaceProvider.readBuildArtifactContent
+    );
+
+    // Service-level token shared by all instances of this source:className;
+    // `do-service:*` is a bearer identity, not an entity id.
+    const serviceCallerId = `do-service:${serviceKey}`;
+    const serviceToken = this.ensureWorkerBearer(serviceCallerId);
+    const egressIdentity = this.registerDoEgressCaller(source, className, image);
+
+    const env: Record<string, unknown> = {
+      RPC_AUTH_TOKEN: serviceToken,
+      WORKER_SOURCE: source,
+      WORKER_CLASS_NAME: className,
+      WORKER_EXECUTION_DIGEST: image.artifact.executionDigest,
+      WORKERD_SESSION_ID: this.sessionId,
+      WORKERD_BOOT_GENERATION: String(this.configBootGeneration()),
+      GATEWAY_URL: this.deps.getServerUrl(),
+      WORKSPACE_ID: this.deps.workspaceId,
+    };
+    const schemaDescriptor = this.doSchemaDescriptorDb
+      .prepare(
+        `SELECT descriptor_json FROM do_schema_descriptors
+       WHERE source = ? AND execution_digest = ? AND class_name = ?`
+      )
+      .get(source, image.artifact.executionDigest, className) as
+      | { descriptor_json: string }
+      | undefined;
+    if (schemaDescriptor)
+      env["VIBESTUDIO_SCHEMA_DESCRIPTOR"] = JSON.parse(schemaDescriptor.descriptor_json);
+    addSharedRuntimeEnv(env, this.deps.getServerAliasUrls?.() ?? []);
+    if (this.port) env["WORKERD_URL"] = `http://127.0.0.1:${this.port}`;
+
+    this.loadedDoCodeUnits.set(JSON.stringify([source, className, version]), {
+      source,
+      className,
+      version,
+    });
+    this.reconcileDoCodeUnitOwnership();
+    return {
+      ...USER_CODE_COMPATIBILITY,
+      compatibilityFlags: [...USER_CODE_COMPATIBILITY.compatibilityFlags],
+      modules,
+      env,
+      version,
+      egressIdentity,
+    };
+  }
+
+  /** Raw network effects are attributable to one sealed executable unit.
+   * Object/task authority remains on the separately authenticated RPC transport. */
+  private registerDoEgressCaller(
+    source: string,
+    className: string,
+    image: RuntimeImageRecord
+  ): string {
+    const identity = `do-code:${source}:${className}:${runtimeExecutableVersion(image)}`;
+    const caller = createVerifiedCaller(identity, "worker", {
+      callerId: identity,
+      callerKind: "worker",
+      repoPath: source,
+      effectiveVersion: image.artifact.sourceState.effectiveVersion,
+      executionDigest: image.artifact.executionDigest,
+      requested: image.authority.requests,
+    });
+    this.deps.registerEgressCaller(identity, caller);
+    this.doCodeEgressCallers.set(identity, {
+      source,
+      className,
+      version: runtimeExecutableVersion(image),
+      executable: {
+        source,
+        effectiveVersion: image.artifact.sourceState.effectiveVersion,
+        buildKey: image.artifact.buildKey,
+        executionDigest: image.artifact.executionDigest,
+      },
+    });
+    return identity;
+  }
+
+  // =========================================================================
+  // Runtime deployment
+  // =========================================================================
+
+  /**
+   * The wrangler configuration of the runtime application for one generation.
+   * The module is the immutable build artifact; a generation differs only in
+   * its variables. Every product class is always deployed, so registering an
+   * internal class never changes the deployment, and userland classes load
+   * through UniversalDO's Worker Loader.
+   */
+  private runtimeDeployment(chronolog?: {
+    publicKey: string;
+    signingKey: string;
+    token: string;
+  }): RuntimeDeployment {
+    const programs = this.internalDOPrograms();
+    const internalClasses = programs.publication().internalClasses;
+    const classes = internalClasses.map((className) => {
+      const builtin = productBuiltinByIdentity(INTERNAL_DO_SOURCE, className);
+      if (!builtin) {
+        throw new Error(`Internal Durable Object ${className} has no builtin catalog entry`);
+      }
+      // Service-level token shared by all objects of this class. NOTE:
+      // `do-service:*` is a bearer-token key, NOT an entity id; the runtime
+      // entity model only tracks concrete objects (`do:<source>:<cls>:<key>`).
+      const serviceCallerId = `do-service:${doServiceKey(INTERNAL_DO_SOURCE, className)}`;
+      // Raw network effects of a product class are attributable to its
+      // service principal (the node stamps `class` on its requests).
+      const identity = programs.get(className).identity;
+      this.deps.registerEgressCaller(
+        serviceCallerId,
+        createVerifiedCaller(serviceCallerId, "worker", {
+          callerId: serviceCallerId,
+          callerKind: "worker",
+          repoPath: identity.source,
+          effectiveVersion: identity.effectiveVersion,
+          executionDigest: identity.executionDigest,
+          requested: identity.authority.requests,
+        })
+      );
+      return {
+        className,
+        rpcToken: this.ensureWorkerBearer(serviceCallerId),
+        // Manifest-declared provider bindings for this class (meta/vibestudio.yml
+        // `providers.*`, e.g. EVAL_ENGINE_SOURCE for eval kernel): names of units,
+        // not credentials.
+        env: { ...this.deps.getInternalDoEnv(className) },
+        codegen: builtin.runtime.codegen,
+        residency: builtin.runtime.residency,
+        ...("storage" in builtin.runtime && builtin.runtime.storage === "dolt"
+          ? {
+              storage: "dolt" as const,
+              doltLocal: "doltLocal" in builtin.runtime ? builtin.runtime.doltLocal : [],
+            }
+          : {}),
+      };
+    });
+    return buildRuntimeDeployment({
+      ...(chronolog === undefined ? {} : { chronolog }),
+      compatibility: USER_CODE_COMPATIBILITY,
+      classes,
+      doLoaderSecret: this.doLoaderSecret,
+      vars: {
+        RUNTIME_GATEWAY_TOKEN: this.deps.getWorkerdGatewayToken(),
+        RUNTIME_DISPATCH_SECRET: this.dispatchSecret,
+        RUNTIME_LOADER_SECRET: this.loaderSecret,
+        GATEWAY_URL: this.deps.getServerUrl(),
+        ...((this.deps.getServerAliasUrls?.() ?? []).length > 0
+          ? { GATEWAY_URL_ALIASES: [...(this.deps.getServerAliasUrls?.() ?? [])] }
+          : {}),
+        WORKSPACE_ID: this.deps.workspaceId,
+        WORKERD_SESSION_ID: this.sessionId,
+        WORKERD_BOOT_GENERATION: String(this.configBootGeneration()),
+      },
+    });
+  }
+
+  private celldNode(): CelldNode {
+    if (this.celld) return this.celld;
+    throw new Error("The runtime node supervisor is created by the first generation");
+  }
+
+  private async ensureCelldNode(): Promise<CelldNode> {
+    if (this.celld) return this.celld;
+    const port = await this.deps.getSharedEgressPort();
+    this.celld = new CelldNode({
+      binary: resolveCelldBinary(this.deps.appRoot ?? process.env["VIBESTUDIO_APP_ROOT"]),
+      stateDir: stateLayout(this.deps.statePath).celldDir,
+      blobRoot: stateLayout(this.deps.statePath).blobsDir,
+      nodeId: `vibestudio-${crypto
+        .createHash("sha256")
+        .update(this.deps.workspaceId)
+        .digest("hex")
+        .slice(0, 16)}`,
+      egressProxyUrl: `http://127.0.0.1:${port}`,
+      egressSecret: this.egressSecret,
+      onOutput: (stream, line) => {
+        const receipt = this.currentWorkerdReceipt;
+        if (receipt) this.rememberWorkerdStartupOutput(`${stream}: ${line}`, receipt.output);
+        // `celld deploy` reports its progress on stderr; that is not a warning.
+        if (line.startsWith("deploy:")) log.verbose(`[celld] ${line}`);
+        else if (stream === "stderr" || / (ERROR|WARN) /u.test(line)) log.warn(`[celld] ${line}`);
+        else log.verbose(`[celld] ${line}`);
+      },
+    });
+    return this.celld;
+  }
+
+  /** Publish this generation's deployment of the runtime application. */
+  private async deployGeneration(): Promise<void> {
+    const node = await this.ensureCelldNode();
+    let chronolog: Parameters<RuntimeManager["runtimeDeployment"]>[0];
+    if (this.hasChronolog) {
+      const { ChronologSigningVault } = await import("./chronolog/signingVault.js");
+      const vault = new ChronologSigningVault(path.join(this.deps.statePath, "chronolog-node"));
+      const { publicKey, pkcs8Hex } = await vault.principal("workspace-runtime");
+      chronolog = { publicKey, signingKey: pkcs8Hex, token: this.chronologToken };
+    }
+    const { config, secrets } = this.runtimeDeployment(chronolog);
+    await node.deploy(this.internalDOPrograms().app().bundle, config, secrets);
+  }
+
+  // =========================================================================
+  // Process lifecycle
+  // =========================================================================
+
+  /**
+   * Coalesced generation transition. Concurrent callers share one in-flight
+   * run; a config change made during a run triggers at most one follow-up.
+   * A run's failure propagates only to callers whose epoch that run actually
+   * covered — waiters whose request was never attempted survive it and get
+   * their own attempt (so a queued crash recovery is never lost to another
+   * caller's failed restart).
+   */
+  private restartWorkerd(request: WorkerdRestartRequest = { kind: "planned" }): Promise<void> {
+    if (this.shuttingDown) {
+      return Promise.reject(new Error("RuntimeManager is shutting down"));
+    }
+    const myEpoch = ++this.requestedEpoch;
+    this.restartRequests.set(myEpoch, request);
+    // Preemption rule: crash recovery must never queue behind a hung graceful
+    // prepare. Prep is advisory — the process is being replaced either way.
+    if (request.kind === "crash") this.preemptPreparingTransition(request.reason);
+    return this.ensureRestartAtLeast(myEpoch);
+  }
+
+  private preemptPreparingTransition(reason: string): void {
+    const transition = this.activeTransition;
+    if (transition && transition.kind === "planned" && transition.state === "preparing") {
+      transition.prepAbort.abort(
+        new Error(`crash recovery preempted graceful workerd prepare: ${reason}`)
+      );
+    }
+  }
+
+  private async ensureRestartAtLeast(epoch: number): Promise<void> {
+    while (this.appliedEpoch < epoch) {
+      if (this.shuttingDown) return;
+      const running = this.activeTransition;
+      if (running) {
+        // Never inherit another run's rejection unguarded: only a run that
+        // actually covered this epoch owes this caller its failure.
+        await running.promise.catch(() => {});
+        if (running.failed && running.covered >= epoch) throw running.error;
+        continue;
+      }
+      const transition = this.startGenerationTransition();
+      await transition.promise.catch(() => {});
+      if (transition.failed && transition.covered >= epoch) throw transition.error;
+    }
+  }
+
+  /**
+   * Become the generation-transition owner. Consumes queued restart requests
+   * (they are deleted regardless of outcome — a failed run must not leak them
+   * into misclassifying the next planned restart as a crash), classifies the
+   * run (crash > planned > stop-if-idle), and starts the owner run.
+   */
+  private startGenerationTransition(): GenerationTransition {
+    const requests = this.consumeQueuedRequests();
+    const crash = [...requests].reverse().find((request) => request.kind === "crash");
+    const hasPlanned = requests.some((request) => request.kind === "planned");
+    const onlyStopIfIdle =
+      requests.length > 0 && requests.every((request) => request.kind === "stop-if-idle");
+    // Severity order: crash > planned > stop-if-idle.
+    const transition: GenerationTransition = {
+      correlationId: crypto.randomUUID(),
+      kind: crash ? "crash" : hasPlanned ? "planned" : onlyStopIfIdle ? "stop-if-idle" : "planned",
+      state: "preparing",
+      reason: crash
+        ? crash.reason
+        : hasPlanned
+          ? "planned-restart"
+          : onlyStopIfIdle
+            ? "idle"
+            : "planned-restart",
+      alreadyExited: crash?.alreadyExited ?? false,
+      prepAbort: new AbortController(),
+      covered: this.requestedEpoch,
+      failed: false,
+      error: undefined,
+      promise: Promise.resolve(),
+    };
+    this.activeTransition = transition;
+    transition.promise = (async () => {
+      try {
+        await this._runGenerationTransition(transition);
+        // Success applies every epoch the run consumed, including any absorbed
+        // at the stopping-step re-drain after a crash preemption.
+        this.appliedEpoch = Math.max(this.appliedEpoch, transition.covered);
+      } catch (err) {
+        transition.failed = true;
+        transition.error = err;
+        throw err;
+      } finally {
+        if (this.activeTransition === transition) this.activeTransition = null;
+      }
+    })();
+    // The owner loop and every waiter attach their own catch; keep the raw
+    // promise from surfacing as an unhandled rejection in the interim.
+    transition.promise.catch(() => {});
+    return transition;
+  }
+
+  /** Drain queued requests up to the current requested epoch (per-attempt). */
+  private consumeQueuedRequests(): WorkerdRestartRequest[] {
+    const applying = this.requestedEpoch;
+    const consumed: WorkerdRestartRequest[] = [];
+    for (const [requestEpoch, request] of [...this.restartRequests.entries()].sort(
+      ([a], [b]) => a - b
+    )) {
+      if (requestEpoch > applying) continue;
+      consumed.push(request);
+      this.restartRequests.delete(requestEpoch);
+    }
+    return consumed;
+  }
+
+  /**
+   * The one owner run: preparing → stopping → reaping → starting. No process
+   * stop or start happens outside this method (and terminal `shutdown()`,
+   * which first closes admission and quiesces the owner).
+   */
+  private async _runGenerationTransition(transition: GenerationTransition): Promise<void> {
+    if (this.shuttingDown) return;
+    const previousGeneration = this.bootGeneration === 0 ? null : this.bootGeneration;
+    const nextGeneration = this.bootGeneration + 1;
+    const hadRunningProcess = this.process !== null;
+
+    // ── stop-if-idle: a pure stop transition; re-check idleness under the
+    // owner (an instance/DO registered while queued wins — no stop).
+    if (transition.kind === "stop-if-idle") {
+      if (
+        this.instances.size > 0 ||
+        this.doServices.size > 0 ||
+        this.schemaProbeBuilds.size > 0 ||
+        this.preparedDoExecutables.size > 0 ||
+        this.preparingDoExecutables.size > 0
+      )
+        return;
+      transition.state = "stopping";
+      if (hadRunningProcess) {
+        await this.emitGenerationClosing({
+          correlationId: transition.correlationId,
+          generation: nextGeneration,
+          reason: "idle",
+        });
+      }
+      await this.stopWorkerd("idle");
+      this.clearRetiredDynamicIsolatePressure();
+      return;
+    }
+
+    // ── preparing (planned/stop; prep hooks may dispatch into workerd) ──
+    let prepDegraded = false;
+    if (transition.kind === "planned" && hadRunningProcess) {
+      transition.state = "preparing";
+      const outcome = await this.emitRestartBegin(
+        {
+          correlationId: transition.correlationId,
+          generation: nextGeneration,
+          reason: "planned",
+          signal: transition.prepAbort.signal,
+        },
+        transition.prepAbort.signal
+      );
+      if (outcome === "failed") {
+        // A failed/timed-out graceful prepare must not abort the restart: the
+        // process replacement proceeds crash-style and listeners reconcile
+        // runtime leases from durable state on the crash-ready event.
+        prepDegraded = true;
+        log.warn(
+          "workerd graceful prepare failed or timed out; proceeding crash-style so the " +
+            "generation transition still reaches the process boundary"
+        );
+      }
+      // "aborted" needs no handling here: the crash request that fired the
+      // abort is absorbed at the re-drain below and escalates the run.
+    }
+
+    // Absorb requests queued during prep. A crash request escalates the run
+    // in place — this is how preemption completes inside the state machine.
+    const lateCrash = [...this.consumeQueuedRequests()]
+      .reverse()
+      .find((request) => request.kind === "crash");
+    if (lateCrash) {
+      transition.kind = "crash";
+      transition.reason = lateCrash.reason;
+      transition.alreadyExited ||= lateCrash.alreadyExited;
+    }
+    transition.covered = Math.max(transition.covered, this.requestedEpoch);
+    let crashStyle = transition.kind === "crash" || prepDegraded;
+
+    // ── reloading: a planned generation on a live node is adopted in place.
+    // The node keeps its process, listeners and storage; resident objects move
+    // to the new deployment when idle and retired loaded isolates are dropped.
+    // A node that cannot adopt it is replaced like a crashed one.
+    if (!crashStyle && hadRunningProcess && this.node && !this.node.hasExited) {
+      transition.state = "starting";
+      let adopted = false;
+      try {
+        this.pendingBootGeneration = nextGeneration;
+        await this.reloadGeneration();
+        this.bootGeneration = nextGeneration;
+        this.pendingBootGeneration = null;
+        this.writeBootGeneration(this.bootGeneration);
+        this.clearRetiredDynamicIsolatePressure();
+        adopted = true;
+      } catch (error) {
+        this.pendingBootGeneration = null;
+        if (this.shuttingDown) return;
+        // A reload that failed after the node adopted the generation cannot be
+        // told from one that failed before: replace the node either way.
+        log.warn(
+          `celld node could not adopt the generation in place; replacing it. ${errorMessage(error)}`
+        );
+        crashStyle = true;
+      }
+      if (adopted) {
+        // Activation recovery has its own owner: a failure reaches the caller
+        // without replacing the node that already runs this generation.
+        await this.emitRestartReady({
+          correlationId: transition.correlationId,
+          generation: this.bootGeneration,
+          previousGeneration,
+          reason: "planned",
+        });
+        return;
+      }
+    }
+
+    // ── stopping: close the old generation in-process, then stop it ──
+    transition.state = "stopping";
+    if (hadRunningProcess || transition.kind === "crash") {
+      await this.emitGenerationClosing({
+        correlationId: transition.correlationId,
+        generation: nextGeneration,
+        reason: crashStyle ? "crash" : "planned",
+      });
+    }
+    if (transition.kind === "crash" && transition.alreadyExited) {
+      if (this.port)
+        await destroyWorkerdConnections(
+          `http://127.0.0.1:${this.port}`,
+          `workerd process generation crashed: ${transition.reason}`
+        );
+    }
+    transition.state = "reaping";
+    await this.stopWorkerd(
+      transition.kind === "crash" ? `unresponsive-sandbox:${transition.reason}` : "planned-restart",
+      crashStyle ? "force" : "graceful"
+    );
+    this.clearRetiredDynamicIsolatePressure();
+
+    if (this.shuttingDown) return;
+
+    if (
+      this.instances.size === 0 &&
+      this.doServices.size === 0 &&
+      this.schemaProbeBuilds.size === 0 &&
+      this.preparedDoExecutables.size === 0 &&
+      this.preparingDoExecutables.size === 0
+    )
+      return;
+
+    // ── starting ──
+    transition.state = "starting";
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      if (this.shuttingDown) return;
+      try {
+        this.pendingBootGeneration = nextGeneration;
+        await this.startWorkerdOnce();
+        if (this.shuttingDown) {
+          this.pendingBootGeneration = null;
+          await this.stopWorkerd("shutdown-during-restart", "force");
+          return;
+        }
+        this.bootGeneration = nextGeneration;
+        this.pendingBootGeneration = null;
+        this.writeBootGeneration(this.bootGeneration);
+      } catch (err) {
+        lastError = err;
+        this.pendingBootGeneration = null;
+        if (this.shuttingDown) {
+          await this.stopWorkerd("shutdown-during-restart", "force");
+          return;
+        }
+        const detail = this.formatWorkerdStartupError(err);
+        if (attempt < 3) {
+          log.warn(
+            `workerd startup attempt ${attempt} did not become ready; retrying with a fresh port. ${detail}`
+          );
+        } else {
+          log.warn(`workerd startup attempt ${attempt} failed. ${detail}`);
+        }
+        await this.stopWorkerd("startup-retry", "force");
+        continue;
+      }
+      const readyPort = this.getPort();
+      if (!readyPort) throw new Error("workerd started without a relay port");
+      for (const hook of this.generationReadyHooks) {
+        hook({ generation: this.bootGeneration, port: readyPort });
+      }
+      // Process startup and activation recovery have different owners. A
+      // failed resume must reach the restart caller without replacing an
+      // already-started process or rerunning the hook as a startup retry.
+      const owedStopRecovery = this.resumeLifecycleAfterStop;
+      if (crashStyle || hadRunningProcess || owedStopRecovery) {
+        await this.emitRestartReady({
+          correlationId: transition.correlationId,
+          generation: this.bootGeneration,
+          previousGeneration,
+          // A start owing stop recovery has no prepared epoch of its own:
+          // crash-style ready is the durable-state reconstruction path.
+          reason: crashStyle || owedStopRecovery ? "crash" : "planned",
+        });
+      }
+      this.resumeLifecycleAfterStop = false;
+      return;
+    }
+
+    throw lastError instanceof Error ? lastError : new Error("workerd failed to start");
+  }
+
+  private configBootGeneration(): number {
+    return this.pendingBootGeneration ?? this.bootGeneration;
+  }
+
+  private readBootGeneration(): number {
+    try {
+      const text = fs.readFileSync(this.bootGenerationFile, "utf8").trim();
+      const parsed = Number.parseInt(text, 10);
+      return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        log.warn("Failed to read workerd boot generation:", err);
+      }
+      return 0;
+    }
+  }
+
+  private writeBootGeneration(generation: number): void {
+    fs.mkdirSync(path.dirname(this.bootGenerationFile), { recursive: true });
+    fs.writeFileSync(this.bootGenerationFile, `${generation}\n`);
+  }
+
+  /**
+   * Run graceful-prepare hooks for a planned transition. Returns "aborted"
+   * the moment `signal` fires (crash preemption — remaining hooks are skipped
+   * and in-flight ones are abandoned with their rejections swallowed),
+   * "failed" when any hook failed, "ok" otherwise. Never throws: prepare is
+   * advisory and must not be able to abort the transition.
+   */
+  private async emitRestartBegin(
+    event: RestartBeginEvent,
+    signal: AbortSignal
+  ): Promise<"ok" | "failed" | "aborted"> {
+    let failed = false;
+    const aborted = new Promise<"aborted">((resolve) => {
+      if (signal.aborted) resolve("aborted");
+      else signal.addEventListener("abort", () => resolve("aborted"), { once: true });
+    });
+    for (const hook of this.restartBeginHooks) {
+      if (signal.aborted) return "aborted";
+      const hookRun = (async () => {
+        await hook(event);
+        return "hook-done" as const;
+      })().catch((err: unknown) => {
+        log.warn("restart begin hook failed:", err);
+        failed = true;
+        return "hook-done" as const;
+      });
+      const winner = await Promise.race([hookRun, aborted]);
+      if (winner === "aborted") return "aborted";
+    }
+    return failed ? "failed" : "ok";
+  }
+
+  /** In-process only; hook failures are logged, never propagated. */
+  private async emitGenerationClosing(event: GenerationClosingEvent): Promise<void> {
+    for (const hook of this.generationClosingHooks) {
+      try {
+        await hook(event);
+      } catch (err) {
+        log.warn("generation closing hook failed:", err);
+      }
+    }
+  }
+
+  private async emitRestartReady(event: RestartReadyEvent): Promise<void> {
+    const failures: unknown[] = [];
+    for (const hook of this.restartReadyHooks) {
+      try {
+        await hook(event);
+      } catch (err) {
+        failures.push(err);
+      }
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length)
+      throw new AggregateError(failures, "Workerd activation recovery failed", {
+        cause: failures[0],
+      });
+  }
+
+  private async startWorkerdOnce(): Promise<void> {
+    if (this.shuttingDown) throw this.shutdownCancellation;
+    const startedAt = performance.now();
+    const { findServicePort } = await import("./hostCore/portUtils.js");
+    if (!this.port) {
+      this.port = await findServicePort(
+        "workerd",
+        "127.0.0.1",
+        this.retiredPort === null ? undefined : new Set([this.retiredPort])
+      );
+      this.retiredPort = null;
+    }
+    if (!this.inspectorPort && workerdInspectorEnabled()) {
+      this.inspectorPort = await findServicePort(
+        "workerdInspector",
+        "127.0.0.1",
+        this.retiredInspectorPort === null ? undefined : new Set([this.retiredInspectorPort])
+      );
+      this.retiredInspectorPort = null;
+    }
+    await this.deployGeneration();
+    const deployedAt = performance.now();
+    if (this.shuttingDown) throw this.shutdownCancellation;
+
+    const node = this.celldNode().start({ listen: this.port, inspector: this.inspectorPort });
+    this.node = node;
+    this.process = node.child;
+    const spawnedProcess = node.child;
+    const spawnedPid = spawnedProcess.pid;
+    const receipt: WorkerdProcessReceipt = {
+      pid: spawnedPid,
+      port: this.port,
+      startedAt: Date.now(),
+      generation: this.configBootGeneration(),
+      output: [],
+    };
+    this.currentWorkerdReceipt = receipt;
+    this.workerdStartedAtMs = receipt.startedAt;
+    this.lastWorkerdRssBytes = null;
+    this.startWorkerdMemorySampling(spawnedPid);
+    this.lastWorkerdStartupOutput = receipt.output;
+
+    // Wait for the deployed router to answer. A surviving process is not
+    // enough: the node may report a fatal error and exit just after spawn,
+    // and DO dispatch must not race ahead until the router accepts HTTP.
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const readinessAbort = new AbortController();
+
+      const onExit = (code: number | null, signal: string | null) => {
+        readinessAbort.abort(new Error(`celld exited before readiness (${code}, ${signal})`));
+        this.logWorkerdExit(code, signal, receipt);
+        if (this.process === spawnedProcess) {
+          this.process = null;
+          this.node = null;
+        }
+        if (!settled) {
+          settled = true;
+          reject(
+            new Error(
+              `celld exited before accepting HTTP (code=${code}, signal=${signal})${this.recentWorkerdOutputSuffix(receipt.output)}`
+            )
+          );
+        }
+      };
+
+      const onError = (err: Error) => {
+        readinessAbort.abort(err);
+        log.error("celld process error:", err);
+        if (this.process === spawnedProcess) {
+          this.process = null;
+          this.node = null;
+        }
+        if (!settled) {
+          settled = true;
+          reject(new Error(`celld failed to start: ${err.message}`, { cause: err }));
+        }
+      };
+
+      spawnedProcess.on("exit", onExit);
+      spawnedProcess.on("error", onError);
+
+      // Probe until the router answers; the process exiting or erroring is
+      // the only terminal failure, so a slow start is never misreported.
+      this.waitForHttpReady(() => settled, readinessAbort.signal).then(
+        () => {
+          if (settled) return;
+          settled = true;
+          spawnedProcess.removeListener("exit", onExit);
+          spawnedProcess.removeListener("error", onError);
+          spawnedProcess.on("exit", (code, signal) => {
+            this.logWorkerdExit(code, signal, receipt);
+            const wasCurrent = this.process === spawnedProcess;
+            if (wasCurrent) {
+              this.process = null;
+              this.node = null;
+            }
+            if (wasCurrent && !this.shuttingDown) {
+              void this.recoverExitedSandbox(
+                `unexpected exit (code=${code}, signal=${signal})`
+              ).catch((err) => {
+                log.error("failed to recover unexpectedly exited celld node:", err);
+              });
+            }
+          });
+          spawnedProcess.on("error", (err) => {
+            log.error("celld process error:", err);
+            if (this.process === spawnedProcess) {
+              this.process = null;
+              this.node = null;
+            }
+          });
+          resolve();
+        },
+        (err: unknown) => {
+          if (settled) return;
+          settled = true;
+          reject(
+            new Error(
+              `${errorMessage(err)}. port=${receipt.port}${this.recentWorkerdOutputSuffix(receipt.output)}`
+            )
+          );
+        }
+      );
+    });
+
+    const readyAt = performance.now();
+    log.info(
+      `celld node started on port ${this.port} with ${this.instances.size} worker(s); ` +
+        `runtimeStartupReport=${JSON.stringify({
+          generation: receipt.generation,
+          totalMs: readyAt - startedAt,
+          deployMs: deployedAt - startedAt,
+          spawnToHttpReadyMs: readyAt - deployedAt,
+        })}`
+    );
+    await this.storage.recover();
+  }
+
+  /**
+   * A planned generation on a live node: publish the new deployment and have
+   * the node adopt it in place. Resident objects move to the new code when
+   * idle; storage, the process and its listeners are unaffected.
+   */
+  private async reloadGeneration(): Promise<void> {
+    const node = this.node;
+    if (!node || node.hasExited) throw new Error("celld node is not running");
+    await this.deployGeneration();
+    await node.reload();
+    if (this.currentWorkerdReceipt) {
+      this.currentWorkerdReceipt.generation = this.configBootGeneration();
+    }
+    log.info(`celld node adopted generation ${this.configBootGeneration()} in place`);
+  }
+
+  private startWorkerdMemorySampling(pid: number | undefined): void {
+    if (this.workerdMemorySampleTimer) {
+      clearInterval(this.workerdMemorySampleTimer);
+      this.workerdMemorySampleTimer = null;
+    }
+    this.workerdRssSamples = [];
+    this.workerdMemorySamplePid = pid ?? null;
+    if (!pid || process.platform !== "linux") return;
+    const recordSample = (): void => {
+      const rss = this.readProcessRssBytes(pid);
+      if (rss === null) return;
+      this.lastWorkerdRssBytes = rss;
+      this.workerdRssSamples.push({ at: Date.now(), rssBytes: rss });
+      if (this.workerdRssSamples.length > 120) this.workerdRssSamples.shift();
+      this.maybeCompactRetiredDynamicIsolates(rss);
+    };
+    recordSample();
+    this.workerdMemorySampleTimer = setInterval(() => {
+      recordSample();
+    }, 5_000);
+    this.workerdMemorySampleTimer.unref?.();
+  }
+
+  /** Executable-unit ownership follows actual admitted bindings, not object counts. */
+  private reconcileDoCodeUnitOwnership(): void {
+    const owns = (source: string, className: string, version: string): boolean => {
+      const serviceKey = doServiceKey(source, className);
+      const service = this.doServices.get(serviceKey);
+      const image = service?.imageId ? this.runtimeImages.get(service.imageId) : null;
+      if (image && runtimeExecutableVersion(image) === version) return true;
+      const prepared = this.preparedDoExecutables.get(serviceKey);
+      if (prepared && prepared.version === version) return true;
+      if (this.preparingDoExecutables.has(canonicalJson([source, className, version]))) return true;
+      for (const [key, binding] of this.doObjectBuilds) {
+        if (!key.startsWith(`${serviceKey}/`)) continue;
+        if (binding.admission.executableVersion === version) return true;
+      }
+      return false;
+    };
+    this.retiredDynamicIsolateIds.clear();
+    for (const [key, unit] of this.loadedDoCodeUnits) {
+      if (!owns(unit.source, unit.className, unit.version)) this.retiredDynamicIsolateIds.add(key);
+    }
+    this.retiredDynamicIsolateGeneration =
+      this.retiredDynamicIsolateIds.size > 0 ? this.bootGeneration : null;
+    for (const [identity, unit] of this.doCodeEgressCallers) {
+      if (owns(unit.source, unit.className, unit.version)) continue;
+      this.deps.unregisterEgressCaller(identity);
+      this.doCodeEgressCallers.delete(identity);
+    }
+  }
+
+  private maybeCompactRetiredDynamicIsolates(rssBytes: number | null): void {
+    const retiredGeneration = this.retiredDynamicIsolateGeneration;
+    if (
+      retiredGeneration === null ||
+      (this.retiredDynamicIsolateIds.size < RUNTIME_DYNAMIC_ISOLATE_COMPACTION_COUNT &&
+        (rssBytes === null || rssBytes < RUNTIME_DYNAMIC_ISOLATE_COMPACTION_RSS_BYTES)) ||
+      this.dynamicIsolateCompactionFlight ||
+      this.shuttingDown ||
+      !this.process ||
+      this.process.exitCode !== null ||
+      this.hasLiveUserlandExecutions()
+    ) {
+      return;
+    }
+    const flight = this.restartWorkerd();
+    this.dynamicIsolateCompactionFlight = flight;
+    void flight
+      .then(() => {
+        log.info(
+          `Compacted workerd generation containing retired dynamic isolates` +
+            (rssBytes === null ? "" : ` at ${Math.round(rssBytes / (1024 * 1024))} MiB RSS`)
+        );
+      })
+      .catch((error) => {
+        log.warn("workerd dynamic-isolate compaction failed", error);
+      })
+      .finally(() => {
+        if (this.dynamicIsolateCompactionFlight === flight) {
+          this.dynamicIsolateCompactionFlight = null;
+        }
+      });
+  }
+
+  private clearRetiredDynamicIsolatePressure(): void {
+    this.workerAdmissionEpoch++;
+    this.workerAdmissions.clear();
+    this.preparingWorkerAdmissions.clear();
+    this.retiredDynamicIsolateGeneration = null;
+    this.retiredDynamicIsolateIds.clear();
+    this.loadedDoCodeUnits.clear();
+  }
+
+  private hasLiveUserlandExecutions(): boolean {
+    // Class-level runtime images remain registered so a future object can be
+    // created without rebuilding; they are not live executions. Only actual
+    // worker instances and object-specific DO bindings make a process restart
+    // user-visible.
+    return this.instances.size > 0 || this.doObjectBuilds.size > 0;
+  }
+
+  private stopWorkerdMemorySampling(): void {
+    if (this.workerdMemorySampleTimer) {
+      clearInterval(this.workerdMemorySampleTimer);
+      this.workerdMemorySampleTimer = null;
+    }
+    this.workerdMemorySamplePid = null;
+  }
+
+  private readProcessRssBytes(pid: number): number | null {
+    if (process.platform !== "linux") return null;
+    try {
+      const status = fs.readFileSync(`/proc/${pid}/status`, "utf8");
+      const match = /^VmRSS:\s+(\d+)\s+kB$/m.exec(status);
+      return match ? Number(match[1]) * 1024 : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private logWorkerdExit(
+    code: number | null,
+    signal: string | null,
+    receipt: WorkerdProcessReceipt
+  ): void {
+    const exitedAt = Date.now();
+    const recentOutput = [...receipt.output];
+    const lifecycle = {
+      pid: receipt.pid ?? null,
+      port: receipt.port,
+      code,
+      signal,
+      exitedAt,
+      startedAt: receipt.startedAt,
+      generation: receipt.generation,
+      recentOutput,
+    };
+    const diagnosticSnapshot = this.workerdDiagnostics(receipt.pid);
+    log.info(
+      `workerd exited; lifecycle=${JSON.stringify(lifecycle)}; diagnostics=${JSON.stringify({ ...diagnosticSnapshot, pid: receipt.pid ?? null, port: receipt.port, uptimeMs: exitedAt - receipt.startedAt, bootGeneration: receipt.generation })}`
+    );
+    const diagnosticId = `workerd:${this.deps.workspaceId}`;
+    this.deps.recordLifecycleEvent?.({
+      source: INTERNAL_DO_SOURCE,
+      callerId: diagnosticId,
+      entityId: this.deps.workspaceId,
+      kind: "worker",
+      level: code === 0 ? "info" : "error",
+      message: `workerd process exited (code=${code}, signal=${signal})`,
+      fields: { event: "workerd-process-exited", ...lifecycle },
+    });
+    if (this.currentWorkerdReceipt === receipt) this.currentWorkerdReceipt = null;
+    if (receipt.pid === this.workerdMemorySamplePid) this.stopWorkerdMemorySampling();
+  }
+
+  private workerdDiagnostics(pid: number | undefined): WorkerdPerformanceSnapshot {
+    const currentRssBytes = pid ? this.readProcessRssBytes(pid) : null;
+    const ownsSamples = pid !== undefined && pid === this.workerdMemorySamplePid;
+    if (currentRssBytes !== null && ownsSamples) {
+      this.lastWorkerdRssBytes = currentRssBytes;
+      const latest = this.workerdRssSamples.at(-1);
+      if (!latest || latest.rssBytes !== currentRssBytes) {
+        this.workerdRssSamples.push({ at: Date.now(), rssBytes: currentRssBytes });
+        if (this.workerdRssSamples.length > 120) this.workerdRssSamples.shift();
+      }
+    }
+    const samples = ownsSamples ? this.workerdRssSamples : [];
+    const firstRss = samples[0];
+    const lastRss = samples.at(-1);
+    return {
+      pid: pid ?? null,
+      port: this.port,
+      uptimeMs:
+        ownsSamples && this.workerdStartedAtMs ? Date.now() - this.workerdStartedAtMs : null,
+      rssBytes: currentRssBytes,
+      lastRssBytes: ownsSamples ? this.lastWorkerdRssBytes : currentRssBytes,
+      rssSampleCount: samples.length,
+      rssPeakBytes:
+        samples.length > 0 ? Math.max(...samples.map((sample) => sample.rssBytes)) : null,
+      rssGrowthBytes: firstRss && lastRss ? lastRss.rssBytes - firstRss.rssBytes : null,
+      rssWindowMs: firstRss && lastRss ? lastRss.at - firstRss.at : null,
+      regularWorkers: this.instances.size,
+      doServices: this.doServices.size,
+      doObjectBuilds: this.doObjectBuilds.size,
+      runtimeImages: this.runtimeImages.list().length,
+      sealedDoImages: this.sealedDoImages.size,
+      runtimeImageRebinds: this.runtimeImageRebinds.size,
+      bootGeneration: this.bootGeneration,
+      pendingBootGeneration: this.pendingBootGeneration,
+    };
+  }
+
+  /** Bounded, read-only resource/occupancy snapshot for userland profilers. */
+  performanceSnapshot(): WorkerdPerformanceSnapshot {
+    return this.workerdDiagnostics(this.process?.pid);
+  }
+
+  private rememberWorkerdStartupOutput(line: string, output: string[]): void {
+    output.push(line);
+    if (output.length > RUNTIME_STARTUP_OUTPUT_LINES) {
+      output.splice(0, output.length - RUNTIME_STARTUP_OUTPUT_LINES);
+    }
+  }
+
+  private recentWorkerdOutputSuffix(output = this.lastWorkerdStartupOutput): string {
+    if (output.length === 0) return "";
+    return `; recent workerd output:\n${output.join("\n")}`;
+  }
+
+  private formatWorkerdStartupError(err: unknown): string {
+    return errorMessage(err).replace(/\s+/gu, " ").slice(0, 1200);
+  }
+
+  private async stopWorkerd(
+    reason = "unspecified",
+    mode: "graceful" | "force" = "graceful"
+  ): Promise<void> {
+    const proc = this.process;
+    const node = this.node;
+    this.process = null;
+    this.node = null;
+    try {
+      if (proc) {
+        log.info(
+          `stopping workerd (${reason}); diagnostics=${JSON.stringify(
+            this.workerdDiagnostics(proc.pid)
+          )}`
+        );
+        if (this.port)
+          await destroyWorkerdConnections(
+            `http://127.0.0.1:${this.port}`,
+            `workerd process generation ended: ${reason}`
+          );
+        let exited = false;
+        if (mode === "force") {
+          // Crash recovery and terminal server shutdown have already revoked
+          // admission and severed every host-owned connection. Workerd's
+          // SIGTERM drain can remain alive forever on durable timers or an
+          // interrupted userland request, so these lifecycle edges terminate
+          // the isolated runtime directly. Its SQLite storage is crash-safe;
+          // durable work resumes from journals on the next server generation.
+          proc.kill("SIGKILL");
+          exited = await this.waitForProcessReaped(
+            proc,
+            this.deps.workerdStopTimeoutsMs?.sigkillMs ?? DEFAULT_RUNTIME_SIGKILL_TIMEOUT_MS
+          );
+        } else {
+          // The node's own durable stop (what `celld dev` uses); a signal only
+          // when the node cannot be asked.
+          if (!(node && (await node.requestShutdown()))) proc.kill("SIGTERM");
+          // Wait for the process to exit so the port is released before respawn.
+          // `proc.killed` only reports that a signal was *sent*, not that the
+          // process actually died — so track exit observation explicitly.
+          exited = await this.waitForProcessExitEvent(
+            proc,
+            this.deps.workerdStopTimeoutsMs?.sigtermMs ?? DEFAULT_RUNTIME_SIGTERM_TIMEOUT_MS
+          );
+        }
+        if (!exited && mode === "graceful") {
+          // SIGTERM timed out — force reap so the socket can be reclaimed.
+          try {
+            log.warn(
+              `workerd did not exit after SIGTERM (${reason}); sending SIGKILL; diagnostics=${JSON.stringify(
+                this.workerdDiagnostics(proc.pid)
+              )}`
+            );
+            proc.kill("SIGKILL");
+          } catch {
+            /* already gone */
+          }
+          // Confirm the reap from kernel state (kill(pid, 0)) rather than a
+          // single libuv event window: a delayed 'exit' event must not fail a
+          // reap that actually succeeded.
+          exited = await this.waitForProcessReaped(
+            proc,
+            this.deps.workerdStopTimeoutsMs?.sigkillMs ?? DEFAULT_RUNTIME_SIGKILL_TIMEOUT_MS
+          );
+        }
+        if (!exited) {
+          // Refusal path: never overlap runtime generations. Watch this exact
+          // pid in the background — when the kernel finally reaps it, re-enter
+          // the transition owner so the runtime does not stay down forever.
+          this.installUnkillableProcessWatch(proc, reason);
+          throw new Error(
+            `workerd process ${proc.pid ?? "unknown"} did not exit after SIGKILL (${reason}); refusing to overlap runtime generations`
+          );
+        }
+      }
+    } finally {
+      // Always release the pinned ports — including on the SIGKILL-refusal
+      // throw above — so the next transition re-probes via findServicePort.
+      // findServicePort skips EADDRINUSE ports, which sidesteps both the
+      // kernel-release race and the still-bound unkillable process.
+      if (this.port) {
+        const { releaseServicePort } = await import("./hostCore/portUtils.js");
+        this.retiredPort = this.port;
+        releaseServicePort("workerd", this.port);
+      }
+      this.port = null;
+      if (this.inspectorPort) {
+        const { releaseServicePort } = await import("./hostCore/portUtils.js");
+        this.retiredInspectorPort = this.inspectorPort;
+        releaseServicePort("workerdInspector", this.inspectorPort);
+      }
+      this.inspectorPort = null;
+    }
+  }
+
+  private waitForProcessExitEvent(proc: ChildProcess, timeoutMs: number): Promise<boolean> {
+    // An already-exited child never emits 'exit' again.
+    if (proc.exitCode !== null || proc.signalCode !== null) return Promise.resolve(true);
+    return new Promise<boolean>((resolve) => {
+      const onExit = () => {
+        clearTimeout(timer);
+        resolve(true);
+      };
+      const timer = setTimeout(() => {
+        proc.removeListener("exit", onExit);
+        resolve(false);
+      }, timeoutMs);
+      proc.once("exit", onExit);
+    });
+  }
+
+  /**
+   * True once the process is gone, judged by kernel state: either the 'exit'
+   * event fires or kill(pid, 0) reports ESRCH. Polled, because a single
+   * event-loop window can miss a reap that has already happened.
+   */
+  private async waitForProcessReaped(proc: ChildProcess, timeoutMs: number): Promise<boolean> {
+    const pid = proc.pid;
+    let exitObserved = proc.exitCode !== null || proc.signalCode !== null;
+    const onExit = () => {
+      exitObserved = true;
+    };
+    proc.once("exit", onExit);
+    try {
+      const deadline = Date.now() + timeoutMs;
+      for (;;) {
+        if (exitObserved) return true;
+        if (pid !== undefined && !this.isPidAlive(pid)) return true;
+        if (Date.now() >= deadline) return false;
+        await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      }
+    } finally {
+      proc.removeListener("exit", onExit);
+    }
+  }
+
+  private isPidAlive(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (err) {
+      // ESRCH: no such process (reaped). Anything else (e.g. EPERM) means the
+      // pid still exists as far as the kernel is concerned.
+      return (err as NodeJS.ErrnoException).code !== "ESRCH";
+    }
+  }
+
+  /**
+   * Background watcher for a process that survived SIGKILL confirmation. The
+   * moment its exit is finally observed, re-enter the generation-transition
+   * owner with a crash request so recovery is driven by the lifecycle event,
+   * not a clock — the runtime must not stay down because one reap was late.
+   */
+  private installUnkillableProcessWatch(proc: ChildProcess, reason: string): void {
+    const pid = proc.pid ?? "unknown";
+    proc.once("exit", () => {
+      if (this.shuttingDown) return;
+      log.warn(`previously unkillable workerd pid ${pid} finally exited; re-entering recovery`);
+      void this.restartWorkerd({
+        kind: "crash",
+        reason: `late exit of unkillable workerd pid ${pid} (${reason})`,
+        alreadyExited: true,
+      }).catch((err) => {
+        log.error("failed to recover after late exit of unkillable workerd:", err);
+      });
+    });
+  }
+
+  /**
+   * Register a batch of DO classes. Internal DO classes are static workerd
+   * services before the first launch. Later static configuration changes restart
+   * the existing process. Userland DO classes load
+   * through universal-do; startup should prefer route metadata + lazy
+   * ensureDORoute unless an explicit prewarm is required.
+   */
+  async registerAllDOClasses(
+    doClasses: Array<{ source: string; className: string }>
+  ): Promise<void> {
+    let internalAdded = false;
+    for (const { source, className } of doClasses) {
+      const serviceKey = doServiceKey(source, className);
+      if (this.doServices.has(serviceKey)) continue;
+
+      if (!isInternalDOSource(source)) {
+        this.requireWorkspaceProvider(`Durable Object class ${source}:${className}`);
+      }
+      const imageId = `do-service:${serviceKey}`;
+      const image = isInternalDOSource(source)
+        ? this.persistInternalRuntimeImage(imageId, className)
+        : await this.bindRuntimeImage(imageId, source, undefined);
+      const buildKey = image.artifact.buildKey;
+      const sourceSanitized = source.replace(/[^a-zA-Z0-9_]/g, "_");
+      const serviceName = `do_${sourceSanitized}_${className.replace(/[^a-zA-Z0-9_]/g, "_")}`;
+      this.doServices.set(serviceKey, {
+        buildKey,
+        className,
+        imageId: image.id,
+        serviceName,
+        source,
+      });
+      if (!isInternalDOSource(source)) {
+        this.registerRoutesForDoClass(source, className);
+        this.registerDoEgressCaller(source, className, image);
+      } else {
+        internalAdded = true;
+      }
+    }
+
+    // Every product class is always deployed, so registering one changes
+    // nothing: the node only has to be running.
+    if (internalAdded) {
+      await this.ensureWorkerdRunning();
+      log.info(`Pre-registered ${this.doServices.size} DO class(es)`);
+    }
+  }
+
+  /** Register DO-backed routes from a source's manifest for the given class. */
+  private registerRoutesForDoClass(source: string, className: string): void {
+    if (!this.deps.routeRegistry) return;
+    const provider = this.requireWorkspaceProvider("Durable Object route registration");
+    const routes = provider.getManifestRoutes(source);
+    if (routes.length === 0) return;
+    this.deps.routeRegistry.registerDoRoutes(
+      source,
+      className,
+      Array.from(routes),
+      provider.singletonRegistry
+    );
+  }
+
+  reconcileManifestRoutes(sources: Iterable<string>): void {
+    const allSources = new Set(sources);
+    for (const source of this.deps.routeRegistry?.getWorkerRouteSources() ?? []) {
+      allSources.add(source);
+    }
+    for (const source of allSources) {
+      this.reconcileManifestRoutesForSource(source);
+    }
+  }
+
+  private reconcileManifestRoutesForSource(
+    source: string,
+    authoritativeDoClasses: Array<{ className: string }> | null = null
+  ): void {
+    if (!this.deps.routeRegistry) return;
+    const provider = this.requireWorkspaceProvider("manifest route reconciliation");
+
+    const liveDoClasses = new Set<string>();
+    for (const cls of authoritativeDoClasses ?? provider.getManifestDoClasses(source)) {
+      liveDoClasses.add(cls.className);
+    }
+    for (const svc of this.doServices.values()) {
+      if (svc.source === source) liveDoClasses.add(svc.className);
+    }
+
+    const canonical = canonicalInstanceNameForSource(source);
+    const hasCanonicalInstance =
+      this.instances.has(canonical) &&
+      assertPresent(this.instances.get(canonical)).source === source;
+
+    this.deps.routeRegistry.reconcileWorkerRoutes(
+      source,
+      Array.from(provider.getManifestRoutes(source)),
+      liveDoClasses,
+      hasCanonicalInstance ? canonical : null,
+      provider.singletonRegistry
+    );
+  }
+
+  /**
+   * Ensure a DO class is registered and workerd is running. Does NOT bootstrap any instance.
+   * Use for infrastructure DOs that don't need DOIdentity.
+   */
+  async ensureDOClass(
+    source: string,
+    className: string,
+    opts: {
+      scopeRef?: string;
+      sourceState?: ExecutionSourceStateRef;
+      objectKey?: string;
+      imageId?: string;
+      stateArgs?: unknown;
+    } = {}
+  ): Promise<string | undefined> {
+    const serviceKey = doServiceKey(source, className);
+    let service = this.doServices.get(serviceKey);
+    const isNew = !service;
+    let image: RuntimeImageRecord | null = null;
+    if (!isInternalDOSource(source)) {
+      this.requireWorkspaceProvider(`Durable Object class ${source}:${className}`);
+      if (source.split("/").filter(Boolean).length !== 2)
+        throw new Error(`DO source path must be exactly 2 segments, got: "${source}"`);
+      const scopeRef = opts.scopeRef ?? service?.scopeRef;
+      if (opts.sourceState && !(scopeRef && opts.objectKey)) {
+        throw new Error("An exact participant runtime image requires a concrete Durable Object");
+      }
+      const serviceImageId = `do-service:${serviceKey}`;
+      // Resolve one immutable executable for this request. A new service and
+      // its first concrete object share that exact binding, even if the source
+      // head advances while activation is in flight.
+      if (!service?.imageId || (scopeRef && opts.objectKey)) {
+        const imageId =
+          scopeRef && opts.objectKey
+            ? (opts.imageId ??
+              canonicalEntityId({ kind: "do", source, className, key: opts.objectKey }))
+            : serviceImageId;
+        image = await this.bindRuntimeImage(imageId, source, scopeRef, opts.sourceState);
+      }
+      if (!service?.imageId && (!opts.sourceState || !service)) {
+        const prepared = assertPresent(image);
+        // Private concrete executions are never the default for a class.
+        const serviceImage = opts.sourceState
+          ? null
+          : prepared.id === serviceImageId
+            ? prepared
+            : this.persistRuntimeImage(serviceImageId, prepared, scopeRef);
+        const sourceSanitized = source.replace(/[^a-zA-Z0-9_]/g, "_");
+        service = {
+          buildKey: prepared.artifact.buildKey,
+          className,
+          ...(serviceImage ? { imageId: serviceImage.id, scopeRef } : {}),
+          serviceName: `do_${sourceSanitized}_${className.replace(/[^a-zA-Z0-9_]/g, "_")}`,
+          source,
+        };
+        this.doServices.set(serviceKey, service);
+        if (serviceImage) {
+          this.registerRoutesForDoClass(source, className);
+          this.registerDoEgressCaller(source, className, serviceImage);
+        }
+      }
+      if (!service) throw new Error(`Durable Object ${serviceKey} has no admitted class`);
+      if (opts.objectKey) {
+        const imageId = image?.id ?? service.imageId;
+        if (!imageId) throw new Error(`Durable Object ${serviceKey} has no executable binding`);
+        const stateArgs = recordStateArgs(opts.stateArgs);
+        this.doObjectBuilds.set(doObjectBuildKey(source, className, opts.objectKey), {
+          imageId,
+          buildKey: image?.artifact.buildKey ?? service.buildKey,
+          admission: doAdmission(
+            image ?? assertPresent(this.runtimeImages.get(imageId)),
+            stateArgs,
+            null,
+            this.classEngine(source, className)
+          ),
+          ...(scopeRef ? { scopeRef } : {}),
+        });
+      }
+      await this.ensureWorkerdRunning();
+      return image?.artifact.buildKey ?? service.buildKey;
+    }
+    if (!service) {
+      image = this.persistInternalRuntimeImage(`do-service:${serviceKey}`, className);
+      await this.admitDurableObjectSchema(image, className);
+      const sourceSanitized = source.replace(/[^a-zA-Z0-9_]/g, "_");
+      service = {
+        buildKey: image.artifact.buildKey,
+        className,
+        imageId: image.id,
+        serviceName: `do_${sourceSanitized}_${className.replace(/[^a-zA-Z0-9_]/g, "_")}`,
+        source,
+      };
+      this.doServices.set(serviceKey, service);
+    }
+
+    // Internal DOs are static workerd services: a new one requires a config
+    // regeneration + restart (startup-rare, foundational classes only).
+    if (isNew) {
+      await this.restartWorkerd();
+    } else if (!this.process || this.process.exitCode !== null) {
+      await this.restartWorkerd();
+    }
+    // Do NOT probe-and-restart a live workerd (false positives killed all DOs
+    // and fed the relay/restart cascade). The relay path retries transients.
+    return service.buildKey;
+  }
+
+  /**
+   * Ensure a Durable Object class is registered and workerd is running.
+   * DOs self-bootstrap from env bindings on first request — no external bootstrap call needed.
+   * Used by explicit lifecycle and route preparation before a caller dispatches
+   * to the object. Dispatch transports never call this as an implicit retry.
+   */
+  async ensureDO(
+    source: string,
+    className: string,
+    objectKey: string,
+    opts: { contextId?: string; ref?: string } = {}
+  ): Promise<void> {
+    if (!isInternalDOSource(source)) {
+      throw new Error(
+        `Userland Durable Object ${source}:${className}/${objectKey} requires a sealed entity record`
+      );
+    }
+    const scopeRef = opts.contextId
+      ? entityScopeRef(opts.ref)
+      : explicitScopeRef(opts.ref);
+    await this.ensureDOClass(source, className, { scopeRef, objectKey });
+  }
+
+  /** Probe the router until it accepts HTTP or `abandoned()` reports the spawn settled. */
+  private async waitForHttpReady(abandoned: () => boolean, signal: AbortSignal): Promise<void> {
+    if (!this.port) {
+      throw new Error("workerd has no assigned port");
+    }
+    while (!abandoned()) {
+      let response: Response;
+      try {
+        response = await fetch(`http://127.0.0.1:${this.port}/__vibestudio_workerd_ready`, {
+          method: "GET",
+          signal,
+          headers: {
+            Authorization: `Bearer ${this.deps.getWorkerdGatewayToken()}`,
+          },
+        });
+      } catch {
+        // Not accepting connections yet; exit/error settle the spawn instead.
+        if (abandoned()) return;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        continue;
+      }
+      await response.arrayBuffer().catch(() => undefined);
+      if (response.status !== 204) {
+        // Receiving an HTTP response means the listener is up, so a response
+        // other than the router's readiness status is a configuration or
+        // routing failure rather than a reason to keep probing indefinitely.
+        throw new Error(`workerd readiness returned HTTP ${response.status} (expected 204)`);
+      }
+      return;
+    }
+  }
+
+  /** Prepare one immutable worker executable without creating an entity or
+   * registering routes. Class declarations come from the same exact-state
+   * catalog view used to build it; schema admission shares the normal gate. */
+  async prepareWorkerExecutable(
+    build: StoredBuildResult,
+    classNames: readonly string[]
+  ): Promise<void> {
+    if (build.metadata.kind !== "worker" || !build.metadata.sourcePath)
+      throw new Error("Worker executable preparation requires an exact workspace worker build");
+    const image: RuntimeImageBinding = {
+      source: build.metadata.sourcePath,
+      unitName: build.metadata.name,
+      artifact: executionArtifactRefFromBuild(this.deps.workspaceId, build),
+      authority: assertPresent(build.metadata.authority),
+    };
+    if (this.shuttingDown) throw new Error("RuntimeManager is shutting down");
+    for (const className of new Set(classNames)) {
+      const key = canonicalJson([image.source, className, runtimeExecutableVersion(image)]);
+      this.latestExecutablePreparation.set(doServiceKey(image.source, className), key);
+      const pending = this.executablePreparations.get(key);
+      if (pending) {
+        await pending;
+        continue;
+      }
+      const preparation = this.prepareDurableExecutable(image, build, className);
+      this.executablePreparations.set(key, preparation);
+      try {
+        await preparation;
+      } finally {
+        this.executablePreparations.delete(key);
+      }
+    }
+  }
+
+  private async prepareDurableExecutable(
+    image: RuntimeImageBinding,
+    build: StoredBuildResult,
+    className: string
+  ): Promise<void> {
+    await this.admitDurableObjectSchema(image, className);
+    const serviceKey = doServiceKey(image.source, className);
+    const version = runtimeExecutableVersion(image);
+    const key = canonicalJson([image.source, className, version]);
+    const record = this.persistRuntimeImage(`do-preparation:${serviceKey}:${version}`, image);
+    const prepared = { image: record, build, version };
+    this.preparingDoExecutables.set(key, prepared);
+    if (this.latestExecutablePreparation.get(serviceKey) === key) {
+      const previous = this.preparedDoExecutables.get(serviceKey);
+      this.preparedDoExecutables.set(serviceKey, prepared);
+      if (
+        previous &&
+        previous.image.id !== record.id &&
+        !this.preparingDoExecutables.has(canonicalJson([image.source, className, previous.version]))
+      )
+        this.runtimeImages.delete(previous.image.id);
+    }
+    try {
+      await this.ensureWorkerdRunning();
+      const origin = `http://127.0.0.1:${assertPresent(this.port)}`;
+      const response = await fetch(`${origin}/_prepare_executable`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.deps.getWorkerdGatewayToken()}`,
+          "X-Vibestudio-Dispatch-Secret": this.dispatchSecret,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ source: image.source, className, version }),
+        dispatcher: getWorkerdConnectionDispatcher(origin),
+      } as RequestInit);
+      if (response.status !== 204) {
+        const failure = (await response.json()) as { error: unknown };
+        throw deserializeRpcFailure(failure.error);
+      }
+    } finally {
+      this.preparingDoExecutables.delete(key);
+      if (this.preparedDoExecutables.get(serviceKey)?.image.id !== record.id)
+        this.runtimeImages.delete(record.id);
+      this.reconcileDoCodeUnitOwnership();
+    }
+  }
+
+  /** Admit the schema of the exact executable before its first entity activation. */
+  private async admitDurableObjectSchema(
+    image: RuntimeImageBinding,
+    className: string
+  ): Promise<void> {
+    // Internal classes are the exact product bundle. The class's own kernel
+    // creates and validates its database; host schema admission is for loaded
+    // workspace artifacts, whose definitions are publication inputs.
+    if (isInternalDOSource(image.source)) return;
+    const key = canonicalJson([image.source, image.artifact.executionDigest, className]);
+    const pending = this.schemaAdmissions.get(key);
+    if (pending) return pending;
+    if (
+      this.doSchemaDescriptorDb
+        .prepare(
+          "SELECT 1 FROM do_schema_descriptors WHERE source = ? AND execution_digest = ? AND class_name = ?"
+        )
+        .get(image.source, image.artifact.executionDigest, className)
+    )
+      return;
+    const admission = (async () => {
+      const build = await this.requireWorkspaceProvider("schema admission").getBuildByExecution(
+        image.artifact.buildKey,
+        image.artifact.executionDigest
+      );
+      if (
+        !build ||
+        build.metadata.kind !== "worker" ||
+        build.metadata.sourcePath !== image.source
+      ) {
+        throw new RuntimeImageUnavailableError(
+          `Durable Object ${image.source}:${className} has no exact executable for schema admission`
+        );
+      }
+      const artifact = executionArtifactRefFromBuild(this.deps.workspaceId, build);
+      if (
+        artifact.executionDigest !== image.artifact.executionDigest ||
+        canonicalJson(build.metadata.authority) !== canonicalJson(image.authority)
+      ) {
+        throw new RuntimeImageUnavailableError(
+          `Durable Object ${image.source}:${className} schema executable failed sealed identity verification`
+        );
+      }
+      const descriptor = await this.probeDurableObjectSchema(image.source, className, build);
+      this.recordDurableObjectSchema({
+        source: image.source,
+        effectiveVersion: image.artifact.sourceState.effectiveVersion,
+        executionDigest: image.artifact.executionDigest,
+        descriptor,
+      });
+    })();
+    this.schemaAdmissions.set(key, admission);
+    try {
+      await admission;
+    } finally {
+      this.schemaAdmissions.delete(key);
+    }
+  }
+
+  private nativeOwnerAdmission(
+    record: EntityRecord
+  ): import("@vibestudio/shared/runtime/entitySpec").NativeOwnerAdmission | null {
+    const capable = this.hasNativeOwner(
+      record.source.repoPath,
+      record.className!,
+      record.activeExecutionDigest!
+    );
+    if (!capable) {
+      if (record.nativeOwner) throw new Error("Non-native executable retains native ownership");
+      return null;
+    }
+    if (record.status !== "active") return null;
+    if (!record.nativeOwner || !record.authoritySessionId)
+      throw new Error("Native executable has no activation witness");
+    const canonical = this.durableObjectStorageIncarnation({
+      source: record.source.repoPath,
+      className: record.className!,
+      objectKey: record.key,
+    });
+    if (canonicalJson(canonical) !== canonicalJson(record.nativeOwner))
+      throw new Error("Native activation witness does not match storage incarnation");
+    return {
+      ...canonical,
+      runtimeId: record.id,
+      contextId: record.contextId,
+      authoritySessionId: record.authoritySessionId,
+      executionDigest: record.activeExecutionDigest!,
+      effectiveVersion: record.source.effectiveVersion,
+    };
+  }
+
+  hasNativeOwner(source: string, className: string, executionDigest: string): boolean {
+    if (isInternalDOSource(source)) return false;
+    const row = this.doSchemaDescriptorDb
+      .prepare(
+        "SELECT descriptor_json FROM do_schema_descriptors WHERE source = ? AND execution_digest = ? AND class_name = ?"
+      )
+      .get(source, executionDigest, className) as { descriptor_json: string } | undefined;
+    if (!row)
+      throw new RuntimeImageUnavailableError(
+        "Native ownership requires an admitted executable descriptor"
+      );
+    const descriptor = JSON.parse(row.descriptor_json) as DurableObjectPublishedSchemaDescriptor;
+    if (typeof descriptor.nativeOwner !== "boolean")
+      throw new Error("Executable descriptor has no native resource capability");
+    return descriptor.nativeOwner;
+  }
+
+  /** Immutable queue ownership evidence, already admitted with this executable.
+   * This accessor performs no owner RPC or activation of a disposable object. */
+  getDurableWorkQueues(
+    source: string,
+    className: string,
+    executionDigest: string
+  ): DurableWorkQueue[] {
+    if (!/^[a-f0-9]{64}$/.test(executionDigest))
+      throw new Error("Durable work registration requires an exact execution digest");
+    if (isInternalDOSource(source)) {
+      const identity = internalDOExecutionIdentity(this.internalDOPrograms(), className);
+      if (identity.executionDigest !== executionDigest)
+        throw new RuntimeImageUnavailableError(
+          "Internal durable work declaration does not match the admitted executable"
+        );
+      return [...identity.durableWorkQueues];
+    }
+    const row = this.doSchemaDescriptorDb
+      .prepare(
+        "SELECT descriptor_json FROM do_schema_descriptors WHERE source = ? AND execution_digest = ? AND class_name = ?"
+      )
+      .get(source, executionDigest, className) as { descriptor_json: string } | undefined;
+    if (!row)
+      throw new RuntimeImageUnavailableError(
+        `Durable Object ${source}:${className} has no admitted executable capability descriptor`
+      );
+    const descriptor = JSON.parse(row.descriptor_json) as DurableObjectPublishedSchemaDescriptor;
+    return parseDurableWorkReady(descriptor.durableWorkQueues);
+  }
+
+  private recordDurableObjectSchema(candidate: {
+    source: string;
+    effectiveVersion: string;
+    executionDigest: string;
+    descriptor: DurableObjectPublishedSchemaDescriptor;
+  }): void {
+    if (!/^[a-f0-9]{64}$/.test(candidate.executionDigest)) {
+      throw new Error("Schema evidence requires an exact execution digest");
+    }
+    const previous = this.doSchemaDescriptorDb
+      .prepare(
+        "SELECT descriptor_json FROM do_schema_descriptors WHERE source = ? AND execution_digest = ? AND class_name = ?"
+      )
+      .get(candidate.source, candidate.executionDigest, candidate.descriptor.className) as
+      | { descriptor_json: string }
+      | undefined;
+    const serialized = canonicalJson(candidate.descriptor);
+    if (previous && previous.descriptor_json !== serialized) {
+      throw new Error("Schema probe changed for the same immutable execution artifact");
+    }
+    this.doSchemaDescriptorDb
+      .prepare(
+        `INSERT OR IGNORE INTO do_schema_descriptors
+         (source, effective_version, execution_digest, class_name, descriptor_json) VALUES (?, ?, ?, ?, ?)`
+      )
+      .run(
+        candidate.source,
+        candidate.effectiveVersion,
+        candidate.executionDigest,
+        candidate.descriptor.className,
+        serialized
+      );
+  }
+
+  /** Run schema installation in the serving workerd, over an isolated disposable facet. */
+  async probeDurableObjectSchema(
+    source: string,
+    className: string,
+    build: StoredBuildResult
+  ): Promise<DurableObjectPublishedSchemaDescriptor> {
+    this.schemaAdmissionLifetime.signal.throwIfAborted();
+    const operation = (async () => {
+      if (build.metadata.kind !== "worker" || build.metadata.sourcePath !== source) {
+        throw new Error(`Schema probe build does not belong to worker source ${source}`);
+      }
+      const artifact = executionArtifactRefFromBuild(this.deps.workspaceId, build);
+      this.installedSchemaEvidence ??= readInstalledSchemaProbeEvidence(
+        this.deps.schemaProbeReleaseRoot,
+        this.deps.schemaProbeEnvironment
+      );
+      return acquireSchemaProbeEvidence(
+        {
+          identity: {
+            installation: this.deps.schemaProbeEnvironment,
+            artifactDigest: artifact.artifactDigest,
+            source,
+            className,
+            protocol: SCHEMA_PROBE_CACHE_VERSION,
+            platform: process.platform,
+            arch: process.arch,
+            compatibility: USER_CODE_COMPATIBILITY,
+          },
+          installed: await this.installedSchemaEvidence,
+          signal: this.schemaAdmissionLifetime.signal,
+        },
+        async () => {
+          return this.probeSchemaExecutable(source, className, {
+            version: `${build.metadata.ev}:${build.buildKey}`,
+            modules: await workerJavaScriptModules(
+              build,
+              this.requireWorkspaceProvider("DO schema probe").readBuildArtifactContent
+            ),
+          });
+        }
+      );
+    })();
+    this.schemaProbeOperations.add(operation);
+    try {
+      return await operation;
+    } finally {
+      this.schemaProbeOperations.delete(operation);
+    }
+  }
+
+  private async probeSchemaExecutable(
+    source: string,
+    className: string,
+    executable: Omit<SchemaProbeBuild, "source" | "className">
+  ): Promise<DurableObjectPublishedSchemaDescriptor> {
+    const objectKey = `__vibestudio_schema_probe:${crypto.randomUUID()}`;
+    const ref = { source, className, objectKey };
+    this.schemaProbeBuilds.set(objectKey, { source, className, ...executable });
+    let outcome:
+      | { ok: true; descriptor: DurableObjectPublishedSchemaDescriptor }
+      | { ok: false; error: unknown };
+    try {
+      await this.ensureWorkerdRunning();
+      const key = encodeUniversalKey(ref);
+      const response = await fetch(
+        `http://127.0.0.1:${assertPresent(this.port)}/_u/${encodeURIComponent(key)}/__vibestudio_schema_descriptor`,
+        {
+          headers: {
+            Authorization: `Bearer ${this.deps.getWorkerdGatewayToken()}`,
+            "X-Vibestudio-Dispatch-Secret": this.dispatchSecret,
+            ...doExecutableHeaders(ref, (target) =>
+              this.getDoAdmission(target.source, target.className, target.objectKey)
+            ),
+          },
+          signal: this.schemaAdmissionLifetime.signal,
+          dispatcher: getWorkerdConnectionDispatcher(
+            `http://127.0.0.1:${assertPresent(this.port)}`
+          ),
+        } as RequestInit
+      );
+      if (!response.ok) {
+        throw new Error(
+          `${source}:${className} schema probe failed (${response.status}): ${await response.text()}`
+        );
+      }
+      const descriptor = (await response.json()) as DurableObjectRuntimeSchemaDescriptor;
+      if (
+        descriptor.className !== className ||
+        !Number.isSafeInteger(descriptor.version) ||
+        descriptor.version < 1 ||
+        typeof descriptor.freshSchemaFingerprint !== "string" ||
+        !descriptor.freshSchemaFingerprint ||
+        typeof descriptor.nativeOwner !== "boolean"
+      ) {
+        throw new Error(
+          `${source}:${className} returned a malformed schema descriptor: ${JSON.stringify(descriptor)}`
+        );
+      }
+      const queues = parseDurableWorkReady(descriptor.durableWorkQueues);
+      if (canonicalJson(queues) !== canonicalJson(descriptor.durableWorkQueues))
+        throw new Error(`${source}:${className} returned noncanonical durable work declarations`);
+      outcome = { ok: true, descriptor };
+    } catch (error) {
+      outcome = { ok: false, error };
+    }
+    try {
+      // Retire the facet now; its universal host keeps a SQLite connection
+      // until the shared process exits. The storage outbox owns
+      // physical collection across that process boundary and host crashes.
+      await this.abortUserlandDOFacet(ref, "__vibestudio_retire");
+      await this.destroyRetiredDOStorage(ref);
+      this.schemaProbeBuilds.delete(objectKey);
+      await this.stopWorkerdIfIdle();
+    } catch (cleanupFailure) {
+      if (!outcome.ok) {
+        throw new AggregateError(
+          [outcome.error, cleanupFailure],
+          `${source}:${className} schema probe failed and retirement was incomplete`,
+          { cause: outcome.error }
+        );
+      }
+      throw cleanupFailure;
+    }
+    if (!outcome.ok) throw outcome.error;
+    return outcome.descriptor;
+  }
+
+  /** Stage exact current-candidate descriptors; no prior generation is admitted. */
+  validateAndStageDurableObjectSchemas(
+    stateHash: string,
+    candidates: ReadonlyArray<{
+      source: string;
+      effectiveVersion: string;
+      executionDigest: string;
+      descriptor: DurableObjectPublishedSchemaDescriptor;
+    }>
+  ): string[] {
+    const failures: string[] = [];
+    const insertCandidate = this.doSchemaDescriptorDb.prepare(
+      `INSERT OR REPLACE INTO do_schema_candidates
+       (state_hash, source, class_name, effective_version) VALUES (?, ?, ?, ?)`
+    );
+    this.doSchemaDescriptorDb.exec("BEGIN IMMEDIATE");
+    try {
+      this.doSchemaDescriptorDb
+        .prepare(`DELETE FROM do_schema_candidates WHERE state_hash = ?`)
+        .run(stateHash);
+      for (const candidate of candidates) {
+        this.recordDurableObjectSchema(candidate);
+        insertCandidate.run(
+          stateHash,
+          candidate.source,
+          candidate.descriptor.className,
+          candidate.effectiveVersion
+        );
+      }
+      if (failures.length > 0) {
+        this.doSchemaDescriptorDb.exec("ROLLBACK");
+      } else {
+        this.doSchemaDescriptorDb.exec("COMMIT");
+      }
+    } catch (error) {
+      this.doSchemaDescriptorDb.exec("ROLLBACK");
+      throw error;
+    }
+    return failures;
+  }
+
+  commitDurableObjectSchemas(stateHash: string): void {
+    this.doSchemaDescriptorDb.exec("BEGIN IMMEDIATE");
+    try {
+      this.doSchemaDescriptorDb
+        .prepare(
+          `INSERT OR REPLACE INTO do_schema_installed (source, class_name, effective_version)
+           SELECT source, class_name, effective_version FROM do_schema_candidates WHERE state_hash = ?`
+        )
+        .run(stateHash);
+      this.doSchemaDescriptorDb
+        .prepare(`DELETE FROM do_schema_candidates WHERE state_hash = ?`)
+        .run(stateHash);
+      this.doSchemaDescriptorDb.exec("COMMIT");
+    } catch (error) {
+      this.doSchemaDescriptorDb.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  // =========================================================================
+  // Durable Object storage
+  //
+  // A userland object is a cell of the runtime node: a UniversalDO named by
+  // its encoded key, whose userland class is its facet `do`. Fork, backup and
+  // restore are the node's object fork and restore (celld
+  // docs/services/object-fork.md), which copy the cell's root and every facet
+  // together; the host copies no files. `DurableObjectStorage` holds the
+  // operations (backup, restore, reset, retirement) and the few rows the host
+  // owes; this class supplies the node's side of them.
+  // =========================================================================
+
+  private durableObjectTargetId(ref: DORef): string {
+    return DurableObjectStorage.targetId(ref);
+  }
+
+  /** After a replacement, the object's host authority is published again on its new storage identity. */
+  private async republishStorageOwner(ref: DORef): Promise<void> {
+    if (this.deps.republishStorageOwner) return this.deps.republishStorageOwner(ref);
+    const binding = this.doObjectBuilds.get(
+      doObjectBuildKey(ref.source, ref.className, ref.objectKey)
+    );
+    if (binding?.admission.props.nativeOwner) {
+      throw new Error("Native storage replacement has no publication owner");
+    }
+  }
+
+  /** Host authority survives restoring either an agent database or the workspace registry. */
+  durableObjectStorageIncarnation(ref: DORef): DurableObjectStorageIncarnation {
+    return this.storage.incarnation(ref);
+  }
+
+  /** The node's cell name of a userland object (its UniversalDO host). */
+  private cellName(ref: DORef): string {
+    return encodeUniversalKey(ref);
+  }
+
+  /** Maintenance and clones address userland objects only; product objects
+   *  are owned by their classes. */
+  private requireUserlandStorage(ref: DORef, operation: string): void {
+    if (isInternalDOSource(ref.source)) {
+      throw new Error(`${operation} is not supported for internal DO source "${ref.source}"`);
+    }
+  }
+
+  get hasChronolog(): boolean {
+    return this.internalDOPrograms().publication().chronolog === true;
+  }
+
+  getChronologIngressToken(): string | null {
+    return this.hasChronolog ? this.chronologToken : null;
+  }
+
+  async workspaceNodeEndpoint(signal?: AbortSignal): Promise<{ nodeId: string; addrs?: string[] }> {
+    const node = this.node;
+    if (!node) throw new Error("The workspace runtime node is unavailable");
+    const localEndpoint = await node.p2pEndpoint(signal);
+    if (this.node !== node) throw new Error("The workspace runtime changed while reading its endpoint");
+    return localEndpoint;
+  }
+
+  async chronologRequest(input: unknown, signal?: AbortSignal): Promise<Response> {
+    if (!this.hasChronolog) throw new Error("Chronolog is unavailable in this host build");
+    let body = input;
+    if (
+      input !== null &&
+      typeof input === "object" &&
+      "action" in input &&
+      (input.action === "identity" || input.action === "invite")
+    ) {
+      body = { ...input, localEndpoint: await this.workspaceNodeEndpoint(signal) };
+    }
+    return this.nodeFetch("/_chronolog", { chronolog: true, body, signal });
+  }
+
+  /** A request to the running node's router, authenticated like host dispatch. */
+  private async nodeFetch(
+    pathname: string,
+    init: { body?: unknown; lifecycle?: boolean; chronolog?: boolean; signal?: AbortSignal } = {}
+  ): Promise<Response> {
+    if (!this.process || this.process.exitCode !== null || !this.port) {
+      throw new Error("The runtime node is not running");
+    }
+    const origin = `http://127.0.0.1:${this.port}`;
+    return fetch(`${origin}${pathname}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.deps.getWorkerdGatewayToken()}`,
+        "X-Vibestudio-Dispatch-Secret": this.dispatchSecret,
+        ...(init.lifecycle ? { "X-Vibestudio-Lifecycle-Secret": this.doLoaderSecret } : {}),
+        ...(init.chronolog ? { "X-Chronolog-Node-Token": this.chronologToken } : {}),
+        ...(init.body === undefined ? {} : { "Content-Type": "application/json" }),
+      },
+      ...(init.body === undefined
+        ? {}
+        : {
+            body: init.chronolog ? encodeRpcJson(init.body) : JSON.stringify(init.body),
+          }),
+      ...(init.signal ? { signal: init.signal } : {}),
+      dispatcher: getWorkerdConnectionDispatcher(origin),
+    } as RequestInit);
+  }
+
+  /**
+   * Fork or restore whole cells of UniversalDO through the router. A failure
+   * carries the runtime's stable error code (`ERR_OBJECT_EXISTS`, ...).
+   */
+  private async objectOperation(input: {
+    op: "fork" | "restore";
+    from: DORef;
+    to: DORef;
+    stop?: boolean;
+    /** `fork`: take over a target an interrupted fork left unfinished. */
+    replaceUnfinished?: boolean;
+    /** `fork`: a Dolt facet copied at its own commit. */
+    facets?: Record<string, { at?: string }>;
+  }): Promise<void> {
+    const response = await this.nodeFetch("/_object", {
+      body: {
+        op: input.op,
+        namespace: "UNIVERSAL_DO",
+        from: this.cellName(input.from),
+        to: this.cellName(input.to),
+        ...(input.stop ? { stop: true } : {}),
+        ...(input.replaceUnfinished ? { replaceUnfinished: true } : {}),
+        ...(input.facets ? { facets: input.facets } : {}),
+      },
+    });
+    if (!response.ok) {
+      throw Object.assign(
+        new Error(
+          `${input.op} of ${input.from.className}/${input.from.objectKey} failed ` +
+            `(${response.status}): ${await response.text()}`
+        ),
+        { code: response.headers.get(OBJECT_ERROR_HEADER) ?? undefined }
+      );
+    }
+    await response.arrayBuffer();
+  }
+
+  /**
+   * Delete a retired object's storage: a userland object's UniversalDO cell
+   * (stopping its facet, deleting root, facet index and facets), or a product
+   * object's own cell (the class answers the lifecycle call by deleting
+   * everything it stored).
+   */
+  private async destroyCell(ref: DORef): Promise<void> {
+    const path = isInternalDOSource(ref.source)
+      ? `/_w/${ref.source}/${ref.className}/${encodeURIComponent(ref.objectKey)}/${DESTROY_METHOD}`
+      : `/_u/${encodeURIComponent(this.cellName(ref))}/${DESTROY_METHOD}`;
+    const response = await this.nodeFetch(path, { lifecycle: true });
+    if (!response.ok) {
+      throw new Error(
+        `Failed to destroy storage of ${ref.source}:${ref.className}/${ref.objectKey} ` +
+          `(${response.status}): ${await response.text()}`
+      );
+    }
+    await response.arrayBuffer();
+  }
+
+  async resetDOStorage(ref: DORef, intent: string): Promise<{ operationId: string }> {
+    this.requireUserlandStorage(ref, "Durable Object storage reset");
+    return this.storage.reset(ref, intent);
+  }
+
+  async restoreDOStorageBackup(
+    ref: DORef,
+    backupOperationId: string,
+    intent: string
+  ): Promise<{ operationId: string }> {
+    this.requireUserlandStorage(ref, "Durable Object storage restore");
+    return this.storage.restore(ref, backupOperationId, intent);
+  }
+
+  async listDOStorageBackups(ref: DORef): Promise<DurableObjectStorageBackup[]> {
+    return this.storage.list(ref);
+  }
+
+  /**
+   * Whether the storage of a prepared clone is complete: a fresh object has
+   * none to copy, a snapshot clone is complete once the node's fork returned.
+   */
+  requireCloneStorageComplete(record: EntityRecord): void {
+    this.cloneReceipts.requireComplete(record);
+  }
+
+  private async assertCloneSourceIdentity(
+    ref: DORef,
+    reservation: EntityRecord,
+    resolveSource: () => Promise<EntityRecord | null>
+  ): Promise<void> {
+    const object = this.doObjectBuilds.get(
+      doObjectBuildKey(ref.source, ref.className, ref.objectKey)
+    );
+    const imageId = object?.imageId;
+    const image = imageId
+      ? (this.sealedDoImages.get(imageId) ?? this.runtimeImages.get(imageId))
+      : null;
+    const provenance = reservation.cloneProvenance;
+    const owner = await resolveSource();
+    if (
+      !owner ||
+      !provenance ||
+      owner.status !== "active" ||
+      owner.id !== provenance.sourceEntityId ||
+      owner.contextId !== provenance.sourceContextId ||
+      owner.authoritySessionId !== provenance.sourceAuthoritySessionId ||
+      owner.activeBuildKey !== provenance.sourceBuildKey ||
+      owner.activeExecutionDigest !== provenance.sourceExecutionDigest
+    ) {
+      throw new Error(
+        `Clone source ${this.durableObjectTargetId(ref)} changed its snapshot owner: expected ${canonicalJson(
+          provenance
+        )}, observed ${canonicalJson(
+          owner
+            ? {
+                id: owner.id,
+                status: owner.status,
+                contextId: owner.contextId,
+                authoritySessionId: owner.authoritySessionId,
+                buildKey: owner.activeBuildKey,
+                executionDigest: owner.activeExecutionDigest,
+              }
+            : null
+        )}`
+      );
+    }
+    if (
+      !image ||
+      image.artifact.buildKey !== provenance.sourceBuildKey ||
+      image.artifact.executionDigest !== provenance.sourceExecutionDigest
+    ) {
+      throw new Error(
+        `Clone source ${this.durableObjectTargetId(ref)} changed its snapshot execution: expected ${
+          provenance?.sourceBuildKey
+        }/${provenance?.sourceExecutionDigest}, observed ${
+          image?.artifact.buildKey
+        }/${image?.artifact.executionDigest}`
+      );
+    }
+  }
+
+  /**
+   * Fork a DO's storage into a new object key. The fork starts with identical
+   * state, root and facets, as of one committed cut of the source. Used for
+   * channel forking.
+   *
+   * Idempotent by the target key: the node never overwrites an object, so a
+   * second fork of the same target answers `ERR_OBJECT_EXISTS` and leaves the
+   * one object it holds; an interrupted fork is taken over
+   * (`replaceUnfinished`). The reservation's receipt says whether the earlier
+   * attempt was this reservation's own.
+   *
+   * The node exports the source from its own turn, so the source need not be
+   * quiesced and the object that asks for its own clone (`cooperativelyPaused`,
+   * paused on this very call) is not retired. Other callers hold the source's
+   * relays sealed while the cut is taken, so no host-driven write interleaves.
+   */
+  async forkObjectStorage(
+    ref: DORef,
+    newObjectKey: string,
+    options: {
+      reservation: EntityRecord;
+      resolveSource: () => Promise<EntityRecord | null>;
+      cooperativelyPaused?: boolean;
+      /**
+       * A Dolt class's object is forked at this commit of its Dolt facet (the
+       * newest when absent): the parent's state as of one conversation point.
+       */
+      at?: string;
+    }
+  ): Promise<DORef> {
+    if (this.shuttingDown) throw new Error("RuntimeManager is shutting down");
+    this.requireUserlandStorage(ref, "forkObjectStorage");
+    const target = { ...ref, objectKey: newObjectKey };
+    if (options.reservation.key !== newObjectKey)
+      throw new Error("Clone reservation target mismatch");
+    const storageCommit = options.reservation.cloneProvenance?.storageCommit;
+    if (storageCommit !== undefined && options.at !== storageCommit)
+      throw new Error("Clone reservation storage commit mismatch");
+    const targetId = this.durableObjectTargetId(target);
+    const receipt = this.cloneReceipts.begin(ref, options.reservation);
+    if (receipt === "complete") return target;
+    await this.ensureWorkerdRunning();
+    const sourceId = this.durableObjectTargetId(ref);
+    const sealOwnerId = `clone:${options.reservation.authoritySessionId}`;
+    try {
+      if (!options.cooperativelyPaused) {
+        await sealAndDrainDurableObjectRelays(sourceId, sealOwnerId, {
+          code: "DO_MAINTENANCE_IN_PROGRESS",
+          message: `Durable Object ${sourceId} is being quiesced for a storage snapshot`,
+          errorData: { operation: "clone-snapshot", ...ref },
+        });
+      }
+      await this.assertCloneSourceIdentity(ref, options.reservation, options.resolveSource);
+      try {
+        await this.objectOperation({
+          op: "fork",
+          from: ref,
+          to: target,
+          // An earlier attempt the node lost mid-publication is taken over.
+          replaceUnfinished: true,
+          ...(options.at ? { facets: { [DO_FACET]: { at: options.at } } } : {}),
+        });
+      } catch (error) {
+        // A retry of a clone whose earlier fork finished before its receipt
+        // was recorded: the target exists and is complete.
+        if (!(receipt === "retry" && objectErrorCode(error) === "ERR_OBJECT_EXISTS")) throw error;
+      }
+      await this.assertCloneSourceIdentity(ref, options.reservation, options.resolveSource);
+      this.cloneReceipts.complete(targetId);
+    } finally {
+      if (!options.cooperativelyPaused) releaseDurableObjectRelaySeal(sourceId, sealOwnerId);
+    }
+    return target;
+  }
+
+  /**
+   * Destroy a userland DO's cell storage. Used to clean up orphaned clones on
+   * fork failure.
+   */
+  async destroyDO(ref: DORef): Promise<void> {
+    this.requireUserlandStorage(ref, "destroyDO");
+    await this.ensureWorkerdRunning();
+    this.cloneReceipts.retire(this.durableObjectTargetId(ref));
+    await this.destroyCell(ref);
+  }
+
+  /**
+   * Reclamation after entity retirement. The obligation is recorded first; the
+   * node deletes the cell's storage when it runs, and an attempt that could not
+   * (the node was down, or refused) is collected by the next start's recovery.
+   */
+  async destroyRetiredDOStorage(ref: DORef): Promise<void> {
+    this.cloneReceipts.retire(this.durableObjectTargetId(ref));
+    await this.storage.destroyRetired(ref);
+  }
+
+  // =========================================================================
+  // Shutdown
+  // =========================================================================
+
+  async shutdown(): Promise<void> {
+    this.shuttingDown = true;
+    this.schemaAdmissionLifetime.abort(this.shutdownCancellation);
+    const failures: unknown[] = [];
+    // Only acknowledgement of this exact owner's cancellation is successful
+    // retirement. A mixed aggregate retains every independent original failure.
+    const acknowledgesCancellation = (error: unknown): boolean =>
+      error === this.shutdownCancellation ||
+      (error instanceof AggregateError &&
+        error.errors.length > 0 &&
+        error.errors.every(acknowledgesCancellation));
+    const retainFailure = (error: unknown): void => {
+      if (!acknowledgesCancellation(error)) failures.push(error);
+    };
+    const attempt = async (operation: () => Promise<unknown>): Promise<void> => {
+      try {
+        await operation();
+      } catch (error) {
+        retainFailure(error);
+      }
+    };
+    const preparationResults = await Promise.allSettled([...this.executablePreparations.values()]);
+    for (const result of preparationResults) {
+      if (result.status === "rejected") retainFailure(result.reason);
+    }
+    await attempt(() => this.storage.settled());
+    if (this.activeTransition) await attempt(() => this.activeTransition!.promise);
+    if (this.process) {
+      // Shutdown is a generation-closing edge just like replacement and idle
+      // stop. Publish it before touching the process so every in-process owner
+      // drops relay URLs and severs inspector sockets; otherwise workerd's
+      // graceful signal waits forever on connections whose owners have
+      // already left the service graph.
+      await this.emitGenerationClosing({
+        correlationId: crypto.randomUUID(),
+        generation: this.bootGeneration + 1,
+        reason: "shutdown",
+      });
+    }
+    const schemaResults = await Promise.allSettled([
+      ...this.schemaAdmissions.values(),
+      ...this.schemaProbeOperations,
+    ]);
+    for (const result of schemaResults) {
+      if (result.status === "rejected") retainFailure(result.reason);
+    }
+    // The node stops itself durably: it makes its cells durable and releases
+    // them, so the next start resumes them without waiting for a lease.
+    await attempt(() => this.stopWorkerd("shutdown", "graceful"));
+    // A schema probe's object is retired through the destruction journal, which
+    // the next start collects; only its bookkeeping goes here.
+    this.schemaProbeBuilds.clear();
+
+    // Cleanup all instances
+    for (const [, instance] of this.instances) {
+      this.revokeWorkerBearer(instance.callerId);
+      await attempt(() => this.deps.fsService.closeHandlesForCaller(instance.callerId));
+    }
+    this.instances.clear();
+
+    // Cleanup DO tracking — revoke service-level tokens
+    for (const [serviceKey] of this.doServices) {
+      this.revokeWorkerBearer(`do-service:${serviceKey}`);
+    }
+    this.doServices.clear();
+    this.doObjectBuilds.clear();
+    for (const [serviceKey, prepared] of this.preparedDoExecutables) {
+      this.revokeWorkerBearer(`do-service:${serviceKey}`);
+      this.runtimeImages.delete(prepared.image.id);
+    }
+    this.preparedDoExecutables.clear();
+    this.latestExecutablePreparation.clear();
+    this.reconcileDoCodeUnitOwnership();
+
+    this.doStorageDb.close();
+    this.doSchemaDescriptorDb.close();
+
+    log.info("RuntimeManager shut down");
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures,
+        `RuntimeManager shutdown failed in ${failures.length} phase(s)`
+      );
+    }
+  }
+
+  /**
+   * Called by push trigger when a worker source is rebuilt.
+   * Restarts HEAD-tracking instances (no ref) running the given source.
+   *
+   * DO class reconciliation:
+   *   - `doClasses === null`: the rebuild is not for the authoritative main
+   *     manifest, so DO service membership is unchanged.
+   *   - `doClasses` is an explicit array (possibly empty): treat it as the
+   *     authoritative current list. Classes in the list that aren't yet
+   *     registered get registered; classes registered but missing from the
+   *     list get torn down (service-level token revoked, entry removed from
+   *     `doServices`, workerd restarted).
+   *
+   * This is what lets a manifest edit that DROPS a DO class actually remove
+   * the stale workerd service on the next rebuild, rather than leaving an
+   * orphaned class bound forever.
+   */
+  async reconcileMutableSourceBuild(
+    source: string,
+    doClasses: Array<{ className: string }> | null,
+    trigger?: ProtectedPublicationEvent,
+    completedBuildKey?: string
+  ): Promise<void> {
+    const provider = this.requireWorkspaceProvider("source rebuild reconciliation");
+    // Dynamic loading makes a rebuild a loader-cache eviction, NOT a restart:
+    // runtime image generations advance, so the next request loads fresh code.
+    // No workerd restart — concurrent agents keep running.
+
+    const completed = completedBuildKey ? await provider.getBuildByKey(completedBuildKey) : null;
+    if (completed?.metadata.kind === "worker") {
+      const activeDefinitionDigests = new Set<string>();
+      for (const method of completed.metadata.workspaceRpcCatalog ?? []) {
+        if (method.userlandCapability) {
+          activeDefinitionDigests.add(method.userlandCapability.definitionDigest);
+        }
+        if (method.producesHandle) {
+          activeDefinitionDigests.add(method.producesHandle.definitionDigest);
+        }
+      }
+      this.deps.resourceHandleLifecycle?.reconcileProviderDefinitions(source, [
+        ...activeDefinitionDigests,
+      ]);
+    }
+    if (doClasses !== null) {
+      this.deps.resourceHandleLifecycle?.reconcileReceiverClasses(
+        source,
+        doClasses.map(({ className }) => className)
+      );
+    }
+    const updateImageFromCompleted = (
+      imageId: string,
+      scopeRef: string | undefined
+    ): RuntimeImageRecord | null => {
+      if (!completedBuildKey || !trigger || !completed) return null;
+      return this.runtimeImages.upsert({
+        id: imageId,
+        source,
+        unitName: completed.metadata.name,
+        artifact: executionArtifactRefFromBuild(this.deps.workspaceId, completed),
+        authority: assertPresent(completed.metadata.authority),
+        ...(scopeRef ? { scopeRef } : {}),
+      });
+    };
+
+    // Workers tracking this head reload on their next request.
+    for (const instance of this.instances.values()) {
+      if (instance.source === source && scopeTracksProtectedMain(instance.scopeRef)) {
+        await this.withWorkerSelection(instance.name, async () => {
+          if (this.instances.get(instance.name) !== instance) return;
+          const image = updateImageFromCompleted(instance.runtimeImageId, instance.scopeRef);
+          if (!image) return;
+          instance.buildKey = image.artifact.buildKey;
+          instance.executionDigest = image.artifact.executionDigest;
+          instance.effectiveVersion = image.artifact.sourceState.effectiveVersion;
+          this.advanceWorkerCodeVersion(instance, image.generation);
+          this.registerEgressCaller(instance);
+          this.retireWorkerAdmissions(
+            instance.name,
+            `${instance.admissionLifetime}:${instance.codeVersion}`
+          );
+        });
+      }
+    }
+
+    // Refresh the build version for this source's userland DO classes so their
+    // facets reload. (Internal DOs aren't rebuilt through this push path.)
+    const trackedServices = Array.from(this.doServices.values()).filter(
+      (s) => s.source === source && scopeTracksProtectedMain(s.scopeRef)
+    );
+    for (const svc of trackedServices) {
+      if (!svc.imageId) continue;
+      const image = updateImageFromCompleted(svc.imageId, svc.scopeRef);
+      if (image) {
+        svc.buildKey = image.artifact.buildKey;
+        this.registerDoEgressCaller(svc.source, svc.className, image);
+      }
+    }
+    // Object-specific DO images are sealed by their durable entity records.
+    // Publication advances those records through WorkspaceEntityStore and then
+    // calls restoreDurableObjectEntity(); this source-level callback must never
+    // move a live object ahead of its durable identity.
+
+    // Reconcile DO classes for this source against the new manifest — add new,
+    // drop removed. All loader-cache changes; no restart.
+    if (doClasses !== null) {
+      const newClassNames = new Set(doClasses.map((c) => c.className));
+      for (const key of this.latestExecutablePreparation.keys()) {
+        if (key.startsWith(`${source}:`) && !newClassNames.has(key.slice(source.length + 1)))
+          this.latestExecutablePreparation.delete(key);
+      }
+      for (const [key, prepared] of this.preparedDoExecutables) {
+        if (prepared.image.source !== source || newClassNames.has(key.slice(source.length + 1)))
+          continue;
+        this.preparedDoExecutables.delete(key);
+        this.latestExecutablePreparation.delete(key);
+        if (
+          !this.preparingDoExecutables.has(
+            canonicalJson([source, key.slice(source.length + 1), prepared.version])
+          )
+        )
+          this.runtimeImages.delete(prepared.image.id);
+      }
+      for (const [serviceKey, svc] of Array.from(this.doServices.entries())) {
+        if (svc.source !== source || newClassNames.has(svc.className)) continue;
+        this.revokeWorkerBearer(`do-service:${serviceKey}`);
+        this.doServices.delete(serviceKey);
+        if (svc.imageId) this.runtimeImages.delete(svc.imageId);
+        for (const key of Array.from(this.doObjectBuilds.keys())) {
+          if (key.startsWith(`${source}:${svc.className}/`)) {
+            const objectBuild = this.doObjectBuilds.get(key);
+            if (objectBuild) {
+              this.runtimeImages.delete(objectBuild.imageId);
+              this.sealedDoImages.delete(objectBuild.imageId);
+            }
+            this.doObjectBuilds.delete(key);
+          }
+        }
+        this.deps.routeRegistry?.unregisterDoRoutes(source, svc.className);
+        log.info(`Unregistered stale DO class ${serviceKey} after manifest change`);
+      }
+      for (const { className } of doClasses) {
+        const serviceKey = `${source}:${className}`;
+        if (this.doServices.has(serviceKey)) continue;
+        const imageId = `do-service:${serviceKey}`;
+        const image = updateImageFromCompleted(imageId, undefined);
+        if (!image) continue;
+        const sourceSanitized = source.replace(/[^a-zA-Z0-9_]/g, "_");
+        const serviceName = `do_${sourceSanitized}_${className.replace(/[^a-zA-Z0-9_]/g, "_")}`;
+        this.doServices.set(serviceKey, {
+          buildKey: image.artifact.buildKey,
+          className,
+          imageId,
+          serviceName,
+          source,
+        });
+        this.registerRoutesForDoClass(source, className);
+        this.registerDoEgressCaller(source, className, image);
+        log.info(`Registered new DO class ${source}:${className} from push (no restart)`);
+      }
+    }
+
+    // Reconcile routes: worker source rebuilds and meta-only route edits share
+    // the same route-table convergence path.
+    this.reconcileDoCodeUnitOwnership();
+    this.reconcileManifestRoutesForSource(source, doClasses);
+    if (trigger && completed?.metadata.kind === "worker" && doClasses !== null)
+      await this.prepareWorkerExecutable(
+        completed,
+        doClasses.map(({ className }) => className)
+      );
+  }
+}

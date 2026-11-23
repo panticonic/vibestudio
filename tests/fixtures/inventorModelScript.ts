@@ -51,6 +51,11 @@ export const inventorModelScript = {
             ),
           },
         },
+        {
+          tool: "vcs",
+          arguments: { operation: "commit", message: "Revise the Moon Permit Office" },
+        },
+        { tool: "vcs", arguments: { operation: "push" } },
       ],
       reply:
         "The Department of Unlikely Permissions is open. The lunar clerk still awaits your petitions.",

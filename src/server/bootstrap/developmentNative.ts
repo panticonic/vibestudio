@@ -5,7 +5,8 @@ import type { ServiceContainer } from "@vibestudio/shared/serviceContainer";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { StateLayout } from "../stateLayout.js";
-import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
+import type { ParticipantRepositoryAccess, WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
+import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { PanelRuntimeCoordinator } from "../panelRuntimeCoordinator.js";
 import type { AttachedHostPublisher } from "../services/attachedHostController.js";
 import type { AttachedHostEndpoint } from "../services/attachedHostProtocol.js";
@@ -31,6 +32,7 @@ export interface DevelopmentNativeBootstrapDeps {
     "getBuildByKey" | "putStoredBuild" | "readBuildArtifactBytes"
   >;
   workspaceVcs: WorkspaceVcs;
+  resolveParticipantAccess(contextId: string, ctx: ServiceContext): Promise<ParticipantRepositoryAccess>;
   layout: Pick<StateLayout, "development" | "blobsDir">;
   eventService: EventService;
   serverLogStore: Pick<ServerLogStore, "append">;
@@ -122,6 +124,11 @@ export async function wireDevelopmentNative(
     async start() {
       const hostExecutionDigest = readHostBuildFingerprint(deps.hostArtifactRoot).fingerprint;
       const semantic = createNativeDevelopmentSemanticAdapter(deps.workspaceVcs);
+      const resolveAccess = async (contextId: string, ctx?: ServiceContext) => {
+        if (!ctx) throw new Error("Development source requires a verified workspace context");
+        await deps.workspaceVcs.whenSemanticReady(ctx.signal);
+        return deps.resolveParticipantAccess(contextId, ctx);
+      };
       const appendLog = (runId: string, stream: "stdout" | "stderr", line: string, origin = "") => {
         const current = logs.get(runId) ?? [];
         current.push({ stream, line });
@@ -134,7 +141,10 @@ export async function wireDevelopmentNative(
         buildSystem: deps.getBuildSystem(),
         runRoots: developmentRunRoots,
         ownership: deps.ownership,
-        planSource: (input) => deps.workspaceVcs.planExactContextRepository(input),
+        planSources: async (input, ctx) => {
+          const access = await resolveAccess(input.contextId, ctx);
+          return deps.workspaceVcs.planExactContextRepositories(input, access);
+        },
         materializeSource: (plan, destination) =>
           deps.workspaceVcs.materializeExactRepositoryPlan(plan, destination),
         onLog: (runId, stream, line) => appendLog(runId, stream, line),
@@ -144,12 +154,12 @@ export async function wireDevelopmentNative(
         root: deps.layout.development.nativeSessionsDir,
         blobsDir: deps.layout.blobsDir,
         semantic,
-        planSource: ({ developmentContextId, repositoryId }) =>
+        planSource: ({ developmentContextId, repositoryId }, access) =>
           deps.workspaceVcs.planExactContextRepository({
             contextId: developmentContextId,
             repositoryId,
             requiredFiles: [],
-          }),
+          }, access),
         materializeSource: (plan, destination) =>
           deps.workspaceVcs.materializeExactRepositoryPlan(plan, destination),
       });
@@ -161,7 +171,8 @@ export async function wireDevelopmentNative(
         root: path.join(deps.layout.development.root, "template-exchanges"),
         blobsDir: deps.layout.blobsDir,
         semantic,
-        planSource: (input) => deps.workspaceVcs.planExactContextRepository(input),
+        resolveAccess,
+        planSource: (input, access) => deps.workspaceVcs.planExactContextRepository(input, access),
         materializeSource: (plan, destination) =>
           deps.workspaceVcs.materializeExactRepositoryPlan(plan, destination),
       });
@@ -177,6 +188,7 @@ export async function wireDevelopmentNative(
           }),
       });
       developmentNativeService = createDevelopmentNativeService({
+        resolveParticipantAccess: resolveAccess,
         native: nativeDevelopmentController,
         executor: developmentExecutor,
         isolatedExecutor,
@@ -203,17 +215,10 @@ export async function wireDevelopmentNative(
           return current;
         },
         releaseLogs: (runId) => logs.delete(runId),
-        resolveAdoptedRepository: async ({ contextId, repositoryId }) => {
-          const workingHead = await deps.workspaceVcs.resolveWorkingState(contextId);
-          const inspected = await deps.workspaceVcs.semanticDirectCall("vcsInspect", {
-            node: { kind: "repository", state: workingHead, repositoryId },
-            edgeLimit: 1,
-          });
-          if (inspected.node.kind !== "repository" || inspected.node.value.kind !== "present") {
-            return null;
-          }
-          return { repoPath: inspected.node.value.repoPath, workingHead };
-        },
+        resolveAdoptedRepository: async ({ contextId, repositoryId }, ctx) =>
+          deps.workspaceVcs.resolveAdoptedParticipantRepository(
+            { contextId, repositoryId }, await resolveAccess(contextId, ctx),
+          ),
       });
     },
     stop: close,

@@ -14,6 +14,8 @@ import { createAuthorityService } from "./authorityService.js";
 import { AuthorityPlanStore } from "./authorityPlanStore.js";
 import { resolveCodeIdentity } from "./principalIdentity.js";
 import { createVcsService } from "./vcsService.js";
+import { sha256HexSyncText } from "@vibestudio/content-addressing";
+import { workspaceParticipantIdentity } from "../vcsHost/workspaceHistoryHost.js";
 import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
 
 const fixtures: Array<{ store: AuthorityPlanStore; path: string }> = [];
@@ -65,15 +67,40 @@ function fixture() {
     handle: "alice",
   });
   const ctx: ServiceContext = { caller };
-  const semanticCall = vi.fn<WorkspaceVcs["semanticCausalCall"]>();
+  const readHistoryStatus = vi.fn(async (contextId: string) => {
+    const event = { kind: "event" as const, eventId: "event:current" };
+    return {
+      contextId,
+      committed: event,
+      workingHead: event,
+      clean: true,
+      mainEventId: event.eventId,
+      mainRelation: "at",
+      workingCounts: { applications: 0, workUnits: 0, changes: 0 },
+    };
+  });
+  const canonical = { source: "workers/workspace-source", className: "GadHistoryDO", objectKey: "canonical" };
+  const openParticipantScope: WorkspaceVcs["openParticipantScope"] = async (input) => {
+    const participant = workspaceParticipantIdentity(input.caller, input.ownerContextId);
+    return {
+      ...input,
+      canonical,
+      owner: { ...canonical, objectKey: `work-${sha256HexSyncText(participant)}` },
+      workingHead: "head",
+      dispatch: {
+        dispatch: async (_target, method, request) => {
+          if (method !== "readHistoryStatus") throw new Error(`Unexpected history method ${method}`);
+          return readHistoryStatus((request as { contextId: string }).contextId);
+        },
+      },
+    };
+  };
   const vcs = createVcsService({
     workspaceVcs: {
-      semanticCausalCall: semanticCall,
-      semanticPublishCall: vi.fn<WorkspaceVcs["semanticPublishCall"]>(),
-      semanticEpochTransitionPublishCall:
-        vi.fn<WorkspaceVcs["semanticEpochTransitionPublishCall"]>(),
-      referencesReachable: vi.fn<WorkspaceVcs["referencesReachable"]>(),
-    },
+      participantHistoryAttached: true,
+      whenSemanticReady: async () => {},
+      openParticipantScope,
+    } as WorkspaceVcs,
     entityCache,
     listOwnedContexts: async () => ({ contexts: [] }),
   });
@@ -137,7 +164,7 @@ function fixture() {
     service,
     dispatcher,
     vcs,
-    semanticCall,
+    readHistoryStatus,
     acquisitions,
   };
 }
@@ -148,8 +175,8 @@ describe("author-bound authority plan lifecycle", () => {
     await f.vcs.handler({ ...f.ctx, authorization: {} as never }, "status", [
       { contextId: f.binding.contextId },
     ]);
-    expect(f.semanticCall).toHaveBeenCalledOnce();
-    f.semanticCall.mockClear();
+    expect(f.readHistoryStatus).toHaveBeenCalledOnce();
+    f.readHistoryStatus.mockClear();
     const prepare = vi.spyOn(f.vcs.authorityPreparation!, "vcs.files.status");
     const plan = await f.compile();
     expect(prepare).toHaveBeenCalledOnce();
@@ -158,7 +185,7 @@ describe("author-bound authority plan lifecycle", () => {
       f.verify(plan.digest, f.execution, { caller: controller, invokingCaller: f.caller })
     ).resolves.toMatchObject({ schemaVersion: 2, digest: plan.digest });
     expect(prepare).toHaveBeenCalledOnce();
-    expect(f.semanticCall).not.toHaveBeenCalled();
+    expect(f.readHistoryStatus).not.toHaveBeenCalled();
     expect(f.acquisitions.registerTargetSubject).not.toHaveBeenCalled();
     expect(f.acquisitions.requestTaskRulesForTarget).not.toHaveBeenCalled();
     await expect(
@@ -208,15 +235,15 @@ describe("author-bound authority plan lifecycle", () => {
     ).rejects.toMatchObject({ code: "EACCES" });
   });
 
-  it("matches the immediate EvalDO author rather than the root review initiator", async () => {
+  it("matches the immediate eval kernel author rather than the root review initiator", async () => {
     const f = fixture();
     const rootPlan = await f.compile();
-    const evalId = "do:vibestudio/internal:EvalDO:one";
+    const evalId = "do:workers/session:SessionDO:one";
     const evalEntity = {
       ...f.entity,
       id: evalId,
       authoritySessionId: "lifecycle:eval",
-      className: "EvalDO",
+      className: "SessionDO",
       source: { repoPath: "vibestudio/internal", effectiveVersion: "d".repeat(64) },
       activeBuildKey: "build:eval",
       activeExecutionDigest: "d".repeat(64),

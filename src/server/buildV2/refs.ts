@@ -15,3 +15,16 @@ export function validateBuildRef(ref: string | undefined): string | undefined {
     { ref }
   );
 }
+
+/** Context selectors are resolved with caller authority before entering the build engine. */
+export function validateResolvedBuildRef(ref: string | undefined): string | undefined {
+  const validated = validateBuildRef(ref);
+  if (validated?.startsWith("ctx:")) {
+    throw new BuildRequestError(
+      "invalid_build_ref",
+      "A context build requires its resolved immutable state",
+      { ref },
+    );
+  }
+  return validated;
+}

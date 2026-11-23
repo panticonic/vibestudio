@@ -24,10 +24,9 @@
  * into this path. These measurements are profile-cold/warm, not compiler-cold:
  * release production and seal validation finish before either launch starts.
  *
- * There is no deadline: a first run builds the terminal browser and its
- * dependencies, which may legitimately take minutes. The CLI's exit is the
- * authoritative failure signal; its output and the server log are retained
- * as evidence when the smoke fails.
+ * Startup can take minutes while the terminal browser and its dependencies
+ * build. Once the browser is ready, the quit command must stop the CLI and
+ * its server within the shutdown deadline. Failures retain CLI and server output.
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -47,8 +46,9 @@ import { preparedWorkspaceReleaseManifestSchema } from "../src/server/preparedWo
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 /** Text the browser's chrome renders once it owns the screen. */
 const CHROME_MARKER = process.env.TERMINAL_SMOKE_CHROME_MARKER ?? "Vibestudio ·";
-/** Keys that quit the browser: the default prefix (Ctrl-Space, sent as NUL), then `q`. */
-const QUIT_KEYS = process.env.TERMINAL_SMOKE_QUIT_KEYS ?? "\x00q";
+/** Keys that quit the browser: the default prefix (Ctrl-B), then `q`. */
+const QUIT_KEYS = process.env.TERMINAL_SMOKE_QUIT_KEYS ?? "\x02q";
+const QUIT_TIMEOUT_MS = 60_000;
 
 const ANSI =
   // eslint-disable-next-line no-control-regex
@@ -345,7 +345,15 @@ export async function main(args, { ownership, signal, scratchRoot }) {
           }
 
           term.write(QUIT_KEYS);
-          const { exitCode, signal } = await screen.exited;
+          const { exitCode, signal } = await new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+              reject(new Error(`vibestudio terminal did not quit within ${QUIT_TIMEOUT_MS}ms`));
+            }, QUIT_TIMEOUT_MS);
+            void screen.exited.then((result) => {
+              clearTimeout(timer);
+              resolve(result);
+            });
+          });
           term = null;
           if (exitCode !== 0 || signal) {
             throw new Error(

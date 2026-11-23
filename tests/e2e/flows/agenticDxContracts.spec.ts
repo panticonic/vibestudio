@@ -1,6 +1,13 @@
 import type { TestApp } from "../../setup/electronSetup";
 import { expect, test } from "@playwright/test";
+import { appendFileSync } from "node:fs";
+import path from "node:path";
+import type {
+  DiagnoseInvocationInput,
+  InvocationDiagnosticPacket,
+} from "@vibestudio/service-schemas/workspaceSource";
 import { configureInspectionFixture } from "../support/inspectionFixture";
+import { declineFirstRunReporting } from "../support/workspaceCreation";
 import {
   ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE,
   approvePendingWorkspaceCreationReview,
@@ -17,7 +24,13 @@ import {
 
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 
-async function waitForPanelRuntime(owner: TestApp, panelId: string): Promise<void> {
+const INSPECTION_RUNTIME = "__vibestudioInspectionRuntimeForTest";
+
+async function waitForPanelRuntime(
+  owner: TestApp,
+  panelId: string,
+  exportName = "__vibestudioRequireAsync__"
+): Promise<void> {
   await expect
     .poll(
       async () => {
@@ -25,7 +38,7 @@ async function waitForPanelRuntime(owner: TestApp, panelId: string): Promise<voi
           return await executePanelScript<boolean>(
             owner,
             panelId,
-            `typeof globalThis.__vibestudioRequireAsync__ === "function"`
+            `typeof globalThis[${JSON.stringify(exportName)}] === "function"`
           );
         } catch {
           return false;
@@ -37,41 +50,33 @@ async function waitForPanelRuntime(owner: TestApp, panelId: string): Promise<voi
 }
 
 test.describe("agentic DX contracts", () => {
+  // The cold source launch provisions System and its companion workspaces.
+  test.describe.configure({ timeout: 360_000 });
+
   test("Electron preserves directory reads and bounded causal diagnostics end to end", async () => {
-    test.setTimeout(240_000);
     const workspacePath = await createManagedTestWorkspace();
     const testApp = await launchTestApp({ workspace: workspacePath, launchTimeout: 180_000 });
     try {
-      await approvePendingStartupUnits(testApp, 75_000);
+      await approvePendingWorkspaceCreationReview(testApp);
+      await approvePendingStartupUnits(testApp);
+      await declineFirstRunReporting(testApp);
       await ensureHostedShellReady(testApp, {
         panelSource: "panels/chat",
         timeoutMs: 75_000,
       });
-      await approvePendingWorkspaceCreationReview(testApp);
       const panel = (await getPanelTree(testApp))[0];
       expect(panel).toBeTruthy();
       await waitForPanelRuntime(testApp, panel!.id);
 
+      const coordinate = {
+        trajectoryId: "electron-diagnostic-missing",
+        branchId: "main",
+        invocationId: "invocation-missing",
+      };
+      const diagnosticInput = { ...coordinate, eventLimit: 3 } satisfies DiagnoseInvocationInput;
       const result = await executePanelScript<{
         entries: string[];
-        diagnostic: {
-          coordinate: {
-            trajectoryId: string;
-            branchId: string;
-            invocationId: string;
-          };
-          invocation: unknown;
-          events: unknown[];
-          commands: unknown[];
-          summary: {
-            terminal: boolean;
-            eventCount: number;
-            commandCount: number;
-            pendingEffectCount: number;
-            cleanupFailureCount: number;
-            truncated: { events: boolean; commands: boolean; effects: boolean };
-          };
-        };
+        diagnostic: InvocationDiagnosticPacket;
       }>(
         testApp,
         panel!.id,
@@ -88,14 +93,10 @@ test.describe("agentic DX contracts", () => {
             () => globalThis.__vibestudioRequireAsync__("@workspace/runtime"),
           );
           const entries = await fs.readdir("panels");
-          const diagnostic = await bounded("gad.diagnoseInvocation", () => gad.diagnoseInvocation({
-            trajectoryId: "electron-diagnostic-missing",
-            branchId: "main",
-            invocationId: "invocation-missing",
-            eventLimit: 3,
-            commandLimit: 2,
-            effectLimit: 2,
-          }));
+          const diagnostic = await bounded(
+            "gad.diagnoseInvocation",
+            () => gad.diagnoseInvocation(${JSON.stringify(diagnosticInput)}),
+          );
           return { entries, diagnostic };
         })()`
       );
@@ -103,22 +104,15 @@ test.describe("agentic DX contracts", () => {
       expect(result.entries).toContain("chat");
       expect(result.diagnostic).toEqual({
         generatedAt: expect.any(String),
-        coordinate: {
-          trajectoryId: "electron-diagnostic-missing",
-          branchId: "main",
-          invocationId: "invocation-missing",
-        },
+        coordinate,
         invocation: null,
         turn: null,
         events: [],
-        commands: [],
         summary: {
           terminal: false,
           eventCount: 0,
-          commandCount: 0,
-          pendingEffectCount: 0,
           cleanupFailureCount: 0,
-          truncated: { events: false, commands: false, effects: false },
+          truncated: { events: false },
         },
       });
     } finally {
@@ -128,24 +122,32 @@ test.describe("agentic DX contracts", () => {
   });
 
   test("Electron captures hosted-panel pixels and historical console diagnostics end to end", async () => {
-    test.setTimeout(240_000);
     const workspacePath = await createManagedTestWorkspace({
       workspaceKind: "project",
-      configureSource: configureInspectionFixture,
+      configureSource: (sourceRoot) => {
+        configureInspectionFixture(sourceRoot, "about/new");
+        // Declare the inspection dependency in the reviewed panel bundle.
+        // About/New does not otherwise generate a dynamic runtime loader.
+        appendFileSync(
+          path.join(sourceRoot, "about/new/index.tsx"),
+          `\nObject.defineProperty(globalThis, ${JSON.stringify(INSPECTION_RUNTIME)}, {
+  value: () => import("@workspace/runtime"),
+});\n`
+        );
+      },
     });
     const testApp = await launchTestApp({ workspace: workspacePath, launchTimeout: 180_000 });
     try {
-      await approvePendingStartupUnits(testApp, 75_000);
-      await ensureHostedShellReady(testApp, {
-        panelSource: "panels/chat",
+      await approvePendingWorkspaceCreationReview(testApp);
+      await approvePendingStartupUnits(testApp);
+      await declineFirstRunReporting(testApp);
+      const { panelId } = await ensureHostedShellReady(testApp, {
+        panelSource: "about/new",
         timeoutMs: 75_000,
       });
-      await approvePendingWorkspaceCreationReview(testApp);
-      const panel = (await getPanelTree(testApp))[0];
-      expect(panel).toBeTruthy();
-      await waitForPanelRuntime(testApp, panel!.id);
+      await waitForPanelRuntime(testApp, panelId, INSPECTION_RUNTIME);
 
-      await callTestApi(testApp, "focusPanel", [panel!.id]);
+      await callTestApi(testApp, "focusPanel", [panelId]);
       const result = await executePanelScript<{
         screenshot: {
           mimeType: string;
@@ -172,7 +174,7 @@ test.describe("agentic DX contracts", () => {
         };
       }>(
         testApp,
-        panel!.id,
+        panelId,
         `(async () => {
           const bounded = (stage, operation) => Promise.race([
             operation(),
@@ -183,11 +185,11 @@ test.describe("agentic DX contracts", () => {
           ]);
           const { blobstore, openPanel } = await bounded(
             "runtime module load",
-            () => globalThis.__vibestudioRequireAsync__("@workspace/runtime"),
+            () => globalThis[${JSON.stringify(INSPECTION_RUNTIME)}](),
           );
           const handle = await bounded(
             "hosted panel open",
-            () => openPanel("panels/chat", { focus: false }),
+            () => openPanel("about/help", { focus: false }),
           );
           try {
             const observation = await bounded("panel observation", () => handle.observe());
@@ -246,7 +248,7 @@ test.describe("agentic DX contracts", () => {
         byteLength: expect.any(Number),
       });
       expect(result.screenshot.width).toBeGreaterThan(0);
-      expect(await callTestApi(testApp, "getFocusedPanelId", [])).toBe(panel!.id);
+      expect(await callTestApi(testApp, "getFocusedPanelId", [])).toBe(panelId);
       expect(result.screenshot.height).toBeGreaterThan(0);
       expect(result.screenshot.byteLength).toBeGreaterThan(100);
       expect(result.blob).toEqual({
@@ -259,7 +261,7 @@ test.describe("agentic DX contracts", () => {
       expect(result.console.errorCount).toBe(0);
       expect(result.console.dropped).toBeTruthy();
       expect(result.observation).toMatchObject({
-        source: "panels/chat",
+        source: "about/help",
         phase: "ready",
         runtimeEntityId: expect.any(String),
         buildKey: expect.any(String),

@@ -7,6 +7,7 @@ import { Readable } from "stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
+import { blobUploadPrincipal, hasBlobUploads } from "../storage/blobUploads.js";
 import { TreeListCursorSchema } from "@vibestudio/service-schemas/blobstore";
 import {
   buildWorktreeManifest,
@@ -2078,6 +2079,139 @@ describe("blobstoreService", () => {
         /Invalid file mode/
       );
     });
+  });
+
+  it("authorizes a rename through its exact tree placement independently of public file bytes", async () => {
+    const service = createBlobstoreService({
+      blobsDir,
+      canReadWorkspacePlacement: async (state, context) =>
+        state.kind === "event" || context?.caller.runtime.id === "writer",
+    });
+    const dispatcher = createTestServiceDispatcher();
+    dispatcher.registerService(service.definition);
+    dispatcher.markInitialized();
+    const author = { caller: createVerifiedCaller("writer", "worker") };
+    const reader = { caller: createVerifiedCaller("other-writer", "worker") };
+    const { digest } = await putBytes(blobsDir, Buffer.from("already shared"));
+    const files = [{ path: "src/private-name.txt", contentHash: digest, mode: 33188 }];
+    const tree = await mirrorWorktreeTree(blobsDir, files, {
+      placement: { kind: "application", applicationId: "rename" },
+    });
+    const view = await new MerkleTreeComposer(blobsDir).composeStateGrafts(
+      [{ path: "repos/private-repository", stateHash: tree.stateHash }],
+      { kind: "application", applicationId: "rename" },
+    );
+    await expect(dispatcher.dispatch(reader, "blobstore", "getText", [digest]))
+      .resolves.toBe("already shared");
+    for (const { stateHash, treeHash } of [tree, view]) {
+      for (const ref of [stateHash, treeHash]) {
+        const rawDigest = ref.split(":")[1]!;
+        await expect(dispatcher.dispatch(reader, "blobstore", "getText", [rawDigest])).resolves.toBeNull();
+        await expect(dispatcher.dispatch(reader, "blobstore", "getTree", [ref])).resolves.toBeNull();
+        await expect(dispatcher.dispatch(author, "blobstore", "has", [rawDigest])).resolves.toBe(true);
+      }
+    }
+    const published = { kind: "event" as const, eventId: "published-rename" };
+    expect(await mirrorWorktreeTree(blobsDir, files, { placement: published }))
+      .toEqual({ ...tree, written: 0 });
+    expect(await new MerkleTreeComposer(blobsDir).composeStateGrafts(
+      [{ path: "repos/private-repository", stateHash: tree.stateHash }], published,
+    )).toEqual(view);
+    await expect(dispatcher.dispatch(reader, "blobstore", "listTree", [view.stateHash, {}]))
+      .resolves.toMatchObject({ entries: expect.arrayContaining([
+        expect.objectContaining({ path: "repos/private-repository/src/private-name.txt", contentHash: digest }),
+      ]) });
+  });
+
+  it("recognizes a byte upload only for its authenticated producer", async () => {
+    const createDispatcher = () => {
+      const service = createBlobstoreService({
+        blobsDir, recordParticipantUploads: () => true,
+        canReadPrivateContent: async (digest, context) =>
+          !!context && hasBlobUploads(blobsDir, blobUploadPrincipal(context), [digest]),
+      });
+      const dispatcher = createTestServiceDispatcher();
+      dispatcher.registerService(service.definition);
+      dispatcher.markInitialized();
+      return dispatcher;
+    };
+    const alice = { caller: createVerifiedCaller("writer", "worker") };
+    const bob = { caller: createVerifiedCaller("other-writer", "worker") };
+    const alicePrincipal = blobUploadPrincipal(alice);
+    const bobPrincipal = blobUploadPrincipal(bob);
+    const first = createDispatcher();
+    const stored = await first.dispatch(alice, "blobstore", "putText", ["alice's uploaded bytes"]) as {
+      digest: string;
+    };
+    const second = createDispatcher();
+    await expect(second.dispatch(bob, "blobstore", "retain", [{ owner: "bob", digest: stored.digest }]))
+      .rejects.toThrow("unavailable");
+    await expect(second.dispatch(bob, "blobstore", "has", [stored.digest])).resolves.toBe(false);
+    await expect(second.dispatch(bob, "blobstore", "getText", [stored.digest])).resolves.toBeNull();
+    await expect(second.dispatch(bob, "blobstore", "stat", [stored.digest])).resolves.toBeNull();
+    await expect(second.dispatch(alice, "blobstore", "getText", [stored.digest]))
+      .resolves.toBe("alice's uploaded bytes");
+    expect(hasBlobUploads(blobsDir, alicePrincipal, [stored.digest])).toBe(true);
+    expect(hasBlobUploads(blobsDir, bobPrincipal, [stored.digest])).toBe(false);
+    await second.dispatch(bob, "blobstore", "putBase64", [
+      Buffer.from("alice's uploaded bytes").toString("base64"),
+    ]);
+    expect(hasBlobUploads(blobsDir, bobPrincipal, [stored.digest])).toBe(true);
+  });
+
+  it("reads a private upload across calls in one admitted notebook without sharing its supply proof", async () => {
+    const notebookOwner = { runtimeId: "agent:alice", authoritySessionId: "alice-session" };
+    const callers = new Map([
+      ["alice-notebook", { runtimeId: notebookOwner.runtimeId, contextId: "alice-copy" }],
+      ["moved-notebook", { runtimeId: notebookOwner.runtimeId, contextId: "other-copy" }],
+      ["other-notebook", { runtimeId: notebookOwner.runtimeId, contextId: "alice-copy" }],
+      ["child-notebook", { runtimeId: "agent:child", contextId: "child-copy" }],
+    ]);
+    const service = createBlobstoreService({
+      blobsDir,
+      recordParticipantUploads: () => true,
+      admittedEvalOwner: (caller) => callers.get(caller.runtime.id) ?? null,
+      canReadPrivateContent: async (digest, context) =>
+        !!context && hasBlobUploads(blobsDir, blobUploadPrincipal(context), [digest]),
+    });
+    const dispatcher = createTestServiceDispatcher();
+    dispatcher.registerService(service.definition);
+    dispatcher.markInitialized();
+    const fromEval = (runtimeId: string, taskId: number, owner = notebookOwner) => ({
+      caller: {
+        ...createVerifiedCaller(runtimeId, "worker"),
+        nativeInvocation: {
+          owner,
+          task: { conversationId: 1, taskId },
+          operation: { kind: "tool" as const, assistantEntryId: taskId, callId: `call:${taskId}` },
+        },
+      },
+    });
+    const first = fromEval("alice-notebook", 1);
+    const second = fromEval("alice-notebook", 2);
+    const text = "only this notebook supplied these bytes";
+    const { digest } = await dispatcher.dispatch(first, "blobstore", "putText", [text]) as {
+      digest: string;
+    };
+    const { treeHash } = await dispatcher.dispatch(first, "blobstore", "putTree", [
+      [{ name: "note.txt", kind: "file", mode: 33188, contentHash: digest }], {},
+    ]) as { treeHash: string };
+
+    await expect(dispatcher.dispatch(second, "blobstore", "listTree", [treeHash, {}]))
+      .resolves.toMatchObject({ entries: [expect.objectContaining({ path: "note.txt", contentHash: digest })] });
+    await expect(dispatcher.dispatch(second, "blobstore", "getText", [digest])).resolves.toBe(text);
+    expect(hasBlobUploads(blobsDir, blobUploadPrincipal(second), [digest])).toBe(false);
+
+    for (const other of [
+      fromEval("moved-notebook", 2),
+      fromEval("other-notebook", 2),
+      fromEval("child-notebook", 2),
+      fromEval("unknown-notebook", 2),
+      fromEval("alice-notebook", 2, { ...notebookOwner, authoritySessionId: "new-session" }),
+    ]) {
+      await expect(dispatcher.dispatch(other, "blobstore", "listTree", [treeHash, {}])).resolves.toBeNull();
+      await expect(dispatcher.dispatch(other, "blobstore", "getText", [digest])).resolves.toBeNull();
+    }
   });
 
   describe("grep", () => {

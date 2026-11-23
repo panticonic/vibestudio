@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { VcsImportSnapshotResult, VcsStateNodeRef } from "@vibestudio/service-schemas/vcs";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { hasBlobUploads, privateWorkspaceBlobScopes } from "../storage/blobUploads.js";
 import { ensureLayout, getBytes } from "./blobstoreService.js";
 import {
   NativeDevelopmentExecutor,
@@ -17,8 +19,10 @@ import {
 
 const roots: string[] = [];
 const baseEvent = { kind: "event", eventId: "event:child-base" } as const;
+const owner = createVerifiedCaller("shell:editor", "shell", null, null, { userId: "user:editor", handle: "editor" });
 const ingress = {
   causalParent: null,
+  resolveAccess: async (contextId: string) => ({ caller: owner, ownerContextId: contextId }),
 };
 
 afterEach(async () => {
@@ -151,7 +155,7 @@ async function fixture(options: { importFailsOnce?: boolean } = {}): Promise<Fix
   };
 }
 
-async function open(fx: Fixture) {
+async function open(fx: Fixture, authority = ingress) {
   return fx.executor.open({
     sessionId: "session-1",
     developmentContextId: "context:child",
@@ -159,7 +163,7 @@ async function open(fx: Fixture) {
     childWorkingHead: { kind: "application", applicationId: "application:dirty" },
     toolId: "system-editor",
     idempotencyKey: "open-1",
-    ingress,
+    ingress: authority,
   });
 }
 
@@ -383,29 +387,34 @@ describe("NativeDevelopmentExecutor", () => {
     });
   });
 
-  it("preserves checkpoint and resume failures as one aggregate graph and migrates v1 durable markers", async () => {
+  it("checks the exact working-copy owner before reopening or checkpointing", async () => {
+    const fx = await fixture();
+    const outsider = createVerifiedCaller("shell:other", "shell", null, null, {
+      userId: "user:other", handle: "other",
+    });
+    const foreign = {
+      causalParent: null,
+      resolveAccess: async (contextId: string) => ({ caller: outsider, ownerContextId: contextId }),
+    };
+    await open(fx);
+    await expect(open(fx, foreign)).rejects.toMatchObject({ code: "EACCES" });
+    await expect(fx.executor.checkpoint({
+      sessionId: "session-1", idempotencyKey: "checkpoint-owner", ingress: foreign,
+    })).rejects.toMatchObject({ code: "EACCES" });
+    expect(fx.handle.freezeForCheckpoint).not.toHaveBeenCalled();
+    await fx.executor.checkpoint({
+      sessionId: "session-1", idempotencyKey: "checkpoint-owner", ingress,
+    });
+    const request = fx.importSnapshot.mock.calls[0]![0] as Parameters<NativeDevelopmentSemanticAdapter["importSnapshot"]>[0];
+    const digests = [...new Set(request.descriptor.files.map(({ contentHash }) => contentHash))];
+    expect(request.ingress.access.caller).toBe(owner);
+    expect(hasBlobUploads(fx.blobsDir, request.ingress.uploadPrincipal, digests)).toBe(true);
+    expect(privateWorkspaceBlobScopes(fx.blobsDir, digests).size).toBe(digests.length);
+  });
+
+  it("preserves checkpoint and resume failures as one aggregate graph", async () => {
     const fx = await fixture({ importFailsOnce: true });
     await open(fx);
-    const markerPath = path.join(fx.root, "sessions", "session-1", "SESSION.json");
-    const legacy = JSON.parse(await fs.readFile(markerPath, "utf8")) as Record<string, unknown>;
-    legacy["version"] = 1;
-    legacy["repair"] = {
-      phase: "legacy-repair",
-      primaryError: "old persisted error",
-      cleanupErrors: ["old cleanup error"],
-      attention: "actionable",
-      knownEffects: {
-        nativeTree: "owned",
-        process: "unknown",
-        importedEvent: "absent",
-      },
-    };
-    await fs.writeFile(markerPath, JSON.stringify(legacy));
-    const migratedReceipt = await fx.executor.inspect("session-1");
-    expect(migratedReceipt.repair?.primaryFailure.message).toBe("old persisted error");
-    expect(migratedReceipt.repair?.cleanupFailures[0]?.message).toBe("old cleanup error");
-    const migratedMarker = JSON.parse(await fs.readFile(markerPath, "utf8")) as { version: number };
-    expect(migratedMarker.version).toBe(2);
     vi.mocked(fx.handle.resumeCheckpoint).mockRejectedValueOnce(
       Object.assign(new Error("tool resume failed"), { code: "ERESUME" })
     );
@@ -429,11 +438,6 @@ describe("NativeDevelopmentExecutor", () => {
     expect((aggregate.cause as AggregateError).cause).toMatchObject({ code: "ESOCKET" });
     expect(aggregate.errors[1]).toMatchObject({ code: "ERESUME" });
 
-    const migrated = JSON.parse(await fs.readFile(markerPath, "utf8")) as {
-      version: number;
-      repair: { primaryFailure: { message: string }; cleanupFailures: Array<{ code?: string }> };
-    };
-    expect(migrated.version).toBe(2);
     const inspected = await fx.executor.inspect("session-1");
     expect(inspected.repair?.cleanupFailures[0]).toMatchObject({ code: "ERESUME" });
     expect(inspected.repair?.primaryFailure).toMatchObject({
@@ -569,7 +573,7 @@ describe("scanNativeSnapshot", () => {
       repoPath: "projects/vibestudio",
       sessionId: "session-deterministic",
       blobsDir,
-      persist: false,
+      persist: false as const,
     };
     const [left, right] = await Promise.all([
       scanNativeSnapshot({ ...common, repositoryRoot: first }),
@@ -600,6 +604,7 @@ describe("scanNativeSnapshot", () => {
         sessionId: "session-two-phase",
         blobsDir,
         persist: true,
+        uploadPrincipal: "test-participant",
       })
     ).rejects.toMatchObject({ code: "EUNSUPPORTED_NATIVE_ENTRY" });
     expect(await getBytes(blobsDir, expectedDigest)).toBeNull();

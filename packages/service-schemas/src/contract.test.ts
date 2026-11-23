@@ -28,6 +28,7 @@ import { browserPermissionsMethods } from "./browserPermissions.js";
 import { buildMethods } from "./build.js";
 import { channelMethods } from "./channel.js";
 import { chromiumFetchMethods } from "./chromiumFetch.js";
+import { chronologMethods } from "./chronolog.js";
 import { corsApprovalMethods } from "./corsApproval.js";
 import { ConnectCredentialSpecSchema, credentialsMethods } from "./credentials.js";
 import { localModelRuntimeMethods } from "./localModelRuntime.js";
@@ -72,9 +73,8 @@ import { phoneProvisioningMethods } from "./phoneProvisioning.js";
 import { phoneNativeEndpointMethods } from "./phoneNativeEndpoint.js";
 import { remoteCredMethods } from "./remoteCred.js";
 import { runtimeMethods } from "./runtime.js";
-import { evalMethods } from "./eval.js";
-import { evalEngineMethods } from "./evalEngine.js";
-import { evalEventIngressMethods } from "./evalEventIngress.js";
+import { evalRunStatusSchema } from "./eval.js";
+import { dynamicCodeMethods } from "./dynamicCode.js";
 import { evalExecutionRootsMethods } from "./evalExecutionRoots.js";
 import { shellApprovalMethods } from "./shellApproval.js";
 import { shellPresenceMethods } from "./shellPresence.js";
@@ -103,6 +103,7 @@ type ServiceTable = {
 };
 
 const serviceTables: ServiceTable[] = [
+  { service: "chronolog", file: "chronolog.ts", methods: chronologMethods },
   { service: "gateway", file: "gateway.ts", methods: gatewayMethods },
   { service: "adblock", file: "adblock.ts", methods: adblockMethods },
   { service: "attachedHosts", file: "attachedHosts.ts", methods: attachedHostsMethods },
@@ -211,13 +212,7 @@ const serviceTables: ServiceTable[] = [
   { service: "push", file: "push.ts", methods: pushMethods },
   { service: "remoteCred", file: "remoteCred.ts", methods: remoteCredMethods },
   { service: "runtime", file: "runtime.ts", methods: runtimeMethods },
-  { service: "eval", file: "eval.ts", methods: evalMethods },
-  { service: "evalEngine", file: "evalEngine.ts", methods: evalEngineMethods },
-  {
-    service: "evalEventIngress",
-    file: "evalEventIngress.ts",
-    methods: evalEventIngressMethods,
-  },
+  { service: "dynamicCode", file: "dynamicCode.ts", methods: dynamicCodeMethods },
   {
     service: "evalExecutionRoots",
     file: "evalExecutionRoots.ts",
@@ -429,24 +424,12 @@ describe("service schema contracts", () => {
     expect(RPC_PROGRESS_SEMANTICS).toEqual(declared);
   });
 
-  it("allows eval reset to omit its optional routing object", () => {
-    expect(evalMethods.reset.args.safeParse([]).success).toBe(true);
-    expect(evalMethods.reset.args.safeParse([{}]).success).toBe(true);
+  it("allows dynamic-code reset to omit its optional routing object", () => {
+    expect(dynamicCodeMethods.reset.args.safeParse([]).success).toBe(true);
+    expect(dynamicCodeMethods.reset.args.safeParse([{}]).success).toBe(true);
   });
 
-  it("bounds lossless eval scope pages at 128 Ki code units", () => {
-    expect(
-      evalMethods.readScopeTextPage.args.safeParse([{ key: "large", offset: 0, limit: 128 * 1024 }])
-        .success
-    ).toBe(true);
-    expect(
-      evalMethods.readScopeTextPage.args.safeParse([
-        { key: "large", offset: 0, limit: 128 * 1024 + 1 },
-      ]).success
-    ).toBe(false);
-  });
-
-  it("preserves structured eval failure data through start and get", () => {
+  it("preserves structured eval failure data in a run's status", () => {
     const result = {
       success: false,
       console: "",
@@ -464,23 +447,14 @@ describe("service schema contracts", () => {
     };
 
     expect(
-      evalMethods.start.returns.safeParse({
-        runId: "run-1",
-        runDigest: "a".repeat(64),
-        authorityManifestDigest: "b".repeat(64),
-        status: "terminal",
-        snapshot: { status: "done", result },
-      }).success
-    ).toBe(true);
-    expect(
-      evalMethods.get.returns.safeParse({
+      evalRunStatusSchema.safeParse({
         status: "done",
         result,
       }).success
     ).toBe(true);
   });
 
-  it("carries exact eval-kernel restart recovery through start and get", () => {
+  it("carries exact eval-kernel restart recovery in a run's status", () => {
     const result = {
       success: true,
       console: "",
@@ -499,28 +473,9 @@ describe("service schema contracts", () => {
       },
     };
 
-    expect(
-      evalMethods.start.returns.safeParse({
-        runId: "run-1",
-        runDigest: "a".repeat(64),
-        authorityManifestDigest: "b".repeat(64),
-        status: "terminal",
-        snapshot: { status: "done", result },
-      }).success
-    ).toBe(true);
-    expect(evalMethods.get.returns.safeParse({ status: "done", result }).success).toBe(true);
-    expect(evalMethods.get.returns.safeParse({ status: "cancelling" }).success).toBe(true);
-    expect(evalMethods.get.returns.safeParse({ status: "cleanup-ish" }).success).toBe(false);
-  });
-
-  it("reports whether eval cancellation required a shared-scope reset", () => {
-    expect(evalMethods.cancel.returns.safeParse({ ok: true, forcedReset: false }).success).toBe(
-      true
-    );
-    expect(evalMethods.cancel.returns.safeParse({ ok: true, forcedReset: true }).success).toBe(
-      true
-    );
-    expect(evalMethods.cancel.returns.safeParse({ ok: true }).success).toBe(false);
+    expect(evalRunStatusSchema.safeParse({ status: "done", result }).success).toBe(true);
+    expect(evalRunStatusSchema.safeParse({ status: "cancelling" }).success).toBe(true);
+    expect(evalRunStatusSchema.safeParse({ status: "cleanup-ish" }).success).toBe(false);
   });
 
   it("covers every service schema file in this directory", () => {
@@ -538,6 +493,9 @@ describe("service schema contracts", () => {
           file !== "nativeInvocation.ts" &&
           file !== "agenticMessageTypes.ts" &&
           file !== "evalNatlang.ts" &&
+          // The data shapes of dynamic code run as eval (intent, result, receipt, events): the calls are
+          // `dynamicCode.ts` and the hosting entity's own methods.
+          file !== "eval.ts" &&
           file !== "rpcCausality.ts" &&
           file !== "rpcFailure.ts" &&
           file !== "governanceQuery.ts" &&
@@ -545,6 +503,8 @@ describe("service schema contracts", () => {
           file !== "systemTestRunner.ts" &&
           file !== "test-utils.ts" &&
           file !== "workspaceHubControl.ts" &&
+          // Constants the class and the deployment share, not a service table.
+          file !== "workspaceStateStorage.ts" &&
           !file.startsWith("progressSemantics")
       )
       .sort();

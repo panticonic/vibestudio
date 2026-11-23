@@ -1,16 +1,16 @@
 import type { EvalNatlangCallSummary } from "./eval.js";
 
 /**
- * Exact ABI between the builtin EvalDO host and the dynamically loaded
+ * Exact ABI between the builtin eval kernel host and the dynamically loaded
  * workspace natlang provider (`providers.natlang` in meta/vibestudio.yml).
  * Bump this whenever either side's structural contract changes; a provider
  * built against another version must fail before it runs a cell.
  */
 export const NATLANG_PROVIDER_HOST_CONTRACT_VERSION = 4 as const;
 
-/** What the host hands the provider once per EvalDO owner. */
+/** What the host hands the provider once per eval kernel owner. */
 export interface NatlangProviderHost {
-  /** workerd UNSAFE_EVAL newFunction: the same constructor the eval engine uses. */
+  /** `new Function` of the codegen-enabled eval kernel isolate: the same constructor the eval engine uses. */
   newFunction(body: string, name: string, ...argNames: string[]): (...args: unknown[]) => unknown;
   /** Private emergency custody when the records service cannot acknowledge paid exchanges.
    * The native host binds the original JSON to the actual owner/run/source and

@@ -16,6 +16,7 @@ import { RuntimeSupervisionDescriptionSchema } from "@vibestudio/service-schemas
 import {
   createManagedTestWorkspace,
   callTestApi,
+  clickPanelSelector,
   ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE,
   getPanelDiagnostics,
   getPanelHtml,
@@ -23,6 +24,7 @@ import {
   getPanelTree,
   hasElectronDisplay,
   launchTestApp,
+  approvePendingStartupUnits,
   approvePendingWorkspaceCreationReview,
   removeManagedTestWorkspace,
   startPanelDiagnostics,
@@ -734,25 +736,26 @@ async function collectStartupAgentCompletion(
   expectedInitialPrompt: string
 ): Promise<StartupAgentCompletionState> {
   const panels = await getPanelTree(testApp).catch(() => []);
-  const firstPanelId = panels[0]?.id;
-  const channelNames = new Set<string>();
+  const channelPanels = new Map<string, string>();
   for (const panel of panels) {
-    const stateArgs = panel.snapshot?.stateArgs as Record<string, unknown> | undefined;
-    const channelName =
-      typeof stateArgs?.["channelName"] === "string"
-        ? stateArgs["channelName"]
-        : (await getPanelText(testApp, panel.id).catch(() => "")).match(/\bchat-[a-z0-9]+\b/)?.[0];
-    if (channelName) channelNames.add(channelName);
-  }
-  if (!firstPanelId) {
-    return { complete: false, channels: [], errors: ["No panel is available for RPC inspection"] };
+    if (panel.snapshot?.source !== "panels/chat") continue;
+    const channelName = await executePanelScript<string | null>(
+      testApp,
+      panel.id,
+      `(async () => {
+        const { panel } = await globalThis.__vibestudioRequireAsync__("@workspace/runtime");
+        const { channelName } = panel.stateArgs.get() ?? {};
+        return typeof channelName === "string" ? channelName : null;
+      })()`
+    ).catch(() => null);
+    if (channelName) channelPanels.set(channelName, panel.id);
   }
   const channels: StartupAgentCompletionState["channels"] = [];
   const errors: string[] = [];
-  for (const channelName of channelNames) {
+  for (const [channelName, panelId] of channelPanels) {
     const resolved = await resolveWorkspaceServiceFromPanel(
       testApp,
-      firstPanelId,
+      panelId,
       "vibestudio.channel.v1",
       channelName
     ).catch((error: unknown) => {
@@ -790,7 +793,7 @@ async function collectStartupAgentCompletion(
     const snapshotBundle = await getChannelRpcReadBundle();
     const snapshot = await executePanelScript(
       testApp,
-      firstPanelId,
+      panelId,
       `${snapshotBundle}
       ;(async () => {
         const { rpc, services } = await globalThis.__vibestudioRequireAsync__("@workspace/runtime");
@@ -1120,17 +1123,6 @@ function isUnitBatchApproval(approval: PendingApproval): boolean {
   return approval.kind === "unit-install-review";
 }
 
-/** A client app part, in the install review's own vocabulary. */
-function appParts(approval: PendingApproval) {
-  return approval.kind === "unit-install-review"
-    ? (approval.parts ?? []).filter((part) => part.kind === "app")
-    : [];
-}
-
-function isElectronHostAppApproval(approval: PendingApproval): boolean {
-  return appParts(approval).some((part) => part.target === "electron");
-}
-
 function describeApproval(approval: PendingApproval): string {
   const parts =
     approval.kind === "unit-install-review"
@@ -1141,51 +1133,9 @@ function describeApproval(approval: PendingApproval): string {
   return `${approval.kind}:${approval.title ?? ""}:${parts}`;
 }
 
-async function reachHostedShellAndDrainStartupApprovals(testApp: TestApp): Promise<string[]> {
-  const observedInstallReviews = new Set<string>();
-  const startupState: { current: "approval" | "ready" | "waiting" } = { current: "waiting" };
+async function reachHostedShellAndDrainStartupApprovals(testApp: TestApp): Promise<void> {
   try {
-    await expect
-      .poll(
-        async () => {
-          const pending = await listPendingApprovals(testApp);
-          for (const approval of pending.filter(isUnitBatchApproval)) {
-            observedInstallReviews.add(describeApproval(approval));
-          }
-          if (pending.some(isElectronHostAppApproval) && (await shellHasApprovalUi(testApp))) {
-            startupState.current = "approval";
-            return startupState.current;
-          }
-          if (await hostedShellHasChrome(testApp)) {
-            startupState.current = "ready";
-            return startupState.current;
-          }
-          startupState.current = "waiting";
-          return startupState.current;
-        },
-        { timeout: 90_000, intervals: [500, 1000, 2000] }
-      )
-      .not.toBe("waiting");
-  } catch (error) {
-    await attachStartupDiagnostics(testApp);
-    throw error;
-  }
-
-  if (startupState.current === "approval") {
-    // `startupState` is "approval" for either surface: the launch gate window
-    // (accept label "Start"), or the workspace shell already up and showing the
-    // in-app install review. Accept whichever is actually on screen — the same
-    // decision is reachable from both, and which one appears depends on how far
-    // startup got before the review was queued.
-    expect(
-      await clickShellButton(
-        testApp,
-        /^(Start|Add to workspace|Add template|Update|Use the new version|Trust and start|Approve and start)$/
-      )
-    ).toBe(true);
-  }
-
-  try {
+    await approvePendingStartupUnits(testApp);
     await expect
       .poll(() => hostedShellHasChrome(testApp), {
         timeout: 180_000,
@@ -1208,28 +1158,17 @@ async function reachHostedShellAndDrainStartupApprovals(testApp: TestApp): Promi
     // including shared and deferred host-target batches. Leaving those cards
     // pending keeps panel/agent capabilities behind the creation-review gate.
     const pendingInstallReviews = pending.filter(isUnitBatchApproval);
-    for (const approval of pendingInstallReviews) {
-      observedInstallReviews.add(describeApproval(approval));
-    }
-    const pendingUnitBatchCount = pendingInstallReviews.length;
-    const pendingTargetCount = pendingUnitBatchCount;
-    if (pendingTargetCount === 0) break;
-    if (pendingUnitBatchCount > 0) {
-      // The install review's real click path is covered by the desktop pairing
-      // smoke. This launch-gate spec is about the subsequent agent lifecycle;
-      // resolve the one-time workspace adoption through the typed host helper
-      // so a large full-surface render cannot make this fixture race its own
-      // startup transition.
-      for (const workspaceId of new Set(
-        pendingInstallReviews.map((approval) => approval.workspaceId)
-      )) {
-        await approvePendingWorkspaceCreationReview(
-          { app: testApp.app, workspaceId: workspaceId },
-          pendingInstallReviews
-            .filter((approval) => approval.workspaceId === workspaceId)
-            .map(({ approvalId }) => approvalId)
-        );
-      }
+    if (pendingInstallReviews.length === 0) break;
+    // Use the exact one-time workspace review for this agent lifecycle fixture.
+    for (const workspaceId of new Set(
+      pendingInstallReviews.map((approval) => approval.workspaceId)
+    )) {
+      await approvePendingWorkspaceCreationReview(
+        { app: testApp.app, workspaceId },
+        pendingInstallReviews
+          .filter((approval) => approval.workspaceId === workspaceId)
+          .map(({ approvalId }) => approvalId)
+      );
     }
     await expect
       .poll(
@@ -1239,7 +1178,7 @@ async function reachHostedShellAndDrainStartupApprovals(testApp: TestApp): Promi
         },
         { timeout: 10_000, intervals: [500, 1000, 2000] }
       )
-      .toBeLessThan(pendingTargetCount);
+      .toBeLessThan(pendingInstallReviews.length);
   }
 
   await expect
@@ -1249,7 +1188,6 @@ async function reachHostedShellAndDrainStartupApprovals(testApp: TestApp): Promi
     })
     .toBe(0);
   await declineFirstRunReporting(testApp);
-  return [...observedInstallReviews];
 }
 
 /** Ordinary declared service access is covered by the accepted installation.
@@ -1352,6 +1290,7 @@ test.describe("Desktop Startup Approvals", () => {
             ?.openingRequest === configuredInitialPrompt
       );
       if (!onboardingPanel) throw new Error("The automatic onboarding panel disappeared");
+      const setupOverview = '.inline-ui-content[data-inline-ui-id="onboarding-setup-overview"]';
       await expect
         .poll(
           () =>
@@ -1359,33 +1298,27 @@ test.describe("Desktop Startup Approvals", () => {
               testApp!,
               onboardingPanel.id,
               `(() => {
-                const overview = document.querySelector(
-                  '[data-inline-ui-id="onboarding-setup-overview"]'
-                );
+                const overview = document.querySelector(${JSON.stringify(setupOverview)});
                 if (!(overview instanceof HTMLElement)) return false;
-                overview.scrollIntoView({ block: "start" });
-                const bounds = overview.getBoundingClientRect();
-                return bounds.width > 0 && bounds.height > 0 && bounds.top < innerHeight && bounds.bottom > 0
+                return overview.getClientRects().length > 0
                   && overview.innerText.includes("Your Vibestudio")
                   && Boolean(overview.querySelector('[aria-label="Refresh setup overview"]'));
               })()`
             ),
-          { timeout: 30_000, intervals: [250, 500, 1000] }
+          {
+            message: "The shipped onboarding overview renders in the initial chat",
+            timeout: 30_000,
+            intervals: [250, 500, 1000],
+          }
         )
         .toBe(true);
       expect(
-        await executePanelScript<boolean>(
+        await clickPanelSelector(
           testApp,
           onboardingPanel.id,
-          `(() => {
-            const link = Array.from(document.querySelectorAll('a')).find(
-              (candidate) => candidate.textContent?.trim() === 'Add workspace'
-            );
-            if (!(link instanceof HTMLAnchorElement)) return false;
-            link.click();
-            return true;
-          })()`
-        )
+          `${setupOverview} a[href^="vibestudio://surface?"][href*="kind=workspace-chooser"]`
+        ),
+        "The Add workspace link receives a native pointer click"
       ).toBe(true);
       let chooserPage: import("@playwright/test").Page | undefined;
       await expect
@@ -1403,7 +1336,7 @@ test.describe("Desktop Startup Approvals", () => {
             }
             return false;
           },
-          { timeout: 30_000 }
+          { message: "The onboarding link opens the workspace chooser", timeout: 30_000 }
         )
         .toBe(true);
       await chooserPage!
@@ -1434,7 +1367,7 @@ test.describe("Desktop Startup Approvals", () => {
         getPanelTree(testApp).catch(() => []),
       ]);
       throw new Error(
-        `Initial chat did not complete: ${JSON.stringify({
+        `The initial chat or onboarding workflow failed: ${JSON.stringify({
           completion: lastCompletion,
           pending: pending.map((approval) => ({
             approvalId: approval.approvalId,
@@ -1447,7 +1380,8 @@ test.describe("Desktop Startup Approvals", () => {
             title: panel.title,
             snapshot: panel.snapshot,
           })),
-        })}\n${error instanceof Error ? error.message : String(error)}`
+        })}`,
+        { cause: error }
       );
     }
   });
@@ -1504,13 +1438,42 @@ test.describe("Desktop Startup Approvals", () => {
     }
 
     if (!networkApproval) throw new Error("Expected the pending network approval");
-    const paused = await collectStartupAgentCompletion(testApp, prompt);
-    const originalNetworkInvocations = paused.channels.flatMap(
-      (channel) => channel.networkInvocationIds
-    );
-    expect(originalNetworkInvocations).toHaveLength(1);
-    expect(paused.complete).toBe(false);
-    expect(paused.channels.flatMap((channel) => channel.completedNetworkInvocationIds)).toEqual([]);
+    let originalNetworkInvocations: string[] = [];
+    let lastPaused: StartupAgentCompletionState | undefined;
+    try {
+      // The approval inbox and the channel replay are read from different
+      // owners. Observe the durable invocation before deciding the approval.
+      await expect
+        .poll(
+          async () => {
+            const paused = await collectStartupAgentCompletion(testApp!, prompt);
+            lastPaused = paused;
+            const failures = paused.channels.flatMap((channel) => channel.failures);
+            if (failures.length > 0) {
+              throw new Error(
+                `Agent failed while awaiting network approval: ${failures.join("; ")}`
+              );
+            }
+            expect(paused.complete).toBe(false);
+            expect(
+              paused.channels.flatMap((channel) => channel.completedNetworkInvocationIds)
+            ).toEqual([]);
+            originalNetworkInvocations = paused.channels.flatMap(
+              (channel) => channel.networkInvocationIds
+            );
+            return originalNetworkInvocations;
+          },
+          { timeout: 45_000, intervals: [250, 500, 1000, 2000] }
+        )
+        .toHaveLength(1);
+    } catch (error) {
+      await test.info().attach("paused-agent-completion.json", {
+        body: JSON.stringify(lastPaused ?? null, null, 2),
+        contentType: "application/json",
+      });
+      await attachStartupDiagnostics(testApp);
+      throw error;
+    }
     expect(networkApproval).toMatchObject({
       kind: "capability",
       capability: "network.response.read",

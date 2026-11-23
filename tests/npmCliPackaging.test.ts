@@ -131,7 +131,7 @@ describe("npm CLI packaging", () => {
       "dist/immutable-tree-worker.mjs",
       "dist/sqlite-integrity-worker.mjs",
       "dist/dependency-content-maintenance.cjs",
-      "dist/internal-do-programs.json",
+      "dist/runtime-app.json",
       "dist/sql-wasm.wasm",
       ...OWNERSHIP_REAPER_FILES.map((filename) => `dist/${filename}`),
       "dist/host-build-fingerprint.json",

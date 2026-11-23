@@ -23,6 +23,7 @@ import { clickNativeApproval } from "../support/nativeApproval";
 import { requireE2eRootTemplate } from "../../setup/e2eRootTemplate";
 import { hasOwnedX11Display } from "../../setup/ownedXvfb";
 import {
+  declineFirstRunReporting,
   findWorkspaceShellPage,
   presentApprovalCard,
   settleWorkspaceInstallReviews,
@@ -30,16 +31,23 @@ import {
 
 let sdkPath: string;
 test.beforeAll(async () => {
-  test.setTimeout(120_000);
+  test.setTimeout(190_000);
   const root = process.env["VIBESTUDIO_E2E_TEMP_ROOT"];
   if (!root) throw new Error("The website SDK acceptance requires the owned E2E temporary root");
   const directory = path.join(root, "website-runtime-sdk");
   await promisify(execFile)(
     process.execPath,
-    ["node_modules/tsx/dist/cli.mjs", "scripts/build-website-runtime.ts", "--out-dir", directory],
+    [
+      "--max-old-space-size=4300",
+      "--import",
+      "tsx",
+      "scripts/build-website-runtime.ts",
+      "--out-dir",
+      directory,
+    ],
     {
       cwd: process.cwd(),
-      timeout: 110_000,
+      timeout: 180_000,
       maxBuffer: 1024 * 1024,
     }
   );
@@ -61,7 +69,13 @@ test("website SDK requires explicit connection and retires access on document re
     const templatePin = ${JSON.stringify(templatePin)};
     const operationId = sessionStorage.getItem('operationId') || crypto.randomUUID();
     sessionStorage.setItem('operationId', operationId);
-    const attempt = async operation => { try { output(await operation()); } catch (error) { output('error:' + formatRpcFailure(error)); } };
+    const attempt = async operation => {
+      try { output(await operation()); }
+      catch (error) {
+        const code = typeof error?.code === 'string' ? error.code + ': ' : '';
+        output('error:' + code + formatRpcFailure(error));
+      }
+    };
     document.querySelector('#connect').onclick = () => attempt(async () => { await connectWorkspace(); return 'connected:' + workspaceConnection.connected; });
     document.querySelector('#tree').onclick = () => attempt(async () => 'tree:' + JSON.stringify(await callMain('fs.readdir', '/')));
     document.querySelector('#read').onclick = () => attempt(async () => 'read:' + typeof await callMain('fs.readFile', 'meta/vibestudio.yml', 'utf8'));
@@ -78,13 +92,20 @@ test("website SDK requires explicit connection and retires access on document re
       const runId = crypto.randomUUID();
       const scope = { key: 'website-authority-acceptance', lifecycle: 'finite' };
       const code = "const runtime = await import('@workspace/runtime'); const entries = await runtime.services.docs.listSurfaces(); let closed = false; try { await runtime.services.websiteHosting.list(); } catch (error) { closed = /closed to websites/.test(error.message); } return { discovered: Array.isArray(entries), closed };";
-      await callMain('eval.start', { runId, scope, source: { kind: 'inline', code } });
-      for (let attempt = 0; attempt < 120; attempt++) {
-        const state = await callMain('eval.get', { runId, scopeKey: scope.key });
-        if (state.result) return 'eval:' + JSON.stringify(state.result);
-        await new Promise(resolve => setTimeout(resolve, 500));
+      // Dynamic code is admitted by the host and run by the entity that hosts it: the website starts the run on
+      // that entity and pulls its committed result (docs/dolt-redesign.md §7.5), then releases the admission.
+      const hosted = name => ({ name, invoke: (args, dispatch) => dispatch(args), parseArgs: async args => args });
+      const admission = await callMain('dynamicCode.admit', { runId, scope, source: { kind: 'inline', code } });
+      try {
+        await rpc.call(admission.hostId, hosted('start'), [admission.start, admission.nonce]);
+        for (let attempt = 0; attempt < 120; attempt++) {
+          const state = await rpc.call(admission.hostId, hosted('await'), [runId, { waitMs: 1000 }]);
+          if (state.result) return 'eval:' + JSON.stringify(state.result);
+        }
+        throw new Error('Scoped eval did not settle');
+      } finally {
+        await callMain('dynamicCode.release', { runId, hostId: admission.hostId }).catch(() => undefined);
       }
-      throw new Error('Scoped eval did not settle');
     });
     document.querySelector('#inspect').onclick = () => attempt(async () => { const result = await templates.inspect({ pin: templatePin }); return 'inspected:' + result.pin.commit; });
     document.querySelector('#create').onclick = () => attempt(async () => { const result = await workspaces.create({ operationId, workspace: 'website-installation-acceptance', rootTemplate: templatePin }); sessionStorage.setItem('createdWorkspaceId', result.workspaceId); return 'created:' + result.workspaceId; });
@@ -120,6 +141,7 @@ test("website SDK requires explicit connection and retires access on document re
       app: app.app,
       workspaceId: app.systemWorkspaceId,
     });
+    await declineFirstRunReporting(app);
     const initial = await ensureHostedShellReady(app, { panelSource: "about/new" });
     const panel = await createBrowserPanel(app, initial.panelId, url, { focus: true });
     await ensureHostedShellReady(app, { panelSource: `browser:${url}` });
@@ -160,27 +182,7 @@ test("website SDK requires explicit connection and retires access on document re
         .poll(async () => (await pendingCapability(capability)).length, { timeout: 30_000 })
         .toBe(1);
       const approvalId = (await pendingCapability(capability))[0]!.approvalId;
-      let approval!: Locator;
-      await expect
-        .poll(
-          async () => {
-            for (const page of app!.app.context().pages()) {
-              const candidate = page.locator(`[data-approval-id=${JSON.stringify(approvalId)}]`);
-              if (await candidate.isVisible()) {
-                approval = candidate;
-                return true;
-              }
-              if (await page.locator("[data-approval-id]:visible").count()) {
-                approval = await presentApprovalCard(page, approvalId);
-                return true;
-              }
-            }
-            return false;
-          },
-          { timeout: 30_000 }
-        )
-        .toBe(true);
-      return approval;
+      return presentApprovalCard(shell, approvalId);
     };
     const denied = await visibleConnectionApproval();
     const clickApproval = (button: Locator) => clickNativeApproval(app!, button);
@@ -211,14 +213,18 @@ test("website SDK requires explicit connection and retires access on document re
     await expect.poll(text).toContain("tree:");
     await clickPanelSelector(app, panel.id, "#read");
     const readApproval = await visibleConnectionApproval("filesystem.read");
-    await expect(readApproval).toContainText("/meta/vibestudio.yml");
+    await expect(readApproval).toContainText("Read /meta/?");
+    await expect(readApproval).toContainText("all files in this repository");
     await clickApproval(
       readApproval.getByRole("button", { name: "Allow for this page", exact: true })
     );
     await expect.poll(text).toContain("read:string");
     await clickPanelSelector(app, panel.id, "#write");
     const writeApproval = await visibleConnectionApproval("filesystem.write");
-    await expect(writeApproval).toContainText("/meta/vibestudio.yml");
+    await expect(writeApproval).toContainText("Change /meta/?");
+    await expect(writeApproval).toContainText(
+      "create, change, and delete all files in this repository"
+    );
     await clickApproval(writeApproval.getByRole("button", { name: "Don't allow", exact: true }));
     await expect.poll(text).toContain("error:");
     expect(await text()).not.toContain("unexpected write");

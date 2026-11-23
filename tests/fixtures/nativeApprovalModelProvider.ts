@@ -26,7 +26,7 @@ export function writeNativeApprovalModelProvider(sourceRoot: string): string {
           extension: {
             activationEvents: ["onInvoke"],
             methodAuthority: Object.fromEntries(
-              ["listModels", "ensureLoaded", "getLoopbackAuth", "requestLog"].map((name) => [
+              ["listModels", "ensureLoaded", "attestRuntime", "requestLog"].map((name) => [
                 name,
                 {
                   effect: { kind: "open" },
@@ -140,6 +140,38 @@ export async function activate(ctx) {
   const origin = 'http://127.0.0.1:' + address.port;
   const baseUrl = origin + '/v1';
 
+  function messageText(content) {
+    if (typeof content === 'string') return content;
+    return Array.isArray(content) ? content.map(part => part.text ?? '').join('\\n') : '';
+  }
+
+  const checkpointPrefix = 'Fixture approval progress: ';
+
+  function readCheckpoint(text) {
+    const line = text.split('\\n').find(line => line.startsWith(checkpointPrefix));
+    return line ? JSON.parse(line.slice(checkpointPrefix.length)) : null;
+  }
+
+  function summarizeFixture(prompt) {
+    const conversation = prompt.slice('<conversation>\\n'.length, prompt.lastIndexOf('\\n</conversation>'));
+    const turns = conversation.split(/\\n\\n(?=\\[(?:User|Assistant|Assistant tool calls|Tool result)\\]: )/);
+    let progress = { prompt: '', read: false, network: false, inline: false };
+    let pendingTool = '';
+    for (const turn of turns) {
+      if (turn.startsWith('[User]: ')) {
+        progress = readCheckpoint(turn) ?? { prompt: turn.slice('[User]: '.length), read: false, network: false, inline: false };
+      } else if (turn.startsWith('[Assistant tool calls]: ')) {
+        pendingTool = turn.slice('[Assistant tool calls]: '.length).split('(')[0];
+      } else if (turn.startsWith('[Tool result]: ')) {
+        if (pendingTool === 'read') progress.read = turn.includes('name: onboarding');
+        if (pendingTool === 'eval') progress.network = turn.includes('Example Domain');
+        if (pendingTool === 'inline_ui') progress.inline = true;
+        pendingTool = '';
+      }
+    }
+    return checkpointPrefix + JSON.stringify(progress);
+  }
+
   async function handle(req, res) {
     if (sealed) throw new Error('Fixture provider is retired');
     if (req.method !== 'POST' || req.url !== '/v1/chat/completions') throw new Error('Unsupported fixture provider request');
@@ -150,7 +182,13 @@ export async function activate(ctx) {
     if (body.model !== slug || !Array.isArray(body.messages)) throw new Error('Fixture model identity changed');
     const messages = body.messages;
     const user = messages.filter(message => message.role === 'user').at(-1);
-    const prompt = typeof user?.content === 'string' ? user.content : JSON.stringify(user?.content ?? '');
+    const userText = messageText(user?.content);
+    const summarizing = !body.tools?.length &&
+      userText.startsWith('<conversation>\\n') &&
+      messages.some(message => message.role === 'system' &&
+        messageText(message.content).startsWith('You are a context summarization assistant.'));
+    const checkpoint = summarizing ? null : readCheckpoint(userText);
+    const prompt = checkpoint?.prompt ?? userText;
     const readId = 'fixture-read-' + createHash('sha256').update(prompt).digest('hex').slice(0, 16);
     const evalId = 'fixture-network-' + createHash('sha256').update(prompt).digest('hex').slice(0, 16);
     const inlineId = 'fixture-overview-' + createHash('sha256').update(prompt).digest('hex').slice(0, 16);
@@ -158,14 +196,16 @@ export async function activate(ctx) {
     const evalResult = messages.find(message => message.role === 'tool' && message.tool_call_id === evalId);
     const inlineResult = messages.find(message => message.role === 'tool' && message.tool_call_id === inlineId);
     let call;
-    if (!readResult) call = { id: readId, type: 'function', function: { name: 'read', arguments: JSON.stringify({ path: 'skills/onboarding/SKILL.md' }) } };
-    else if (!String(readResult.content).includes('name: onboarding')) throw new Error('Actual onboarding read did not return the shipped skill');
-    else if (prompt.includes('https://example.com') && !evalResult) call = { id: evalId, type: 'function', function: { name: 'eval', arguments: JSON.stringify({ code: ${JSON.stringify(fixtureEvalCode)} }) } };
-    else if (!prompt.includes('https://example.com') && !inlineResult) call = { id: inlineId, type: 'function', function: { name: 'inline_ui', arguments: JSON.stringify({ id: 'onboarding-setup-overview', path: 'skills/onboarding/SetupHub.tsx', props: {} }) } };
-    if (evalResult && !String(evalResult.content).includes('Example Domain')) throw new Error('Actual scoped eval did not return the expected page title');
+    if (!summarizing) {
+      if (readResult && !messageText(readResult.content).includes('name: onboarding')) throw new Error('Actual onboarding read did not return the shipped skill');
+      if (evalResult && !messageText(evalResult.content).includes('Example Domain')) throw new Error('Actual scoped eval did not return the expected page title');
+      if (!readResult && !checkpoint?.read) call = { id: readId, type: 'function', function: { name: 'read', arguments: JSON.stringify({ path: 'skills/onboarding/SKILL.md' }) } };
+      else if (prompt.includes('https://example.com') && !evalResult && !checkpoint?.network) call = { id: evalId, type: 'function', function: { name: 'eval', arguments: JSON.stringify({ code: ${JSON.stringify(fixtureEvalCode)} }) } };
+      else if (!prompt.includes('https://example.com') && !inlineResult && !checkpoint?.inline) call = { id: inlineId, type: 'function', function: { name: 'inline_ui', arguments: JSON.stringify({ id: 'onboarding-setup-overview', path: 'skills/onboarding/SetupHub.tsx', props: {} }) } };
+    }
     if (call && !body.tools?.some(tool => tool.function?.name === call.function.name)) throw new Error('The actual native request did not offer ' + call.function.name);
-    log.push({ model: body.model, phase: call?.function.name ?? 'complete', toolCallId: call?.id ?? null });
-    const content = call ? null : ${JSON.stringify(NATIVE_APPROVAL_REPLY)};
+    log.push({ model: body.model, phase: summarizing ? 'summarize' : (call?.function.name ?? 'complete'), toolCallId: call?.id ?? null });
+    const content = summarizing ? summarizeFixture(userText) : call ? null : ${JSON.stringify(NATIVE_APPROVAL_REPLY)};
     if (!body.stream) {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ id: randomUUID(), object: 'chat.completion', created: 1, model: slug, choices: [{ index: 0, message: { role: 'assistant', content, ...(call ? { tool_calls: [call] } : {}) }, finish_reason: call ? 'tool_calls' : 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }));
@@ -181,7 +221,14 @@ export async function activate(ctx) {
   return {
     listModels() { return [{ slug, displayName: 'Native Approval Fixture', baseUrl, server: 'utility', contextWindow: 65536, maxTokens: 4096, toolsCapable: true, reasoningCapable: false, fit: { fit: 'cpu-only', estTokensPerSec: null, contextLength: 65536, gpuLayers: 0, notes: [] }, measuredTokensPerSec: null, state: 'ready', download: null, errorMessage: null }]; },
     ensureLoaded(modelId) { if (modelId !== slug) throw new Error('Foreign fixture model'); return { baseUrl }; },
-    getLoopbackAuth() { if (sealed) throw new Error('Fixture provider is retired'); return { apiKey: key, origins: [origin] }; },
+    attestRuntime(modelId) {
+      if (ctx.invocation?.current()?.caller.callerKind !== 'server') {
+        throw new Error('Only the trusted host can attest the fixture runtime');
+      }
+      if (sealed) throw new Error('Fixture provider is retired');
+      if (modelId !== slug && modelId !== 'local:' + slug) throw new Error('Foreign fixture model');
+      return { baseUrl, apiKey: key };
+    },
     requestLog() { return log.map(item => ({ ...item })); },
   };
 }

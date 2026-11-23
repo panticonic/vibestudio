@@ -102,6 +102,29 @@ describe("createMirrorService", () => {
     ).rejects.toThrow(/not reachable from this agent context/);
   });
 
+  it("binds participant mirror pages to the requesting caller's context and tree", async () => {
+    const { deps } = fixture();
+    const service = createMirrorService({
+      ...deps,
+      participantHistoryAttached: () => true,
+      contextRepoTargets: async (contextId, caller) => [
+        { repoPath: "packages/x", stateHash: `${caller.runtime.id}:${contextId}` },
+      ],
+    });
+    const contextId = "ctx-shared";
+    const [target] = await service.handler(CALLER, "targets", [{ contextId }]) as Array<{ stateHash: string }>;
+    const stateHash = target!.stateHash;
+    await expect(service.handler(CALLER, "objects", [{ stateHash }]))
+      .rejects.toThrow("requires the context");
+    await expect(service.handler(CALLER, "objects", [{ stateHash, contextId }]))
+      .resolves.toMatchObject({ files: expect.any(Array) });
+    const other = { caller: createVerifiedCaller("shell:other", "shell") };
+    await expect(service.handler(other, "objects", [{ stateHash, contextId }]))
+      .rejects.toThrow("not reachable from this participant context");
+    await expect(service.handler(AGENT_CALLER, "objects", [{ stateHash, contextId }]))
+      .rejects.toThrow("must match the connection's entity binding");
+  });
+
   it("agent object reachability is independent of service lifetime and call order", async () => {
     const { deps } = fixture();
 

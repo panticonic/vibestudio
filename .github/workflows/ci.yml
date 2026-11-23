@@ -228,7 +228,7 @@ jobs:
     name: Prepare native release input (darwin-arm64)
     uses: ./.github/workflows/native-input.yml
     with:
-      runner: macos-14
+      runner: macos-15
       target: darwin-arm64
     permissions:
       contents: read
@@ -305,7 +305,7 @@ jobs:
     needs: native-input-darwin-arm64
     uses: ./.github/workflows/darwin-production-host.yml
     with:
-      runner: macos-14
+      runner: macos-15
     permissions:
       contents: read
 
@@ -315,7 +315,7 @@ jobs:
     if: ${{ !cancelled() && needs.darwin-production-host.result == 'success' && needs.workspace-release.result == 'success' }}
     uses: ./.github/workflows/application-candidate.yml
     with:
-      runner: macos-14
+      runner: macos-15
       target: darwin-arm64
       package: mac
       release-candidate: ${{ needs.release-metadata.outputs.candidate-needed == 'true' && vars.RELEASE_MAC == 'true' }}
@@ -334,16 +334,16 @@ jobs:
     needs: [darwin-production-host, quality-inputs]
     uses: ./.github/workflows/darwin-host-inputs.yml
     with:
-      runner: macos-14
+      runner: macos-15
     permissions:
       contents: read
 
-  desktop-source-integration-macos-14:
-    name: Development desktop source integration (macos-14)
+  desktop-source-integration-macos-15:
+    name: Development desktop source integration (macos-15)
     needs: darwin-development-inputs
     uses: ./.github/workflows/desktop-source-integration.yml
     with:
-      runner: macos-14
+      runner: macos-15
     permissions:
       contents: read
 
@@ -381,13 +381,13 @@ jobs:
     permissions:
       contents: read
 
-  packaged-acceptance-macos-14:
-    name: Installed application (darwin-arm64, macos-14)
+  packaged-acceptance-macos-15:
+    name: Installed application (darwin-arm64, macos-15)
     needs: application-candidate-mac
     if: ${{ needs.application-candidate-mac.result == 'success' }}
     uses: ./.github/workflows/packaged-acceptance.yml
     with:
-      runner: macos-14
+      runner: macos-15
       target: darwin-arm64
       app: Vibestudio.app
     permissions:
@@ -493,9 +493,9 @@ jobs:
       - native-isolation-linux-x64
       - native-isolation-linux-arm64
       - native-isolation-darwin-arm64
-      - desktop-source-integration-macos-14
+      - desktop-source-integration-macos-15
       - npm-server-preflight
-      - packaged-acceptance-macos-14
+      - packaged-acceptance-macos-15
       - packaged-acceptance-macos-26
       - packaged-acceptance-windows
       - sign-linux-release-candidate

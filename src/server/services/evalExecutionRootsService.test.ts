@@ -9,7 +9,7 @@ import {
 } from "@vibestudio/shared/execution/retention";
 import { createEvalExecutionRootsService } from "./evalExecutionRootsService.js";
 
-const runtimeId = "do:vibestudio/internal:EvalDO:object-one";
+const runtimeId = "do:workers/session:SessionDO:object-one";
 const runId = "run:one";
 
 function artifact(): ExecutionArtifactRefV1 {
@@ -56,16 +56,16 @@ function execution(): ExecutionAdmissionFact {
     taskRef: "task:one",
     taskAuthority: "task:one",
     executionImage: {
-      principal: `code:vibestudio/internal@one`,
-      repoPath: "vibestudio/internal",
+      principal: `code:workers/session@one`,
+      repoPath: "workers/session",
       ref: "state:one",
       effectiveVersion: "one",
       executionDigest: "d".repeat(64),
     },
     executor: {
-      kind: "eval",
+      kind: "dynamic-code",
       runtimeId,
-      evalRunId: runId,
+      runId,
       authorityManifest: {
         mode: "adaptive",
         effects: "read-write",
@@ -89,7 +89,7 @@ function context(): ServiceContext {
       code: {
         callerId: runtimeId,
         callerKind: "do",
-        repoPath: "vibestudio/internal",
+        repoPath: "workers/session",
         effectiveVersion: "one",
         executionDigest: "d".repeat(64),
         requested: [],
@@ -115,8 +115,9 @@ describe("eval execution root publication ingress", () => {
             resolveActive: () => ({
               id: runtimeId,
               kind: "do",
-              className: "EvalDO",
-              source: { repoPath: "vibestudio/internal", effectiveVersion: "one" },
+              className: "SessionDO",
+              key: "object-one",
+              source: { repoPath: "workers/session", effectiveVersion: "one" },
               contextId: "context:one",
               activeExecutionDigest: "d".repeat(64),
             }),
@@ -143,7 +144,7 @@ describe("eval execution root publication ingress", () => {
         artifacts: [{ buildKey: ref.buildKey, executionDigest: ref.executionDigest }],
       });
       expect(dispatch).toHaveBeenCalledWith(
-        { source: "vibestudio/internal", className: "EvalDO", objectKey: "object-one" },
+        { source: "workers/session", className: "SessionDO", objectKey: "object-one" },
         "retainExecutionRoot",
         runId,
         "@workspace/example",
@@ -152,6 +153,46 @@ describe("eval execution root publication ingress", () => {
       expect(finalize).toHaveBeenCalledWith({ reservationId: "reservation:one", epoch: 1 });
     }
   );
+
+  it("serves an entity that hosts its own kernel, and reaches that entity", async () => {
+    const hostId = "do:workers/agent-worker:AiChatWorker:agent-one";
+    const reserve = vi.fn(() => ({ reservationId: "reservation:one", epoch: 1 }));
+    const dispatch = vi.fn(async () => undefined);
+    const fact = { ...execution(), executor: { ...execution().executor, runtimeId: hostId } };
+    const service = createEvalExecutionRootsService({
+      executionSessions: { resolve: () => fact, resolveInvocation: () => fact },
+      publicationPort: { reserve, finalize: vi.fn() },
+      doDispatch: { dispatch } as never,
+      hostsEvalKernel: (source, className) =>
+        source === "workers/agent-worker" && className === "AiChatWorker",
+      entityStore: {
+        cache: {
+          resolveActive: () => ({
+            id: hostId,
+            kind: "do",
+            className: "AiChatWorker",
+            key: "agent-one",
+            source: { repoPath: "workers/agent-worker", effectiveVersion: "one" },
+            contextId: "context:one",
+            activeExecutionDigest: "d".repeat(64),
+          }),
+        },
+      } as never,
+    });
+    const ctx = context();
+    ctx.caller.runtime = { id: hostId, kind: "do" };
+    const ref = artifact();
+    await expect(
+      service.handler(ctx, "retain", [runId, "@workspace/example", ref])
+    ).resolves.toEqual({ retained: true });
+    expect(dispatch).toHaveBeenCalledWith(
+      { source: "workers/agent-worker", className: "AiChatWorker", objectKey: "agent-one" },
+      "retainExecutionRoot",
+      runId,
+      "@workspace/example",
+      ref
+    );
+  });
 
   it.each(["wrong-run", "evaluated-code", "website-code", "wrong-kernel"])(
     "rejects %s at the sealed kernel boundary",
@@ -165,9 +206,9 @@ describe("eval execution root publication ingress", () => {
             resolveActive: () => ({
               id: runtimeId,
               kind: "do",
-              className: "EvalDO",
+              className: "SessionDO",
               source: {
-                repoPath: kind === "wrong-kernel" ? "workers/forged" : "vibestudio/internal",
+                repoPath: kind === "wrong-kernel" ? "workers/forged" : "workers/session",
                 effectiveVersion: "one",
               },
               contextId: "context:one",

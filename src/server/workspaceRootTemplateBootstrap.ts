@@ -400,6 +400,8 @@ export interface WorkspaceRootTemplateBootstrapDeps {
   acquire(pin: WorkspaceTemplatePin): Promise<ExactGitSnapshot>;
   sink: SnapshotContentSink;
   expectedSystemEpoch: number;
+  /** The host already loaded runtime settings from protected workspace history. */
+  restoredProtectedSource?: true;
   preparedTemplate?(
     pin: WorkspaceTemplatePin,
     purpose: "use" | "author"
@@ -786,11 +788,15 @@ export class WorkspaceRootTemplateBootstrap {
     if (!fs.existsSync(manifestPath)) {
       throw new Error("Workspace root materialization receipt exists but its source is missing");
     }
-    parseWorkspaceConfigContentWithId(
-      fs.readFileSync(manifestPath, "utf8"),
-      this.deps.workspaceId,
-      (source) => fs.readFileSync(path.join(this.deps.sourcePath, source, "package.json"), "utf8")
-    );
+    // On restart the protected source already supplied the current runtime
+    // configuration. The original scaffold serves only as materialization evidence.
+    if (!this.deps.restoredProtectedSource) {
+      parseWorkspaceConfigContentWithId(
+        fs.readFileSync(manifestPath, "utf8"),
+        this.deps.workspaceId,
+        (source) => fs.readFileSync(path.join(this.deps.sourcePath, source, "package.json"), "utf8")
+      );
+    }
     return true;
   }
 

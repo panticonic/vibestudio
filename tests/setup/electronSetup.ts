@@ -535,6 +535,21 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
         await desktop.close();
       } catch (error) {
         cleanupErrors.push(error);
+        try {
+          await playwrightTest.info().attach(`electron-shutdown-${workspaceInfo.workspaceName}.log`, {
+            body: output.join("").slice(-40_000),
+            contentType: "text/plain",
+          });
+          const shutdownLog = readLogTail(hubLogPath, 40_000);
+          if (shutdownLog) {
+            await playwrightTest.info().attach(`hub-shutdown-${workspaceInfo.workspaceName}.log`, {
+              body: shutdownLog,
+              contentType: "text/plain",
+            });
+          }
+        } catch (diagnosticError) {
+          cleanupErrors.push(diagnosticError);
+        }
       }
       // Retained independently of logical close errors: only actual Electron
       // exit makes its detached children orphans of its own ownership.
@@ -642,7 +657,8 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
  */
 export async function approvePendingStartupUnits(
   fixture: TestApp,
-  timeoutMs = 180_000
+  timeoutMs = 180_000,
+  observeReview?: (review: import("@vibestudio/shared/approvals").PendingUnitInstallReviewApproval) => void
 ): Promise<void> {
   const owner = { app: fixture.app, workspaceId: fixture.systemWorkspaceId };
   const deadline = Date.now() + timeoutMs;
@@ -655,6 +671,7 @@ export async function approvePendingStartupUnits(
         []
       );
       if (gate.launch.status === "approval-required") {
+        for (const review of gate.launch.approvals) observeReview?.(review);
         await callTestApi(owner, "resolveLaunchApprovals", ["once"]);
         continue;
       }
@@ -701,11 +718,13 @@ export async function approvePendingStartupUnits(
  * Resolve the first-run workspace adoption review for tests whose assertions
  * exercise ordinary panel/runtime APIs. Startup-unit approval intentionally
  * remains separate because launch-gate tests need to inspect that review in
- * the product UI.
+ * the product UI. A fixture may leave selected capabilities for a later
+ * interactive approval in the target workspace.
  */
 export async function approvePendingWorkspaceCreationReview(
   owner: TestWorkspaceOwner,
-  approvalIds?: readonly string[]
+  approvalIds?: readonly string[],
+  deferCapabilities: readonly string[] = []
 ): Promise<void> {
   // A desktop fixture adopts both System and the selected workspace. Leaving
   // System's review pending keeps a blocking native card above the test target.
@@ -733,7 +752,12 @@ export async function approvePendingWorkspaceCreationReview(
             | { status: "preparing" | "not-required" | "resolved" | "unresolved" }
             | { status: "pending"; approvalId: string }
             | { status: "failed"; error: string };
-          if (state.status === "not-required" || state.status === "resolved") return;
+          if (state.status === "not-required" || state.status === "resolved") {
+            if (request.deferCapabilities.length > 0) {
+              throw new Error(`Cannot defer test permissions from a ${state.status} creation review`);
+            }
+            return;
+          }
           if (state.status === "failed") {
             throw new Error(`Workspace creation review failed: ${state.error}`);
           }
@@ -751,6 +775,13 @@ export async function approvePendingWorkspaceCreationReview(
         }
       }
 
+      type PermissionRow = {
+        key: string;
+        selectable: boolean;
+        selectedByDefault: boolean;
+        row?: { capability?: string };
+      };
+      const deferred = new Set(request.deferCapabilities);
       const pending = (await testApi.rpcCall("shellApproval", "listPending", [])) as Array<{
         approvalId: string;
         kind: string;
@@ -758,10 +789,11 @@ export async function approvePendingWorkspaceCreationReview(
         parts?: Array<{
           identityKey: string;
           change?: string;
-          notableRows?: Array<{ key: string; selectable: boolean; selectedByDefault: boolean }>;
-          everydayRows?: Array<{ key: string; selectable: boolean; selectedByDefault: boolean }>;
+          notableRows?: PermissionRow[];
+          everydayRows?: PermissionRow[];
         }>;
       }>;
+      const deferredRows = new Set<string>();
       for (const approval of pending) {
         if (!requested.has(approval.approvalId)) continue;
         if (approval.kind !== "unit-install-review" || !approval.mode || !approval.parts) continue;
@@ -776,7 +808,14 @@ export async function approvePendingWorkspaceCreationReview(
           .map((part) => ({
             identityKey: part.identityKey,
             permissions: [...(part.notableRows ?? []), ...(part.everydayRows ?? [])]
-              .filter((row) => row.selectable && row.selectedByDefault)
+              .filter((row) => {
+                const capability = row.row?.capability;
+                if (capability && deferred.has(capability)) {
+                  deferredRows.add(capability);
+                  return false;
+                }
+                return row.selectable && row.selectedByDefault;
+              })
               .map((row) => row.key),
           }));
         await testApi.rpcCall("shellApproval", "resolveInstallReview", [
@@ -784,8 +823,16 @@ export async function approvePendingWorkspaceCreationReview(
           { decision, allowNow },
         ]);
       }
+      const missing = [...deferred].filter((capability) => !deferredRows.has(capability));
+      if (missing.length > 0) {
+        throw new Error(`Test permissions absent from the creation review: ${missing.join(", ")}`);
+      }
     },
-    { approvalIds: approvalIds ? [...approvalIds] : null, workspaceId: owner.workspaceId }
+    {
+      approvalIds: approvalIds ? [...approvalIds] : null,
+      workspaceId: owner.workspaceId,
+      deferCapabilities: [...deferCapabilities],
+    }
   );
 }
 

@@ -1,15 +1,16 @@
 import * as crypto from "node:crypto";
 import fs from "node:fs";
 import * as path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
-import { derivedCacheCoordinator } from "@vibestudio/shared/derivedCache";
+import { derivedCacheCoordinator, isSqliteBusy } from "@vibestudio/shared/derivedCache";
 import { blobCasPath } from "../storage/blobCas.js";
 
 const HASH_CONCURRENCY = 8;
 // Lease more than one I/O group at a time. Metadata stays bounded; hashing and
 // publication never exceed HASH_CONCURRENCY, and every lease outlives its work.
 function publicationBatchSize(): number {
-  const value = Number(process.env.VIBESTUDIO_DEPENDENCY_CONTENT_BATCH_FILES ?? 64);
+  const value = Number(process.env["VIBESTUDIO_DEPENDENCY_CONTENT_BATCH_FILES"] ?? 64);
   if (!Number.isInteger(value) || value < 1 || value > 256)
     throw new Error("VIBESTUDIO_DEPENDENCY_CONTENT_BATCH_FILES must be an integer from 1 to 256");
   return value;
@@ -64,6 +65,20 @@ function withCoordinatorOperation<T>(operation: string, run: () => T): T {
     }
     throw contextual;
   }
+}
+
+async function acquireContentLeases(root: string, keys: readonly string[]) {
+  const coordinator = derivedCacheCoordinator(root);
+  const acquire = () =>
+    withCoordinatorOperation("acquiring digest leases", () => coordinator.acquireBatch(root, keys));
+  try {
+    return acquire();
+  } catch (error) {
+    if (!(error instanceof Error) || !isSqliteBusy(error.cause)) throw error;
+  }
+  // No payload mutation has started. Give a competing writer one more turn.
+  await delay(75);
+  return acquire();
 }
 
 function contentHardlinkLimit(platform = process.platform): number {
@@ -525,7 +540,6 @@ export async function deduplicateDependencyContent(
 
   const failures: unknown[] = [];
   const coordinatorRoot = contentCoordinatorRoot();
-  const coordinator = derivedCacheCoordinator(coordinatorRoot);
   const batchSize = publicationBatchSize();
   for (let offset = 0; offset < files.length; offset += batchSize) {
     const groupFailureStart = failures.length;
@@ -542,13 +556,11 @@ export async function deduplicateDependencyContent(
     }
     if (prepared.length === 0) break;
 
-    let leaseBatch: ReturnType<typeof coordinator.acquireBatch>;
+    let leaseBatch: Awaited<ReturnType<typeof acquireContentLeases>>;
     try {
-      leaseBatch = withCoordinatorOperation("acquiring digest leases", () =>
-        coordinator.acquireBatch(
-          coordinatorRoot,
-          prepared.map((file) => file.leaseKey)
-        )
+      leaseBatch = await acquireContentLeases(
+        coordinatorRoot,
+        prepared.map((file) => file.leaseKey)
       );
     } catch (error) {
       failures.push(error);

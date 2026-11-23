@@ -50,9 +50,9 @@ describe("host build fingerprint", () => {
     expect(computeHostBuildFingerprint({ cwd }).inputCount).toBeGreaterThan(0);
   });
 
-  it("changes when the workerd build helper changes", () => {
+  it("changes when the runtime app build helper changes", () => {
     const cwd = fixture();
-    const helper = path.join(cwd, "scripts", "build-workerd-programs.mjs");
+    const helper = path.join(cwd, "scripts", "runtime-app-build.mjs");
     fs.mkdirSync(path.dirname(helper), { recursive: true });
     fs.writeFileSync(helper, "export const target = 'es2022';\n");
     const initial = computeHostBuildFingerprint({ cwd, mode: "development" });

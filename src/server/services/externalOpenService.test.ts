@@ -1,6 +1,5 @@
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
-import { productBuiltinMethodRequests } from "@vibestudio/shared/productBuiltinCatalog.generated";
 import { describe, expect, it, vi } from "vitest";
 import { EventService } from "@vibestudio/shared/eventsService";
 import { createExternalOpenService } from "./externalOpenService.js";
@@ -79,20 +78,19 @@ describe("externalOpenService", () => {
     });
   });
 
-  it("preflights GitHub from the product EvalDO authority envelope", async () => {
+  it("preflights GitHub from the session entity authority envelope", async () => {
     const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(createExternalOpenService({ eventService: new EventService() }));
     dispatcher.markInitialized();
-    const evalRequests = productBuiltinMethodRequests(
-      "vibestudio/internal",
-      "EvalDO",
-      "executeRun"
-    );
-    const runtimeId = "do:vibestudio/internal:EvalDO:agent-channel";
+    // The session entity that hosts an eval kernel declares `external.open` in its manifest.
+    const evalRequests = [
+      { capability: "external.open", resource: { kind: "prefix" as const, prefix: "" } },
+    ];
+    const runtimeId = "do:workers/session:SessionDO:agent-channel";
     const caller = createVerifiedCaller(runtimeId, "do", {
       callerId: runtimeId,
       callerKind: "do",
-      repoPath: "vibestudio/internal",
+      repoPath: "workers/session",
       effectiveVersion: "version-1",
       executionDigest: "b".repeat(64),
       requested: evalRequests,

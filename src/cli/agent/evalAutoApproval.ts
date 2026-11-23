@@ -63,7 +63,7 @@ function admits(level: EvalApprovalLevel, tier: EvalAuthorityRequest["tier"]): b
  * It resolves only ordinary capability cards whose host-attested caller and
  * immutable invocation snapshot match an authority-requested event from this
  * exact eval run. Credential/protected-input/review cards never match. Every
- * accepted request is an audited `once` decision for the EvalDO itself, or an
+ * accepted request is an audited `once` decision for the eval kernel itself, or an
  * audited `task` decision for a descendant carrying the same host-attested
  * task authority. It never grants session- or version-wide authority.
  */

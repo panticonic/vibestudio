@@ -460,6 +460,35 @@ it("preserves the original hardlink failure with bounded filesystem evidence", a
   expect(linkError.message).not.toContain(root);
 });
 
+it("retries digest lease acquisition after a transient SQLite writer lock", async () => {
+  const tree = path.join(root, "recoverable-lock-tree");
+  await fs.promises.mkdir(tree);
+  await fs.promises.writeFile(path.join(tree, "index.js"), "export default true;");
+
+  const coordinatorRoot = path.join(cache.root, "dependency-files");
+  const coordinator = derivedCacheCoordinator(coordinatorRoot);
+  (coordinator as unknown as { db: DatabaseSync }).db.exec("PRAGMA busy_timeout = 25");
+  const blocker = new DatabaseSync(derivedCacheDatabasePath(coordinatorRoot));
+  const acquireBatch = coordinator.acquireBatch.bind(coordinator);
+  const attempts = vi.spyOn(coordinator, "acquireBatch").mockImplementationOnce((...args) => {
+    blocker.exec("BEGIN IMMEDIATE");
+    try {
+      return acquireBatch(...args);
+    } finally {
+      blocker.exec("ROLLBACK");
+    }
+  });
+  try {
+    await expect(deduplicateDependencyContent(tree)).resolves.toMatchObject({
+      files: 1,
+    });
+    expect(attempts).toHaveBeenCalledTimes(2);
+    expect(contentLeaseCount(coordinatorRoot)).toBe(0);
+  } finally {
+    blocker.close();
+  }
+});
+
 it("retains SQLite transaction diagnostics when batch lease acquisition is rejected", async () => {
   const tree = path.join(root, "locked-tree");
   await fs.promises.mkdir(tree);

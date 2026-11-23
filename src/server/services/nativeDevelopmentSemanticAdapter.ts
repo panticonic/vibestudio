@@ -4,16 +4,12 @@ import {
   vcsImportSnapshotInputSchema,
   vcsImportSnapshotResultSchema,
 } from "@vibestudio/service-schemas/vcs";
-import type { RpcCausalParent } from "@vibestudio/rpc";
 import type { NativeDevelopmentSemanticAdapter } from "./nativeDevelopmentExecutor.js";
+import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
 
-export interface NativeDevelopmentSemanticCausalPort {
-  semanticCausalCall(
-    method: string,
-    input: unknown,
-    causalParent: RpcCausalParent | null
-  ): Promise<unknown>;
-}
+type NativeDevelopmentParticipantPort = Pick<WorkspaceVcs,
+  "saveParticipantContextFromAccess" | "importParticipantSnapshotFromContext"
+>;
 
 /**
  * Compose native development with the canonical semantic VCS ingress.
@@ -24,7 +20,7 @@ export interface NativeDevelopmentSemanticCausalPort {
  * otherwise internal.
  */
 export function createNativeDevelopmentSemanticAdapter(
-  workspaceVcs: NativeDevelopmentSemanticCausalPort
+  workspaceVcs: NativeDevelopmentParticipantPort
 ): NativeDevelopmentSemanticAdapter {
   return {
     async commitChildBase(input) {
@@ -39,7 +35,9 @@ export function createNativeDevelopmentSemanticAdapter(
         message: input.message,
       });
       const result = vcsCommitResultSchema.parse(
-        await workspaceVcs.semanticCausalCall("vcsCommit", request, input.ingress.causalParent)
+        await workspaceVcs.saveParticipantContextFromAccess({
+          commit: request, access: input.ingress.access, cause: { parent: input.ingress.causalParent },
+        })
       );
       if (result.contextId !== input.developmentContextId || result.event.kind !== "event") {
         throw coded("EINTEGRITY", "Native development base commit returned the wrong context");
@@ -81,12 +79,11 @@ export function createNativeDevelopmentSemanticAdapter(
         ],
         message: `Native development checkpoint ${input.descriptor.source.snapshotRevision}`,
       });
+      const { access, uploadPrincipal, causalParent } = input.ingress;
       const result = vcsImportSnapshotResultSchema.parse(
-        await workspaceVcs.semanticCausalCall(
-          "vcsImportSnapshot",
-          request,
-          input.ingress.causalParent
-        )
+        await workspaceVcs.importParticipantSnapshotFromContext({
+          access, uploadPrincipal, snapshot: request, cause: { parent: causalParent },
+        })
       );
       if (
         result.contextId !== input.developmentContextId ||

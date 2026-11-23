@@ -1,11 +1,8 @@
 import { assertSingleInfrastructureModuleTree } from "./scripts/lib/bundle-module-identity.mjs";
 import * as esbuild from "esbuild";
 import { buildArtifactGroups, joinBuildOperations } from "./scripts/build-artifact-groups.mjs";
-import {
-  INTERNAL_DO_PROGRAMS_FILE,
-  captureInternalDoPrograms,
-} from "./scripts/lib/internal-do-programs.mjs";
-import { internalDoBuildOptions, internalDoCompilerOutputs } from "./scripts/internal-do-build.mjs";
+import { RUNTIME_APP_FILE, captureRuntimeApp } from "./scripts/lib/runtime-app.mjs";
+import { runtimeAppBuildOptions, runtimeAppCompilerOutput } from "./scripts/runtime-app-build.mjs";
 import { stageNodeRuntime } from "./scripts/node-runtime-artifacts.mjs";
 import { buildNativeIsolation } from "./scripts/build-native-isolation.mjs";
 import { prepareNativeDependencyFiles } from "./scripts/native-host-dependencies.mjs";
@@ -22,12 +19,12 @@ import {
   SERVER_ESM_BANNER,
 } from "./scripts/build-artifact-contracts.mjs";
 import { generateConnectGrammar } from "./scripts/generate-connect-grammar.mjs";
-import { buildWorkerdPrograms } from "./scripts/build-workerd-programs.mjs";
 import { cleanHostBuildOutput } from "./scripts/clean-host-build-output.mjs";
 import {
   assertHostBuildPayloadComplete,
   publishHostBuildGeneration,
   admitPublishedHostBuildGeneration,
+  restorePackagedHostPreparationRecipes,
 } from "./scripts/host-build-generations.mjs";
 import { buildInfrastructurePackages } from "./scripts/infrastructure-package-cache.mjs";
 import { nativeWorkspaceArtifactConfigs } from "./scripts/native-workspace-artifacts.mjs";
@@ -591,21 +588,22 @@ const browserTransportConfig = {
   logOverride,
 };
 
-const internalDoProgramsBase = internalDoBuildOptions({
+const runtimeAppBase = runtimeAppBuildOptions({
   minify: !isDev,
   sourcemap: isDev,
 });
-const internalDoProgramsConfig = {
-  ...internalDoProgramsBase,
+const runtimeAppConfig = {
+  ...runtimeAppBase,
   logOverride,
   plugins: [
-    ...internalDoProgramsBase.plugins,
+    ...runtimeAppBase.plugins,
     {
-      name: "publish-internal-do-programs",
+      name: "publish-runtime-app",
       setup(build) {
         build.onEnd(async (result) => {
           if (result.errors.length > 0) return;
-          const capture = captureInternalDoPrograms(internalDoCompilerOutputs(result));
+          assertSingleInfrastructureModuleTree(result.metafile, process.cwd());
+          const capture = captureRuntimeApp(runtimeAppCompilerOutput(result));
           // Source maps are producer diagnostics, not executable payload. Keep
           // the existing linked-map contract instead of making every isolate
           // parse an inline copy of the complete original source graph.
@@ -618,7 +616,7 @@ const internalDoProgramsConfig = {
               })
           );
           await fs.promises.writeFile(
-            path.join("dist", INTERNAL_DO_PROGRAMS_FILE),
+            path.join("dist", RUNTIME_APP_FILE),
             JSON.stringify(capture)
           );
         });
@@ -703,6 +701,7 @@ function copyAssets() {
   fs.copyFileSync("hosts/desktop/main/displayCapture.html", "dist/displayCapture.html");
   copySqlJsRuntimeAsset("dist");
   copyOwnershipReaperAssets("dist");
+  copyOwnershipReaperAssets("dist/cli");
   copyBrandAssets();
   // Bundled agent skill consumed by `vibestudio agent skill install|print`
   // (resolved as a sibling of dist/cli/client.mjs).
@@ -828,10 +827,12 @@ async function build() {
       )
     ) {
       const build = { ...expected, kind: "desktop" };
-      if (!admitPublishedHostBuildGeneration(process.cwd(), build)) {
+      let generation = admitPublishedHostBuildGeneration(process.cwd(), build);
+      if (!generation) {
         await checkBuildArtifacts();
-        publishHostBuildGeneration(process.cwd(), build);
+        generation = publishHostBuildGeneration(process.cwd(), build);
       }
+      if (!isDev) restorePackagedHostPreparationRecipes(process.cwd(), generation);
       console.log("Host artifacts already match the current source snapshot.");
       return;
     }
@@ -853,10 +854,9 @@ async function build() {
     await buildVibestudioPackages();
     buildNativeIsolation();
     // These phases own separate outputs. Join them before the server compiler
-    // consumes the internal DO bundle and workerd programs.
-    const [, workerdPrograms] = await joinBuildOperations([
+    // consumes the runtime application.
+    await joinBuildOperations([
       () => stageNodeRuntime(),
-      () => buildWorkerdPrograms({ minify: !isDev, logOverride }),
       () =>
         buildArtifactGroups(
           [
@@ -865,7 +865,7 @@ async function build() {
             adblockWorkerConfig,
             ...preloadConfigs,
             browserTransportConfig,
-            internalDoProgramsConfig,
+            runtimeAppConfig,
             bootstrapConfig,
             clientConfig,
             releaseVerifierRunnerConfig,
@@ -877,7 +877,7 @@ async function build() {
     ]);
     await joinBuildOperations([
       () => buildDependencyWorkers(),
-      () => buildServerArtifacts(["standalone", "electron"], workerdPrograms),
+      () => buildServerArtifacts(["standalone", "electron"]),
     ]);
 
     // ========================================================================
@@ -906,7 +906,11 @@ async function build() {
       process.cwd(),
       DESKTOP_HOST_BUILD_FINGERPRINT_PATH
     );
-    publishHostBuildGeneration(process.cwd(), { ...completedSnapshot, kind: "desktop" });
+    const generation = publishHostBuildGeneration(process.cwd(), {
+      ...completedSnapshot,
+      kind: "desktop",
+    });
+    if (!isDev) restorePackagedHostPreparationRecipes(process.cwd(), generation);
 
     console.log("Build successful!");
   } catch (error) {
@@ -917,16 +921,16 @@ async function build() {
   }
 }
 
-async function buildInternalDoOnly() {
+async function buildRuntimeAppOnly() {
   let releaseLock;
   try {
     releaseLock = await acquireSourcePrerequisiteLock();
     fs.mkdirSync("dist", { recursive: true });
     invalidateHostBuildFingerprints();
-    await buildHostArtifact(internalDoProgramsConfig);
-    console.log("Internal Durable Object programs built successfully!");
+    await buildHostArtifact(runtimeAppConfig);
+    console.log("Runtime application built successfully!");
   } catch (error) {
-    console.error("Internal Durable Object bundle build failed:", error);
+    console.error("Runtime application build failed:", error);
     process.exitCode = 1;
   } finally {
     releaseLock?.();
@@ -934,13 +938,12 @@ async function buildInternalDoOnly() {
 }
 
 /** Source and packaged launchers execute the same server artifact contract. */
-async function buildServerArtifacts(modes, workerdPrograms) {
+async function buildServerArtifacts(modes) {
   const embedded = {
-    "globalThis.__VIBESTUDIO_INTERNAL_DO_PROGRAMS__": fs.readFileSync(
-      path.join("dist", INTERNAL_DO_PROGRAMS_FILE),
+    "globalThis.__VIBESTUDIO_RUNTIME_APP__": fs.readFileSync(
+      path.join("dist", RUNTIME_APP_FILE),
       "utf8"
     ),
-    "globalThis.__VIBESTUDIO_WORKERD_PROGRAMS__": JSON.stringify(workerdPrograms),
   };
   const workerGlobals = {
     authorityAnalysis: "AUTHORITY",
@@ -1028,18 +1031,17 @@ async function buildSourceServerPrerequisites() {
     // infrastructure portion of `pnpm dev` without rebuilding desktop UI.
     await buildVibestudioPackages();
     buildNativeIsolation();
-    const [, programs] = await joinBuildOperations([
+    await joinBuildOperations([
       () => stageNodeRuntime(),
-      () => buildWorkerdPrograms({ minify: !isDev, logOverride }),
       () =>
         buildArtifactGroups(
-          [browserTransportConfig, internalDoProgramsConfig],
+          [browserTransportConfig, runtimeAppConfig],
           assertHostBuildMetafiles,
           buildHostArtifact
         ),
       () => stageHeadlessHost(),
     ]);
-    await buildServerArtifacts(["standalone"], programs);
+    await buildServerArtifacts(["standalone"]);
     copySqlJsRuntimeAsset("dist");
     copyOwnershipReaperAssets("dist");
     copyBrandAssets();
@@ -1067,8 +1069,8 @@ async function buildSourceServerPrerequisites() {
   }
 }
 
-if (process.argv.includes("--internal-do-only")) {
-  await buildInternalDoOnly();
+if (process.argv.includes("--runtime-app-only")) {
+  await buildRuntimeAppOnly();
 } else if (process.argv.includes("--source-server-prereqs")) {
   await buildSourceServerPrerequisites();
 } else {

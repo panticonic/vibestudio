@@ -6,20 +6,13 @@
  */
 
 import {
-  filterConsoleHistoryEntries,
-  pageConsoleHistory,
-  type PanelConsoleHistoryOptions,
+  queryPanelConsoleHistory,
+  type PanelConsoleHistoryEntry as ConsoleHistoryEntry,
+  type PanelConsoleHistoryResult as ConsoleHistoryResult,
+  type PanelConsoleHistoryOptions as ConsoleHistoryOptions,
+  type PanelConsoleHistoryLevel as ConsoleLevel,
 } from "@vibestudio/shared/panel/consoleHistory";
-import type {
-  PanelConsoleHistoryEntry,
-  PanelConsoleHistoryResult,
-  PanelConsoleHistoryLevel,
-} from "@vibestudio/shared/panel/observation";
-
-export type ConsoleLevel = PanelConsoleHistoryLevel;
-export type ConsoleHistoryEntry = PanelConsoleHistoryEntry;
-export type ConsoleHistoryResult = PanelConsoleHistoryResult;
-export type ConsoleHistoryOptions = PanelConsoleHistoryOptions;
+export type { ConsoleHistoryEntry, ConsoleHistoryResult, ConsoleHistoryOptions, ConsoleLevel };
 
 const ENTRY_CAPACITY = 1_000;
 const ERROR_CAPACITY = 500;
@@ -68,14 +61,15 @@ export class ConsoleHistoryStore {
 
   query(slotId: string, options: ConsoleHistoryOptions = {}): ConsoleHistoryResult {
     const history = this.panels.get(slotId) ?? new PanelHistory();
-    const entries = filterConsoleHistoryEntries(history.entries, options);
-    // Level selection must not hide separately retained failures.
-    const errors = filterConsoleHistoryEntries(history.errors, { ...options, levels: undefined });
-    return {
-      ...pageConsoleHistory(entries, errors, options),
-      dropped: { entries: history.droppedEntries, errors: history.droppedErrors },
-      capacity: { entries: ENTRY_CAPACITY, errors: ERROR_CAPACITY },
-    };
+    return queryPanelConsoleHistory(
+      {
+        entries: history.entries,
+        errors: history.errors,
+        dropped: { entries: history.droppedEntries, errors: history.droppedErrors },
+        capacity: { entries: ENTRY_CAPACITY, errors: ERROR_CAPACITY },
+      },
+      options
+    );
   }
 
   clear(slotId: string): void {

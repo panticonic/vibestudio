@@ -5,19 +5,62 @@ import {
   type CodeIdentityCallerKind,
 } from "@vibestudio/shared/principalKinds";
 import type { UserSubject } from "@vibestudio/identity/types";
+import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 
-const INTERNAL_DO_SOURCE = "vibestudio/internal";
-const EVAL_DO_CLASS = "EvalDO";
+import { isEvalHostRecord } from "@vibestudio/shared/evalRuntimeIdentity";
+
+/** Identify one host-admitted interactive session across separate executions. */
+export function verifiedInteractiveSession(caller: VerifiedCaller) {
+  const userId = caller.subject?.userId;
+  const execution = caller.executionSession;
+  if (
+    !userId || execution?.mode !== "interactive" ||
+    execution.executor.kind !== "dynamic-code" ||
+    execution.executor.runtimeId !== caller.runtime.id ||
+    execution.ownerUser !== `user:${userId}` ||
+    execution.agentBinding !== null || execution.parent !== null
+  ) return null;
+  return { userId, contextId: execution.contextId };
+}
+
+/** The runtime whose context a live session executor is admitted to act in. */
+export function admittedEvalContextOwner(
+  entityCache: Pick<EntityCache, "resolveActive"> | undefined,
+  caller: VerifiedCaller
+): { runtimeId: string; contextId: string } | null {
+  const admission = caller.executionSession;
+  if (admission?.executor?.runtimeId !== caller.runtime.id) return null;
+  const executor = entityCache?.resolveActive(caller.runtime.id);
+  if (!executor?.parentId || !isEvalHostRecord(executor) ||
+      executor.contextId !== admission.contextId) return null;
+  return { runtimeId: executor.parentId, contextId: admission.contextId };
+}
+
+/** A notebook may execute in its own admitted session or directly in the agent hosting its kernel. */
+export function admittedNotebookOwner(
+  entityCache: Pick<EntityCache, "resolveActive">,
+  caller: VerifiedCaller,
+): { runtimeId: string; contextId: string } | null {
+  const hosted = admittedEvalContextOwner(entityCache, caller);
+  if (hosted) return hosted;
+  const admission = caller.executionSession;
+  const runtimeId = caller.runtime.id;
+  if (admission?.executor.kind !== "dynamic-code" ||
+      admission.executor.runtimeId !== runtimeId ||
+      admission.controllerRuntimeId !== runtimeId) return null;
+  const executor = entityCache.resolveActive(runtimeId);
+  if (executor?.kind !== "do" || executor.contextId !== admission.contextId) return null;
+  return { runtimeId, contextId: admission.contextId };
+}
 
 function evalOwner(record: {
+  kind?: string;
   source: { repoPath: string };
   className?: string;
   parentId?: string;
   stateArgs?: unknown;
 }): { ownerId: string } | null {
-  if (record.source.repoPath !== INTERNAL_DO_SOURCE || record.className !== EVAL_DO_CLASS) {
-    return null;
-  }
+  if (!isEvalHostRecord(record)) return null;
   if (
     !record.stateArgs ||
     typeof record.stateArgs !== "object" ||
@@ -52,6 +95,27 @@ export interface ResolvedCodeIdentity {
 }
 
 /**
+ * The entity whose sealed image a resolved code identity names. A run of dynamic
+ * code carries its owner in `evalOrigin`, and the identity is the owner's own
+ * code when it has some. An owner with none (a user or CLI session) is mediated by
+ * its session entity's image (the identity then names the session entity, with the
+ * owner still in `evalOrigin` for attribution), so the entity is the one whose
+ * execution digest the identity carries, not simply the owner.
+ */
+export function entityOfCodeIdentity(
+  entityCache: Pick<EntityCache, "resolveActive">,
+  code: { callerId: string; executionDigest?: string; evalOrigin?: { ownerId: string } }
+) {
+  for (const id of [code.evalOrigin?.ownerId, code.callerId]) {
+    if (!id) continue;
+    const record = entityCache.resolveActive(id);
+    if (record?.activeExecutionDigest && record.activeExecutionDigest === code.executionDigest)
+      return record;
+  }
+  return entityCache.resolveActive(code.evalOrigin?.ownerId ?? code.callerId);
+}
+
+/**
  * Resolve the code/source identity for a runtime caller, used at trust-boundary
  * hand-offs (RPC verify, capability grants, audit). Reads from the Node-side
  * `EntityCache` mirror of `WorkspaceDO`. Returns null for callers without an
@@ -78,12 +142,12 @@ export function resolveCodeIdentity(
       !owner.activeAuthority
     ) {
       // An inert user/session owner has no code identity by design. In that
-      // case the exact product-baked EvalDO is the mediating harness. Continue
-      // through the ordinary record validation below; forged/unsealed EvalDO
-      // records still fail closed because they lack a sealed execution image.
+      // case the session entity's own sealed image is the mediating harness.
+      // Continue through the ordinary record validation below; a forged or
+      // unsealed record still fails closed because it lacks a sealed image.
     } else {
       return {
-        // Runtime attribution remains the concrete EvalDO. The exact harness
+        // Runtime attribution remains the concrete session entity. The exact harness
         // identity comes from its immutable host-recorded owner chain; it is not
         // a request list for dynamic execution.
         callerId,

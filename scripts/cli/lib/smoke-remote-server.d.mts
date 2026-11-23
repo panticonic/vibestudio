@@ -3,6 +3,7 @@ export function resolveDevelopmentTemplates(options: {
   checkpointRoot: string;
   productionTemplates?: boolean;
   explicitRoot?: string | null;
+  includeDevelopmentAddons?: boolean;
 }): ReturnType<
   typeof import("../../../src/dev/developmentTemplateSet.js").resolveDevelopmentTemplateSet
 >;

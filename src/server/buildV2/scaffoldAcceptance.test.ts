@@ -230,9 +230,6 @@ describe("default scaffolds pass the canonical build report unchanged", () => {
       async unitHashes(_stateHash, relPaths) {
         return Object.fromEntries(relPaths.map((relPath) => [relPath, `h:${relPath}:${revision}`]));
       },
-      async resolveContextState() {
-        return stateHash();
-      },
       async readFile(readStateHash, relPath) {
         const absolute = path.join(workspaceRoot, relPath);
         if (!fs.existsSync(absolute)) return null;

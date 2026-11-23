@@ -44,7 +44,7 @@ export const GAD_RUNTIME_METHOD_NAMES = [
   "listAgentDirectory",
   "searchAgentDirectory",
   "describeChannels",
-  "validateGadHashes",
+  "validateGadIntegrity",
   "clearDirtyAfterValidation",
   "checkGadIntegrity",
   "rebuildTrajectoryProjections",

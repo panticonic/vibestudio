@@ -608,6 +608,22 @@ describe("initWorkspace", () => {
 });
 
 describe("resolveOrCreateWorkspace", () => {
+  it("uses the protected launch configuration for an existing workspace", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-published-config-"));
+    tempRoots.push(root);
+    const source = path.join(root, "source");
+    writeConfig(source, "initPanels: []\n");
+    const publishedConfig = loadWorkspaceConfig(source);
+    const scaffold = path.join(source, "meta", "vibestudio.yml");
+    fs.writeFileSync(scaffold, `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH + 1}\n`);
+
+    expect(() => resolveOrCreateWorkspace({ wsDir: root })).toThrow(/requires workspace host epoch/);
+    const resolved = resolveOrCreateWorkspace({ wsDir: root, publishedConfig });
+    expect(resolved.created).toBe(false);
+    expect(resolved.workspace.config).toBe(publishedConfig);
+    expect(fs.readFileSync(scaffold, "utf8")).toBe(`systemEpoch: ${WORKSPACE_SYSTEM_EPOCH + 1}\n`);
+  });
+
   (process.platform === "linux" ? it : it.skip)(
     "reuses an empty interrupted-create directory without deleting non-empty workspaces",
     () => {

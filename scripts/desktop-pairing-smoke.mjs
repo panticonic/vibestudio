@@ -1460,21 +1460,26 @@ async function observePersonalPanel(app, workspaceId, expectedSource, deadline, 
       if (!runtime || !pane) return null;
       const available = runtime.getBoundingClientRect();
       const bounds = pane.getBoundingClientRect();
-      const frame = document.querySelector('.workspace-desktop')?.getBoundingClientRect();
-      const titleBar = document.querySelector('.workspace-desktop-titlebar [data-shell-top-chrome="titlebar"]')?.getBoundingClientRect();
+      const titleBar = pane.querySelector('[data-pane-titlebar]')?.getBoundingClientRect();
+      const surface = pane.querySelector('[data-native-panel-slot-id]')?.getBoundingClientRect();
+      const sidebar = document.querySelector('[data-shell-panel-sidebar]')?.getBoundingClientRect();
+      if (!titleBar || !surface || titleBar.height <= 0 || surface.height <= 0) return null;
       return { panelId: pane.getAttribute('data-pane-panel-id'),
         privateOwnerBands: [...document.querySelectorAll('.workspace-section[aria-label="Personal workspace"] [aria-label^="Panels owned by"], .workspace-section[aria-label="System workspace"] [aria-label^="Panels owned by"]')].length,
-        titleBarSpansWindow: Boolean(frame && titleBar &&
-          Math.abs(titleBar.left - frame.left) <= 2 &&
-          Math.abs(titleBar.right - frame.right) <= 2),
+        titleBarFitsPane:
+          Math.abs(titleBar.left - bounds.left) <= 2 &&
+          Math.abs(titleBar.right - bounds.right) <= 2 &&
+          Math.abs(titleBar.top - bounds.top) <= 2 &&
+          titleBar.bottom <= surface.top + 2,
+        sidebarClear: !sidebar || sidebar.width <= 0 || sidebar.right <= surface.left + 2,
         availableWidth: available.width, paneWidth: bounds.width,
         rightGap: available.right - bounds.right };
     })()`,
       "reading the initial Personal pane geometry"
     );
     if (layout?.panelId) {
-      if (!layout.titleBarSpansWindow)
-        throw new Error("The desktop title bar does not span the workspace sidebar and content");
+      if (!layout.titleBarFitsPane || !layout.sidebarClear)
+        throw new Error(`The initial pane does not fit below its title bar and beside the sidebar: ${JSON.stringify(layout)}`);
       if (layout.privateOwnerBands !== 0)
         throw new Error("Private workspaces should show one panel tree without owner bands");
       const page = await chromePage(app, deadline);
@@ -1875,8 +1880,24 @@ async function runWebsiteConnectionAcceptance(app, workspaceId, deadline) {
   )
     throw new Error("Ordinary website navigation requested Browser Data write approval");
   console.log("[desktop-smoke] Website: visit recorded without Browser Data approval");
-  if (await website.locator("#workspace-capabilities").textContent())
-    throw new Error("Website read workspace capabilities before connection");
+  const readCapabilityDiscovery = () =>
+    website.evaluate(async () => {
+      const sdk = window.inventionWorkspace;
+      if (!sdk) return { connected: false, count: 0, errorCode: "MISSING_SDK" };
+      try {
+        const surfaces = await sdk.services.docs.listSurfaces();
+        return {
+          connected: sdk.workspaceConnection.connected,
+          count: Array.isArray(surfaces) ? surfaces.length : 0,
+          errorCode: null,
+        };
+      } catch (error) {
+        return { connected: sdk.workspaceConnection.connected, count: 0, errorCode: error?.code };
+      }
+    });
+  const beforeDiscovery = await readCapabilityDiscovery();
+  if (beforeDiscovery.connected || beforeDiscovery.errorCode !== "EWORKSPACE_DISCONNECTED")
+    throw new Error(`Unexpected website discovery before connection: ${JSON.stringify(beforeDiscovery)}`);
   await connect.click();
   console.log("[desktop-smoke] Website: requested workspace connection");
 
@@ -1957,9 +1978,8 @@ async function runWebsiteConnectionAcceptance(app, workspaceId, deadline) {
   try {
     await until(
       async () => {
-        const text = await website.locator("#workspace-capabilities").textContent();
-        if (text?.startsWith("Could not")) throw new Error(text);
-        return /^[1-9]\d* workspace capabilities available to this page\.$/.test(text ?? "");
+        const discovery = await readCapabilityDiscovery();
+        return discovery.connected && discovery.count > 0;
       },
       "reading workspace capability discovery through the connected website",
       Math.min(deadline, Date.now() + 20_000)
@@ -1975,11 +1995,11 @@ async function runWebsiteConnectionAcceptance(app, workspaceId, deadline) {
       .evaluate((element) => ({
         text: element.textContent?.slice(0, 700),
         html: element.outerHTML.slice(0, 1200),
-      }))
+      }), undefined, { timeout: 2_000 })
       .catch((problem) => ({ error: String(problem) }));
     const pageState = await website.evaluate(() => ({
       status: document.querySelector("#workspace-connection-status")?.textContent,
-      capabilities: document.querySelector("#workspace-capabilities")?.textContent,
+      connected: window.inventionWorkspace?.workspaceConnection.connected,
       button: document.querySelector("#workspace-connect-button")?.textContent,
     }));
     throw new Error(
@@ -1987,18 +2007,13 @@ async function runWebsiteConnectionAcceptance(app, workspaceId, deadline) {
       { cause: error }
     );
   }
-  if (
-    (await website.locator("#workspace-connection-status").textContent()) !==
-    "Connected to this workspace."
-  )
-    throw new Error("Website did not display its connected state");
-  await website.getByRole("button", { name: "Disconnect" }).click();
+  await website.getByRole("button", { name: "Disconnect", exact: true }).click();
   await until(
-    async () =>
-      (await website.locator("#workspace-connection-status").textContent()) ===
-        "This page starts without workspace access." &&
-      (await website.locator("#workspace-capabilities").textContent()) === "",
-    "disconnecting the website and clearing workspace data",
+    async () => {
+      const discovery = await readCapabilityDiscovery();
+      return !discovery.connected && discovery.errorCode === "EWORKSPACE_DISCONNECTED";
+    },
+    "disconnecting the website and confirming it lost workspace access",
     deadline
   );
   console.log(

@@ -80,7 +80,6 @@ describe("connected website file consent", () => {
       {
         contextSourcePath: () => scratch,
         contextScratchPath: () => scratch,
-        ensureContextFolder: async () => scratch,
         ensureContextScratch: async () => scratch,
       } as unknown as ContextFolderManager,
       { resolveContext: () => "context", resolveActive: () => null } as unknown as EntityCache,

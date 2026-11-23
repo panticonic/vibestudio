@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { sha256HexSyncText } from "@vibestudio/content-addressing";
 import {
   createVerifiedCaller,
   ServiceDispatcher,
@@ -13,22 +14,17 @@ import {
   channelTrajectoryFor,
   commandIdForTrajectoryInvocation,
 } from "@vibestudio/trajectory-identity";
-import type {
-  WorkspaceSemanticInput,
-  WorkspaceSemanticMethod,
-  WorkspaceSemanticOutput,
-  WorkspaceVcs,
-} from "../vcsHost/workspaceVcs.js";
-import { createVcsService } from "./vcsService.js";
-import { gadWireMethods } from "@vibestudio/service-schemas/workspaceSource";
-import type { RpcCausalParent } from "@vibestudio/rpc";
+import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
+import { parseWorkspaceTrajectoryProvenance, workspaceParticipantIdentity } from "../vcsHost/workspaceHistoryHost.js";
+import { createVcsService, type VcsServiceDeps } from "./vcsService.js";
 
 const EVENT = { kind: "event" as const, eventId: "event:one" };
+const TEST_SUBJECT = { userId: "test-user", handle: "test" };
 const INTERNAL_AUTHORIZATION = {} as unknown as NonNullable<ServiceContext["authorization"]>;
 
 function workerContext(id = "worker:one"): ServiceContext {
   return {
-    caller: createVerifiedCaller(id, "worker"),
+    caller: createVerifiedCaller(id, "worker", null, null, TEST_SUBJECT),
     requestId: "request:one",
     authorization: INTERNAL_AUTHORIZATION,
   };
@@ -36,7 +32,7 @@ function workerContext(id = "worker:one"): ServiceContext {
 
 function shellContext(): ServiceContext {
   return {
-    caller: createVerifiedCaller("shell:test-device", "shell"),
+    caller: createVerifiedCaller("shell:test-device", "shell", null, null, TEST_SUBJECT),
     authorization: INTERNAL_AUTHORIZATION,
   };
 }
@@ -48,32 +44,29 @@ function agentContext(channelId = "channel:own"): ServiceContext {
       contextId: "context:agent",
       channelId,
       agentId: "agent:stable",
-    }),
+    }, TEST_SUBJECT),
     authorization: INTERNAL_AUTHORIZATION,
   };
 }
 
-function service(options?: {
+type ServiceOptions = {
   context?: string | null;
   owned?: Array<{
     contextId: string;
     kind?: "lifecycle" | "lineage";
     ownerEntityId?: string | null;
   }>;
-  result?: unknown;
+  attached?: boolean;
   failure?: unknown;
   relayBinding?: { entityId: string; contextId: string; channelId: string };
+  resolveActive?: NonNullable<VcsServiceDeps["entityCache"]>["resolveActive"];
   referencesReachable?:
     | boolean
     | ((
         contextIds: readonly string[],
         references: readonly { kind: string; value: unknown }[]
       ) => boolean | Promise<boolean>);
-  semanticCall?: (
-    method: string,
-    input: unknown,
-    causalParent: RpcCausalParent | null
-  ) => unknown | Promise<unknown>;
+  readHistory?: (method: string, input: unknown) => unknown | Promise<unknown>;
   testPolicyForContext?: (
     contextId: string
   ) => import("@vibestudio/rpc").AgentExecutionTestPolicy | null;
@@ -82,61 +75,24 @@ function service(options?: {
     input: { contextId: string; sourceDeltaId: string }
   ) => Promise<void>;
   onEpochTransitionPublished?: () => void;
-}) {
-  const semanticCall = vi.fn<WorkspaceVcs["semanticCausalCall"]>(
-    async <M extends WorkspaceSemanticMethod>(
-      method: M,
-      input: WorkspaceSemanticInput<M>,
-      causalParent: RpcCausalParent | null
-    ): Promise<WorkspaceSemanticOutput<M>> => {
-      if (options && "failure" in options) throw options.failure;
-      if (options?.semanticCall)
-        return (await options.semanticCall(
-          method,
-          input,
-          causalParent
-        )) as WorkspaceSemanticOutput<M>;
-      return (options?.result ?? { contextId: "context:own" }) as WorkspaceSemanticOutput<M>;
-    }
-  );
-  const semanticPublishCall = vi.fn<WorkspaceVcs["semanticPublishCall"]>(
-    async (input, causalParent, _caller, _signal) => {
-      if (options && "failure" in options) throw options.failure;
-      if (options?.semanticCall)
-        return (await options.semanticCall(
-          "vcsPush",
-          input,
-          causalParent
-        )) as WorkspaceSemanticOutput<"vcsPush">;
-      return (options?.result ?? {
-        contextId: "context:own",
-      }) as WorkspaceSemanticOutput<"vcsPush">;
-    }
-  );
-  const semanticEpochTransitionPublishCall = vi.fn<
-    WorkspaceVcs["semanticEpochTransitionPublishCall"]
-  >(async (_input, _causalParent, _caller, _signal) => {
+  participantWorkspace?: VcsServiceDeps["workspaceVcs"];
+};
+
+function service(options?: ServiceOptions) {
+  const read = vi.fn(async (method: string, input?: unknown) => {
     if (options && "failure" in options) throw options.failure;
-    return (options?.result ?? { contextId: "context:own" }) as WorkspaceSemanticOutput<"vcsPush">;
+    if (options?.readHistory) return options.readHistory(method, input);
+    return undefined;
   });
+  const workspace = options?.participantWorkspace ?? participantFixture(options, read);
   const definition = createVcsService({
-    workspaceVcs: {
-      semanticCausalCall: semanticCall,
-      semanticPublishCall,
-      semanticEpochTransitionPublishCall,
-      referencesReachable: vi.fn<WorkspaceVcs["referencesReachable"]>(
-        async (contextIds, references) =>
-          typeof options?.referencesReachable === "function"
-            ? options.referencesReachable(contextIds, references)
-            : (options?.referencesReachable ?? true)
-      ),
-    },
+    workspaceVcs: workspace,
     entityCache: {
       resolveContext: () => options?.context ?? null,
-      resolveActive: (id: string) =>
+      resolveActive: options?.resolveActive ?? ((id: string) =>
         options?.relayBinding
           ? ({ id, status: "active", agentBinding: options.relayBinding } as never)
-          : null,
+          : null),
     },
     listOwnedContexts: async () => ({ contexts: options?.owned ?? [] }),
     ...(options?.testPolicyForContext
@@ -151,15 +107,413 @@ function service(options?: {
   });
   return {
     definition,
-    semanticCall,
-    semanticPublishCall,
-    semanticEpochTransitionPublishCall,
+    read,
+    workspace,
+  };
+}
+
+function participantFixture(
+  options: ServiceOptions | undefined,
+  read: (method: string, input?: unknown) => Promise<unknown>,
+) {
+  const canonical = {
+    source: "workers/workspace-source",
+    className: "GadHistoryDO",
+    objectKey: "canonical",
+  };
+  const dispatch = vi.fn(async (_target: unknown, method: string, input?: unknown) => {
+    if (method === "readHistoryReferenceVisibility") {
+      const { contextIds, references } = input as {
+        contextIds: string[];
+        references: Array<{ kind: string }>;
+      };
+      const visible = options?.referencesReachable;
+      return typeof visible === "function"
+        ? visible(contextIds, references.map((value) => ({ kind: value.kind, value })))
+        : visible ?? true;
+    }
+    if (method === "readHistoryReferenceContext") return null;
+    if (method === "readHistoryStatus") {
+      await read(method, input);
+      return {
+        contextId: (input as { contextId: string }).contextId,
+        committed: EVENT,
+        workingHead: EVENT,
+        clean: true,
+        mainEventId: EVENT.eventId,
+        mainRelation: "at",
+        workingCounts: { applications: 0, workUnits: 0, changes: 0 },
+      };
+    }
+    return read(method, input);
+  });
+  return {
+    participantHistoryAttached: options?.attached ?? true,
+    whenSemanticReady: vi.fn(async () => {}),
+    readRuntimeParticipantStatus: vi.fn(async () => null as Awaited<ReturnType<WorkspaceVcs["readRuntimeParticipantStatus"]>>),
+    receiveRuntimeParticipantReference: vi.fn(async () => null as string | null),
+    openParticipantScope: vi.fn<WorkspaceVcs["openParticipantScope"]>(async (input) => {
+      const { caller, contextId, ownerContextId } = input;
+      const participant = workspaceParticipantIdentity(caller, ownerContextId);
+      const owner = { ...canonical, objectKey: `work-${sha256HexSyncText(participant)}` };
+      return { canonical, owner, dispatch: { dispatch }, caller, contextId, ownerContextId, workingHead: "head" };
+    }),
+    readTrajectoryProvenance: vi.fn<WorkspaceVcs["readTrajectoryProvenance"]>(async (input) =>
+      parseWorkspaceTrajectoryProvenance(input, await read("readHistoryTrajectoryProvenance", input))
+    ),
+    readParticipantMain: vi.fn(async () => {
+      await read("readHistoryMain");
+      return EVENT;
+    }),
+    readPublishedCatalog: vi.fn<WorkspaceVcs["readPublishedCatalog"]>(),
+    editParticipantContext: vi.fn(),
+    transferParticipantContext: vi.fn(),
+    revertParticipantContext: vi.fn(),
+    importParticipantSnapshot: vi.fn(),
+    registerParticipantExternalDelta: vi.fn(),
+    setParticipantExternalDeltaStatus: vi.fn(),
+    saveParticipantContext: vi.fn(),
+    discardParticipantContext: vi.fn(),
+    publishParticipantContext: vi.fn<WorkspaceVcs["publishParticipantContext"]>(async ({ push }) => {
+      if (options && "failure" in options) throw options.failure;
+      return {
+        contextId: push.contextId,
+        eventId: push.expectedCommittedEventId,
+        mainEventId: push.expectedCommittedEventId,
+        effectId: "effect:fixture",
+        appliedAt: "2026-11-20T00:00:00.000Z",
+      };
+    }),
+    readParticipantFiles: vi.fn(),
+    readParticipantMemory: vi.fn(),
+    walkParticipantHistory: vi.fn<WorkspaceVcs["walkParticipantHistory"]>(async ({ walk }) => {
+      await read("walk", walk);
+      return { walk: walk.walk, scope: walk.scope ?? null, subject: walk.subject, entries: [], omitted: [], notes: [], nextCursor: null };
+    }),
+    queryParticipantHistory: vi.fn<WorkspaceVcs["queryParticipantHistory"]>(async ({ query }) => {
+      await read("query", query);
+      return { schemaVersion: 1, state: EVENT, columns: [], rows: [], rowsRead: 0, truncated: false, refusal: null };
+    }),
+    searchParticipantHistory: vi.fn<WorkspaceVcs["searchParticipantHistory"]>(async ({ search }) => {
+      await read("search", search);
+      return { text: search.text, indexMode: "scan", hits: [], truncated: false };
+    }),
+    reviewParticipantMerge: vi.fn(),
+    mergeParticipantContext: vi.fn<WorkspaceVcs["mergeParticipantContext"]>(async ({ merge }) => ({
+      head: "head",
+      value: merge.expectedWorkingHead,
+      result: {
+        status: "unchanged",
+        contextId: merge.contextId,
+        workingHead: merge.expectedWorkingHead,
+        resolution: { complete: true, concluded: true, remainingCoordinateCount: 0 },
+        intents: [],
+        intentsTruncated: false,
+        counts: { adopt: 0, convergent: 0, composed: 0, conflict: 0, resolved: 0 },
+        conflicts: [],
+        nextConflictCursor: null,
+      },
+    })),
+  } satisfies VcsServiceDeps["workspaceVcs"];
+}
+
+function mutationService(options?: Omit<ServiceOptions, "participantWorkspace">) {
+  const workspace = participantFixture(options, vi.fn(async () => undefined));
+  return {
+    ...service({ ...options, participantWorkspace: workspace }),
+    publish: workspace.publishParticipantContext,
+    discard: workspace.discardParticipantContext,
+    save: workspace.saveParticipantContext,
   };
 }
 
 describe("canonical vcsService", () => {
+  it("lets a trusted shell's template extension resolve a published repository without opening a copy", async () => {
+    const workspace = participantFixture(undefined, vi.fn());
+    const repository = { state: EVENT, repoPath: "meta", repositoryId: "repository:meta" };
+    const resolveRepository = vi.fn().mockResolvedValue(repository);
+    workspace.readPublishedCatalog.mockReturnValue({
+      resolveRepository,
+      listDirectory: vi.fn(),
+      listFiles: vi.fn(),
+      readFileDescriptors: vi.fn(),
+      readFiles: vi.fn(),
+    });
+    const { definition } = service({ participantWorkspace: workspace });
+    const ctx = {
+      ...workerContext(),
+      caller: createVerifiedCaller("@workspace-extensions/templates", "extension"),
+      authorizingCaller: shellContext().caller,
+    };
+    const selector = { state: EVENT, repoPath: "meta" };
+    await expect(definition.handler(ctx, "resolveRepository", [selector])).resolves.toEqual(repository);
+    expect(resolveRepository).toHaveBeenCalledWith(selector);
+    expect(workspace.openParticipantScope).not.toHaveBeenCalled();
+    await expect(definition.handler(workerContext(), "resolveRepository", [selector])).rejects.toThrow(
+      "no admitted workspace participant context",
+    );
+    expect(resolveRepository).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the admitted participant copy for exact reads and protected writes", async () => {
+    const caller = createVerifiedCaller("worker:reader", "worker", null, null, {
+      userId: "user:owner",
+      handle: "owner",
+    });
+    const ctx = { ...workerContext(), caller };
+    const canonical = {
+      source: "workers/workspace-source",
+      className: "GadHistoryDO",
+      objectKey: "canonical",
+    };
+    const identity = JSON.stringify(["user", "user:owner", caller.runtime.id, "context:own"]);
+    const owner = { ...canonical, objectKey: `work-${sha256HexSyncText(identity)}` };
+    const dispatch = vi.fn().mockResolvedValue(true);
+    const scope = {
+      dispatch: { dispatch },
+      canonical,
+      owner,
+      caller,
+      contextId: "context:own",
+      ownerContextId: "context:own",
+      workingHead: "native-head",
+    };
+    const saved = {
+      contextId: scope.contextId,
+      event: EVENT,
+      committedApplicationIds: [],
+      integrationSourceEventIds: [],
+    };
+    const published = {
+      contextId: scope.contextId,
+      eventId: EVENT.eventId,
+      mainEventId: EVENT.eventId,
+      effectId: "effect:push",
+      appliedAt: "2026-11-20T00:00:00.000Z",
+    };
+    const workspace = {
+      participantHistoryAttached: true,
+      whenSemanticReady: vi.fn(async () => {}),
+      openParticipantScope: vi.fn().mockResolvedValue(scope),
+      readRuntimeParticipantStatus: vi.fn(),
+      receiveRuntimeParticipantReference: vi.fn(),
+      readParticipantMain: vi.fn().mockResolvedValue(EVENT),
+      readPublishedCatalog: vi.fn<WorkspaceVcs["readPublishedCatalog"]>(),
+      readTrajectoryProvenance: vi.fn(),
+      editParticipantContext: vi.fn(),
+      transferParticipantContext: vi.fn(),
+      revertParticipantContext: vi.fn(),
+      importParticipantSnapshot: vi.fn(),
+      registerParticipantExternalDelta: vi.fn(),
+      setParticipantExternalDeltaStatus: vi.fn(),
+      saveParticipantContext: vi.fn().mockResolvedValue(saved),
+      discardParticipantContext: vi.fn().mockResolvedValue({
+        contextId: scope.contextId,
+        workingHead: EVENT,
+        discardedApplicationIds: ["old-application"],
+      }),
+      publishParticipantContext: vi.fn().mockResolvedValue(published),
+      readParticipantFiles: vi.fn().mockResolvedValue([null]),
+      readParticipantMemory: vi.fn(),
+      walkParticipantHistory: vi.fn(),
+      queryParticipantHistory: vi.fn(),
+      searchParticipantHistory: vi.fn().mockResolvedValue({
+        text: "retained provenance", indexMode: "scan", hits: [], truncated: false,
+      }),
+      reviewParticipantMerge: vi.fn(),
+      mergeParticipantContext: vi.fn(),
+    };
+    const onEpochTransitionPublished = vi.fn();
+    const { definition, read } = service({
+      context: scope.contextId,
+      participantWorkspace: workspace,
+      onEpochTransitionPublished,
+    });
+    await expect(
+      definition.handler(ctx, "status", [{ contextId: "context:foreign" }])
+    ).rejects.toMatchObject({ code: "EACCES" });
+    await expect(definition.handler(ctx, "mainState", [])).resolves.toEqual(EVENT);
+    expect(workspace.openParticipantScope).not.toHaveBeenCalled();
+
+    const file = { repositoryId: "repo:one", file: { kind: "path", path: "hello.txt" } };
+    await expect(
+      definition.handler(ctx, "readFile", [{ state: EVENT, ...file }])
+    ).resolves.toBeNull();
+    expect(workspace.openParticipantScope).toHaveBeenCalledWith({
+      caller,
+      contextId: scope.contextId,
+      ownerContextId: scope.contextId,
+    });
+    expect(dispatch).toHaveBeenCalledWith(owner, "readHistoryReferenceVisibility", {
+      contextIds: [scope.contextId],
+      references: [EVENT],
+    });
+    expect(workspace.readParticipantFiles).toHaveBeenCalledWith({
+      ...scope,
+      read: { state: EVENT, files: [file] },
+    });
+    dispatch.mockResolvedValueOnce(false);
+    await expect(
+      definition.handler(ctx, "readFile", [{ state: EVENT, ...file }])
+    ).rejects.toMatchObject({ code: "EINVAL" });
+    expect(workspace.readParticipantFiles).toHaveBeenCalledOnce();
+
+    const childContext = "context:child";
+    const childState = { kind: "application", applicationId: "child-edit" };
+    const { definition: withChild } = service({
+      context: scope.contextId,
+      owned: [{ contextId: childContext, kind: "lifecycle", ownerEntityId: caller.runtime.id }],
+      participantWorkspace: workspace,
+    });
+    dispatch.mockResolvedValueOnce(true).mockResolvedValueOnce(childContext);
+    await expect(withChild.handler(ctx, "readFile", [{ state: childState, ...file }])).resolves.toBeNull();
+    expect(dispatch).toHaveBeenLastCalledWith(owner, "readHistoryReferenceContext", {
+      contextIds: [scope.contextId, childContext], reference: childState,
+    });
+    expect(workspace.readParticipantFiles).toHaveBeenLastCalledWith({
+      ...scope, contextId: childContext, read: { state: childState, files: [file] },
+    });
+    dispatch.mockResolvedValueOnce(true).mockResolvedValueOnce("context:unrelated");
+    await expect(withChild.handler(ctx, "readFile", [{ state: childState, ...file }])).rejects.toThrow(
+      "selected an unauthorized context"
+    );
+
+    const neighbors = { root: EVENT, limit: 2 };
+    const page = { root: EVENT, edges: [], nextCursor: null };
+    dispatch.mockResolvedValueOnce(true).mockResolvedValueOnce(page);
+    await expect(definition.handler(ctx, "neighbors", [neighbors])).resolves.toEqual(page);
+    expect(dispatch).toHaveBeenCalledWith(owner, "readHistoryNeighbors", {
+      contextId: scope.contextId, neighbors,
+    });
+    const blame = { state: EVENT, repositoryId: "repo:one", fileId: "file:one", range: { start: 0, end: 0 }, limit: 1 };
+    const lineage = { state: EVENT, fileId: blame.fileId, coordinateKind: "utf16", spans: [], nextCursor: null };
+    dispatch.mockResolvedValueOnce(true).mockResolvedValueOnce(lineage);
+    await expect(definition.handler(ctx, "blame", [blame])).resolves.toEqual(lineage);
+    expect(dispatch).toHaveBeenCalledWith(owner, "readHistoryBlame", { contextId: scope.contextId, blame });
+    const history = { root: EVENT, direction: "past", limit: 2 };
+    const timeline = { root: EVENT, entries: [], nextCursor: null };
+    dispatch.mockResolvedValueOnce(true).mockResolvedValueOnce(timeline);
+    await expect(definition.handler(ctx, "history", [history])).resolves.toEqual(timeline);
+    expect(dispatch).toHaveBeenCalledWith(owner, "readHistoryTimeline", { contextId: scope.contextId, history });
+
+    const query = { contextId: scope.contextId, query: "SELECT * FROM prov_work_units", limit: 2 };
+    const rows = { schemaVersion: 1, state: EVENT, columns: [], rows: [], rowsRead: 0, truncated: false, refusal: null };
+    workspace.queryParticipantHistory.mockResolvedValue(rows);
+    await expect(withChild.handler(ctx, "query", [
+      { ...query, visibilityContextIds: ["context:unrelated"] },
+    ])).resolves.toEqual(rows);
+    expect(workspace.queryParticipantHistory).toHaveBeenCalledWith({
+      ...scope, query: { ...query, visibilityContextIds: [childContext, scope.contextId] },
+    });
+
+    const walk = { contextId: scope.contextId, walk: "cause", subject: EVENT, limit: 2 };
+    const walked = { walk: "cause", subject: EVENT, scope: null, entries: [], omitted: [], notes: [], nextCursor: null };
+    workspace.walkParticipantHistory.mockResolvedValue(walked);
+    dispatch.mockResolvedValueOnce(true);
+    await expect(withChild.handler(ctx, "walk", [
+      { ...walk, visibilityContextIds: ["context:unrelated"] },
+    ])).resolves.toEqual(walked);
+    expect(workspace.walkParticipantHistory).toHaveBeenCalledWith({
+      ...scope, walk: { ...walk, scope: "turn", visibilityContextIds: [childContext, scope.contextId] },
+    });
+
+    const memory = {
+      contextId: scope.contextId, path: "projects/one/file.txt",
+      expectedContentHash: "a".repeat(64), range: { start: 0, end: 1 },
+    };
+    const unmanaged = { status: "unmanaged", path: memory.path };
+    workspace.readParticipantMemory.mockResolvedValue(unmanaged);
+    await expect(definition.handler(ctx, "readMemory", [memory])).resolves.toEqual(unmanaged);
+    expect(workspace.readParticipantMemory).toHaveBeenCalledWith({
+      ...scope, memory: { ...memory, episodeLimit: 4, historyLimit: 3 },
+    });
+    await expect(definition.handler(ctx, "readMemory", [
+      { ...memory, contextId: "context:unrelated" },
+    ])).rejects.toMatchObject({ code: "EACCES" });
+    expect(workspace.readParticipantMemory).toHaveBeenCalledTimes(1);
+
+    const search = { contextId: scope.contextId, text: "retained provenance", limit: 2 };
+    await expect(withChild.handler(ctx, "search", [
+      { ...search, visibilityContextIds: ["context:unrelated"] },
+    ])).resolves.toEqual({
+      text: search.text, indexMode: "scan", hits: [], truncated: false,
+    });
+    expect(workspace.searchParticipantHistory).toHaveBeenCalledWith({
+      ...scope, search: { ...search, visibilityContextIds: [childContext, scope.contextId] },
+    });
+
+    const discard = {
+      contextId: scope.contextId,
+      commandId: "command:discard",
+      expectedWorkingHead: { kind: "application", applicationId: "old-application" },
+    };
+    dispatch.mockResolvedValueOnce(false).mockResolvedValueOnce(false);
+    await expect(definition.handler(ctx, "discard", [discard])).rejects.toMatchObject({
+      code: "EINVAL",
+    });
+    expect(workspace.discardParticipantContext).not.toHaveBeenCalled();
+    dispatch.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    await expect(definition.handler(ctx, "discard", [discard])).resolves.toMatchObject({
+      discardedApplicationIds: ["old-application"],
+    });
+    expect(dispatch).toHaveBeenCalledWith(owner, "hasHistoryDiscardReceipt", {
+      discard,
+      cause: { parent: null },
+    });
+
+    const commit = {
+      contextId: scope.contextId,
+      commandId: "command:commit",
+      expectedWorkingHead: EVENT,
+    };
+    await expect(definition.handler(ctx, "commit", [commit])).resolves.toEqual(saved);
+    expect(workspace.saveParticipantContext).toHaveBeenCalledWith({
+      ...scope,
+      head: scope.workingHead,
+      cause: { parent: null },
+      commit,
+    });
+    const source = { kind: "event", eventId: "event:shared" };
+    const merge = { ...commit, commandId: "command:merge", source };
+    const work = { status: "working", contextId: scope.contextId };
+    workspace.mergeParticipantContext.mockResolvedValue({ result: work });
+    await expect(definition.handler(ctx, "merge", [merge])).resolves.toEqual(work);
+    expect(workspace.mergeParticipantContext).toHaveBeenCalledWith({
+      ...scope,
+      cause: { parent: null },
+      readableContextIds: ["context:own"],
+      merge,
+    });
+    const push = {
+      contextId: scope.contextId,
+      commandId: "command:push",
+      expectedCommittedEventId: EVENT.eventId,
+      expectedMainEventId: "event:main",
+    };
+    await expect(definition.handler(ctx, "push", [push])).resolves.toEqual(published);
+    expect(workspace.publishParticipantContext).toHaveBeenCalledWith({
+      ...scope,
+      push,
+      gateContext: { kind: "caller", caller },
+    });
+    expect(onEpochTransitionPublished).not.toHaveBeenCalled();
+    const epochPush = { ...push, commandId: "command:participant-epoch" };
+    const failure = new Error("foreign candidate rejected");
+    workspace.publishParticipantContext.mockRejectedValueOnce(failure);
+    await expect(definition.handler(ctx, "push", [{ ...epochPush, epochTransition: true }])).rejects.toBe(failure);
+    expect(onEpochTransitionPublished).not.toHaveBeenCalled();
+    await expect(definition.handler(ctx, "push", [{ ...epochPush, epochTransition: true }])).resolves.toEqual(published);
+    expect(workspace.publishParticipantContext).toHaveBeenLastCalledWith({
+      ...scope,
+      push: epochPush,
+      gateContext: { kind: "caller", caller, epochTransition: true },
+    });
+    expect(onEpochTransitionPublished).toHaveBeenCalledOnce();
+    expect(read).not.toHaveBeenCalled();
+  });
+
   it("keeps installation provenance restricted to reviewed source consumers", async () => {
-    const { definition, semanticPublishCall } = service({ context: "context:own" });
+    const { definition, publish } = mutationService({ context: "context:own" });
     await expect(
       definition.handler(workerContext(), "push", [
         {
@@ -182,7 +536,7 @@ describe("canonical vcsService", () => {
         },
       ])
     ).rejects.toThrow(/reviewed source consumer/);
-    expect(semanticPublishCall).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
   });
   it("registers its authority preparers with the production dispatcher", () => {
     const { definition } = service();
@@ -197,9 +551,9 @@ describe("canonical vcsService", () => {
   });
 
   it("reads current main metadata without granting access to its content", async () => {
-    const { definition, semanticCall } = service({ result: EVENT, referencesReachable: false });
+    const { definition, read } = service({ referencesReachable: false });
     await expect(definition.handler(agentContext(), "mainState", [])).resolves.toEqual(EVENT);
-    expect(semanticCall).toHaveBeenCalledWith("vcsMainState", undefined, null);
+    expect(read).toHaveBeenCalledWith("readHistoryMain");
     await expect(
       definition.handler(agentContext(), "readFile", [
         {
@@ -209,23 +563,15 @@ describe("canonical vcsService", () => {
         },
       ])
     ).rejects.toThrow("unavailable from the caller's reachable context graph");
-    expect(semanticCall).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledTimes(1);
   });
 
-  it("retains zero arguments through authority preparation and the semantic wire contract", async () => {
-    const { definition, semanticCall } = service({
-      semanticCall: (_method, input, causalParent) => {
-        const serialized = JSON.parse(
-          JSON.stringify({ input, ingress: { causalParent } })
-        ) as unknown;
-        gadWireMethods.vcsMainState.args.parse([serialized]);
-        return EVENT;
-      },
-    });
+  it("retains zero arguments through authority preparation", async () => {
+    const { definition, read } = service();
     const ctx = agentContext();
     const resolver = "vcs.files.mainState";
     const prepared = await definition.authorityPreparation![resolver]!(ctx, []);
-    expect(prepared.payload).toEqual([]);
+    expect(prepared.payload).toEqual({ args: [], reviewContextIds: [] });
     await expect(
       definition.handler(
         {
@@ -240,18 +586,68 @@ describe("canonical vcsService", () => {
         []
       )
     ).resolves.toEqual(EVENT);
-    expect(semanticCall).toHaveBeenCalledWith("vcsMainState", undefined, null);
+    expect(read).toHaveBeenCalledWith("readHistoryMain");
   });
 
-  it("forwards only input and the exact per-call causal edge", async () => {
-    const { definition, semanticCall } = service();
+  it("reads status from the admitted context", async () => {
+    const { definition, read } = service();
     await definition.handler(shellContext(), "status", [{ contextId: "context:target" }]);
-    expect(semanticCall).toHaveBeenCalledWith("vcsStatus", { contextId: "context:target" }, null);
+    expect(read).toHaveBeenCalledWith("readHistoryStatus", { contextId: "context:target" });
+  });
+
+  it("reads the exact author for a supervised child and denies other callers", async () => {
+    const child = "context:child";
+    const blocked = service();
+    const caller = agentContext("channel:parent");
+    await expect(blocked.definition.handler(caller, "status", [{ contextId: child }]))
+      .rejects.toThrow("outside the caller's reachable context graph");
+    expect(blocked.workspace.readRuntimeParticipantStatus).not.toHaveBeenCalled();
+
+    const admitted = service({ owned: [{ contextId: child, kind: "lifecycle" }] });
+    const status = {
+      contextId: child,
+      committed: EVENT,
+      workingHead: EVENT,
+      clean: true,
+      mainEventId: EVENT.eventId,
+      mainRelation: "at" as const,
+      workingCounts: { applications: 0, workUnits: 0, changes: 0 },
+      integrating: [],
+    };
+    vi.mocked(admitted.workspace.readRuntimeParticipantStatus).mockResolvedValue(status);
+    await expect(admitted.definition.handler(caller, "status", [{ contextId: child }]))
+      .resolves.toEqual(status);
+    expect(admitted.workspace.readRuntimeParticipantStatus).toHaveBeenCalledWith(child);
+    expect(admitted.workspace.openParticipantScope).not.toHaveBeenCalled();
+  });
+
+  it("admits comparison against an exact child review copy", async () => {
+    const child = "context:child";
+    const review = "context:review";
+    const source = { kind: "event" as const, eventId: "event:child" };
+    const caller = agentContext("channel:parent");
+    const admitted = service({
+      owned: [{ contextId: child, kind: "lifecycle" }],
+      referencesReachable: (contexts, references) =>
+        contexts.includes(review) ||
+        references.every(({ value }) => JSON.stringify(value) === JSON.stringify(EVENT)),
+    });
+    vi.mocked(admitted.workspace.receiveRuntimeParticipantReference).mockResolvedValue(review);
+    await admitted.definition.handler(caller, "compare", [{ target: EVENT, source }]);
+    expect(admitted.workspace.receiveRuntimeParticipantReference).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextIds: expect.arrayContaining([child]),
+        reference: { kind: "event", value: source.eventId },
+      }),
+    );
+    expect(admitted.workspace.reviewParticipantMerge).toHaveBeenCalledWith(
+      expect.objectContaining({ readableContextIds: expect.arrayContaining([child, review]) }),
+    );
   });
 
   it("notifies the owning host coordinator after an ordinary delta merge", async () => {
     const onExternalDeltaIntegrated = vi.fn(async () => undefined);
-    const { definition } = service({ onExternalDeltaIntegrated });
+    const { definition } = mutationService({ onExternalDeltaIntegrated });
     const ctx = shellContext();
     await definition.handler(ctx, "merge", [
       {
@@ -275,16 +671,21 @@ describe("canonical vcsService", () => {
   });
 
   it("preserves authorized chrome read authority through an extension provider relay", async () => {
-    const { definition, semanticCall } = service();
+    const { definition, read, workspace } = service();
     const ctx: ServiceContext = {
       caller: createVerifiedCaller("@workspace-extensions/git-bridge", "extension"),
-      authorizingCaller: createVerifiedCaller("shell:paired-device", "shell"),
+      authorizingCaller: createVerifiedCaller("shell:paired-device", "shell", null, null, TEST_SUBJECT),
       authorization: INTERNAL_AUTHORIZATION,
     };
 
     await definition.handler(ctx, "status", [{ contextId: "git-bridge-project" }]);
 
-    expect(semanticCall).toHaveBeenCalledOnce();
+    expect(read).toHaveBeenCalledOnce();
+    expect(workspace.openParticipantScope).toHaveBeenCalledWith({
+      caller: ctx.authorizingCaller,
+      contextId: "git-bridge-project",
+      ownerContextId: "git-bridge-project",
+    });
   });
 
   it("preserves semantic failures unchanged", async () => {
@@ -297,14 +698,14 @@ describe("canonical vcsService", () => {
 
   it("does not transport an agent session or authorship snapshot on reads", async () => {
     const channelId = "channel:trusted";
-    const { definition, semanticCall } = service();
+    const { definition, read } = service();
     await definition.handler(agentContext(channelId), "status", [{ contextId: "context:agent" }]);
-    expect(semanticCall).toHaveBeenCalledWith("vcsStatus", { contextId: "context:agent" }, null);
+    expect(read).toHaveBeenCalledWith("readHistoryStatus", { contextId: "context:agent" });
   });
 
-  it("preserves a trusted relay's exact causal invocation", async () => {
+  it("admits a trusted relay with its exact causal invocation", async () => {
     const trajectory = channelTrajectoryFor("channel:relay");
-    const { definition, semanticCall } = service({
+    const { definition, save } = mutationService({
       relayBinding: {
         entityId: "entity:agent",
         contextId: "context:agent",
@@ -312,7 +713,7 @@ describe("canonical vcsService", () => {
       },
     });
     const ctx: ServiceContext = {
-      caller: createVerifiedCaller("do:EvalDO:one", "do"),
+      caller: createVerifiedCaller("do:SessionDO:one", "do", null, null, TEST_SUBJECT),
       causalParent: {
         kind: "trajectory-invocation",
         ...trajectory,
@@ -320,16 +721,20 @@ describe("canonical vcsService", () => {
       },
       authorization: INTERNAL_AUTHORIZATION,
     };
-    await definition.handler(ctx, "status", [{ contextId: "context:agent" }]);
-    expect(semanticCall).toHaveBeenCalledWith(
-      "vcsStatus",
-      { contextId: "context:agent" },
-      ctx.causalParent
-    );
+    await definition.handler(ctx, "commit", [{
+      contextId: "context:agent",
+      commandId: "command:save",
+      expectedWorkingHead: EVENT,
+    }]);
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({
+      caller: ctx.caller,
+      cause: { parent: ctx.causalParent },
+      contextId: "context:agent",
+    }));
   });
 
   it("rejects an agent-bound mutation without an exact causal invocation", async () => {
-    const { definition, semanticCall } = service({
+    const { definition, read } = service({
       relayBinding: {
         entityId: "entity:agent",
         contextId: "context:agent",
@@ -352,11 +757,11 @@ describe("canonical vcsService", () => {
       code: "EACCES",
       errorData: { code: "Unauthorized", operation: "causal-ingress" },
     });
-    expect(semanticCall).not.toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
   });
 
   it("confines mutations to the caller's context", async () => {
-    const { definition, semanticCall } = service({ context: "context:own" });
+    const { definition, read } = service({ context: "context:own" });
     await expect(
       definition.handler(workerContext(), "discard", [
         {
@@ -366,12 +771,12 @@ describe("canonical vcsService", () => {
         },
       ])
     ).rejects.toThrow(/outside the caller's authority/);
-    expect(semanticCall).not.toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
   });
 
   it("allows the exact lifecycle owner to mutate its child context", async () => {
     const caller = workerContext();
-    const { definition, semanticCall } = service({
+    const { definition, discard } = mutationService({
       context: "context:own",
       owned: [
         {
@@ -388,7 +793,37 @@ describe("canonical vcsService", () => {
         commandId: "command:discard-child",
       },
     ]);
-    expect(semanticCall).toHaveBeenCalledOnce();
+    expect(discard).toHaveBeenCalledOnce();
+  });
+
+  it("recognizes the exact lifecycle owner through its live eval admission", async () => {
+    const callerId = "do:workers/session:SessionDO:executor";
+    const ownerId = "session:owner";
+    const { definition, discard } = mutationService({
+      context: "context:own",
+      resolveActive: (id) => id === callerId ? {
+        id, kind: "do", className: "SessionDO", key: "executor",
+        source: { repoPath: "workers/session", effectiveVersion: "build:one" },
+        contextId: "context:own", parentId: ownerId, createdAt: 1, status: "active",
+        cleanupComplete: true,
+      } : null,
+      owned: [{ contextId: "context:child", kind: "lifecycle", ownerEntityId: ownerId }],
+    });
+    const caller = createVerifiedCaller(callerId, "do", null, null, TEST_SUBJECT);
+    const discardArgs = [{
+      contextId: "context:child", expectedWorkingHead: EVENT, commandId: "command:discard-child",
+    }];
+    const ctx = { caller, authorization: INTERNAL_AUTHORIZATION };
+    await expect(definition.handler(ctx, "discard", discardArgs)).rejects.toThrow(/outside the caller's authority/);
+    const admitted = (contextId: string) => ({
+      ...ctx, caller: {
+        ...caller,
+        executionSession: { contextId, executor: { runtimeId: callerId } } as NonNullable<typeof caller.executionSession>,
+      },
+    });
+    await expect(definition.handler(admitted("context:other"), "discard", discardArgs)).rejects.toThrow(/outside the caller's authority/);
+    await definition.handler(admitted("context:own"), "discard", discardArgs);
+    expect(discard).toHaveBeenCalledOnce();
   });
 
   it("keeps lineage and foreign lifecycle contexts non-writable", async () => {
@@ -400,7 +835,7 @@ describe("canonical vcsService", () => {
         ownerEntityId: "worker:sibling",
       },
     ]) {
-      const { definition, semanticCall } = service({
+      const { definition, read } = service({
         context: "context:own",
         owned: [child],
       });
@@ -413,12 +848,25 @@ describe("canonical vcsService", () => {
           },
         ])
       ).rejects.toThrow(/outside the caller's authority/);
-      expect(semanticCall).not.toHaveBeenCalled();
+      expect(read).not.toHaveBeenCalled();
     }
   });
 
+  it("refuses reads and writes before native workspace history is attached", async () => {
+    const { definition, read } = service({ context: "context:own", attached: false });
+    await expect(definition.handler(workerContext(), "discard", [{
+      contextId: "context:own",
+      expectedWorkingHead: EVENT,
+      commandId: "command:discard",
+    }])).rejects.toMatchObject({ code: "ENOTREADY" });
+    await expect(definition.handler(workerContext(), "mainState", [])).rejects.toMatchObject({
+      code: "ENOTREADY",
+    });
+    expect(read).not.toHaveBeenCalled();
+  });
+
   it("allows a context owner to request protected publication", async () => {
-    const { definition, semanticPublishCall } = service({ context: "context:own" });
+    const { definition, publish } = mutationService({ context: "context:own" });
     await definition.handler(workerContext(), "push", [
       {
         contextId: "context:own",
@@ -427,12 +875,12 @@ describe("canonical vcsService", () => {
         expectedMainEventId: "event:main",
       },
     ]);
-    expect(semanticPublishCall).toHaveBeenCalledOnce();
+    expect(publish).toHaveBeenCalledOnce();
   });
 
   it("publishes an epoch transition through the protected transition call and notifies after commit", async () => {
     const onEpochTransitionPublished = vi.fn();
-    const { definition, semanticPublishCall, semanticEpochTransitionPublishCall } = service({
+    const { definition, publish } = mutationService({
       context: "context:own",
       onEpochTransitionPublished,
     });
@@ -446,24 +894,22 @@ describe("canonical vcsService", () => {
       },
     ]);
 
-    expect(semanticPublishCall).not.toHaveBeenCalled();
-    expect(semanticEpochTransitionPublishCall).toHaveBeenCalledWith(
-      {
+    expect(publish).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      push: {
         contextId: "context:own",
         commandId: "command:epoch-push",
         expectedCommittedEventId: "event:next",
         expectedMainEventId: "event:main",
       },
-      null,
-      expect.any(Object)
-    );
+      gateContext: { kind: "caller", caller: expect.any(Object), epochTransition: true },
+    }));
     expect(onEpochTransitionPublished).toHaveBeenCalledOnce();
   });
 
   it("does not request a handoff when epoch-transition publication fails", async () => {
     const failure = new Error("candidate rejected");
     const onEpochTransitionPublished = vi.fn();
-    const { definition } = service({
+    const { definition } = mutationService({
       context: "context:own",
       failure,
       onEpochTransitionPublished,
@@ -508,7 +954,7 @@ describe("canonical vcsService", () => {
       testPolicy: orchestrator,
       executionSession: { testPolicy: orchestrator } as never,
     };
-    const { definition, semanticPublishCall } = service({
+    const { definition, publish } = mutationService({
       context: "context:own",
       owned: [
         {
@@ -529,10 +975,15 @@ describe("canonical vcsService", () => {
       },
     ]);
 
-    expect(semanticPublishCall.mock.calls[0]![2]).toMatchObject({
-      testPolicy: casePolicy,
-      executionSession: { testPolicy: casePolicy },
-    });
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({
+      gateContext: {
+        kind: "caller",
+        caller: expect.objectContaining({
+          testPolicy: casePolicy,
+          executionSession: { testPolicy: casePolicy },
+        }),
+      },
+    }));
   });
 
   it("rejects an unrelated resident test policy", async () => {
@@ -541,7 +992,7 @@ describe("canonical vcsService", () => {
       ...ctx.caller,
       testPolicy: { policyId: "test:other", kind: "orchestrator" },
     };
-    const { definition, semanticPublishCall } = service({
+    const { definition, publish } = mutationService({
       context: "context:own",
       owned: [
         {
@@ -577,7 +1028,7 @@ describe("canonical vcsService", () => {
         },
       ])
     ).rejects.toThrow(/unrelated to caller policy/);
-    expect(semanticPublishCall).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it("allows an exactly attributed agent to request publication of its own context", async () => {
@@ -587,7 +1038,7 @@ describe("canonical vcsService", () => {
       ...channelTrajectoryFor("channel:own"),
       invocationId: "invocation:push",
     };
-    const { definition, semanticPublishCall } = service();
+    const { definition, publish } = mutationService();
     await definition.handler(ctx, "push", [
       {
         contextId: "context:agent",
@@ -596,19 +1047,19 @@ describe("canonical vcsService", () => {
         expectedMainEventId: "event:main",
       },
     ]);
-    expect(semanticPublishCall).toHaveBeenCalledOnce();
+    expect(publish).toHaveBeenCalledOnce();
   });
 
   it("authorizes the primary context on status reads", async () => {
-    const { definition, semanticCall } = service({ context: "context:own" });
+    const { definition, read } = service({ context: "context:own" });
     await expect(
       definition.handler(workerContext(), "status", [{ contextId: "context:foreign" }])
     ).rejects.toThrow(/outside the caller's reachable context graph/);
-    expect(semanticCall).not.toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
   });
 
   it("returns a corrective invalid reference for state roots outside every caller-authorized context", async () => {
-    const { definition, semanticCall } = service({
+    const { definition, read } = service({
       context: "context:own",
       referencesReachable: false,
     });
@@ -628,11 +1079,11 @@ describe("canonical vcsService", () => {
         reference: EVENT,
       },
     });
-    expect(semanticCall).not.toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
   });
 
   it("overwrites the declared visibility basis with the caller's reachable authorities", async () => {
-    const { definition, semanticCall } = service({
+    const { definition, read } = service({
       context: "context:own",
       owned: [{ contextId: "context:child" }],
     });
@@ -645,15 +1096,14 @@ describe("canonical vcsService", () => {
         visibilityContextIds: ["context:foreign"],
       },
     ]);
-    expect(semanticCall).toHaveBeenCalledWith(
-      "vcsQuery",
-      expect.objectContaining({ visibilityContextIds: ["context:child", "context:own"] }),
-      null
+    expect(read).toHaveBeenCalledWith(
+      "query",
+      expect.objectContaining({ visibilityContextIds: ["context:child", "context:own"] })
     );
   });
 
   it("scopes a walk and a search by the same reachable authorities", async () => {
-    const { definition, semanticCall } = service({ context: "context:own" });
+    const { definition, read } = service({ context: "context:own" });
     await definition.handler(workerContext(), "walk", [
       {
         contextId: "context:own",
@@ -666,17 +1116,16 @@ describe("canonical vcsService", () => {
     await definition.handler(workerContext(), "search", [
       { contextId: "context:own", text: "retries", limit: 5 },
     ]);
-    for (const method of ["vcsWalk", "vcsSearch"]) {
-      expect(semanticCall).toHaveBeenCalledWith(
+    for (const method of ["walk", "search"]) {
+      expect(read).toHaveBeenCalledWith(
         method,
-        expect.objectContaining({ visibilityContextIds: ["context:own"] }),
-        null
+        expect.objectContaining({ visibilityContextIds: ["context:own"] })
       );
     }
   });
 
   it("guards a walk subject outside the caller's reachable context graph", async () => {
-    const { definition, semanticCall } = service({
+    const { definition, read } = service({
       context: "context:own",
       referencesReachable: false,
     });
@@ -691,16 +1140,16 @@ describe("canonical vcsService", () => {
         },
       ])
     ).rejects.toMatchObject({ code: "EINVAL", errorData: { code: "InvalidReference" } });
-    expect(semanticCall).not.toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
   });
 
   it("guards external delta sources by the caller's reachable context graph", async () => {
-    const { definition, semanticCall } = service({
+    const { definition, read } = service({
       context: "context:own",
       referencesReachable: (_contextIds, references) => {
         expect(references).toContainEqual({
           kind: "external-delta",
-          value: "delta:foreign",
+          value: { kind: "external-delta", deltaId: "delta:foreign" },
         });
         return false;
       },
@@ -721,10 +1170,10 @@ describe("canonical vcsService", () => {
         reference: EVENT,
       },
     });
-    expect(semanticCall).not.toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
   });
 
-  it("lets an agent inspect its own channel trajectory before it has VCS commands", async () => {
+  it("admits an agent's own channel trajectory for inspection before it has VCS commands", async () => {
     const trajectory = channelTrajectoryFor("channel:own");
     const ctx = agentContext("channel:own");
     ctx.causalParent = {
@@ -733,16 +1182,43 @@ describe("canonical vcsService", () => {
       head: trajectory.head,
       invocationId: "invocation:provenance",
     };
-    const { definition, semanticCall } = service({ referencesReachable: false });
+    const inspected = new Error("Reached native inspection");
+    const { definition, read } = service({
+      referencesReachable: false,
+      readHistory: () => { throw inspected; },
+    });
 
-    await definition.handler(ctx, "inspect", [
+    await expect(definition.handler(ctx, "inspect", [
       { node: { kind: "trajectory", logId: trajectory.logId, head: trajectory.head } },
-    ]);
+    ])).rejects.toBe(inspected);
 
-    expect(semanticCall).toHaveBeenCalledOnce();
+    expect(read).toHaveBeenCalledExactlyOnceWith("readHistoryTrajectoryProvenance", {
+      operation: "inspect",
+      request: { node: { kind: "trajectory", logId: trajectory.logId, head: trajectory.head }, edgeLimit: 100 },
+      expand: true,
+    });
   });
 
-  it("lets an agent inspect only the command derived from its live causal invocation", async () => {
+  it("rejects an adjacency response that leaves the admitted transcript head", async () => {
+    const { logId, head } = channelTrajectoryFor("channel:own");
+    const root = { kind: "trajectory-invocation", logId, head, invocationId: "invocation:own" };
+    const { definition } = service({
+      referencesReachable: false,
+      readHistory: () => ({
+        root,
+        edges: [{
+          kind: "triggered-by", from: root,
+          to: { kind: "trajectory-message", logId: "channel:foreign", head, messageId: "message:foreign" },
+        }],
+        nextCursor: null,
+      }),
+    });
+
+    await expect(definition.handler(agentContext("channel:own"), "neighbors", [{ root }]))
+      .rejects.toThrow("outside the admitted transcript");
+  });
+
+  it("admits only the command derived from its live causal invocation", async () => {
     const trajectory = channelTrajectoryFor("channel:own");
     const parent = {
       kind: "trajectory-invocation" as const,
@@ -752,12 +1228,16 @@ describe("canonical vcsService", () => {
     };
     const ctx = agentContext("channel:own");
     ctx.causalParent = parent;
-    const { definition, semanticCall } = service({ referencesReachable: false });
+    const inspected = new Error("Reached native inspection");
+    const { definition, read } = service({
+      referencesReachable: false,
+      readHistory: () => { throw inspected; },
+    });
     const ownCommand = commandIdForTrajectoryInvocation(parent);
 
-    await definition.handler(ctx, "inspect", [
+    await expect(definition.handler(ctx, "inspect", [
       { node: { kind: "command", commandId: ownCommand } },
-    ]);
+    ])).rejects.toBe(inspected);
     await expect(
       definition.handler(agentContext("channel:own"), "inspect", [
         { node: { kind: "command", commandId: ownCommand } },
@@ -788,7 +1268,7 @@ describe("canonical vcsService", () => {
         { node: { kind: "command", commandId: "command:trajectory-invocation:foreign" } },
       ])
     ).rejects.toThrow(/unavailable from the caller's reachable context graph/);
-    expect(semanticCall).toHaveBeenCalledOnce();
+    expect(read).toHaveBeenCalledOnce();
   });
 
   it("does not treat a foreign trajectory as the agent's own", async () => {
@@ -801,17 +1281,17 @@ describe("canonical vcsService", () => {
       head: own.head,
       invocationId: "invocation:provenance",
     };
-    const { definition, semanticCall } = service({ referencesReachable: false });
+    const { definition, read } = service({ referencesReachable: false });
 
     await expect(
       definition.handler(ctx, "inspect", [
         { node: { kind: "trajectory", logId: foreign.logId, head: foreign.head } },
       ])
     ).rejects.toThrow(/unavailable from the caller's reachable context graph/);
-    expect(semanticCall).not.toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
   });
 
-  it("lets a non-privileged caller walk only its causally reachable intent chain", async () => {
+  it("lets a non-privileged caller follow native causes to the originating invocation", async () => {
     const appliedChange = {
       kind: "applied-change" as const,
       appliedChangeId: "applied-change:causal",
@@ -825,27 +1305,7 @@ describe("canonical vcsService", () => {
       head: "main",
       invocationId: "invocation:causal",
     };
-    const turn = {
-      kind: "trajectory-turn" as const,
-      logId: "trajectory:own",
-      head: "main",
-      turnId: "turn:causal",
-    };
-    const message = {
-      kind: "trajectory-message" as const,
-      logId: "trajectory:own",
-      head: "main",
-      messageId: "message:causal",
-    };
-    const chain: VcsSemanticNodeRef[] = [
-      appliedChange,
-      change,
-      workUnit,
-      command,
-      invocation,
-      turn,
-      message,
-    ];
+    const chain = [appliedChange, change, workUnit, command, invocation];
     const key = (node: unknown) => JSON.stringify(node);
     const reachable = new Set(chain.map(key));
     const adjacency = new Map<string, VcsProvenanceEdge[]>([
@@ -853,42 +1313,24 @@ describe("canonical vcsService", () => {
       [key(change), [{ kind: "authored-change", from: workUnit, to: change }]],
       [key(workUnit), [{ kind: "caused-by", from: workUnit, to: command }]],
       [key(command), [{ kind: "caused-by", from: command, to: invocation }]],
-      [key(invocation), [{ kind: "part-of-turn", from: invocation, to: turn }]],
-      [key(turn), [{ kind: "triggered-by", from: turn, to: message }]],
-      [key(message), []],
     ]);
-    const { definition, semanticCall } = service({
+    const { definition, read } = service({
       context: "context:own",
       referencesReachable: (contextIds, references) =>
         contextIds.length === 1 &&
         contextIds[0] === "context:own" &&
         references.every(({ value }) => reachable.has(key(value))),
-      semanticCall: (method, inputValue) => {
-        const input = inputValue as { node?: VcsSemanticNodeRef; root?: VcsSemanticNodeRef };
-        if (method === "vcsInspect" && input.node) {
-          return {
-            root: input.node,
-            node: { kind: input.node.kind },
-            edges: [],
-            hasMoreEdges: false,
-          };
-        }
-        if (method === "vcsNeighbors" && input.root) {
-          return {
-            root: input.root,
-            edges: adjacency.get(key(input.root)) ?? [],
-            nextCursor: null,
-          };
-        }
-        throw new Error(`unexpected semantic method ${method}`);
+      readHistory: (method, inputValue) => {
+        if (method === "readHistoryTrajectoryProvenance") return { root: invocation, edges: [], nextCursor: null };
+        if (method !== "readHistoryNeighbors") throw new Error(`unexpected history method ${method}`);
+        const { neighbors: { root } } = inputValue as { neighbors: { root: VcsSemanticNodeRef } };
+        return { root, edges: adjacency.get(key(root)) ?? [], nextCursor: null };
       },
     });
     const caller = workerContext();
 
-    for (const [index, node] of chain.entries()) {
-      await expect(
-        definition.handler(caller, "inspect", [{ node, edgeLimit: 20 }])
-      ).resolves.toMatchObject({ root: node });
+    const workspaceChain = chain.slice(0, -1);
+    for (const [index, node] of workspaceChain.entries()) {
       const page = (await definition.handler(caller, "neighbors", [{ root: node, limit: 20 }])) as {
         edges: VcsProvenanceEdge[];
       };
@@ -902,6 +1344,12 @@ describe("canonical vcsService", () => {
         ).toBe(true);
       }
     }
+
+    await expect(definition.handler(caller, "neighbors", [{ root: invocation, limit: 20 }]))
+      .resolves.toEqual({ root: invocation, edges: [], nextCursor: null });
+    expect(read).toHaveBeenLastCalledWith("readHistoryTrajectoryProvenance", {
+      operation: "neighbors", request: { root: invocation, limit: 20 }, expand: false,
+    });
 
     const siblingInvocation = {
       kind: "trajectory-invocation" as const,
@@ -929,12 +1377,12 @@ describe("canonical vcsService", () => {
         reference: siblingInvocation,
       },
     });
-    expect(semanticCall).toHaveBeenCalledTimes(chain.length * 2);
+    expect(read).toHaveBeenCalledTimes(workspaceChain.length + 1);
   });
 
   it("carries the verified caller only to the protected publication gate", async () => {
     const ctx = shellContext();
-    const { definition, semanticPublishCall } = service();
+    const { definition, publish } = mutationService();
     await definition.handler(ctx, "push", [
       {
         contextId: "context:own",
@@ -943,15 +1391,14 @@ describe("canonical vcsService", () => {
         expectedMainEventId: "event:main",
       },
     ]);
-    expect(semanticPublishCall).toHaveBeenCalledWith(
-      {
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({
+      push: {
         contextId: "context:own",
         commandId: "command:push",
         expectedCommittedEventId: "event:next",
         expectedMainEventId: "event:main",
       },
-      null,
-      ctx.caller
-    );
+      gateContext: { kind: "caller", caller: ctx.caller },
+    }));
   });
 });

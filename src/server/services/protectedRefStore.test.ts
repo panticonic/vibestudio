@@ -31,6 +31,57 @@ afterEach(async () => {
 });
 
 describe("ProtectedRefStore", () => {
+  it("recovers a durable canonical advance before projecting refs without reopening the gate", async () => {
+    const statePath = await fsp.mkdtemp(path.join(os.tmpdir(), "protected-main-canonical-"));
+    roots.push(statePath);
+    const prepare = vi.fn();
+    const failed = vi.fn();
+    const gate = vi.fn(async () => ({ prepare, committed: vi.fn(), failed }));
+    const create = () => createProtectedRefStore({ statePath, gate, now: () => 42 });
+    let store = create();
+    let approved = false;
+    let published = false;
+    const source = {
+      approved: vi.fn(async () => approved),
+      authorize: vi.fn(async () => {
+        expect(prepare).toHaveBeenCalledOnce();
+        approved = true;
+      }),
+      publish: vi.fn(async () => {
+        expect(approved).toBe(true);
+        expect(store.readMain("packages/a")).toBeNull();
+        if (!published) {
+          published = true;
+          throw new Error("Lost canonical advance response");
+        }
+      }),
+      acknowledge: vi.fn(async () => {
+        expect(store.readMain("packages/a")?.contentRoot).toBe(A);
+        expect(store.readAppliedPublication("publication:canonical")?.observersAppliedAt).toBe(42);
+      }),
+    };
+    const request = {
+      entries: [{ repoPath: "packages/a", expectedOld: null, next: A }],
+      evidence: {
+        publicationId: "publication:canonical",
+        previousEventId: "event:before",
+        publishedEventId: "event:published",
+        hostRefsBasisDigest: EMPTY_BASIS,
+      },
+      gateContext: { approved: true },
+    };
+    await expect(store.updateMains(request, source)).rejects.toThrow("Lost canonical advance response");
+    expect(store.readMain("packages/a")).toBeNull();
+    expect(source.acknowledge).not.toHaveBeenCalled();
+    expect(failed).not.toHaveBeenCalled();
+    store = create();
+    await store.updateMains(request, source);
+    expect(gate).toHaveBeenCalledOnce();
+    expect(source.authorize).toHaveBeenCalledOnce();
+    expect(source.acknowledge).toHaveBeenCalledOnce();
+    expect(store.readMainSemanticState()).toEqual({ kind: "event", eventId: "event:published" });
+  });
+
   it("completes an approved operation only after its refs are durably committed", async () => {
     const statePath = await fsp.mkdtemp(path.join(os.tmpdir(), "protected-main-completion-"));
     roots.push(statePath);

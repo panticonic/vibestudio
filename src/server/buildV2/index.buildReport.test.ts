@@ -95,7 +95,6 @@ function fakeSource(
           return [relPath, `h:${relPath}`];
         })
       ),
-    resolveContextState: async () => CANDIDATE_VIEW,
     readFile: async () => null,
     executionStateForContent: (stateHash) => ({
       kind: "event",
@@ -541,7 +540,7 @@ describe("BuildSystemV2 — explicit build reports", () => {
     env = await loadWithMocks();
     const { buildSystem } = env;
 
-    const report = await buildSystem.getBuildReport("@workspace-panels/app", "ctx:review");
+    const report = await buildSystem.getBuildReport("@workspace-panels/app", CANDIDATE_VIEW);
 
     expect(report).toMatchObject({
       unitName: "@workspace-panels/app",
@@ -557,12 +556,12 @@ describe("BuildSystemV2 — explicit build reports", () => {
   it("distinguishes absent units from existing content at the exact selected state", async () => {
     env = await loadWithMocks();
     for (const target of ["panels/missing", "@workspace/missing"]) {
-      await expect(env.buildSystem.getBuildReport(target, "ctx:review")).rejects.toMatchObject({
+      await expect(env.buildSystem.getBuildReport(target, CANDIDATE_VIEW)).rejects.toMatchObject({
         name: "BuildRequestError",
         message: expect.stringContaining(target),
       });
     }
-    expect(await env.buildSystem.getBuildReport("projects/notes", "ctx:review")).toMatchObject({
+    expect(await env.buildSystem.getBuildReport("projects/notes", CANDIDATE_VIEW)).toMatchObject({
       stateHash: CANDIDATE_VIEW,
       repoPath: "projects/notes",
       kind: "content",
@@ -578,7 +577,7 @@ describe("BuildSystemV2 — explicit build reports", () => {
     env = await loadWithMocks({ invalidPanelManifest: true });
 
     await expect(
-      env.buildSystem.getBuildReport("panels/solo", "ctx:review")
+      env.buildSystem.getBuildReport("panels/solo", CANDIDATE_VIEW)
     ).resolves.toMatchObject({
       repoPath: "panels/solo",
       kind: "panel",
@@ -638,6 +637,17 @@ describe("BuildSystemV2 — explicit build reports", () => {
     expect(reverse).not.toContain("@workspace/lib");
     expect(forward).not.toContain("@workspace/isolated");
     expect(reverse).not.toContain("@workspace/isolated");
+  });
+
+  it("keeps metadata with unchanged service bindings out of the consumer closure", async () => {
+    env = await loadWithMocks({ blockingAuthorityConsumer: true });
+    const { buildSystem } = env;
+    await expect(buildSystem.listAffectedBuildUnits(CANDIDATE_VIEW, ["meta"], undefined, {
+      workspaceServiceBindingsChanged: false,
+    })).resolves.toEqual([]);
+    await expect(buildSystem.listAffectedBuildUnits(CANDIDATE_VIEW, ["meta", "workers/removed-notes"], undefined, {
+      workspaceServiceBindingsChanged: false,
+    })).resolves.toContain("@workspace-panels/app");
   });
 
   it("keeps an unrelated broken sibling outside the protected-publication closure", async () => {

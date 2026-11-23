@@ -66,13 +66,9 @@ export interface WorkspaceServiceDeps {
   };
   /** Durably advance a model session's content latch before read bytes are returned. */
   hasClientCapability?: (callerId: string, capability: ClientCapability) => boolean;
-  /**
-   * Materialize a context's working folder (idempotent) and return its absolute
-   * path. Backs `workspace.ensureContextFolder`; delegates to the
-   * ContextFolderManager. Absent in remote-server/mobile-client mode.
-   */
-  ensureContextFolder?: (contextId: string) => Promise<{ source: string; scratch: string }>;
-  /** Resolve the owning context for runtime callers that request context materialization directly. */
+  /** Create the workspace-confined scratch directory for a context. */
+  ensureContextScratch?: (contextId: string) => Promise<string>;
+  /** Resolve the owning context for runtime callers preparing scratch. */
   resolveCallerContext?: (callerId: string) => Promise<string | null> | string | null;
 }
 
@@ -130,7 +126,7 @@ function isTrustedWorkspaceCaller(ctx: ServiceContext, deps: WorkspaceServiceDep
   return isTrustedDeviceCaller(ctx.caller, { hasClientCapability: deps.hasClientCapability });
 }
 
-async function requireEnsureContextFolderAccess(
+async function requireContextScratchAccess(
   deps: WorkspaceServiceDeps,
   ctx: ServiceContext,
   contextId: string
@@ -388,16 +384,16 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
       },
 
       ensureContextFolder: async (ctx, [contextId]) => {
-        if (!deps.ensureContextFolder) {
+        if (!deps.ensureContextScratch) {
           throw new ServiceError(
             "workspace",
             "ensureContextFolder",
-            "Context folder materialization is unavailable",
+            "Context scratch is unavailable",
             "ENOENT"
           );
         }
-        await requireEnsureContextFolderAccess(deps, ctx, contextId);
-        return deps.ensureContextFolder(contextId);
+        await requireContextScratchAccess(deps, ctx, contextId);
+        return { scratch: await deps.ensureContextScratch(contextId) };
       },
 
       findUnitForPath: async (_ctx, [pathInput]) => {

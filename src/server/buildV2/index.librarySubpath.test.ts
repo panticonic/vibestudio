@@ -62,9 +62,6 @@ function fakeWorkspaceSource(
     async unitHashes(_stateHash, relPaths) {
       return Object.fromEntries(relPaths.map((relPath) => [relPath, `h:${relPath}`]));
     },
-    async resolveContextState() {
-      return TEST_STATE;
-    },
     async readFile() {
       return null;
     },
@@ -86,8 +83,7 @@ function fakeWorkspaceSource(
 
 function fakeMultiStateWorkspaceSource(
   stateRoots: Record<string, string>,
-  mainStateHash: string,
-  heads: Record<string, string> = {}
+  mainStateHash: string
 ): WorkspaceStateSource & BuildSourceProvider {
   const rootForState = (stateHash: string): string => {
     const root = stateRoots[stateHash];
@@ -107,9 +103,6 @@ function fakeMultiStateWorkspaceSource(
           return [relPath, fs.existsSync(dir) ? `h:${stateHash}:${relPath}` : null];
         })
       );
-    },
-    async resolveContextState(contextId) {
-      return heads[`ctx:${contextId}`] ?? TEST_STATE;
     },
     async readFile() {
       return null;
@@ -194,8 +187,7 @@ describe("BuildSystemV2 library package subpaths", () => {
       mainRoot,
       fakeMultiStateWorkspaceSource(
         { [TEST_STATE]: mainRoot, [CONTEXT_STATE]: contextRoot },
-        TEST_STATE,
-        { "ctx:dependency-agent": CONTEXT_STATE }
+        TEST_STATE
       ),
       {
         ...buildRoots(mainRoot),
@@ -234,7 +226,7 @@ describe("BuildSystemV2 library package subpaths", () => {
       workspacePackages: {},
       moduleConditions: ["import", "default"],
     });
-    const preparation = buildSystem.prepareTypecheck("packages/target", "ctx:dependency-agent");
+    const preparation = buildSystem.prepareTypecheck("packages/target", CONTEXT_STATE);
     await started;
     let shutdownComplete = false;
     const shutdown = buildSystem.shutdown();
@@ -819,8 +811,7 @@ describe("BuildSystemV2 library package subpaths", () => {
           "state:main": mainRoot,
           [CONTEXT_STATE]: contextRoot,
         },
-        "state:main",
-        { "ctx:agent-1": CONTEXT_STATE }
+        "state:main"
       ),
       buildRoots(mainRoot)
     );
@@ -839,7 +830,7 @@ describe("BuildSystemV2 library package subpaths", () => {
       },
     });
 
-    const result = await buildSystem.getBuild("@workspace/context-only", "ctx:agent-1", {
+    const result = await buildSystem.getBuild("@workspace/context-only", CONTEXT_STATE, {
       library: true,
       libraryTarget: "panel",
     });
@@ -874,15 +865,14 @@ describe("BuildSystemV2 library package subpaths", () => {
           "state:main-resolve": mainRoot,
           [RESOLVE_CONTEXT_STATE]: contextRoot,
         },
-        "state:main-resolve",
-        { "ctx:agent-resolve": RESOLVE_CONTEXT_STATE }
+        "state:main-resolve"
       ),
       buildRoots(mainRoot)
     );
 
     await expect(buildSystem.resolveBuildUnit("panels/context-panel")).resolves.toBeNull();
     await expect(
-      buildSystem.resolveBuildUnit("panels/context-panel", "ctx:agent-resolve")
+      buildSystem.resolveBuildUnit("panels/context-panel", RESOLVE_CONTEXT_STATE)
     ).resolves.toMatchObject({
       unitPath: "panels/context-panel",
       unitName: "@workspace-panels/context-panel",

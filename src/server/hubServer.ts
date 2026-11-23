@@ -31,6 +31,7 @@ import {
 } from "@vibestudio/workspace/loader";
 import {
   INITIAL_WORKSPACE_TEMPLATE_ENV,
+  DEFAULT_WORKSPACE_TEMPLATES_ENV,
   readDefaultWorkspaceTemplates,
 } from "@vibestudio/workspace/templateRelease";
 import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
@@ -106,6 +107,7 @@ import { updateAccountProfile } from "./hostCore/accountProfile.js";
 import { workspaceCreationAuthorityPreparation } from "./services/workspaceCreationAuthority.js";
 import {
   WorkspaceChildAgentCredentialMintInputSchema,
+  WorkspaceChildChronologPrincipalInputSchema,
   WorkspaceChildAgentCredentialRevokeEntityInputSchema,
   WorkspaceChildClientCredentialMintInputSchema,
   WorkspaceChildClientPrincipalAttestSchema,
@@ -143,7 +145,7 @@ import { readBoundedBody, sendJson, sendText } from "./hostCore/httpResponses.js
 declare const __filename: string;
 
 const WORKSPACE_STARTUP_STDERR_LIMIT_BYTES = 32 * 1024;
-const INTERNAL_DO_PROGRAMS_SNAPSHOT_ENV = "VIBESTUDIO_INTERNAL_DO_PROGRAMS_PATH";
+const INTERNAL_DO_PROGRAMS_SNAPSHOT_ENV = "VIBESTUDIO_RUNTIME_APP_PATH";
 
 /**
  * Freeze the product-baked internal runtime for this hub boot.
@@ -156,7 +158,7 @@ export function snapshotInternalDOProgramsForHub(
   configDir: string,
   programs = getInternalDOPrograms()
 ): string {
-  const snapshotPath = path.join(configDir, "server-auth", "internal-do-programs.snapshot.json");
+  const snapshotPath = path.join(configDir, "server-auth", "runtime-app.snapshot.json");
   writeFileAtomicSync(snapshotPath, JSON.stringify(programs.publication()), { mode: 0o600 });
   return snapshotPath;
 }
@@ -1652,6 +1654,26 @@ async function handleInternalRoute(
       sendJson(res, 200, result);
       return;
     }
+    if (route === "chronolog/principal" || route === "chronolog/public-principal") {
+      const body = WorkspaceChildChronologPrincipalInputSchema.parse(rawBody);
+      const subject = requireTargetUser(state, { userId: body.userId });
+      const caller: HubSubject = {
+        userId: subject.id, handle: subject.handle, role: subject.role,
+        ...(body.deviceId ? { deviceId: body.deviceId } : {}),
+      };
+      requireLiveHubSubject(state, caller);
+      assertWorkspaceMember(state, caller, boundWorkspaceId);
+      const { ChronologSigningVault } = await import("./chronolog/signingVault.js");
+      const principal = await new ChronologSigningVault().principal(caller.userId);
+      if (state.workspaceChildTokens.get(token) !== boundWorkspaceId) {
+        throw authError("EACCES", "Workspace child runtime expired", 403);
+      }
+      requireLiveHubSubject(state, caller);
+      assertWorkspaceMember(state, caller, boundWorkspaceId);
+      res.setHeader("Cache-Control", "no-store");
+      sendJson(res, 200, route === "chronolog/principal" ? principal : { publicKey: principal.publicKey });
+      return;
+    }
     if (route === "client-principal/attest") {
       const body = WorkspaceChildClientPrincipalAttestSchema.parse(rawBody);
       const userId = state.identityDb.userForDevice(body.deviceId);
@@ -3015,9 +3037,12 @@ export function applyWorkspaceHostRuntimeEnv(
   // may be live TypeScript and therefore cannot locate compiled artifacts.
   if (!launchSet.historical) return;
   env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = path.dirname(launchSet.serverEntry);
-  // The retained process owns its compiled bundle and build executable. The
-  // hub snapshot is deliberately preserved only for its own generation.
+  // The retained process owns its compiled bundle, build executable and
+  // prepared workspace resources. The hub's resources belong to its own generation.
   delete env[INTERNAL_DO_PROGRAMS_SNAPSHOT_ENV];
+  delete env["VIBESTUDIO_WORKSPACE_RELEASE_ROOT"];
+  delete env[DEFAULT_WORKSPACE_TEMPLATES_ENV];
+  delete env[INITIAL_WORKSPACE_TEMPLATE_ENV];
   const esbuildBinary = getEsbuildBinaryPath(launchSet.appRoot);
   if (esbuildBinary) env["ESBUILD_BINARY_PATH"] = esbuildBinary;
   else delete env["ESBUILD_BINARY_PATH"];
@@ -3839,13 +3864,14 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     activeState.onRootBootstrapCompleted = () => rootBootstrapLifecycle.complete();
     await rootBootstrapLifecycle.start();
   }
-  // Prewarm every registered workspace runtime WITHOUT blocking hub readiness.
-  // A persisted endpoint-bound device membership is a live reach contract, so children must
-  // restart for returning clients — but pairing and hub control must not wait
-  // out a ~20s child cold boot. Routing coalesces onto the pending start, so a
-  // client that arrives mid-boot awaits the same runtime promise instead of
-  // spawning a duplicate.
-  void restoreRoutedWorkspaceRuntimes(centralData.listWorkspaces(), (name) =>
+  // Restore previously opened workspaces without blocking hub readiness.
+  // A new registration can still need a seed bundle before its first route.
+  const routedWorkspaces = centralData.listWorkspaces().filter(({ name }) =>
+    name === bootstrapWorkspace ||
+    centralData.getWorkspaceCreationIntent(name) === null ||
+    fs.existsSync(workspaceIrohReachPaths(name).identityFile)
+  );
+  void restoreRoutedWorkspaceRuntimes(routedWorkspaces, (name) =>
     ensureWorkspaceRuntime(activeState, name)
   );
   let revocationCleanupDrain: Promise<void> | null = null;

@@ -55,3 +55,26 @@ export function writeNativeIsolationArtifacts(
     );
   }
 }
+
+/**
+ * A celld release for one packaging target: the application's manifest naming a
+ * fixture binary by digest, and that binary as the CI-built input.
+ */
+export function writeCelldRelease(root: string, platform: string, arch: string) {
+  const bytes = nativeIsolationBinary({ platform, arch } as (typeof NATIVE_ISOLATION_TARGETS)[number]);
+  const binaryName = platform === "win32" ? "celld.exe" : "celld";
+  mkdirSync(path.join(root, "native/celld"), { recursive: true });
+  writeFileSync(
+    path.join(root, "native/celld/targets.json"),
+    JSON.stringify({
+      version: 1,
+      targets: [
+        { platform, arch, binary: binaryName, sha256: createHash("sha256").update(bytes).digest("hex") },
+      ],
+    })
+  );
+  const input = path.join(root, "native/celld/artifacts", `${platform}-${arch}`);
+  mkdirSync(input, { recursive: true });
+  writeFileSync(path.join(input, binaryName), bytes);
+  return { bytes, binaryName, installedPath: `native/celld/${platform}-${arch}/${binaryName}` };
+}

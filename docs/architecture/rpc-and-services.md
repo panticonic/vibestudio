@@ -100,10 +100,11 @@ only a handful of host services. This is NOT a reachability limitation, and
 service authors should not play whack-a-mole adding `agent` to allow lists.
 
 **The reachability guarantee is eval.** An agent's `vibestudio eval` runs in a
-per-owner EvalDO activated as an ordinary `do` principal scoped to the agent's
-own context (`evalService.ts`). Every service call the eval makes carries that
+per-owner eval kernel, hosted by a session entity that is an ordinary `do`
+principal scoped to the agent's own context (admitted by `dynamicCodeService.ts`).
+Every service call the eval makes carries that
 `do` identity — so anything `do`-callable is agent-reachable today, including
-capability-gated paths: the EvalDO carries a code identity the grant/approval
+capability-gated paths: the session entity carries a code identity the grant/approval
 pipeline understands, so consent prompts work through eval where they may be
 deny-only on the direct path.
 

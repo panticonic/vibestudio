@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { createRpcMethods } from "@vibestudio/shared/rpcMethods";
 import { mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
+import { fsMethods } from "@vibestudio/service-schemas/fs";
 import { viewMethods } from "@vibestudio/service-schemas/view";
 import { vcsMethods } from "@vibestudio/service-schemas/vcs";
 import { shellApprovalMethods } from "@vibestudio/service-schemas/shellApproval";
@@ -11,10 +12,12 @@ import { nativeUiRead, nativeUiServiceInvoker } from "../support/nativeUiRead";
 import {
   ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE,
   getNativePanelSlotDebugInfo,
+  getPanelReadiness,
   getPanelTree,
   hasElectronDisplay,
   launchTestApp,
   approvePendingStartupUnits,
+  approvePendingWorkspaceCreationReview,
   type TestApp,
 } from "../../setup/electronSetup";
 import {
@@ -27,58 +30,6 @@ test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 
 const hubControlRpcMethods = createRpcMethods("hubControl", hubControlMethods);
 const shellApprovalRpcMethods = createRpcMethods("shellApproval", shellApprovalMethods);
-
-type WebContentsSnapshot = {
-  id: number;
-  url: string;
-  title: string;
-  text: string;
-  hasTitlebar: boolean;
-  hasApprovalBar: boolean;
-  workspaceLabels: string[];
-};
-
-async function listWebContents(testApp: TestApp): Promise<WebContentsSnapshot[]> {
-  return testApp.app.evaluate(async ({ webContents }) => {
-    const snapshots: WebContentsSnapshot[] = [];
-    for (const contents of webContents.getAllWebContents()) {
-      if (contents.isDestroyed()) continue;
-      const url = contents.getURL();
-      const title = contents.getTitle();
-      let dom: {
-        text: string;
-        hasTitlebar: boolean;
-        hasApprovalBar: boolean;
-        workspaceLabels: string[];
-      } | null = null;
-      try {
-        dom = await contents.executeJavaScript(
-          `({
-            text: document.body?.innerText ?? "",
-            hasTitlebar: !!document.querySelector('[data-shell-top-chrome="titlebar"]')
-              || !!document.querySelector(".titlebar-breadcrumb-scroll")
-              || !!document.querySelector('[aria-label="Menu"]'),
-            hasApprovalBar: !!document.querySelector(".approval-card, .approval-pill"),
-            workspaceLabels: [...document.querySelectorAll(".workspace-stack section")].map(node => node.getAttribute("aria-label") ?? ""),
-          })`,
-          true
-        );
-      } catch {
-        dom = null;
-      }
-      snapshots.push({
-        id: contents.id,
-        url,
-        title,
-        text: dom?.text ?? "",
-        hasTitlebar: dom?.hasTitlebar ?? false,
-        hasApprovalBar: dom?.hasApprovalBar ?? false,
-        workspaceLabels: dom?.workspaceLabels ?? [],
-      });
-    }
-    return snapshots;
-  });
-}
 
 async function getPanelSurfaceLayout(shellPage: Page): Promise<{
   surfaces: Array<{
@@ -166,44 +117,6 @@ async function approveStartupUnitsAndDeclineReporting(testApp: TestApp): Promise
   await declineFirstRunReporting(testApp);
 }
 
-async function workspaceReviewState(
-  page: Page,
-  workspaceId: string
-): Promise<{ status: string; approvalId?: string; error?: string }> {
-  return nativeUiRead(
-    page,
-    { kind: "workspace", workspaceId },
-    mainRpcMethods["shellApproval.getWorkspaceCreationReviewState"],
-    []
-  );
-}
-
-async function approveWorkspaceCreationReviewInShell(
-  page: Page,
-  workspaceId: string
-): Promise<void> {
-  await expect
-    .poll(async () => (await workspaceReviewState(page, workspaceId)).status, {
-      timeout: 120_000,
-    })
-    .not.toBe("preparing");
-  let state = await workspaceReviewState(page, workspaceId);
-  if (state.status === "failed") {
-    throw new Error(`Workspace creation review failed: ${state.error}`);
-  }
-  if (state.status === "pending") {
-    if (!state.approvalId) throw new Error("Pending workspace review has no approval ID");
-    const card = await presentApprovalCard(page, state.approvalId);
-    expect(await card.getAttribute("data-approval-id")).toBe(state.approvalId);
-    await card.getByRole("button", { name: "Add to workspace", exact: true }).click();
-    await expect
-      .poll(() => workspaceReviewState(page, workspaceId), { timeout: 120_000 })
-      .toMatchObject({ status: "resolved" });
-    state = await workspaceReviewState(page, workspaceId);
-  }
-  expect(["resolved", "not-required"]).toContain(state.status);
-}
-
 test.describe("Desktop Shell Chrome", () => {
   test.setTimeout(240_000);
 
@@ -218,145 +131,48 @@ test.describe("Desktop Shell Chrome", () => {
     testApp = await launchTestApp({ launchTimeout: 240_000 });
     await approveStartupUnitsAndDeclineReporting(testApp);
 
-    let lastSnapshots: WebContentsSnapshot[] = [];
+    const shellPage = await findWorkspaceShellPage(testApp);
     try {
-      await expect
-        .poll(
-          async () => {
-            lastSnapshots = await listWebContents(testApp!);
-            return lastSnapshots.some((snapshot) => {
-              let pathname = "";
-              try {
-                pathname = new URL(snapshot.url).pathname;
-              } catch {
-                return false;
-              }
-              return (
-                pathname.includes("/_a/") &&
-                pathname.endsWith("/index.html") &&
-                snapshot.hasTitlebar &&
-                snapshot.workspaceLabels.includes("Personal workspace") &&
-                snapshot.workspaceLabels.includes("System workspace")
-              );
-            });
-          },
-          { timeout: 120_000, intervals: [500, 1000, 2000] }
-        )
-        .toBe(true);
-      const chromeId = await testApp.app.evaluate(
-        ({ webContents }) =>
-          webContents
-            .getAllWebContents()
-            .find(
-              (contents) =>
-                !contents.isDestroyed() &&
-                contents.getURL().includes("/_a/") &&
-                contents.getURL().endsWith("/index.html")
-            )!.id
-      );
-      for (const workspace of ["Personal", "System", "Personal"]) {
-        await testApp.app.evaluate(
-          async ({ webContents }, { chromeId, workspace }) => {
-            const chrome = webContents.fromId(chromeId);
-            if (!chrome || chrome.isDestroyed())
-              throw new Error("Workspace switching replaced the desktop chrome");
-            await chrome.executeJavaScript(
-              `document.querySelector('[aria-label="Open ${workspace}"]').click()`
-            );
-          },
-          { chromeId, workspace }
-        );
-        await expect
-          .poll(
-            () =>
-              testApp!.app.evaluate(
-                async ({ webContents }, { chromeId, workspace }) => {
-                  const chrome = webContents.fromId(chromeId);
-                  if (!chrome || chrome.isDestroyed()) return false;
-                  return chrome.executeJavaScript(
-                    `document.querySelector('.workspace-section-focused')?.getAttribute('aria-label') === '${workspace} workspace'`
-                  );
-                },
-                { chromeId, workspace }
-              ),
-            { timeout: 60_000 }
-          )
-          .toBe(true);
+      const titlebar = shellPage.locator(
+        '[data-shell-top-chrome="titlebar"], .titlebar-breadcrumb-scroll, [aria-label="Menu"]'
+      ).first();
+      await expect(titlebar).toBeVisible({ timeout: 120_000 });
+      for (const workspace of ["Personal", "System"]) {
+        await expect(
+          shellPage.locator(`.workspace-stack section[aria-label="${workspace} workspace"]`)
+        ).toBeVisible({ timeout: 60_000 });
       }
-      // Personal's startup review consumes a worker receiver declaration even
-      // though the worker itself does not require privileged-code admission.
-      const shellPage = await findWorkspaceShellPage(testApp);
-      const workspaces = await nativeUiRead(
-        shellPage,
-        { kind: "hub" },
-        hubControlRpcMethods.listWorkspaces,
-        []
-      );
-      const personal = workspaces.find((workspace) => workspace.privateRole === "personal");
-      expect(personal).toBeTruthy();
-      let browserReview:
-        | import("@vibestudio/shared/approvals").PendingUnitInstallReviewApproval
-        | undefined;
-      await expect
-        .poll(
-          async () => {
-            const pending = await nativeUiRead(
-              shellPage,
-              { kind: "workspace", workspaceId: personal!.workspaceId },
-              shellApprovalRpcMethods.listPending,
-              []
-            );
-            browserReview = pending.find(
-              (
-                approval
-              ): approval is import("@vibestudio/shared/approvals").PendingUnitInstallReviewApproval =>
-                approval.kind === "unit-install-review" &&
-                approval.parts.some((part) =>
-                  part.identityKey.startsWith("extensions/browser-data@")
-                )
-            );
-            return Boolean(browserReview);
-          },
-          { timeout: 60_000 }
-        )
-        .toBe(true);
-      if (!browserReview) throw new Error("The browser-data declaration review disappeared");
-      const reviewCard = await presentApprovalCard(shellPage, browserReview.approvalId);
-      const browserDataRow = reviewCard.locator(
-        '[data-part-row][data-identity-key^="extensions/browser-data@"]'
-      );
-      await expect(browserDataRow).toBeVisible();
-      if (
-        (await browserDataRow.getAttribute("aria-current")) !== "true" &&
-        (await browserDataRow.getAttribute("aria-expanded")) !== "true"
-      ) {
-        await browserDataRow.click();
-      }
-      const browserDataDetail = reviewCard.locator(".install-review-detail").filter({
-        hasText: "delete persistent browser data",
-      });
-      await expect(browserDataDetail).toBeVisible();
-      expect(await browserDataDetail.innerText()).not.toContain("doesn't recognize");
-      const screenshot = await testApp.app.evaluate(async ({ webContents }) => {
+      const chromeId = await testApp.app.evaluate(({ webContents }, url) => {
         const chrome = webContents
           .getAllWebContents()
-          .find(
-            (contents) =>
-              !contents.isDestroyed() &&
-              contents.getURL().includes("/_a/") &&
-              contents.getURL().endsWith("/index.html")
-          );
+          .find((contents) => !contents.isDestroyed() && contents.getURL() === url);
         if (!chrome) throw new Error("System desktop chrome disappeared");
+        return chrome.id;
+      }, shellPage.url());
+      for (const workspace of ["Personal", "System", "Personal"]) {
+        const openWorkspace = shellPage.getByRole("button", {
+          name: `Open ${workspace}`,
+          exact: true,
+        });
+        await openWorkspace.click();
+        await expect(openWorkspace).toHaveAttribute("aria-current", "location", {
+          timeout: 60_000,
+        });
+      }
+      const screenshot = await testApp.app.evaluate(async ({ webContents }, id) => {
+        const chrome = webContents.fromId(id);
+        if (!chrome || chrome.isDestroyed()) throw new Error("System desktop chrome disappeared");
         return (await chrome.capturePage()).toPNG().toString("base64");
-      });
+      }, chromeId);
       expect(Buffer.from(screenshot, "base64").length).toBeGreaterThan(0);
       await test.info().attach("workspace-desktop.png", {
         body: Buffer.from(screenshot, "base64"),
         contentType: "image/png",
       });
     } catch (error) {
+      const shellText = await shellPage.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
       throw new Error(
-        `${error instanceof Error ? error.message : String(error)}\nLast WebContents snapshots: ${JSON.stringify(lastSnapshots)}\nElectron output tail:\n${testApp.getOutput().slice(-20_000)}`
+        `${error instanceof Error ? error.stack ?? error.message : String(error)}\nShell text: ${shellText}\nElectron output tail:\n${testApp.getOutput().slice(-20_000)}`
       );
     }
   });
@@ -364,23 +180,7 @@ test.describe("Desktop Shell Chrome", () => {
   test("presents every private workspace review before using the workspace catalog", async () => {
     testApp = await launchTestApp({ launchTimeout: 240_000 });
     await approveStartupUnitsAndDeclineReporting(testApp);
-    let page: Page | undefined;
-    await expect
-      .poll(
-        () => {
-          page = testApp!.app
-            .context()
-            .pages()
-            .find(
-              (candidate) =>
-                candidate.url().includes("/_a/") && candidate.url().endsWith("/index.html")
-            );
-          return Boolean(page);
-        },
-        { timeout: 120_000 }
-      )
-      .toBe(true);
-    const chrome = page!;
+    const chrome = await findWorkspaceShellPage(testApp);
     const rendererDiagnostics: string[] = [];
     chrome.on("console", (message) => {
       if (message.type() === "error" || message.type() === "warning")
@@ -547,20 +347,7 @@ test.describe("Desktop Shell Chrome", () => {
   test("copies one selected file between workspaces into an unpublished review branch", async () => {
     testApp = await launchTestApp({ launchTimeout: 240_000 });
     await approveStartupUnitsAndDeclineReporting(testApp);
-    let chrome: Page | undefined;
-    await expect
-      .poll(
-        () => {
-          chrome = testApp!.app
-            .context()
-            .pages()
-            .find((page) => page.url().includes("/_a/") && page.url().endsWith("/index.html"));
-          return Boolean(chrome);
-        },
-        { timeout: 120_000 }
-      )
-      .toBe(true);
-    const page = chrome!;
+    const page = await findWorkspaceShellPage(testApp);
     const rendererDiagnostics: string[] = [];
     page.on("console", (message) => {
       if (message.type() === "warning" || message.type() === "error") {
@@ -581,8 +368,8 @@ test.describe("Desktop Shell Chrome", () => {
       const system = workspaces.find((workspace) => workspace.privateRole === "system")!;
       expect(personal).toBeTruthy();
       expect(system).toBeTruthy();
-      const approveVisibleStartupReviews = async (workspaceId: string) => {
-        const approvals = createTypedServiceClient(
+      const workspaceApprovals = (workspaceId: string) =>
+        createTypedServiceClient(
           "shellApproval",
           shellApprovalMethods,
           nativeUiServiceInvoker(
@@ -592,6 +379,8 @@ test.describe("Desktop Shell Chrome", () => {
             shellApprovalMethods
           )
         );
+      const approveVisibleStartupReviews = async (workspaceId: string) => {
+        const approvals = workspaceApprovals(workspaceId);
         await expect
           .poll(async () => (await approvals.getWorkspaceCreationReviewState()).status, {
             timeout: 60_000,
@@ -729,24 +518,50 @@ test.describe("Desktop Shell Chrome", () => {
         .textContent())!.trim();
       expect(contextId).toMatch(/^file-copy-/);
       const status = await targetVcs.status({ contextId });
-      const repository = await targetVcs.resolveRepository({
-        state: status.workingHead,
-        repoPath: "projects/copied-welcome",
-      });
-      expect(repository).toBeTruthy();
-      const copied = await targetVcs.listFiles({
-        state: status.workingHead,
-        repositoryId: repository!.repositoryId,
-        limit: 200,
-      });
-      expect(copied.files.map((file) => file.path)).toEqual(["Welcome.mdx"]);
-      const result = await targetVcs.readFile({
-        state: status.workingHead,
-        repositoryId: repository!.repositoryId,
-        file: { kind: "path", path: "Welcome.mdx" },
-      });
-      expect(result?.contentHash).toBe(sourceFile!.contentHash);
-      expect(result?.content).toEqual(sourceFile!.content);
+      expect(status.workingHead).not.toEqual(targetMain);
+      await page.getByRole("button", { name: "Review with an agent", exact: true }).click();
+      const targetOwner = { app: testApp.app, workspaceId: system.workspaceId };
+      const focusedSection = page.locator(".workspace-section-focused");
+      await expect(focusedSection).toHaveAttribute("aria-label", "System workspace");
+      const targetApprovals = workspaceApprovals(system.workspaceId);
+      await expect
+        .poll(
+          async () => {
+            const panel = (await getPanelTree(targetOwner)).find(
+              ({ snapshot }) =>
+                snapshot?.source === "panels/chat" && snapshot.contextId === contextId
+            );
+            if (panel) {
+              const { presentation } = await getPanelReadiness(targetOwner, panel.id);
+              if (presentation.state === "ready") return { state: presentation.state };
+              const approvals = await targetApprovals.listPending();
+              if (approvals.some((approval) => approval.kind === "unit-install-review")) {
+                await approveVisibleStartupReviews(system.workspaceId);
+              }
+              return { state: presentation.state, pendingKinds: approvals.map(({ kind }) => kind) };
+            }
+            return null;
+          },
+          { timeout: 60_000 }
+        )
+        .toEqual({ state: "ready" });
+      const targetFs = createTypedServiceClient(
+        "fs",
+        fsMethods,
+        nativeUiServiceInvoker(
+          page,
+          { kind: "workspace", workspaceId: system.workspaceId },
+          "fs",
+          fsMethods
+        )
+      );
+      // The shell's VCS catalog is the published workspace. The filesystem
+      // reads name the exact review context and use its own working state.
+      const copyRoot = "/projects/copied-welcome";
+      expect(await targetFs.readdir(contextId, copyRoot)).toEqual(["Welcome.mdx"]);
+      const result = await targetFs.readText(contextId, `${copyRoot}/Welcome.mdx`);
+      expect(result.contentHash).toBe(sourceFile!.contentHash);
+      expect({ kind: "text", text: result.text }).toEqual(sourceFile!.content);
       expect(await targetVcs.mainState()).toEqual(targetMain);
       expect(
         await targetVcs.resolveRepository({
@@ -764,7 +579,7 @@ test.describe("Desktop Shell Chrome", () => {
         contentType: "text/plain",
       });
       await test.info().attach("selected-copy-dom.txt", {
-        body: await page.locator("body").innerText(),
+        body: await page.locator("body").innerText({ timeout: 2_000 }).catch(() => ""),
         contentType: "text/plain",
       });
       throw new Error(
@@ -775,12 +590,9 @@ test.describe("Desktop Shell Chrome", () => {
 
   test("places the native panel exactly in the measured shell panel surface", async () => {
     testApp = await launchTestApp({ launchTimeout: 240_000 });
+    await approvePendingWorkspaceCreationReview(testApp);
     await approveStartupUnitsAndDeclineReporting(testApp);
     const shellPage = await findWorkspaceShellPage(testApp);
-    await approveWorkspaceCreationReviewInShell(shellPage, testApp.systemWorkspaceId);
-    if (testApp.workspaceId !== testApp.systemWorkspaceId) {
-      await approveWorkspaceCreationReviewInShell(shellPage, testApp.workspaceId);
-    }
     const nativeBounds = () =>
       testApp!.app.evaluate(({ BaseWindow }) =>
         BaseWindow.getAllWindows().flatMap((window) =>

@@ -1,4 +1,3 @@
-import type { RpcFailure } from "@vibestudio/rpc";
 import { z } from "zod";
 import {
   WorkspaceTemplateDependencySchema,
@@ -68,52 +67,9 @@ export interface WorkspaceSourceSnapshotRepository {
   }[];
 }
 
-export interface WorkspaceSourceEffect {
-  effectId: string;
-  scopeKind: "context" | "workspace";
-  scopeId: string;
-  commandId: string;
-  payloadDigest: string;
-  kind: "observe-content" | "materialize-context" | "publish-main";
-  payload: Record<string, unknown>;
-  status: "pending";
-}
-
-export interface WorkspaceSourceEffectAcknowledgement {
-  effectId: string;
-  payloadDigest: string;
-  receipt: Record<string, unknown>;
-}
-
-export interface WorkspaceSourceInitializationReceipt {
-  commandId: string;
-  pin: WorkspaceSourceExactPin;
-  initializedEventId: string;
-  initializedStateHash: string;
-}
-
-export type WorkspaceSourceInitializationInspection =
-  | { state: "empty" }
-  | {
-      state: "initializing";
-      commandId: string;
-      pendingEffect?: WorkspaceSourceEffect;
-    }
-  | {
-      state: "ready";
-      commandId: string;
-      receipt: WorkspaceSourceInitializationReceipt;
-    }
-  | {
-      state: "failed";
-      commandId: string;
-      failure: RpcFailure;
-    };
-
 export interface InitializeExactWorkspaceSnapshotInput {
   commandId: string;
   pin: WorkspaceSourceExactPin;
   repositories: readonly WorkspaceSourceSnapshotRepository[];
   installation: WorkspaceTemplateInstallation;
-  acknowledgement?: WorkspaceSourceEffectAcknowledgement;
 }

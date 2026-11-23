@@ -11,6 +11,7 @@ import {
   createRpcClient,
   decodeRpcJson,
   deserializeRpcFailure,
+  encodeRpcJson,
   envelopeFromMessage,
   type EnvelopeRpcTransport,
   type RpcMethod,
@@ -18,6 +19,7 @@ import {
   type RpcEnvelope,
 } from "@vibestudio/rpc";
 import { mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
+import { startDynamicCodeRun } from "@vibestudio/service-schemas/dynamicCode";
 import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
 import {
   requestRpcWebSocketAdmission,
@@ -60,12 +62,6 @@ interface CdpEndpoint {
 
 const RUN_HEADLESS_PANEL_INTEGRATION =
   process.env["VIBESTUDIO_RUN_HEADLESS_PANEL_INTEGRATION"] === "1";
-const serverPath = path.resolve(process.cwd(), "dist", "server.mjs");
-const headlessHostEntry = findHeadlessHostEntry();
-const maybeDescribe =
-  RUN_HEADLESS_PANEL_INTEGRATION && fs.existsSync(serverPath) && headlessHostEntry
-    ? describe
-    : describe.skip;
 
 type HeadlessServerProcess = ChildProcessByStdio<null, Readable, Readable>;
 let tempRoot: string | null = null;
@@ -111,8 +107,11 @@ afterEach(async () => {
   }
 }, 20_000);
 
-maybeDescribe("headless browser panel integration", () => {
+describe.runIf(RUN_HEADLESS_PANEL_INTEGRATION)("headless browser panel integration", () => {
   it("opens a browser panel from a worker principal and drives it through the real headless host", async () => {
+    const hostArtifacts = process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"]!;
+    const serverPath = path.join(hostArtifacts, "server.mjs");
+    const headlessHostEntry = path.join(hostArtifacts, "headless-host", "main.js");
     tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-headless-panel-"));
     const readyFile = path.join(tempRoot, "ready.json");
     const fixture = await startFixtureServer();
@@ -139,7 +138,7 @@ maybeDescribe("headless browser panel integration", () => {
           HOME: tempRoot,
           XDG_CONFIG_HOME: path.join(tempRoot, ".config"),
           VIBESTUDIO_HEADLESS_HOST_AUTOSPAWN: "1",
-          VIBESTUDIO_HEADLESS_HOST_ENTRY: headlessHostEntry!,
+          VIBESTUDIO_HEADLESS_HOST_ENTRY: headlessHostEntry,
           ...(fs.existsSync(playwrightChromiumPath)
             ? { VIBESTUDIO_CHROMIUM_PATH: playwrightChromiumPath }
             : {}),
@@ -365,14 +364,6 @@ async function approveStartupInstallReviews(
     }
     await delay(100);
   }
-}
-
-function findHeadlessHostEntry(): string | null {
-  const candidates = [
-    path.resolve(process.cwd(), "dist", "headless-host", "main.js"),
-    path.resolve(process.cwd(), "apps", "headless-host", "dist", "main.js"),
-  ];
-  return candidates.find((candidate) => fs.existsSync(candidate)) ?? null;
 }
 
 async function startFixtureServer(): Promise<{ baseUrl: string }> {
@@ -622,34 +613,33 @@ async function openBrowserPanelFromWorker(
 ): Promise<BrowserPanelHandle> {
   await shellConnection?.rpc.call("main", mainRpcMethods["shellPresence.heartbeat"], []);
   const runId = `headless-panel-open-${randomUUID()}`;
-  await connection.rpc.call("main", mainRpcMethods["eval.start"], [
-    {
-      runId,
-      source: {
-        kind: "inline",
-        code: `const panel = await createPanelSlot(${JSON.stringify(url)}); const observation = await panel.observe(); return { id: panel.id, title: panel.title, kind: panel.kind, runtimeEntityId: observation.runtimeEntityId };`,
-      },
-      authority: {
-        approvals: "prompt",
-        requests: [
-          {
-            capability: "workspace.runtime-state.manage",
-            resource: { kind: "prefix", prefix: "" },
-          },
-          {
-            capability: "context.boundary",
-            resource: { kind: "prefix", prefix: "context/" },
-          },
-        ],
-      },
-      timeoutMs: 90_000,
+  // Admit the run with the host and start it on the entity that hosts it; pull its status from there.
+  const { observer } = await startDynamicCodeRun(connection.rpc, {
+    runId,
+    source: {
+      kind: "inline",
+      code: `const panel = await createPanelSlot(${JSON.stringify(url)}); const observation = await panel.observe(); return { id: panel.id, title: panel.title, kind: panel.kind, runtimeEntityId: observation.runtimeEntityId };`,
     },
-  ]);
+    authority: {
+      approvals: "prompt",
+      requests: [
+        {
+          capability: "workspace.runtime-state.manage",
+          resource: { kind: "prefix", prefix: "" },
+        },
+        {
+          capability: "context.boundary",
+          resource: { kind: "prefix", prefix: "context/" },
+        },
+      ],
+    },
+    timeoutMs: 90_000,
+  });
 
   const deadline = Date.now() + 90_000;
   let lastSnapshot: unknown = null;
   while (Date.now() < deadline) {
-    const snapshot = await connection.rpc.call("main", mainRpcMethods["eval.get"], [{ runId }]);
+    const snapshot = await observer.get();
     lastSnapshot = snapshot;
     if (
       snapshot.activity &&
@@ -719,7 +709,8 @@ async function connectRpcWebSocket(options: {
   const transport: EnvelopeRpcTransport = {
     async send(envelope) {
       if (ws.readyState !== WebSocket.OPEN) throw new Error("RPC WebSocket is not connected");
-      ws.send(JSON.stringify({ type: "ws:rpc", envelope, message: envelope.message }));
+      const type = envelope.target === "main" || envelope.target === "server" ? "ws:rpc" : "ws:route";
+      ws.send(encodeRpcJson({ type, envelope } satisfies WsClientMessage));
     },
     onMessage(handler) {
       listeners.add(handler);

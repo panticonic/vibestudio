@@ -186,6 +186,22 @@ describe("resolveDevelopmentTemplateSet", () => {
     );
   });
 
+  it("uses the authored install graph when a smoke excludes development addons", async () => {
+    const { host, templates, checkpoint } = fixture(WORKSPACE_SYSTEM_EPOCH);
+    const selection = await resolveDevelopmentTemplateSet({
+      repoRoot: host,
+      checkpointRoot: checkpoint,
+      explicitRoot: templates,
+      includeDevelopmentAddons: false,
+    });
+    if (!selection) throw new Error("Expected inspected smoke checkouts");
+    for (const id of ["system", "personal"] as const) {
+      expect(fs.readFileSync(path.join(selection.checkouts[id], "meta", "vibestudio.yml"), "utf8"))
+        .toBe(fs.readFileSync(path.join(templates, id, "meta", "vibestudio.yml"), "utf8"));
+    }
+    expect(selection.sourcePins["system-testing"]).toBeDefined();
+  });
+
   it("serializes the resolved template set through the canonical runtime helper", async () => {
     const { host, templates, checkpoint } = fixture(WORKSPACE_SYSTEM_EPOCH);
     const selection = await resolveDevelopmentTemplateSet({

@@ -217,8 +217,8 @@ describe("webhookIngressService — RPC surface", () => {
     );
   });
 
-  it("attributes an owner-scoped EvalDO lifecycle to its host-verified owner", async () => {
-    const evalId = "do:vibestudio/internal:EvalDO:owner-hash";
+  it("attributes an owner-scoped eval kernel lifecycle to its host-verified owner", async () => {
+    const evalId = "do:workers/session:SessionDO:owner-hash";
     const ownerId = "do:workers/github:GithubDO:agent-1";
     const resolveDelegatedCaller = vi.fn(async (callerId: string) =>
       callerId === evalId

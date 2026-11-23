@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { InvocationSnapshot } from "@vibestudio/rpc";
 import type { DevelopmentInstance } from "@vibestudio/service-schemas/development";
-import { evalMethods } from "@vibestudio/service-schemas/eval";
+import { dynamicCodeMethods } from "@vibestudio/service-schemas/dynamicCode";
 import {
   AttachedHostController,
   type AttachedHostBootstrapPort,
@@ -37,7 +37,7 @@ const RUN: AttachedHostPublicationInput["run"] = {
 };
 const CEILING = [
   {
-    capability: "service:eval.*",
+    capability: "service:dynamicCode.*",
     resource: { kind: "prefix" as const, prefix: "eval:" },
   },
 ];
@@ -78,9 +78,9 @@ function fixture() {
       },
     ],
     dispatch: async ({ service, method }) => {
-      expect(service).toBe("eval");
-      expect(method).toBe("get");
-      return { status: "running" };
+      expect(service).toBe("dynamicCode");
+      expect(method).toBe("release");
+      return { released: true };
     },
   });
   const bootstrap: AttachedHostBootstrapPort = {
@@ -197,10 +197,10 @@ describe("AttachedHostController", () => {
       code: "EREVOKED",
     });
 
-    const evalClient = f.controller.client("attached-session", "eval", evalMethods);
-    await expect(evalClient.get({ target: { kind: "caller" }, runId: "run-one" })).resolves.toEqual(
-      { status: "running" }
-    );
+    const client = f.controller.client("attached-session", "dynamicCode", dynamicCodeMethods);
+    await expect(
+      client.release({ runId: "run-one", hostId: "do:workers/session:SessionDO:one" })
+    ).resolves.toEqual({ released: true });
     expect(
       f.controller.attachClient("attached-session", {
         runtimeId: RUN.ownerRuntimeId,
@@ -220,11 +220,11 @@ describe("AttachedHostController", () => {
           runtimeKind: RUN.ownerRuntimeKind,
           userId: RUN.ownerUserId,
         },
-        "eval",
-        "get",
-        [{ target: { kind: "caller" }, runId: "run-one" }]
+        "dynamicCode",
+        "release",
+        [{ runId: "run-one", hostId: "do:workers/session:SessionDO:one" }]
       )
-    ).resolves.toEqual({ status: "running" });
+    ).resolves.toEqual({ released: true });
     expect(() =>
       f.controller.attachClient("attached-session", {
         runtimeId: "agent:foreign",

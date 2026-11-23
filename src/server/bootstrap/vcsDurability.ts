@@ -1,13 +1,14 @@
 import type { ServiceContainer } from "@vibestudio/shared/serviceContainer";
+import { canonicalEntityId } from "@vibestudio/shared/runtime/entitySpec";
 import { assertPresent } from "../../lintHelpers";
 import type { DODispatch } from "../doDispatch.js";
 import {
   createWorkspaceSemanticPort,
-  createWorkspaceSourceProviderV1,
   type WorkspaceSourceProviderRef,
 } from "../workspaceSourceProvider.js";
 import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
-import type { WorkerdManager } from "../workerdManager.js";
+import type { WorkspaceHistorySource } from "../vcsHost/workspaceHistoryHost.js";
+import type { RuntimeManager } from "../runtimeManager.js";
 import type { GcEpochCoordinator } from "../services/gcEpochCoordinator.js";
 import type { BuildSystemV2 } from "../buildV2/index.js";
 import type { ExecutionPublicationJournal } from "../executionPublicationJournal.js";
@@ -21,6 +22,10 @@ export interface VcsDurabilityBootstrapDeps {
   workspaceId: string;
   /** The state captured before semantic initialization may mutate the source root. */
   bootstrapStateHash: string;
+  sharedHistorySeed?: Omit<Parameters<WorkspaceVcs["initializeSharedHistory"]>[0], "dispatch" | "canonical"> & {
+    remember(): Promise<void>;
+  };
+  exportSharedHistorySeed?: (history: WorkspaceHistorySource) => Promise<void>;
   publishWorkspaceSourceEntity(input: {
     targetId: string;
     source: string;
@@ -32,14 +37,67 @@ export interface VcsDurabilityBootstrapDeps {
     authority: import("@vibestudio/shared/authorityManifest").UnitAuthorityManifest;
     contextId: string;
   }): Promise<void>;
+  readWorkspaceHistoryOwner(targetId: string): Promise<{ contextId: string } | null>;
+  readProtectedMainEventId(): string | null;
   activateSemanticWorkspace(workspaceVcs: WorkspaceVcs): Promise<void>;
+}
+
+/** Initialize or reopen the canonical history for the workspace's native runtime. */
+async function attachNativeWorkspaceHistory(
+  deps: VcsDurabilityBootstrapDeps,
+  dispatch: DODispatch,
+  runtime: RuntimeManager,
+): Promise<void> {
+  const canonical = {
+    source: deps.workspaceSourceProvider.source,
+    className: "GadHistoryDO",
+    objectKey: "canonical",
+  };
+  if (!runtime.declaresRemoteDoltClass(canonical.source, canonical.className)) {
+    throw new Error("Workspace startup requires the native Dolt history class");
+  }
+  const target = { source: canonical.source, className: canonical.className, key: canonical.objectKey };
+  const targetId = canonicalEntityId({ kind: "do", ...target });
+  const owner = await deps.readWorkspaceHistoryOwner(targetId);
+  if (!owner && deps.readProtectedMainEventId() !== null) {
+    throw new Error("Workspace has saved history in an older format. This release requires a native workspace.");
+  }
+  const contextId = canonicalWorkspaceObjectContextId(deps.workspaceId, target);
+  if (owner && owner.contextId !== contextId) {
+    throw new Error("The canonical participant history has a different runtime lifetime");
+  }
+  const prepared = await runtime.ensureDurableObjectEntity({
+    ...target, ref: deps.bootstrapStateHash, contextId,
+  });
+  if (prepared.targetId !== targetId)
+    throw new Error("The runtime prepared a different canonical participant history");
+  await deps.publishWorkspaceSourceEntity({ ...canonical, contextId, ...prepared });
+  const history = { dispatch, canonical };
+  const attachment = {
+    ...history,
+    infrastructureContextId: contextId,
+    destroyRetiredStorage: (owner: WorkspaceSourceProviderRef) => runtime.destroyRetiredDOStorage(owner),
+  };
+  if (deps.sharedHistorySeed) {
+    const destination = await runtime.workspaceNodeEndpoint();
+    if (destination.nodeId === deps.sharedHistorySeed.seed.sourceNodeId) {
+      throw new Error("The workspace seed destination must have its own node identity");
+    }
+    await deps.workspaceVcs.initializeSharedHistory({ ...deps.sharedHistorySeed, ...history });
+    await deps.sharedHistorySeed.remember();
+  } else if (!await deps.workspaceVcs.initializeFreshHistory(history)) {
+    throw new Error("Workspace startup requires a native root template and native workspace history");
+  }
+  await deps.workspaceVcs.attachParticipantHistory(attachment);
+  await deps.exportSharedHistorySeed?.(history);
+  if (!deps.sharedHistorySeed) console.log("[Vcs] Attached native root workspace history");
 }
 
 /** Attach the semantic state machine, then initialize its host materialization. */
 export function wireVcsDurability(deps: VcsDurabilityBootstrapDeps): void {
   deps.container.registerManaged({
     name: "vcsAttach",
-    dependencies: ["doDispatch", "workerdManager"],
+    dependencies: ["doDispatch", "runtimeManager"],
     async start(resolve) {
       const startedAt = performance.now();
       let phaseStartedAt = startedAt;
@@ -52,14 +110,14 @@ export function wireVcsDurability(deps: VcsDurabilityBootstrapDeps): void {
         phaseStartedAt = now;
       };
       const doDispatch = assertPresent(resolve<DODispatch>("doDispatch"));
-      const workerdManager = assertPresent(resolve<WorkerdManager>("workerdManager"));
+      const runtimeManager = assertPresent(resolve<RuntimeManager>("runtimeManager"));
       const gadRef = deps.workspaceSourceProvider;
       const contextId = canonicalWorkspaceObjectContextId(deps.workspaceId, {
         source: gadRef.source,
         className: gadRef.className,
         key: gadRef.objectKey,
       });
-      const prepared = await workerdManager.ensureDurableObjectEntity({
+      const prepared = await runtimeManager.ensureDurableObjectEntity({
         source: gadRef.source,
         ref: deps.bootstrapStateHash,
         className: gadRef.className,
@@ -71,16 +129,11 @@ export function wireVcsDurability(deps: VcsDurabilityBootstrapDeps): void {
       phaseComplete("entity publication");
       await deps.workspaceVcs.attachGad(createWorkspaceSemanticPort(doDispatch, gadRef));
       phaseComplete("semantic port attachment");
-      deps.workspaceVcs.attachWorkspaceSourceProvider(
-        createWorkspaceSourceProviderV1(doDispatch, gadRef)
-      );
-      phaseComplete("source-provider attachment");
-      console.log(
-        `[Vcs] Attached manifest-declared workspace source provider (${gadRef.source}:${gadRef.className})`
-      );
-      deps.workspaceVcs.startSemanticInitialization(() =>
-        deps.activateSemanticWorkspace(deps.workspaceVcs)
-      );
+      deps.workspaceVcs.startSemanticInitialization(async () => {
+        await attachNativeWorkspaceHistory(deps, doDispatch, runtimeManager);
+        phaseComplete("native participant history");
+        await deps.activateSemanticWorkspace(deps.workspaceVcs);
+      });
       return deps.workspaceVcs;
     },
     async stop() {

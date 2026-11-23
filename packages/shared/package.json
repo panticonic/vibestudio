@@ -56,7 +56,6 @@
     "./contextBinding": "./src/contextBinding.ts",
     "./contextFolderManager": "./src/contextFolderManager.ts",
     "./contextIdToPartition": "./src/contextIdToPartition.ts",
-    "./contextMiddleware": "./src/contextMiddleware.ts",
     "./contextPaths": "./src/contextPaths.ts",
     "./derivedCache": "./src/derivedCache.ts",
     "./deviceCredentials": "./src/deviceCredentials.ts",
@@ -154,7 +153,8 @@
     "./egressListener": "./src/egressListener.ts",
     "./socketBridge": "./src/socketBridge.ts",
     "./chromiumNetworkProxy": "./src/chromiumNetworkProxy.ts",
-    "./pinnedHttpForward": "./src/pinnedHttpForward.ts"
+    "./pinnedHttpForward": "./src/pinnedHttpForward.ts",
+    "./kernelRealm": "./src/kernelRealm.ts"
   },
   "scripts": {
     "test": "cd ../.. && vitest run packages/shared/src"
@@ -172,6 +172,7 @@
     "@vibestudio/types": "workspace:*",
     "@vibestudio/vcs-path-policy": "workspace:*",
     "@vibestudio/workspace-contracts": "workspace:*",
+    "ses": "^2.2.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {

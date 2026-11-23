@@ -168,6 +168,19 @@ describe("desktop pairing smoke diagnostics", () => {
     ).toBe(true);
   });
 
+  it("exempts the public landing page's unsupported iframe feature warning", () => {
+    const warning = diagnostic({
+      url: "https://vibestudio.app/",
+      message: "Unrecognized feature: 'web-share'.",
+    });
+    expect(isUnexpectedDesktopDiagnostic(warning)).toBe(false);
+    expect(isUnexpectedDesktopDiagnostic({ ...warning, level: "error" })).toBe(true);
+    expect(isUnexpectedDesktopDiagnostic({ ...warning, url: "https://other.example/" })).toBe(true);
+    expect(
+      isUnexpectedDesktopDiagnostic({ ...warning, message: "Unrecognized feature: 'camera'." })
+    ).toBe(true);
+  });
+
   it("formats actionable diagnostics with their renderer location", () => {
     expect(formatDesktopDiagnostics([diagnostic()])).toBe(
       "console/warning in http://127.0.0.1:41771/shell.js: renderer warning"

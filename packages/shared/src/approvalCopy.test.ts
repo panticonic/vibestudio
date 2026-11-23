@@ -677,14 +677,14 @@ describe("approvalCopy", () => {
       repoPath: "vibestudio/internal",
       effectiveVersion: "internal",
       requester: {
-        id: "do:vibestudio/internal:EvalDO:one",
+        id: "do:workers/session:SessionDO:one",
         kind: "do" as const,
         category: "eval" as const,
         title: "Agentic Chat",
         repoPath: "vibestudio/internal",
         effectiveVersion: "internal",
-        stableIdentityKey: "do:vibestudio/internal:EvalDO:one",
-        ephemeralInstanceKey: "do:vibestudio/internal:EvalDO:one",
+        stableIdentityKey: "do:workers/session:SessionDO:one",
+        ephemeralInstanceKey: "do:workers/session:SessionDO:one",
         breadcrumbs: [],
       },
     };

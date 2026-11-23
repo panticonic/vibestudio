@@ -59,12 +59,13 @@ inspect that database and the backup directory directly with the host stopped.
 Framework-owned storage is implemented as internal DO classes in
 `src/server/internalDOs/`, registered with source `vibestudio/internal`.
 
-| Class            | Service          | Object key                             | Owns                                                                                                                                                          |
-| ---------------- | ---------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `EvalDO`         | `eval`           | per-owner (hash of caller id + subKey) | `repl_scopes`                                                                                                                                                 |
-| `WebhookStoreDO` | `webhookIngress` | `global`                               | `webhook_ingress_subscriptions`                                                                                                                               |
-| `WorkspaceDO`    | `workspace-sync` | workspace id                           | `entities`, `slots`, `slot_history`, `workspace_meta`, `panel_search_metadata`, `lifecycle_*` (unified entity/slot model; replaced the former `PanelStoreDO`) |
-| `BrowserDataDO`  | `browser-data`   | `global`                               | bookmarks, history, history FTS, passwords, cookies, autofill, permissions, import log                                                                        |
+| Class            | Service          | Object key   | Owns                                                                                                                                                          |
+| ---------------- | ---------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WebhookStoreDO` | `webhookIngress` | `global`     | `webhook_ingress_subscriptions`                                                                                                                               |
+| `WorkspaceDO`    | `workspace-sync` | workspace id | `entities`, `slots`, `slot_history`, `workspace_meta`, `panel_search_metadata`, `lifecycle_*` (unified entity/slot model; replaced the former `PanelStoreDO`) |
+| `BrowserDataDO`  | `browser-data`   | `global`     | bookmarks, history, history FTS, passwords, cookies, autofill, permissions, import log                                                                        |
+
+Eval REPL scopes are no longer an internal DO: the kernel is a class hosted by a per-owner session entity, with Dolt storage in that entity's cell (docs/dolt-redesign.md §7).
 
 `WorkspaceDO` and `BrowserDataDO` use FTS5 in workerd. Tests that assert FTS
 behavior run against real workerd, not the `sql.js` unit harness.

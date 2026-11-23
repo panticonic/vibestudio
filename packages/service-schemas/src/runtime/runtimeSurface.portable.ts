@@ -887,6 +887,11 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
     gitRuntimeCatalog
   ),
   vcs: namespaceEntry(VCS_MEMBERS, VCS_DESCRIPTION, "vcs", VCS_RUNTIME_ONLY_METHOD_CATALOG),
+  chronolog: namespaceEntry(
+    ["groups", "history", "transact", "outcome", "query", "subscribe"],
+    "Create, invite, join and list Chronolog groups across workspaces. Use chronolog.groups.identity() to get an invitation address. Group data requires current membership, and writes carry the initiating account's signature after approval. Use chronolog.history to inspect, share, or publish an exact revision between workspaces with shared history.",
+    "chronolog"
+  ),
   gad: namespaceEntry(
     GAD_MEMBERS,
     "Typed access to the workspace's canonical Graph and Data store: parameterized SQL, trajectory/channel lineage, integrity diagnostics, provenance, and bounded channel-envelope paging.",

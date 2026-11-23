@@ -14,13 +14,7 @@
  * main process, the server, and a userland worker. Only a real app run crosses
  * all three.
  */
-import { expect } from "@playwright/test";
-
-import {
-  readPanelInitializationFailure,
-  panelInitializationFailureError,
-  type TestApp,
-} from "../../setup/electronSetup";
+import { approvePendingStartupUnits, type TestApp } from "../../setup/electronSetup";
 import { retryIdempotentAutomationRead } from "../../setup/automationContext";
 import { clickWindowPointThroughNativeInput } from "../../setup/nativeInput";
 
@@ -41,60 +35,20 @@ export interface CommandOverlaySnapshot {
    * Separate from `text` on purpose: a suggestion row echoes the query back
    * ("Send \u201c…\u201d to the agent"), so asserting the typed prose against the
    * whole surface passes the instant you type it and proves nothing about the
-   * conversation. A message here has been through the channel.
+   * conversation. This includes optimistic echoes of queued prompts.
    */
   transcript: string[];
+  /** Messages rendered from the conversation channel, excluding queued echoes. */
+  durableTranscript: string[];
   /** The visible conversation/command failure, if an operation terminated. */
   error: string | null;
   /** Whole-surface text, so a test can assert on an error banner verbatim. */
   text: string;
 }
 
-/** Wait for the hosted shell chrome, approving the bootstrap launch gate if shown. */
+/** Wait for the actual hosted client, including when a first-run dialog is open. */
 export async function waitHostedShellReady(testApp: TestApp): Promise<void> {
-  await expect
-    .poll(
-      async () => {
-        const failure = panelInitializationFailureError(
-          await readPanelInitializationFailure(testApp)
-        );
-        if (failure) throw failure;
-        return testApp.app.evaluate(async ({ webContents }) => {
-          const candidates = webContents.getAllWebContents().filter((contents) => {
-            if (contents.isDestroyed()) return false;
-            const title = contents.getTitle();
-            return contents.getURL().startsWith("vs-client://") || title === "Vibestudio Launch";
-          });
-          for (const contents of candidates) {
-            try {
-              const result = await Promise.race([
-                contents.executeJavaScript(
-                  `(() => {
-                    if (document.querySelector(".titlebar-breadcrumb-scroll")
-                      || document.querySelector('[aria-label="Menu"]')) return "ready";
-                    const approve = Array.from(document.querySelectorAll("button"))
-                      .find((b) => /^(Start|Add to workspace|Add template|Update|Use the new version|Trust and start|Approve and start)$/.test((b.textContent ?? "").trim()));
-                    if (approve) { approve.click(); return "approved"; }
-                    return "waiting";
-                  })()`,
-                  true
-                ),
-                new Promise<"waiting">((resolve) => setTimeout(() => resolve("waiting"), 2_000)),
-              ]);
-              if (result === "ready") return true;
-            } catch {
-              // Non-DOM webContents.
-            }
-          }
-          return false;
-        });
-      },
-      // A cold workspace builds every unit before the chrome is usable, and on a
-      // loaded machine single units have taken 50-95s each. The budget is for
-      // that startup, not for anything this spec asserts.
-      { timeout: 300_000, intervals: [500, 1000, 2000] }
-    )
-    .toBe(true);
+  await approvePendingStartupUnits(testApp, 300_000);
 }
 
 /**
@@ -188,17 +142,20 @@ export async function probeCommandOverlay(
       const SNAPSHOT = `(() => {
         if (!globalThis.__vibestudioContentOverlay) return null;
         const card = document.querySelector(".quickfire-card");
-        if (!card) return { open: false, activeMode: null, rows: [], buttons: [], conversation: false, transcript: [], error: null, text: "" };
+        if (!card) return { open: false, activeMode: null, rows: [], buttons: [], conversation: false, transcript: [], durableTranscript: [], error: null, text: "" };
         const active = card.querySelector(".quickfire-mode[aria-pressed='true']");
+        const transcriptCards = Array.from(card.querySelectorAll(
+          '[data-testid="quickfire-transcript"] [data-testid^="quickfire-card-"]'
+        ));
         return {
           open: true,
           activeMode: active ? active.textContent.trim() : null,
           rows: Array.from(card.querySelectorAll("[data-row-id]")).map((row) => row.textContent.trim()),
           buttons: Array.from(card.querySelectorAll("button")).map((button) => button.getAttribute("aria-label") ?? button.textContent.trim()),
           conversation: card.getAttribute("data-mode") === "conversation",
-          transcript: Array.from(card.querySelectorAll(
-            '[data-testid="quickfire-transcript"] [data-testid^="quickfire-card-"]'
-          ))
+          transcript: transcriptCards.map((message) => message.textContent.trim()),
+          durableTranscript: transcriptCards
+            .filter((message) => !message.getAttribute("data-testid").startsWith("quickfire-card-pending:"))
             .map((message) => message.textContent.trim()),
           error: card.querySelector('[data-testid="quickfire-error"], .quickfire-error')?.textContent?.trim() || null,
           text: card.textContent ?? "",
@@ -451,19 +408,20 @@ export async function callWorkspaceService(
  */
 export async function captureShellConsole(testApp: TestApp): Promise<boolean> {
   return testApp.app.evaluate(async ({ webContents }) => {
-    const globals = globalThis as { __shellConsole?: string[]; __shellConsoleBound?: boolean };
+    const globals = globalThis as { __shellConsole?: string[]; __shellConsoleBound?: Set<number> };
     globals.__shellConsole ??= [];
-    if (globals.__shellConsoleBound) return true;
+    const bound = (globals.__shellConsoleBound ??= new Set());
     for (const contents of webContents.getAllWebContents()) {
       if (contents.isDestroyed()) continue;
-      if (!contents.getURL().startsWith("vs-client://")) continue;
-      contents.on("console-message", (_event, level, message) => {
-        globals.__shellConsole?.push(`[${level}] ${message}`);
+      const url = contents.getURL();
+      if (!url.startsWith("vs-client://") || url.includes("overlaySurface=")) continue;
+      if (bound.has(contents.id)) continue;
+      contents.on("console-message", (event) => {
+        globals.__shellConsole?.push(`[${event.level}] ${event.message}`);
       });
-      globals.__shellConsoleBound = true;
-      return true;
+      bound.add(contents.id);
     }
-    return false;
+    return bound.size > 0;
   });
 }
 

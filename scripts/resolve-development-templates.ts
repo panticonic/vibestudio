@@ -30,6 +30,7 @@ if (sourceOnly) {
     checkpointRoot,
     ...(explicitRoot ? { explicitRoot } : {}),
     productionTemplates: process.argv.includes("--production-templates"),
+    includeDevelopmentAddons: !process.argv.includes("--without-development-addons"),
   });
   process.stdout.write(`${JSON.stringify(selection)}\n`);
 }

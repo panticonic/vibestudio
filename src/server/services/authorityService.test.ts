@@ -72,7 +72,7 @@ const plannedExecution = {
 };
 
 function executionInput(
-  kind: "agent-turn" | "method" | "eval" = "agent-turn"
+  kind: "agent-turn" | "method" | "dynamic-code" = "agent-turn"
 ): Parameters<AgentExecutionSessionRegistry["admitExecution"]>[0] {
   const runtimeId = "do:workers/agent:Agent:one";
   return {
@@ -106,7 +106,7 @@ function executionInput(
           : {
               kind,
               runtimeId,
-              evalRunId: "run:one",
+              runId: "run:one",
               authorityManifest: {
                 mode: "adaptive",
                 effects: "read-write",
@@ -133,7 +133,7 @@ const executionFixtures: Array<{
   acquisitions: AcquisitionCoordinator;
 }> = [];
 
-function executionFixture(kind: "agent-turn" | "method" | "eval" = "agent-turn") {
+function executionFixture(kind: "agent-turn" | "method" | "dynamic-code" = "agent-turn") {
   const statePath = mkdtempSync(join(tmpdir(), "authority-finish-execution-"));
   const grants = new CapabilityGrantStore({ statePath });
   const queue = createApprovalQueue({
@@ -376,19 +376,19 @@ describe("authorityService execution completion", () => {
   });
 
   it("finishes an eval cell without retiring its retained notebook-history authority", async () => {
-    const f = executionFixture("eval");
+    const f = executionFixture("dynamic-code");
     const closeSession = vi.spyOn(f.acquisitions, "closeSession");
     await expect(f.finish()).resolves.toBeUndefined();
     expect(closeSession).not.toHaveBeenCalled();
     expect(f.registry.resolve(f.fact.executor.runtimeId)).toBe(f.fact);
     expect(f.grants.acquisitions.get(f.info.acquisitionId, f.owner)?.state).toBe("pending");
     expect(f.queue.listPending()).toHaveLength(1);
-    const secondInput = executionInput("eval");
-    if (secondInput.executor.kind !== "eval") throw new Error("Expected eval input");
+    const secondInput = executionInput("dynamic-code");
+    if (secondInput.executor.kind !== "dynamic-code") throw new Error("Expected eval input");
     const second = f.registry.admitExecution({
       ...secondInput,
       admissionKey: "execution:two",
-      executor: { ...secondInput.executor, evalRunId: "run:two" },
+      executor: { ...secondInput.executor, runId: "run:two" },
     });
     expect(second.authoritySessionId).toBe(f.fact.authoritySessionId);
     expect(f.registry.resolveInvocation(second.executor.runtimeId, second.nonce)).toBe(second);

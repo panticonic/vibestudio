@@ -1,5 +1,3 @@
-import { rpcFailureSchema } from "./rpcFailure.js";
-import { rpcCausalParentSchema } from "./rpcCausality.js";
 import type {
   EnvelopeId,
   EventId,
@@ -36,31 +34,101 @@ import {
   type MethodSchema,
   type ServiceMethodSchemas,
 } from "@vibestudio/shared/typedServiceClient";
-import { vcsFileLineageSchema, vcsMethods, vcsStateNodeRefSchema } from "./vcs.js";
+import { vcsInspectInputSchema, vcsNeighborsInputSchema, vcsFileLineageSchema, vcsQueryInputSchema, vcsSearchHitSchema, vcsSearchInputSchema, vcsStateNodeRefSchema, vcsTrajectoryInvocationRefSchema, vcsTrajectoryTurnRefSchema, vcsWalkEntrySchema, vcsWalkInputSchema } from "./vcs.js";
 
 const readAccess = { sensitivity: "read" as const };
 const writeAccess = { sensitivity: "write" as const };
 const adminAccess = { sensitivity: "admin" as const };
 
-/** Exact coordinate returned by semantic context initialization and forking. */
-export const SemanticContextResultSchema = z
-  .object({
-    contextId: z.string().min(1),
-    committed: z
-      .object({
-        ref: z.object({ kind: z.literal("event"), eventId: z.string().min(1) }).strict(),
-        workspaceFactRootId: z.string().min(1),
-      })
-      .strict(),
-    working: z
-      .object({
-        ref: vcsStateNodeRefSchema,
-        workspaceFactRootId: z.string().min(1),
-      })
-      .strict(),
-    workingHeadApplicationId: z.string().min(1).nullable(),
-  })
-  .strict();
+/** Host-only search carrier between independently stored facts and trajectories. */
+const historySearchCoordinate = z.string().min(1).max(512);
+const historySearchRevision = z.string().min(1).max(128);
+const historySearchCause = z.tuple([historySearchCoordinate, historySearchCoordinate, historySearchCoordinate]);
+export const HISTORY_SEARCH_CAUSE_LIMIT = 256;
+export const HistorySearchCausePageSchema = z.array(historySearchCause).max(HISTORY_SEARCH_CAUSE_LIMIT);
+export type HistorySearchCause = z.infer<typeof historySearchCause>;
+export const HistorySearchCauseRequestSchema = z.object({
+  revision: historySearchRevision, after: historySearchCause.nullable(),
+}).strict();
+export const HistoryRecallBasisRequestSchema = z.object({
+  contextId: z.string().min(1), protectedEventId: z.string().min(1),
+}).strict();
+export const HistoryRecallBasisSchema = z.array(historySearchRevision).min(1).max(2);
+export const HistoryCommitMemoryMarkerSchema = z.object({
+  completedEventId: z.string().min(1).nullable(),
+  pending: z.object({ eventId: z.string().min(1), after: z.string().min(1) }).strict().nullable(),
+}).strict();
+export const HistorySearchBasisSchema = z.object({
+  revisions: z.array(historySearchRevision).min(1).max(514),
+  hits: z.array(vcsSearchHitSchema).max(50),
+  truncated: z.boolean(),
+}).strict();
+export const HistoryTrajectorySearchInputSchema = vcsSearchInputSchema.pick({ text: true, limit: true })
+  .extend({ causes: HistorySearchCausePageSchema }).strict();
+export type HistoryTrajectorySearchInput = z.infer<typeof HistoryTrajectorySearchInputSchema>;
+export const HistoryTrajectorySearchMatchesSchema = z.array(vcsSearchHitSchema).max(51);
+
+export const HistoryTrajectoryProvenanceRequestSchema = z.discriminatedUnion("operation", [
+  z.object({ operation: z.literal("inspect"), request: vcsInspectInputSchema, expand: z.boolean() }).strict(),
+  z.object({ operation: z.literal("neighbors"), request: vcsNeighborsInputSchema, expand: z.boolean() }).strict(),
+]);
+export type HistoryTrajectoryProvenanceRequest = z.infer<typeof HistoryTrajectoryProvenanceRequestSchema>;
+
+/** Bounded data crossing the native-history and trajectory owner boundary. */
+export const HistoryWalkPageSchema = z.object({
+  entries: z.array(vcsWalkEntrySchema).max(2_000),
+  notes: z.array(z.string().min(1).max(400)).max(20),
+}).strict();
+const historyWalkRevisions = z.array(historySearchRevision).min(1).max(514);
+export const HistoryWalkCohortSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("turn"), turn: vcsTrajectoryTurnRefSchema }).strict(),
+  z.object({
+    kind: z.literal("invocation"), invocation: vcsTrajectoryInvocationRefSchema, workUnitId: z.string().min(1),
+  }).strict(),
+]);
+export const HistoryWalkPlanSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("page"), page: HistoryWalkPageSchema, revisions: historyWalkRevisions,
+    invocation: vcsTrajectoryInvocationRefSchema.nullable(),
+  }).strict(),
+  z.object({
+    kind: z.literal("cohort"), seed: HistoryWalkCohortSchema, revisions: historyWalkRevisions,
+  }).strict(),
+]);
+export const HistoryWalkInvocationsSchema = z.array(vcsTrajectoryInvocationRefSchema).max(2_000);
+export const HistoryWalkCohortRequestSchema = z.object({
+  walk: vcsWalkInputSchema,
+  revisions: historyWalkRevisions,
+  seed: HistoryWalkCohortSchema,
+  invocations: HistoryWalkInvocationsSchema,
+}).strict();
+export type HistoryWalkCohort = z.infer<typeof HistoryWalkCohortSchema>;
+export type HistoryWalkInvocation = z.infer<typeof vcsTrajectoryInvocationRefSchema>;
+export type HistoryWalkPage = z.infer<typeof HistoryWalkPageSchema>;
+
+export const HISTORY_QUERY_CAUSE_LIMIT = 2_000;
+export const HISTORY_QUERY_TRAJECTORY_ROW_LIMIT = 1_600;
+export const HistoryQueryCausesSchema = z.array(historySearchCause).max(HISTORY_QUERY_CAUSE_LIMIT);
+export const HistoryQueryBasisSchema = z.object({
+  state: vcsStateNodeRefSchema,
+  revisions: historyWalkRevisions,
+  needsTrajectory: z.boolean(),
+}).strict();
+const projectedSqlCell = z.union([z.string().max(2_000), z.number(), z.null()]);
+const projectedSqlRows = z.array(z.array(projectedSqlCell).max(12)).max(HISTORY_QUERY_TRAJECTORY_ROW_LIMIT);
+export const HistoryQueryTrajectorySchema = z.object({
+  invocations: projectedSqlRows,
+  turns: projectedSqlRows,
+  messages: projectedSqlRows,
+  truncated: z.boolean(),
+}).strict();
+export const HistoryQueryRequestSchema = z.object({
+  query: vcsQueryInputSchema,
+  basis: HistoryQueryBasisSchema,
+  trajectory: HistoryQueryTrajectorySchema,
+}).strict();
+export type HistoryQueryBasis = z.infer<typeof HistoryQueryBasisSchema>;
+export type HistoryQueryTrajectory = z.infer<typeof HistoryQueryTrajectorySchema>;
 
 export {
   JsonValueSchema as GadJsonValueSchema,
@@ -190,8 +258,6 @@ const logEnvelopeSchema = z
     annotations: PolymorphicJsonRecordSchema.optional(),
     causality: LogEventCausalityWireSchema.optional(),
     appendedAt: z.string().datetime({ offset: true }),
-    prevHash: z.string().min(1),
-    hash: z.string().min(1),
   })
   .strict();
 
@@ -208,15 +274,13 @@ const TrajectoryBranchSchema = z
     branch_id: SqlTextSchema,
     owner_json: SqlNullableTextSchema,
     seq: SqlCountSchema,
-    head_event_hash: SqlTextSchema,
-    head_event_id: SqlTextSchema,
+    head_event_id: SqlNullableTextSchema,
     parent_branch_id: SqlNullableTextSchema,
     created_at: SqlTextSchema,
     updated_at: SqlTextSchema,
   })
   .strict();
 const TrajectoryBranchHeadSchema = TrajectoryBranchSchema.omit({ seq: true }).extend({
-  head_event_hash: SqlNullableTextSchema,
   fork_event_id: SqlNullableTextSchema,
 });
 const TrajectoryInvocationSchema = z
@@ -285,7 +349,7 @@ const StorageDiagnosticSchema = z
   .strict();
 const logIntegrityErrorSchema = z
   .object({
-    type: z.enum(["log-chain", "log-hash", "log-head-pointer"]),
+    type: z.enum(["log-sequence", "log-fork-boundary", "log-head-pointer"]),
     message: z.string(),
     logId: SqlTextSchema,
     head: SqlTextSchema,
@@ -294,14 +358,6 @@ const logIntegrityErrorSchema = z
   .strict();
 const gadIntegrityErrorSchema = z.discriminatedUnion("type", [
   logIntegrityErrorSchema,
-  z
-    .object({
-      type: z.literal("semantic-vcs"),
-      message: z.string(),
-      code: z.string().optional(),
-      detail: GadJsonValueSchema.optional(),
-    })
-    .strict(),
   z
     .object({
       type: z.literal("publication"),
@@ -403,36 +459,6 @@ const DiagnosticInvocationSchema = TrajectoryInvocationSchema.omit({
   request_ref_json: SqlNullableTextSchema,
   result_ref_json: SqlNullableTextSchema,
 });
-const DiagnosticCommandSchema = z
-  .object({
-    command_id: SqlTextSchema,
-    scope_kind: z.enum(["context", "workspace"]),
-    scope_id: SqlTextSchema,
-    method: SqlTextSchema,
-    request_digest: SqlTextSchema,
-    status: z.enum(["pending", "effect-pending", "complete"]),
-    created_at: SqlTextSchema,
-    completed_at: SqlNullableTextSchema,
-    result: GadJsonValueSchema.nullable(),
-  })
-  .strict();
-const DiagnosticEffectSchema = z
-  .object({
-    effect_id: SqlTextSchema,
-    scope_kind: z.enum(["context", "workspace"]),
-    scope_id: SqlTextSchema,
-    command_id: SqlTextSchema,
-    kind: z.enum(["observe-content", "materialize-context", "publish-main"]),
-    payload_digest: SqlTextSchema,
-    status: z.enum(["pending", "applied"]),
-    receipt_digest: SqlNullableTextSchema,
-    created_at: SqlTextSchema,
-    applied_at: SqlNullableTextSchema,
-    payload: GadJsonValueSchema,
-    receipt: GadJsonValueSchema.nullable(),
-  })
-  .strict();
-
 export const ChannelPublicationSchema = z
   .object({
     eventId: z.string(),
@@ -452,8 +478,6 @@ const TrajectoryEventWireSchema = z
     trajectoryId: z.string().min(1),
     branchId: z.string().min(1),
     seq: z.number().int().nonnegative(),
-    prevEventHash: z.string().min(1),
-    eventHash: z.string().min(1),
     kind: z.string().min(1),
     actor: ActorRefWireSchema,
     turnId: z.string().min(1).optional(),
@@ -625,26 +649,14 @@ export const InvocationDiagnosticPacketSchema = z
     // Inspection summaries deliberately truncate arbitrary event payloads, but
     // remain recursively JSON validated at this narrow ABI.
     events: z.array(GadJsonRecordSchema),
-    commands: z.array(
-      z
-        .object({
-          command: DiagnosticCommandSchema,
-          effects: z.array(DiagnosticEffectSchema),
-        })
-        .strict()
-    ),
     summary: z
       .object({
         terminal: z.boolean(),
         eventCount: z.number().int().nonnegative(),
-        commandCount: z.number().int().nonnegative(),
-        pendingEffectCount: z.number().int().nonnegative(),
         cleanupFailureCount: z.number().int().nonnegative(),
         truncated: z
           .object({
             events: z.boolean(),
-            commands: z.boolean(),
-            effects: z.boolean(),
           })
           .strict(),
       })
@@ -809,8 +821,6 @@ export const DiagnoseInvocationInputSchema = z
     branchId: z.string().min(1),
     invocationId: z.string().min(1),
     eventLimit: z.number().int().min(1).max(50).optional(),
-    commandLimit: z.number().int().min(1).max(50).optional(),
-    effectLimit: z.number().int().min(1).max(100).optional(),
   })
   .strict();
 export type DiagnoseInvocationInput = z.infer<typeof DiagnoseInvocationInputSchema>;
@@ -1338,7 +1348,7 @@ export const gadMethods = defineServiceMethods({
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
     description:
-      "Return one bounded causal packet joining an exact invocation to its turn, terminal events, semantic commands, effect intents, and receipts.",
+      "Return one bounded packet for an exact invocation, including its turn and recorded events.",
     args: z.tuple([DiagnoseInvocationInputSchema]),
     returns: InvocationDiagnosticPacketSchema,
     access: readAccess,
@@ -1413,13 +1423,13 @@ export const gadMethods = defineServiceMethods({
     returns: z.array(ChannelDescriptionSchema),
     access: readAccess,
   },
-  validateGadHashes: {
+  validateGadIntegrity: {
     website: {
       kind: "closed",
       reason:
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
-    description: "Validate content, manifest, and state hashes without mutating durable state.",
+    description: "Validate stored log coordinates and publication and storage records.",
     args: z.tuple([z.object({}).strict().optional()]),
     returns: z.object({ ok: z.boolean(), errors: z.array(z.string()) }).strict(),
     access: readAccess,
@@ -1430,7 +1440,7 @@ export const gadMethods = defineServiceMethods({
       reason:
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
-    description: "Clear the dirty marker only after durable hash validation succeeds.",
+    description: "Check stored log coordinates and publication and storage records.",
     args: z.tuple([z.object({}).strict().optional()]),
     returns: z.object({ ok: z.boolean(), errors: z.array(z.string()) }).strict(),
     access: writeAccess,
@@ -1469,27 +1479,7 @@ const {
   ...directGadWireMethods
 } = gadMethods;
 
-const semanticCausalParentSchema = rpcCausalParentSchema;
-const semanticIngressSchema = z
-  .object({
-    causalParent: semanticCausalParentSchema.nullable(),
-  })
-  .strict();
-const semanticEffectSchema = z
-  .object({
-    effectId: z.string().min(1),
-    scopeKind: z.enum(["context", "workspace"]),
-    scopeId: z.string().min(1),
-    commandId: z.string().min(1),
-    kind: z.enum(["observe-content", "materialize-context", "publish-main"]),
-    payload: GadJsonRecordSchema,
-    payloadDigest: z.string().min(1),
-    status: z.enum(["pending", "applied"]),
-    receipt: GadJsonRecordSchema.nullable(),
-    createdAt: z.string(),
-  })
-  .strict();
-const semanticFileHostReadSchema = z
+export const semanticFileHostReadSchema = z
   .object({
     kind: z.literal("read-semantic-blob"),
     state: vcsStateNodeRefSchema,
@@ -1505,154 +1495,7 @@ const semanticFileHostReadSchema = z
     mode: z.number().int().nonnegative(),
   })
   .strict();
-const semanticMergeContentHostReadSchema = z
-  .object({
-    kind: z.literal("read-merge-content"),
-    operation: z.enum(["compare", "merge", "edit"]),
-    input: GadJsonRecordSchema,
-    ingress: semanticIngressSchema,
-    contentHashes: z.array(z.string().min(1)).min(1).max(1_500),
-  })
-  .strict();
-const semanticHostReadSchema = z.discriminatedUnion("kind", [
-  semanticFileHostReadSchema,
-  z
-    .object({
-      kind: z.literal("read-semantic-blobs"),
-      files: z.array(semanticFileHostReadSchema.nullable()).max(500),
-    })
-    .strict(),
-  semanticMergeContentHostReadSchema,
-]);
-const semanticHostReadAcknowledgementSchema = z
-  .object({
-    request: semanticMergeContentHostReadSchema,
-    files: z
-      .array(z.object({ contentHash: z.string().min(1), text: z.string() }).strict())
-      .max(1_500),
-  })
-  .strict();
-
-const semanticContentRequestSchema = z
-  .object({
-    kind: z.literal("prepare-semantic-content"),
-    operation: z.enum(["edit", "merge"]),
-    input: GadJsonRecordSchema,
-    ingress: semanticIngressSchema,
-    observed: z
-      .array(z.object({ contentHash: z.string().min(1), text: z.string() }).strict())
-      .optional(),
-    blobs: z.array(z.object({ contentHash: z.string().min(1), base64: z.string() }).strict()),
-  })
-  .strict();
-const semanticContentAcknowledgementSchema = z
-  .object({
-    request: semanticContentRequestSchema,
-    contentHashes: z.array(z.string().min(1)),
-  })
-  .strict();
-
-function semanticWireMethod<M extends (typeof vcsMethods)[keyof typeof vcsMethods]>(
-  method: M,
-  wireName: string
-) {
-  const inputSchema = (method.args as z.ZodTuple<[] | [z.ZodTypeAny]>).items[0] ?? z.undefined();
-  const resultSchema = method.returns;
-  return {
-    website: {
-      kind: "closed",
-      reason:
-        "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
-    } as const,
-    description: `Execute the exact ${wireName} semantic workspace operation.`,
-    access: method.access,
-    args: z.tuple([
-      z
-        .object({
-          input: inputSchema,
-          ingress: semanticIngressSchema,
-        })
-        .strict(),
-    ]),
-    returns: z.discriminatedUnion("kind", [
-      z.object({ kind: z.literal("complete"), result: resultSchema }).strict(),
-      z
-        .object({
-          kind: z.literal("effects-pending"),
-          // Effects may be required to construct the public method result
-          // (for example an import learns its canonical snapshot only after
-          // host observation). Only `complete` carries the final contract.
-          result: PolymorphicJsonPayloadSchema,
-          effects: z.array(semanticEffectSchema),
-        })
-        .strict(),
-      z.object({ kind: z.literal("host-read"), request: semanticHostReadSchema }).strict(),
-      z.object({ kind: z.literal("host-content"), request: semanticContentRequestSchema }).strict(),
-    ]),
-    agentFacing: false,
-  };
-}
-
-type SemanticWireMethod<M extends (typeof vcsMethods)[keyof typeof vcsMethods]> = ReturnType<
-  typeof semanticWireMethod<M>
->;
-type SemanticWireMethods = {
-  [K in keyof typeof vcsMethods as `vcs${Capitalize<string & K>}`]: SemanticWireMethod<
-    (typeof vcsMethods)[K]
-  >;
-};
-
-const semanticWireMethods: SemanticWireMethods = {
-  vcsEdit: semanticWireMethod(vcsMethods.edit, "edit"),
-  vcsMove: semanticWireMethod(vcsMethods.move, "move"),
-  vcsCopy: semanticWireMethod(vcsMethods.copy, "copy"),
-  vcsMerge: semanticWireMethod(vcsMethods.merge, "merge"),
-  vcsRevert: semanticWireMethod(vcsMethods.revert, "revert"),
-  vcsCommit: semanticWireMethod(vcsMethods.commit, "commit"),
-  vcsDiscard: semanticWireMethod(vcsMethods.discard, "discard"),
-  vcsImportSnapshot: semanticWireMethod(vcsMethods.importSnapshot, "import snapshot"),
-  vcsRegisterExternalDelta: semanticWireMethod(
-    vcsMethods.registerExternalDelta,
-    "register external delta"
-  ),
-  vcsSupersedeExternalDelta: semanticWireMethod(
-    vcsMethods.supersedeExternalDelta,
-    "supersede external delta"
-  ),
-  vcsFinalizeExternalDelta: semanticWireMethod(
-    vcsMethods.finalizeExternalDelta,
-    "finalize external delta"
-  ),
-  vcsPush: semanticWireMethod(vcsMethods.push, "push"),
-  vcsStatus: semanticWireMethod(vcsMethods.status, "status"),
-  vcsMainState: semanticWireMethod(vcsMethods.mainState, "main state"),
-  vcsCompare: semanticWireMethod(vcsMethods.compare, "compare"),
-  vcsInspect: semanticWireMethod(vcsMethods.inspect, "inspect"),
-  vcsNeighbors: semanticWireMethod(vcsMethods.neighbors, "neighbors"),
-  vcsHistory: semanticWireMethod(vcsMethods.history, "history"),
-  vcsBlame: semanticWireMethod(vcsMethods.blame, "blame"),
-  vcsWalk: semanticWireMethod(vcsMethods.walk, "walk"),
-  vcsQuery: semanticWireMethod(vcsMethods.query, "query"),
-  vcsSearch: semanticWireMethod(vcsMethods.search, "search"),
-  vcsReadMemory: semanticWireMethod(vcsMethods.readMemory, "read memory"),
-  vcsResolveRepository: semanticWireMethod(vcsMethods.resolveRepository, "resolve repository"),
-  vcsReadFile: semanticWireMethod(vcsMethods.readFile, "read file"),
-  vcsReadFiles: semanticWireMethod(vcsMethods.readFiles, "read files"),
-  vcsListDirectory: semanticWireMethod(vcsMethods.listDirectory, "list directory"),
-  vcsListFiles: semanticWireMethod(vcsMethods.listFiles, "list files"),
-};
-
-const semanticMutationWireMethodNames = Object.keys(semanticWireMethods).filter(
-  (method) =>
-    semanticWireMethods[method as keyof typeof semanticWireMethods].access?.sensitivity !== "read"
-);
-const semanticReadWireMethodNames = Object.keys(semanticWireMethods).filter(
-  (method) =>
-    semanticWireMethods[method as keyof typeof semanticWireMethods].access?.sensitivity === "read"
-);
-
 const nonemptyText = z.string().min(1);
-const stateRefSchema = vcsStateNodeRefSchema;
 const workspacePinSchema = z
   .object({
     url: nonemptyText,
@@ -1680,134 +1523,12 @@ const workspaceSnapshotRepositorySchema = z
     ),
   })
   .strict();
-const semanticAcknowledgementSchema = z
-  .object({
-    effectId: nonemptyText,
-    payloadDigest: nonemptyText,
-    receipt: GadJsonRecordSchema,
-  })
-  .strict();
-const workspaceInitializationInputSchema = z
+export const workspaceHistoryInitializationInputSchema = z
   .object({
     commandId: nonemptyText,
     pin: workspacePinSchema,
     repositories: z.array(workspaceSnapshotRepositorySchema),
     installation: WorkspaceTemplateInstallationSchema,
-    acknowledgement: semanticAcknowledgementSchema.optional(),
-  })
-  .strict();
-const workspaceSourceEffectSchema = semanticEffectSchema
-  .omit({
-    receipt: true,
-    createdAt: true,
-  })
-  .extend({ status: z.literal("pending") });
-const workspaceInitializationInspectionSchema = z.discriminatedUnion("state", [
-  z.object({ state: z.literal("empty") }).strict(),
-  z
-    .object({
-      state: z.literal("initializing"),
-      commandId: nonemptyText,
-      pendingEffect: workspaceSourceEffectSchema.optional(),
-    })
-    .strict(),
-  z
-    .object({
-      state: z.literal("ready"),
-      commandId: nonemptyText,
-      receipt: z
-        .object({
-          commandId: nonemptyText,
-          pin: workspacePinSchema,
-          initializedEventId: nonemptyText,
-          initializedStateHash: nonemptyText,
-        })
-        .strict(),
-    })
-    .strict(),
-  z
-    .object({
-      state: z.literal("failed"),
-      commandId: nonemptyText,
-      failure: rpcFailureSchema,
-    })
-    .strict(),
-]);
-const genericSemanticResultSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("complete"), result: GadJsonValueSchema }).strict(),
-  z
-    .object({
-      kind: z.literal("effects-pending"),
-      result: GadJsonValueSchema,
-      effects: z.array(semanticEffectSchema),
-    })
-    .strict(),
-  z.object({ kind: z.literal("host-read"), request: semanticHostReadSchema }).strict(),
-  z.object({ kind: z.literal("host-content"), request: semanticContentRequestSchema }).strict(),
-]);
-const materializationFileStateSchema = z
-  .object({ contentHash: nonemptyText, mode: z.number().int().nonnegative() })
-  .strict();
-const materializationRepositorySchema = z.discriminatedUnion("presence", [
-  z
-    .object({
-      repositoryId: nonemptyText,
-      repoPath: z.string(),
-      presence: z.literal("deleted"),
-    })
-    .strict(),
-  z
-    .object({
-      repositoryId: nonemptyText,
-      repoPath: z.string(),
-      presence: z.literal("present"),
-      fileManifestId: nonemptyText,
-      source: z.discriminatedUnion("kind", [
-        z.object({ kind: z.literal("content-root"), contentRoot: nonemptyText }).strict(),
-        z
-          .object({
-            kind: z.literal("delta"),
-            basisContentRoot: nonemptyText,
-            changes: z.array(
-              z
-                .object({
-                  path: z.string(),
-                  expected: materializationFileStateSchema.nullable(),
-                  result: materializationFileStateSchema.nullable(),
-                })
-                .strict()
-            ),
-          })
-          .strict(),
-        z
-          .object({
-            kind: z.literal("snapshot"),
-            files: z.array(
-              z
-                .object({
-                  path: z.string(),
-                  contentHash: nonemptyText,
-                  mode: z.number().int().nonnegative(),
-                })
-                .strict()
-            ),
-          })
-          .strict(),
-      ]),
-    })
-    .strict(),
-]);
-const materializationCommandSchema = z
-  .object({
-    materializationId: nonemptyText,
-    contextId: nonemptyText,
-    commandId: nonemptyText,
-    mode: z.enum(["initialize", "patch", "replace"]),
-    previousState: stateRefSchema.nullable(),
-    targetState: stateRefSchema,
-    repositories: z.array(materializationRepositorySchema),
-    blobs: z.array(z.object({ contentHash: nonemptyText, base64: z.string() }).strict()),
-    payloadDigest: nonemptyText,
   })
   .strict();
 const refRecordSchema = z
@@ -1833,10 +1554,9 @@ const logHeadSchema = z
     head: nonemptyText,
     logKind: nonemptyText,
     seq: z.number().int().nonnegative(),
-    hash: nonemptyText,
     envelopeId: nonemptyText.nullable(),
     forkSeq: z.number().int().nonnegative().nullable(),
-    forkHash: nonemptyText.nullable(),
+    forkEnvelopeId: nonemptyText.nullable(),
     parentLogId: nonemptyText.nullable(),
     parentHead: nonemptyText.nullable(),
   })
@@ -1866,7 +1586,7 @@ const appendLogResultSchema = z
     logId: nonemptyText,
     head: nonemptyText,
     headSeq: z.number().int().nonnegative(),
-    headHash: nonemptyText,
+    headEnvelopeId: nonemptyText,
     envelopes: z.array(logEnvelopeSchema),
     published: z.array(
       z
@@ -1896,249 +1616,13 @@ const forkLogResultSchema = z
     toLogId: nonemptyText,
     toHead: nonemptyText,
     forkSeq: z.number().int().nonnegative(),
-    forkHash: nonemptyText,
+    forkEnvelopeId: nonemptyText.nullable(),
     inherited: z.number().int().nonnegative(),
   })
   .strict();
 const channelInviteKeySchema = z.object({ channelId: nonemptyText, userId: nonemptyText }).strict();
 
 const gadInternalWireMethods = defineServiceMethods({
-  workspaceSourceTemplateInstallation: {
-    website: {
-      kind: "closed",
-      reason: "Installation provenance requires a reviewed source consumer.",
-    } as const,
-    description: "Read installation provenance at an exact workspace publication event.",
-    args: z.tuple([z.object({ eventId: nonemptyText }).strict()]),
-    returns: WorkspaceTemplateInstallationSchema.nullable(),
-    agentFacing: false,
-  },
-  workspaceSourceInitializeExactSnapshot: {
-    website: {
-      kind: "closed",
-      reason:
-        "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
-    } as const,
-    description: "Initialize the provider from one exact root snapshot.",
-    args: z.tuple([workspaceInitializationInputSchema]),
-    returns: workspaceInitializationInspectionSchema,
-    agentFacing: false,
-  },
-  workspaceSourceResolve: {
-    website: {
-      kind: "closed",
-      reason:
-        "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
-    } as const,
-    description: "Resolve an exact source reference.",
-    args: z.tuple([z.object({ ref: nonemptyText }).strict()]),
-    returns: z.object({ stateHash: nonemptyText }).strict(),
-    agentFacing: false,
-  },
-  workspaceSourceCurrent: {
-    website: {
-      kind: "closed",
-      reason:
-        "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
-    } as const,
-    description: "Read the current source state.",
-    args: z.tuple([]),
-    returns: z.object({ stateHash: nonemptyText }).strict().nullable(),
-    agentFacing: false,
-  },
-  workspaceSourceInspectInitialization: {
-    website: {
-      kind: "closed",
-      reason:
-        "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
-    } as const,
-    description: "Inspect exact-root initialization.",
-    args: z.tuple([]),
-    returns: workspaceInitializationInspectionSchema,
-    agentFacing: false,
-  },
-  workspaceSourceHealth: {
-    website: {
-      kind: "closed",
-      reason:
-        "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
-    } as const,
-    description: "Check the workspace-source bootstrap protocol.",
-    args: z.tuple([]),
-    returns: z
-      .object({ ok: z.literal(true), protocol: z.literal("vibestudio.workspace-source.v1") })
-      .strict(),
-    agentFacing: false,
-  },
-  vcsSemanticEffectAck: {
-    website: {
-      kind: "closed",
-      reason:
-        "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
-    } as const,
-    description: "Acknowledge one exact semantic host effect.",
-    args: z.tuple([z.object({ acknowledgement: semanticAcknowledgementSchema }).strict()]),
-    returns: genericSemanticResultSchema,
-    agentFacing: false,
-  },
-  vcsSemanticHostReadAck: {
-    website: {
-      kind: "closed",
-      reason:
-        "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
-    } as const,
-    description: "Resume one exact semantic content host read.",
-    args: z.tuple([z.object({ acknowledgement: semanticHostReadAcknowledgementSchema }).strict()]),
-    returns: genericSemanticResultSchema,
-    agentFacing: false,
-  },
-  vcsSemanticContentAck: {
-    website: {
-      kind: "closed",
-      reason:
-        "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
-    } as const,
-    description: "Resume an exact semantic command after its authored content is available.",
-    args: z.tuple([z.object({ acknowledgement: semanticContentAcknowledgementSchema }).strict()]),
-    returns: genericSemanticResultSchema,
-    agentFacing: false,
-  },
-  vcsPendingSemanticEffects: {
-    website: {
-      kind: "closed",
-      reason:
-        "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
-    } as const,
-    description: "List durable pending semantic effects.",
-    args: z.tuple([]),
-    returns: z.array(semanticEffectSchema),
-    agentFacing: false,
-  },
-  vcsContentGcRoots: {
-    website: {
-      kind: "closed",
-      reason:
-        "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
-    } as const,
-    description: "List content roots retained by semantic state.",
-    args: z.tuple([]),
-    returns: z
-      .object({ contentRoots: z.array(nonemptyText), contentHashes: z.array(nonemptyText) })
-      .strict(),
-    agentFacing: false,
-  },
-  vcsListContexts: {
-    website: {
-      kind: "closed",
-      reason:
-        "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
-    } as const,
-    description: "List semantic context identifiers.",
-    args: z.tuple([z.object({ prefix: z.string().optional() }).strict()]),
-    returns: z.array(nonemptyText),
-    agentFacing: false,
-  },
-  vcsReferencesReachable: {
-    website: {
-      kind: "closed",
-      reason:
-        "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
-    } as const,
-    description: "Check whether semantic references are reachable from contexts.",
-    args: z.tuple([
-      z
-        .object({
-          contextIds: z.array(nonemptyText),
-          references: z.array(z.object({ kind: nonemptyText, value: GadJsonValueSchema }).strict()),
-        })
-        .strict(),
-    ]),
-    returns: z.boolean(),
-    agentFacing: false,
-  },
-  vcsIsStateDescendant: {
-    website: {
-      kind: "closed",
-      reason:
-        "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
-    } as const,
-    description: "Check semantic state ancestry within a bounded traversal.",
-    args: z.tuple([
-      z
-        .object({
-          ancestor: stateRefSchema,
-          descendant: stateRefSchema,
-          maxEdges: z.number().int().positive(),
-        })
-        .strict(),
-    ]),
-    returns: z.boolean(),
-    agentFacing: false,
-  },
-  vcsEnsureContext: {
-    website: {
-      kind: "closed",
-      reason:
-        "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
-    } as const,
-    description: "Ensure one semantic context and requested projection.",
-    args: z.tuple([
-      z
-        .object({
-          contextId: nonemptyText,
-          commandId: nonemptyText,
-          projection: z.enum(["required", "deferred"]).optional(),
-          ingress: semanticIngressSchema,
-        })
-        .strict(),
-    ]),
-    returns: genericSemanticResultSchema,
-    agentFacing: false,
-  },
-  vcsContextMaterializationCommand: {
-    website: {
-      kind: "closed",
-      reason:
-        "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
-    } as const,
-    description: "Derive the exact repair command for one context projection.",
-    args: z.tuple([
-      z.object({ contextId: nonemptyText, materializedState: stateRefSchema.nullable() }).strict(),
-    ]),
-    returns: materializationCommandSchema,
-    agentFacing: false,
-  },
-  vcsForkContext: {
-    website: {
-      kind: "closed",
-      reason:
-        "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
-    } as const,
-    description: "Fork one semantic context into another exact coordinate.",
-    args: z.tuple([
-      z
-        .object({
-          sourceContextId: nonemptyText,
-          targetContextId: nonemptyText,
-          commandId: nonemptyText,
-          ingress: semanticIngressSchema,
-        })
-        .strict(),
-    ]),
-    returns: genericSemanticResultSchema,
-    agentFacing: false,
-  },
-  vcsDropContext: {
-    website: {
-      kind: "closed",
-      reason:
-        "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
-    } as const,
-    description: "Drop one semantic context.",
-    args: z.tuple([z.object({ contextId: nonemptyText }).strict()]),
-    returns: z.object({ dropped: z.boolean() }).strict(),
-    agentFacing: false,
-  },
   resolveRef: {
     website: {
       kind: "closed",
@@ -2241,7 +1725,7 @@ const gadInternalWireMethods = defineServiceMethods({
       .object({
         parentLogId: nonemptyText.nullable(),
         forkSeq: z.number().int().nonnegative().nullable(),
-        forkHash: nonemptyText.nullable(),
+        forkEnvelopeId: nonemptyText.nullable(),
       })
       .strict(),
     agentFacing: false,
@@ -2309,7 +1793,7 @@ const gadInternalWireMethods = defineServiceMethods({
     args: z.tuple([
       z.object({ logId: nonemptyText, head: nonemptyText, logKind: nonemptyText }).strict(),
     ]),
-    returns: z.object({ seq: z.literal(0), hash: z.string() }).strict(),
+    returns: z.object({ seq: z.literal(0), envelopeId: z.null() }).strict(),
     agentFacing: false,
   },
   appendLogEvent: {
@@ -2326,7 +1810,10 @@ const gadInternalWireMethods = defineServiceMethods({
           head: nonemptyText,
           logKind: nonemptyText,
           owner: LogOwnerWireSchema.nullish(),
-          expectedHeadHash: z.string().nullish(),
+          expectedHead: z.object({
+            seq: z.number().int().nonnegative(),
+            envelopeId: nonemptyText.nullable(),
+          }).strict().optional(),
           idempotency: z.enum(["exact", "idempotent-by-id"]).nullish(),
           events: z.array(logAppendEventSchema).min(1),
         })
@@ -2352,7 +1839,7 @@ const gadInternalWireMethods = defineServiceMethods({
       reason:
         "Raw workspace storage and shared transcript indexes require a reviewed public receiver.",
     } as const,
-    description: "Validate durable log chains and head pointers.",
+    description: "Validate durable log sequences, fork boundaries, and head pointers.",
     args: z.tuple([
       z.object({ logId: z.string().nullish(), head: z.string().nullish() }).strict().optional(),
     ]),
@@ -2468,7 +1955,7 @@ const gadInternalWireMethods = defineServiceMethods({
           toTrajectoryId: nonemptyText,
           toBranchId: nonemptyText,
           throughSeq: z.number().int().nonnegative().nullish(),
-          throughEventHash: z.string().nullish(),
+          throughEventId: nonemptyText.nullish(),
           throughPublishedChannelId: z.string().nullish(),
           throughPublishedChannelSeq: z.number().int().nonnegative().nullish(),
           toPublishedChannelId: z.string().nullish(),
@@ -2487,7 +1974,7 @@ const gadInternalWireMethods = defineServiceMethods({
         toBranchId: nonemptyText,
         copied: z.number().int().nonnegative(),
         headEventId: z.string().nullable(),
-        headEventHash: z.string().nullable(),
+        headSeq: z.number().int().nonnegative(),
         lineage: z.array(
           z
             .object({
@@ -2495,8 +1982,6 @@ const gadInternalWireMethods = defineServiceMethods({
               forkEventId: nonemptyText,
               sourceSeq: z.number().int().nonnegative(),
               forkSeq: z.number().int().nonnegative(),
-              sourceEventHash: nonemptyText,
-              forkEventHash: nonemptyText,
             })
             .strict()
         ),
@@ -2605,8 +2090,8 @@ const gadInternalWireMethods = defineServiceMethods({
     ),
     agentFacing: false,
   },
-  validateGadHashes: {
-    ...gadMethods.validateGadHashes,
+  validateGadIntegrity: {
+    ...gadMethods.validateGadIntegrity,
     agentFacing: false,
   },
   clearDirtyAfterValidation: {
@@ -2647,16 +2132,12 @@ const gadWireMethodOverrides = {
 
 type MergeServiceMethods<A, B> = Omit<A, keyof B> & B;
 type RawGadWireMethods = MergeServiceMethods<
-  MergeServiceMethods<
-    MergeServiceMethods<typeof gadInternalWireMethods, typeof semanticWireMethods>,
-    typeof directGadWireMethods
-  >,
+  MergeServiceMethods<typeof gadInternalWireMethods, typeof directGadWireMethods>,
   typeof gadWireMethodOverrides
 >;
 
 const rawGadWireMethods: RawGadWireMethods = defineServiceMethods({
   ...gadInternalWireMethods,
-  ...semanticWireMethods,
   ...directGadWireMethods,
   ...gadWireMethodOverrides,
 });
@@ -2680,63 +2161,11 @@ const GAD_AUTHORITY_GROUPS: readonly GadAuthorityGroup[] = [
     effect: { kind: "open" },
   },
   {
-    methods: [
-      "workspaceSourceInitializeExactSnapshot",
-      "vcsSemanticEffectAck",
-      "vcsSemanticHostReadAck",
-      "vcsSemanticContentAck",
-      "vcsEnsureContext",
-      "vcsContextMaterializationCommand",
-      "vcsForkContext",
-    ],
-    capability: "workspace.source.write",
-    principals: ["host"],
-    tier: "open",
-    sensitivity: "write",
-    effect: { kind: "open" },
-  },
-  {
-    methods: [
-      "workspaceSourceResolve",
-      "workspaceSourceCurrent",
-      "workspaceSourceInspectInitialization",
-      "workspaceSourceTemplateInstallation",
-      "workspaceSourceHealth",
-      "vcsPendingSemanticEffects",
-      "vcsContentGcRoots",
-      "vcsListContexts",
-      "vcsReferencesReachable",
-      "vcsIsStateDescendant",
-      "listChannelMembershipsForUser",
-    ],
+    methods: ["listChannelMembershipsForUser"],
     capability: "workspace.source.read",
     principals: ["host"],
     tier: "open",
     sensitivity: "read",
-    effect: { kind: "open" },
-  },
-  {
-    methods: semanticMutationWireMethodNames,
-    capability: "workspace-service:gad.workspace",
-    principals: ["host"],
-    tier: "open",
-    sensitivity: "admin",
-    effect: { kind: "open" },
-  },
-  {
-    methods: semanticReadWireMethodNames,
-    capability: "workspace-service:gad.workspace",
-    principals: ["host", "code"],
-    tier: "open",
-    sensitivity: "admin",
-    effect: { kind: "open" },
-  },
-  {
-    methods: ["vcsDropContext"],
-    capability: "workspace.source.delete",
-    principals: ["host"],
-    tier: "open",
-    sensitivity: "destructive",
     effect: { kind: "open" },
   },
   {
@@ -2784,7 +2213,7 @@ const GAD_AUTHORITY_GROUPS: readonly GadAuthorityGroup[] = [
       "listStoredValueRefs",
       "getStatus",
       "listChannelLogs",
-      "validateGadHashes",
+      "validateGadIntegrity",
       "checkGadIntegrity",
     ],
     capability: "workspace.graph.read",

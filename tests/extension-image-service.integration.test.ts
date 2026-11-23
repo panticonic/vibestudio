@@ -30,9 +30,6 @@ interface ReadyPayload {
 
 const RUN_SERVER_INTEGRATION = process.env["VIBESTUDIO_RUN_SERVER_INTEGRATION"] === "1";
 const hubControlRpcMethods = createRpcMethods("hubControl", hubControlMethods);
-const serverPath = path.resolve(process.cwd(), "dist", "server.mjs");
-const maybeDescribe =
-  RUN_SERVER_INTEGRATION && fs.existsSync(serverPath) ? describe : describe.skip;
 
 let tempRoot: string | null = null;
 let serverOwner: ReturnType<typeof ownChild> | null = null;
@@ -46,8 +43,9 @@ afterEach(async () => {
   }
 }, 20_000);
 
-maybeDescribe("image-service extension server smoke", () => {
+describe.runIf(RUN_SERVER_INTEGRATION)("image-service extension server smoke", () => {
   it("builds the declared extension then invokes it through the server RPC surface", async () => {
+    const serverPath = path.join(process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"]!, "server.mjs");
     tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-extension-server-smoke-"));
     const readyFile = path.join(tempRoot, "ready.json");
     const developmentTemplates = await resolveDevelopmentTemplateSet({

@@ -30,7 +30,8 @@ it("resolves authored test requirements and selected SDK declarations without ch
     write(sdk, {
       name: "@vibestudio/contract",
       exports: "./src/index.ts",
-      devDependencies: { "@types/node": "24.10.1" },
+      dependencies: { typescript: "6.0.3" },
+      devDependencies: { "@types/node": "24.10.1", typescript: "7.0.2" },
     });
     write(path.join(appRoot, "packages", "unrelated"), {
       name: "@vibestudio/unrelated",
@@ -51,6 +52,7 @@ it("resolves authored test requirements and selected SDK declarations without ch
     ).toEqual({
       "@types/react": "19.2.18",
       "@types/node": "24.10.1",
+      typescript: "6.0.3",
       zod: "3.25.76",
     });
     expect(unit.dependencies).toEqual({ "@vibestudio/contract": "workspace:*" });

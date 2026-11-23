@@ -10,6 +10,10 @@ import { canonicalJson, compareUtf16CodeUnits } from "@vibestudio/content-addres
 import { domainHash } from "@vibestudio/shared/execution/identity";
 import { semanticVcsPathAdmission } from "@vibestudio/shared/vcs/pathAdmission";
 import { putFile } from "./blobstoreService.js";
+import { markPrivateWorkspaceBlobs, recordBlobUpload } from "../storage/blobUploads.js";
+import { withBlobContentLock } from "../storage/blobRetentions.js";
+import type { ParticipantRepositoryAccess } from "../vcsHost/workspaceVcs.js";
+import { workspaceParticipantIdentity } from "../vcsHost/workspaceHistoryHost.js";
 import { writeFileAtomicSync } from "../../atomicFile.js";
 
 const SESSION_ID = /^[A-Za-z0-9._-]{1,160}$/u;
@@ -174,7 +178,7 @@ export interface NativeDevelopmentSemanticAdapter {
     expectedWorkingHead: VcsStateNodeRef;
     commandId: string;
     message: string;
-    ingress: NativeDevelopmentSemanticIngress;
+    ingress: NativeDevelopmentParticipantIngress;
   }): Promise<VcsStateNodeRef>;
   importSnapshot(input: {
     developmentContextId: string;
@@ -182,12 +186,18 @@ export interface NativeDevelopmentSemanticAdapter {
     expectedWorkingHead: VcsStateNodeRef;
     commandId: string;
     descriptor: NativeSnapshotDescriptor;
-    ingress: NativeDevelopmentSemanticIngress;
+    ingress: NativeDevelopmentParticipantIngress & { uploadPrincipal: string };
   }): Promise<VcsImportSnapshotResult>;
 }
 
 export interface NativeDevelopmentSemanticIngress {
   causalParent: RpcCausalParent | null;
+  resolveAccess(contextId: string): Promise<ParticipantRepositoryAccess>;
+}
+
+interface NativeDevelopmentParticipantIngress {
+  causalParent: RpcCausalParent | null;
+  access: ParticipantRepositoryAccess;
 }
 
 export interface NativeDevelopmentSessionReceipt {
@@ -233,7 +243,8 @@ interface PendingCheckpoint {
 }
 
 interface NativeSessionMarker {
-  version: 2;
+  version: 3;
+  participant: string;
   sessionId: string;
   ownedRootId: string;
   executorId: string;
@@ -279,7 +290,10 @@ export class NativeDevelopmentExecutor<TPlan extends NativeDevelopmentSourcePlan
       executorId: string;
       tools: ReviewedNativeDevelopmentTools;
       semantic: NativeDevelopmentSemanticAdapter;
-      planSource(input: { developmentContextId: string; repositoryId: string }): Promise<TPlan>;
+      planSource(
+        input: { developmentContextId: string; repositoryId: string },
+        access: ParticipantRepositoryAccess,
+      ): Promise<TPlan>;
       materializeSource(plan: TPlan, destination: string): Promise<void>;
       now?: () => number;
     }
@@ -372,7 +386,9 @@ export class NativeDevelopmentExecutor<TPlan extends NativeDevelopmentSourcePlan
       this.assertOpaqueId(input.idempotencyKey, "idempotency key");
       const existing = await this.readMarker(input.sessionId, false);
       if (existing) {
+        const access = await input.ingress.resolveAccess(input.developmentContextId);
         this.assertOpenIdentity(existing, input);
+        requireSessionParticipant(existing, access);
         if (existing.state === "ready" && this.activeTools.has(input.sessionId)) {
           return publicReceipt(existing);
         }
@@ -400,19 +416,20 @@ export class NativeDevelopmentExecutor<TPlan extends NativeDevelopmentSourcePlan
         );
       }
 
+      const access = await input.ingress.resolveAccess(input.developmentContextId);
       const baseCommandId = stableCommandId("base", input.sessionId, input.idempotencyKey);
       const baseEvent = await this.deps.semantic.commitChildBase({
         developmentContextId: input.developmentContextId,
         expectedWorkingHead: input.childWorkingHead,
         commandId: baseCommandId,
         message: `Development session base ${input.sessionId}`,
-        ingress: input.ingress,
+        ingress: { causalParent: input.ingress.causalParent, access },
       });
       assertEvent(baseEvent, "Native development base");
       const plan = await this.deps.planSource({
         developmentContextId: input.developmentContextId,
         repositoryId: input.repositoryId,
-      });
+      }, access);
       if (
         plan.contextId !== input.developmentContextId ||
         plan.repositoryId !== input.repositoryId ||
@@ -424,7 +441,8 @@ export class NativeDevelopmentExecutor<TPlan extends NativeDevelopmentSourcePlan
       const root = await this.claimRoot(input.sessionId);
       const now = this.now();
       let marker: NativeSessionMarker = {
-        version: 2,
+        version: 3,
+        participant: participantDigest(access),
         sessionId: input.sessionId,
         ownedRootId: nativeDevelopmentOwnedRootId(this.deps.executorId, input.sessionId),
         executorId: this.deps.executorId,
@@ -504,6 +522,10 @@ export class NativeDevelopmentExecutor<TPlan extends NativeDevelopmentSourcePlan
     return this.locked(input.sessionId, async () => {
       this.assertOpaqueId(input.idempotencyKey, "idempotency key");
       let marker = await this.requireMarker(input.sessionId);
+      const access = await input.ingress.resolveAccess(marker.developmentContextId);
+      requireSessionParticipant(marker, access);
+      const commandId = stableCommandId("checkpoint", marker.sessionId, input.idempotencyKey);
+      const uploadPrincipal = `native-development:${marker.participant}:${commandId}`;
       if (marker.lastCheckpoint?.idempotencyKey === input.idempotencyKey) {
         return marker.lastCheckpoint;
       }
@@ -525,7 +547,7 @@ export class NativeDevelopmentExecutor<TPlan extends NativeDevelopmentSourcePlan
         if (!pending || pending.phase === "freezing") {
           pending = {
             idempotencyKey: input.idempotencyKey,
-            commandId: stableCommandId("checkpoint", marker.sessionId, input.idempotencyKey),
+            commandId,
             phase: "freezing",
             expectedWorkingHead: marker.lastCheckpoint
               ? eventRef(marker.lastCheckpoint.imported.eventId)
@@ -547,6 +569,7 @@ export class NativeDevelopmentExecutor<TPlan extends NativeDevelopmentSourcePlan
             sessionId: marker.sessionId,
             blobsDir: this.deps.blobsDir,
             persist: true,
+            uploadPrincipal,
           });
           this.writeDescriptor(root, descriptor);
           pending = {
@@ -575,7 +598,7 @@ export class NativeDevelopmentExecutor<TPlan extends NativeDevelopmentSourcePlan
             expectedWorkingHead: pending.expectedWorkingHead,
             commandId: pending.commandId,
             descriptor,
-            ingress: input.ingress,
+            ingress: { causalParent: input.ingress.causalParent, access, uploadPrincipal },
           });
           if (
             imported.contextId !== marker.developmentContextId ||
@@ -925,6 +948,7 @@ export class NativeDevelopmentExecutor<TPlan extends NativeDevelopmentSourcePlan
       actual.executorId !== expected.executorId ||
       actual.executorId !== this.deps.executorId ||
       actual.repositoryId !== expected.repositoryId ||
+      actual.participant !== expected.participant ||
       actual.developmentContextId !== expected.developmentContextId
     ) {
       throw coded("EOWNERSHIP", "Native development root has a foreign owner marker");
@@ -945,12 +969,7 @@ export class NativeDevelopmentExecutor<TPlan extends NativeDevelopmentSourcePlan
     this.assertOpaqueId(sessionId, "session id");
     const markerPath = path.join(this.deps.root, sessionId, MARKER_FILE);
     try {
-      const parsed: unknown = JSON.parse(await fs.readFile(markerPath, "utf8"));
-      const marker = parseMarker(parsed);
-      if ((parsed as Record<string, unknown>)["version"] === 1) {
-        writeFileAtomicSync(markerPath, `${canonicalJson(marker)}\n`, { mode: 0o600 });
-      }
-      return marker;
+      return parseMarker(JSON.parse(await fs.readFile(markerPath, "utf8")));
     } catch (error) {
       if (!required && (error as NodeJS.ErrnoException).code === "ENOENT") return null;
       throw error;
@@ -1073,8 +1092,10 @@ export async function scanNativeSnapshot(input: {
   repoPath: string;
   sessionId: string;
   blobsDir: string;
-  persist: boolean;
-}): Promise<NativeSnapshotDescriptor> {
+} & (
+  { persist: false } |
+  { persist: true; uploadPrincipal: string }
+)): Promise<NativeSnapshotDescriptor> {
   const rootStat = await fs.lstat(input.repositoryRoot);
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
     throw coded("EUNSUPPORTED_NATIVE_ENTRY", "Native repository root is not a directory");
@@ -1159,9 +1180,19 @@ export async function scanNativeSnapshot(input: {
         `Native file changed before checkpoint capture: ${observation.path}`
       );
     }
-    const contentHash = input.persist
-      ? (await putFile(input.blobsDir, observation.absolutePath)).digest
-      : await hashFile(observation.absolutePath);
+    let contentHash: string;
+    if (!input.persist) {
+      contentHash = await hashFile(observation.absolutePath);
+    } else {
+      const principal = input.uploadPrincipal;
+      contentHash = await withBlobContentLock(input.blobsDir, async () => {
+        const stored = await putFile(input.blobsDir, observation.absolutePath, (digest) =>
+          markPrivateWorkspaceBlobs(input.blobsDir, [digest])
+        );
+        recordBlobUpload(input.blobsDir, principal, stored.digest);
+        return stored.digest;
+      });
+    }
     const after = await fs.lstat(observation.absolutePath);
     if (!sameFileObservation(observation.stat, after)) {
       throw coded(
@@ -1235,13 +1266,13 @@ function parseDescriptor(value: unknown): NativeSnapshotDescriptor {
 
 function parseMarker(value: unknown): NativeSessionMarker {
   if (!value || typeof value !== "object") throw coded("ECORRUPT", "Invalid native session marker");
-  const raw = value as Record<string, unknown>;
   const marker = value as Partial<Omit<NativeSessionMarker, "version" | "repair">> & {
     version?: unknown;
     repair?: unknown;
   };
   if (
-    (raw["version"] !== 1 && raw["version"] !== 2) ||
+    marker.version !== 3 ||
+    typeof marker.participant !== "string" || !/^[0-9a-f]{64}$/u.test(marker.participant) ||
     typeof marker.sessionId !== "string" ||
     typeof marker.ownedRootId !== "string" ||
     typeof marker.executorId !== "string" ||
@@ -1270,40 +1301,6 @@ function parseMarker(value: unknown): NativeSessionMarker {
     throw coded("ECORRUPT", "Invalid native session marker");
   }
   if (marker.process) assertProcessIdentity(marker.process);
-  if (raw["version"] === 1) {
-    const legacyRepair = marker.repair as
-      | {
-          phase?: unknown;
-          primaryError?: unknown;
-          cleanupErrors?: unknown;
-          attention?: unknown;
-          knownEffects?: unknown;
-        }
-      | null
-      | undefined;
-    let repair: NativeRepair | null = null;
-    if (legacyRepair) {
-      if (
-        typeof legacyRepair.phase !== "string" ||
-        typeof legacyRepair.primaryError !== "string" ||
-        !Array.isArray(legacyRepair.cleanupErrors) ||
-        !legacyRepair.cleanupErrors.every((entry) => typeof entry === "string") ||
-        (legacyRepair.attention !== "actionable" && legacyRepair.attention !== "kept") ||
-        !legacyRepair.knownEffects
-      )
-        throw coded("ECORRUPT", "Invalid v1 native repair marker");
-      repair = {
-        phase: legacyRepair.phase,
-        primaryFailure: serializeRpcFailure(new Error(legacyRepair.primaryError), "application"),
-        cleanupFailures: legacyRepair.cleanupErrors.map((message) =>
-          serializeRpcFailure(new Error(message), "application")
-        ),
-        attention: legacyRepair.attention,
-        knownEffects: legacyRepair.knownEffects as NativeRepair["knownEffects"],
-      };
-    }
-    return { ...marker, version: 2, repair } as NativeSessionMarker;
-  }
   if (marker.repair !== null && marker.repair !== undefined) {
     const repair = marker.repair as NativeRepair;
     if (
@@ -1314,7 +1311,7 @@ function parseMarker(value: unknown): NativeSessionMarker {
       !Array.isArray(repair.cleanupFailures) ||
       repair.cleanupFailures.some((failure) => !rpcFailureSchema.safeParse(failure).success)
     )
-      throw coded("ECORRUPT", "Invalid v2 native repair marker");
+      throw coded("ECORRUPT", "Invalid native repair marker");
   }
   return marker as NativeSessionMarker;
 }
@@ -1370,6 +1367,18 @@ function stableCommandId(
     `vibestudio/native-development-${kind}-command/v1`,
     canonicalJson({ sessionId, idempotencyKey })
   )}`;
+}
+
+function participantDigest(access: ParticipantRepositoryAccess): string {
+  return domainHash(
+    "vibestudio/native-development-participant/v1",
+    workspaceParticipantIdentity(access.caller, access.ownerContextId),
+  );
+}
+
+function requireSessionParticipant(marker: NativeSessionMarker, access: ParticipantRepositoryAccess): void {
+  if (marker.participant !== participantDigest(access))
+    throw coded("EACCES", "The native editor session belongs to a different working copy");
 }
 
 function nativeOpenIntentDigest(input: {

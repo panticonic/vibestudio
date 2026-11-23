@@ -65,10 +65,10 @@ describe("resolveApprovalCallerTitle", () => {
     entityCache._onActivate(record("do:workers/agent:Agent:session", "do", "panel:nav-chat"));
     entityCache._onActivate(
       record(
-        "do:vibestudio/internal:EvalDO:run-1",
+        "do:workers/session:SessionDO:run-1",
         "do",
         "do:workers/agent:Agent:session",
-        "vibestudio/internal",
+        "workers/session",
         "internal"
       )
     );
@@ -78,7 +78,7 @@ describe("resolveApprovalCallerTitle", () => {
           entityCache,
           getTitle: (id) => (id === "panel:nav-chat" ? "Import Trello into Flowboard" : undefined),
         },
-        "do:vibestudio/internal:EvalDO:run-1"
+        "do:workers/session:SessionDO:run-1"
       )
     ).toBe("Import Trello into Flowboard");
   });
@@ -121,13 +121,13 @@ describe("resolveApprovalCallerTitle", () => {
     });
     entityCache._onActivate({
       ...record(
-        "do:vibestudio/internal:EvalDO:run-1",
+        "do:workers/session:SessionDO:run-1",
         "do",
         "do:workers/agent:AgentDO:session",
-        "vibestudio/internal",
+        "workers/session",
         "internal"
       ),
-      className: "EvalDO",
+      className: "SessionDO",
       stateArgs: { ownerPrincipalId: "do:workers/agent:AgentDO:session", subKey: "turn-17" },
     });
     const requester = resolveApprovalRequester(
@@ -141,9 +141,9 @@ describe("resolveApprovalCallerTitle", () => {
               : undefined,
       },
       {
-        callerId: "do:vibestudio/internal:EvalDO:run-1",
+        callerId: "do:workers/session:SessionDO:run-1",
         callerKind: "do",
-        repoPath: "vibestudio/internal",
+        repoPath: "workers/session",
         effectiveVersion: "internal",
       }
     );

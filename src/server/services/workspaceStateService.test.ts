@@ -961,36 +961,43 @@ describe("workspaceStateService — slot-state change hook", () => {
     });
   });
 
-  it("publishes a newly created slot's durable desired entity", async () => {
-    const onSlotStateChanged = vi.fn();
-    const { svc } = makeService({ onSlotStateChanged });
-    const input = {
-      slotId: "panel:tree/news",
-      parentSlotId: null,
-      initialEntry: {
-        entryKey: "nav-news",
-        entityId: "panel:nav-news",
-        source: "panels/news",
-        contextId: "ctx-news",
-      },
-    };
+  it.each([undefined, "ctx:ctx-news", "state:revision", "main"])(
+    "publishes a newly created slot's durable desired entity for %s",
+    async (ref) => {
+      const onSlotStateChanged = vi.fn();
+      const { svc } = makeService({ onSlotStateChanged });
+      const input = {
+        slotId: "panel:tree/news",
+        parentSlotId: null,
+        initialEntry: {
+          entryKey: "nav-news",
+          entityId: "panel:nav-news",
+          source: "panels/news",
+          contextId: "ctx-news",
+          ...(ref ? { options: { ref } } : {}),
+        },
+      };
 
-    await svc.handler(makeCtx() as never, "slot.create", [input]);
+      const ctx = makeCtx();
+      await svc.handler(ctx as never, "slot.create", [input]);
 
-    expect(onSlotStateChanged).toHaveBeenCalledWith({
-      kind: "current-entity",
-      slotId: input.slotId,
-      previousEntityId: null,
-      currentEntityId: input.initialEntry.entityId,
-      presentation: "awaiting-execution",
-      desiredExecution: {
-        source: input.initialEntry.source,
-        key: input.initialEntry.entryKey,
-        contextId: input.initialEntry.contextId,
-        stateArgs: {},
-      },
-    });
-  });
+      expect(onSlotStateChanged).toHaveBeenCalledWith({
+        kind: "current-entity",
+        slotId: input.slotId,
+        previousEntityId: null,
+        currentEntityId: input.initialEntry.entityId,
+        presentation: "awaiting-execution",
+        desiredExecution: {
+          source: input.initialEntry.source,
+          key: input.initialEntry.entryKey,
+          contextId: input.initialEntry.contextId,
+          stateArgs: {},
+          ...(ref ? { ref } : {}),
+          ...(ref?.startsWith("ctx:") || ref?.startsWith("state:") ? { sourceCaller: ctx.caller } : {}),
+        },
+      });
+    }
+  );
 
   it("publishes the exact artifact committed with a preparing panel slot", async () => {
     const onSlotStateChanged = vi.fn();

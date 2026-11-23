@@ -1,4 +1,5 @@
-import { requireEvalKernel } from "./evalKernelAuthority.js";
+import { isEvalHost, requireEvalKernel, type HostsEvalKernel } from "./evalKernelAuthority.js";
+import { entityHostRef } from "@vibestudio/shared/evalRuntimeIdentity";
 import type { AgentExecutionSessionRegistry } from "./agentExecutionSessionRegistry.js";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { ServiceAccessError } from "@vibestudio/shared/serviceDispatcher";
@@ -13,15 +14,17 @@ import type { HeldDoDispatcher } from "@vibestudio/shared/doDispatcher";
 import type { WorkspaceEntityStore } from "../workspaceEntityStore.js";
 
 /**
- * The EvalDO cannot mutate the host publication journal directly. This narrow
+ * The eval kernel cannot mutate the host publication journal directly. This narrow
  * ingress authenticates the exact admitted run, reserves the artifact in the
- * host journal, and finalizes only after the EvalDO's durable owner row commits.
+ * host journal, and finalizes only after the eval kernel's durable owner row commits.
  */
 export function createEvalExecutionRootsService(deps: {
   doDispatch: HeldDoDispatcher;
   entityStore: WorkspaceEntityStore;
   publicationPort: ExecutionPublicationPort;
   executionSessions: Pick<AgentExecutionSessionRegistry, "resolve" | "resolveInvocation">;
+  /** Classes that host their own kernel (§6.11.6) are eval hosts like a session entity. */
+  hostsEvalKernel?: HostsEvalKernel;
 }): ServiceDefinition {
   return {
     name: "evalExecutionRoots",
@@ -38,17 +41,16 @@ export function createEvalExecutionRootsService(deps: {
           ctx.caller,
           deps.entityStore.cache,
           "evalExecutionRoots",
-          "retain"
+          "retain",
+          deps.hostsEvalKernel
         );
         if (
           !execution ||
-          execution.executor.kind !== "eval" ||
+          execution.executor.kind !== "dynamic-code" ||
           execution.executor.runtimeId !== ctx.caller.runtime.id ||
-          execution.executor.evalRunId !== runId ||
-          !ctx.caller.runtime.id.startsWith("do:vibestudio/internal:EvalDO:") ||
-          entity?.kind !== "do" ||
-          entity.source.repoPath !== "vibestudio/internal" ||
-          entity.className !== "EvalDO" ||
+          execution.executor.runId !== runId ||
+          !entity ||
+          !isEvalHost(entity, deps.hostsEvalKernel) ||
           entity.contextId !== execution.contextId
         ) {
           throw new ServiceAccessError(
@@ -59,7 +61,7 @@ export function createEvalExecutionRootsService(deps: {
           );
         }
         const artifact = verifyExecutionArtifactRef(artifactInput);
-        const objectKey = ctx.caller.runtime.id.slice("do:vibestudio/internal:EvalDO:".length);
+        const host = entityHostRef(entity)!;
         const ownerId = `${ctx.caller.runtime.id}:${runId}:${moduleSpecifier}`;
         await publishExecutionOwnerAsync(
           deps.publicationPort,
@@ -75,17 +77,7 @@ export function createEvalExecutionRootsService(deps: {
           },
           () =>
             deps.doDispatch
-              .dispatch(
-                {
-                  source: "vibestudio/internal",
-                  className: "EvalDO",
-                  objectKey,
-                },
-                "retainExecutionRoot",
-                runId,
-                moduleSpecifier,
-                artifact
-              )
+              .dispatch(host, "retainExecutionRoot", runId, moduleSpecifier, artifact)
               .then(() => undefined)
         );
         return { retained: true as const };

@@ -264,9 +264,9 @@ function sessionContext(): AuthorizationContext {
         revisionDigest: "b".repeat(64),
       },
       executor: {
-        kind: "eval",
+        kind: "dynamic-code",
         runtimeId: "runtime:eval:s1",
-        evalRunId: "run:s1",
+        runId: "run:s1",
         authorityManifest: {
           mode: "adaptive",
           effects: "read-write",

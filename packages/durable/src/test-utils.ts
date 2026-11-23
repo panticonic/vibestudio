@@ -108,12 +108,12 @@ export type TestDOCall<T, DOClass = unknown> = TestDOResult<T, DOClass>["call"];
 
 let sqlJsPromise: Promise<SqlJsStatic> | null = null;
 
-function getSqlJs(): Promise<SqlJsStatic> {
+export function getSqlJs(): Promise<SqlJsStatic> {
   if (!sqlJsPromise) sqlJsPromise = initSqlJs();
   return sqlJsPromise;
 }
 
-function createSqlProxy(db: Database) {
+export function createSqlProxy(db: Database) {
   return {
     exec(query: string, ...bindings: unknown[]): SqlResult {
       const parameters = bindings.map((value) =>
@@ -305,11 +305,21 @@ export async function createTestDO<DOClass extends new (ctx: any, env: any) => o
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   DOClass: DOClass,
   env?: Record<string, unknown>,
-  opts?: { db?: Database; initialize?: boolean }
+  opts?: {
+    db?: Database;
+    initialize?: boolean;
+    /**
+     * A complete `ctx.storage` replacing the in-memory SQLite one, for example
+     * `FakeDoltStorage#storage` to run the object on a Dolt cell. Its `sql` is
+     * the object's `sql`; `db` is then an unused empty database.
+     */
+    storage?: Record<string, unknown> & { sql: unknown };
+  }
 ): Promise<TestDOResult<InstanceType<DOClass>, DOClass>> {
   const SQL = await getSqlJs();
   const db = opts?.db ?? new SQL.Database();
-  const sqlProxy = createSqlProxy(db);
+  const sqlProxy =
+    (opts?.storage?.sql as ReturnType<typeof createSqlProxy> | undefined) ?? createSqlProxy(db);
   const alarms: number[] = [];
   const acceptedWebSockets: AcceptedWebSocket[] = [];
   const objectKey = (env?.["__objectKey"] as string) ?? "test-key";
@@ -317,7 +327,7 @@ export async function createTestDO<DOClass extends new (ctx: any, env: any) => o
   const ctx = {
     props: {},
     id: { toString: () => objectKey, name: objectKey },
-    storage: {
+    storage: opts?.storage ?? {
       sql: sqlProxy,
       setAlarm(scheduledTime: number | Date) {
         const ts = typeof scheduledTime === "number" ? scheduledTime : scheduledTime.getTime();

@@ -524,7 +524,7 @@ export const vcsWorkUnitSchema = z
   });
 export type VcsWorkUnit = z.infer<typeof vcsWorkUnitSchema>;
 
-export const vcsWorkApplicationSchema = z
+const legacyVcsWorkApplicationSchema = z
   .object({
     applicationId: id("Local work application."),
     workUnitId: id("Applied work unit."),
@@ -535,6 +535,12 @@ export const vcsWorkApplicationSchema = z
     semanticProtocol: id("Semantic protocol."),
   })
   .strict();
+export const vcsWorkApplicationSchema = z.union([
+  legacyVcsWorkApplicationSchema,
+  legacyVcsWorkApplicationSchema
+    .omit({ resultWorkspaceFactRootId: true })
+    .extend({ revision: id("Exact native workspace revision.") }),
+]);
 export type VcsWorkApplication = z.infer<typeof vcsWorkApplicationSchema>;
 
 export const vcsMergeCoordinateRefSchema = z.discriminatedUnion("kind", [
@@ -581,7 +587,7 @@ const vcsSnapshotSourceSchema = z
   .object({ sourceUri: externalSourceUri, snapshotRevision: nonEmptyText })
   .strict();
 
-export const vcsWorkspaceEventSchema = z
+const legacyVcsWorkspaceEventSchema = z
   .object({
     eventId: id("Committed workspace event."),
     workspaceId: id("Owning workspace."),
@@ -598,6 +604,12 @@ export const vcsWorkspaceEventSchema = z
     createdAt: timestamp,
   })
   .strict();
+export const vcsWorkspaceEventSchema = z.union([
+  legacyVcsWorkspaceEventSchema,
+  legacyVcsWorkspaceEventSchema
+    .omit({ workspaceFactRootId: true })
+    .extend({ revision: id("Exact native workspace revision.") }),
+]);
 export type VcsWorkspaceEvent = z.infer<typeof vcsWorkspaceEventSchema>;
 
 // ---------------------------------------------------------------------------
@@ -880,6 +892,7 @@ export const vcsCommitInputSchema = z
   .object({
     ...mutationEnvelope,
     message: nonEmptyText.optional(),
+    templateInstallation: WorkspaceTemplateInstallationSchema.optional(),
     concludes: vcsMergeSourceSchema
       .describe(
         "A source whose comparison is complete but not concluded (convergent or net-zero). Commit atomically records its decision-only application and refuses with IntegrationIncomplete if it is incomplete."
@@ -1368,7 +1381,7 @@ const vcsMergeReviewFields = {
 export const vcsMergeResultSchema = z.discriminatedUnion("status", [
   vcsWorkingMutationResultSchema.extend({
     status: z.literal("working"),
-    decisionId: id("Created merge decision."),
+    decisionId: id("Created merge decision when an explicit resolution was recorded.").optional(),
     outcomes: z.array(vcsMergeCoordinateSchema).max(500),
     ...vcsMergeReviewFields,
     composed: z.array(vcsComposedReviewSchema).max(500),

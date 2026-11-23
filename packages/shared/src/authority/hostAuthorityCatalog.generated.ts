@@ -2356,6 +2356,207 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "chronolog.groups.create": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "grant-authority",
+      family: "chronolog.control",
+      rationale: "The prepared group operation selects the approved membership change.",
+    },
+    capability: "chronolog.write",
+    presentation: null,
+  },
+  "chronolog.groups.identity": {
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "transport",
+      family: "chronolog.read",
+      rationale: "Group reads use the authenticated account and a group-scoped grant.",
+    },
+    capability: "chronolog.read",
+    presentation: {
+      title: "Read from Chronolog",
+      action: "read from Chronolog",
+      description:
+        "Read account or workspace information and data from authorized Chronolog groups.",
+      group: "sharing",
+      authorityCategory: {
+        domain: "sharing",
+        verb: "see",
+      },
+    },
+  },
+  "chronolog.groups.invite": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "grant-authority",
+      family: "chronolog.control",
+      rationale: "The prepared group operation selects the approved membership change.",
+    },
+    capability: "chronolog.write",
+    presentation: null,
+  },
+  "chronolog.groups.join": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "grant-authority",
+      family: "chronolog.control",
+      rationale: "The prepared group operation selects the approved membership change.",
+    },
+    capability: "chronolog.write",
+    presentation: null,
+  },
+  "chronolog.groups.list": {
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "transport",
+      family: "chronolog.read",
+      rationale: "Group reads use the authenticated account and a group-scoped grant.",
+    },
+    capability: "chronolog.read",
+    presentation: {
+      title: "Read from Chronolog",
+      action: "read from Chronolog",
+      description:
+        "Read account or workspace information and data from authorized Chronolog groups.",
+      group: "sharing",
+      authorityCategory: {
+        domain: "sharing",
+        verb: "see",
+      },
+    },
+  },
+  "chronolog.history.current": {
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "transport",
+      family: "chronolog.read",
+      rationale: "Group reads use the authenticated account and a group-scoped grant.",
+    },
+    capability: "chronolog.read",
+    presentation: {
+      title: "Read from Chronolog",
+      action: "read from Chronolog",
+      description:
+        "Read account or workspace information and data from authorized Chronolog groups.",
+      group: "sharing",
+      authorityCategory: {
+        domain: "sharing",
+        verb: "see",
+      },
+    },
+  },
+  "chronolog.history.publish": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "grant-authority",
+      family: "chronolog.control",
+      rationale: "The prepared group operation selects the approved membership change.",
+    },
+    capability: "chronolog.write",
+    presentation: null,
+  },
+  "chronolog.history.share": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "grant-authority",
+      family: "chronolog.control",
+      rationale: "The prepared group operation selects the approved membership change.",
+    },
+    capability: "chronolog.write",
+    presentation: null,
+  },
+  "chronolog.outcome": {
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "transport",
+      family: "chronolog.read",
+      rationale: "Group reads use the authenticated account and a group-scoped grant.",
+    },
+    capability: "chronolog.read",
+    presentation: {
+      title: "Read from Chronolog",
+      action: "read from Chronolog",
+      description:
+        "Read account or workspace information and data from authorized Chronolog groups.",
+      group: "sharing",
+      authorityCategory: {
+        domain: "sharing",
+        verb: "see",
+      },
+    },
+  },
+  "chronolog.query": {
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "transport",
+      family: "chronolog.read",
+      rationale: "Group reads use the authenticated account and a group-scoped grant.",
+    },
+    capability: "chronolog.read",
+    presentation: {
+      title: "Read from Chronolog",
+      action: "read from Chronolog",
+      description:
+        "Read account or workspace information and data from authorized Chronolog groups.",
+      group: "sharing",
+      authorityCategory: {
+        domain: "sharing",
+        verb: "see",
+      },
+    },
+  },
+  "chronolog.subscribe": {
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "transport",
+      family: "chronolog.read",
+      rationale: "Group reads use the authenticated account and a group-scoped grant.",
+    },
+    capability: "chronolog.read",
+    presentation: {
+      title: "Read from Chronolog",
+      action: "read from Chronolog",
+      description:
+        "Read account or workspace information and data from authorized Chronolog groups.",
+      group: "sharing",
+      authorityCategory: {
+        domain: "sharing",
+        verb: "see",
+      },
+    },
+  },
+  "chronolog.transact": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "chronolog.transact",
+      rationale: "The prepared program selects the exact group and approved contents.",
+    },
+    capability: "chronolog.write",
+    presentation: {
+      title: "Write to a Chronolog group",
+      action: "write to a Chronolog group",
+      description: "Review one signed transaction for a specific group.",
+      group: "sharing",
+      authorityCategory: {
+        domain: "sharing",
+        verb: "act",
+      },
+    },
+  },
   "clients.integrationSnapshot": {
     tier: {
       tier: "open",
@@ -3372,96 +3573,41 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
-  "eval.acknowledge": {
+  "dynamicCode.admit": {
     tier: {
       tier: "open",
       session: "family",
       residency: "untrusted-execution",
-      family: "eval.control",
-      rationale: "Owner-scoped acknowledgement neither executes code nor deletes retained data.",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "eval.cancel": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "untrusted-execution",
-      family: "eval.retire",
+      family: "eval.create",
       rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
     },
     capability: null,
     presentation: null,
   },
-  "eval.deleteScopeValue": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "untrusted-execution",
-      family: "eval.retire",
-      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "eval.dispose": {
+  "dynamicCode.dispose": {
     tier: {
       tier: "open",
       session: "family",
       residency: "untrusted-execution",
       family: "eval.control",
       rationale:
-        "Owned-resource release: the host admits disposal only when this caller declared the isolated EvalDO finite at its immutable first activation",
+        "Owned-resource release: the host admits disposal only when this caller declared the scope finite at its immutable first activation",
     },
     capability: null,
     presentation: null,
   },
-  "eval.events": {
+  "dynamicCode.release": {
     tier: {
       tier: "open",
       session: "family",
       residency: "untrusted-execution",
-      family: "eval.control",
-      rationale: "Owner-scoped bounded read of durable eval lifecycle events",
+      family: "eval.retire",
+      rationale: "Owned-resource release of the caller's own admission.",
     },
     capability: null,
     presentation: null,
   },
-  "eval.get": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "untrusted-execution",
-      family: "eval.read",
-      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "eval.readScopeTextPage": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "untrusted-execution",
-      family: "eval.read",
-      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "eval.receipt": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "untrusted-execution",
-      family: "eval.read",
-      rationale: "Owner-scoped read of an immutable result; no new execution or authority.",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "eval.reset": {
+  "dynamicCode.reset": {
     tier: {
       tier: "critical",
       session: "family",
@@ -3482,29 +3628,6 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
-  "eval.start": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "untrusted-execution",
-      family: "eval.create",
-      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "evalEventIngress.publish": {
-    tier: {
-      tier: "open",
-      session: "codeOnly",
-      residency: "observability",
-      family: "evalEventIngress.mutate",
-      rationale:
-        "Host-internal observability ingress; exact EvalDO/run/owner session binding is re-derived by the receiver",
-    },
-    capability: null,
-    presentation: null,
-  },
   "evalExecutionRoots.retain": {
     tier: {
       tier: "open",
@@ -3512,7 +3635,7 @@ export const HOST_AUTHORITY_METHODS = {
       residency: "untrusted-execution",
       family: "evalExecutionRoots.control",
       rationale:
-        "Sealed eval kernel bookkeeping; exact live EvalDO/run admission and immutable artifact identity are re-derived and verified",
+        "Sealed eval kernel bookkeeping; exact live eval kernel/run admission and immutable artifact identity are re-derived and verified",
     },
     capability: null,
     presentation: null,
@@ -6719,6 +6842,17 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
+  "runtime.forwardHistoryPacket": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "runtime.history",
+      rationale: "One transfer, sender and remote destination are verified by the host.",
+    },
+    capability: null,
+    presentation: null,
+  },
   "runtime.listContexts": {
     tier: {
       tier: "open",
@@ -9774,6 +9908,12 @@ export const HOST_METHOD_MANIFEST_DEPENDENCIES = {
   "browserEnvironment.revealDownload": ["service:browserEnvironment.revealDownload"],
   "browserEnvironment.startImportRead": ["service:browserEnvironment.startImportRead"],
   "chromiumFetch.openBrowser": ["credential.use"],
+  "chronolog.groups.create": ["chronolog.write"],
+  "chronolog.groups.invite": ["chronolog.write"],
+  "chronolog.groups.join": ["chronolog.write"],
+  "chronolog.history.publish": ["chronolog.write"],
+  "chronolog.history.share": ["chronolog.write"],
+  "chronolog.transact": ["chronolog.write"],
   "corsApproval.authorize": ["network.response.read"],
   "credentials.closeWebSocketScope": ["credential.use"],
   "credentials.deleteClientConfig": ["account-providers.delete"],
@@ -9881,6 +10021,14 @@ export const HOST_CAPABILITY_CATEGORIES = {
   "browser-passwords.manage": {
     domain: "accounts",
     verb: "manage",
+  },
+  "chronolog.read": {
+    domain: "sharing",
+    verb: "see",
+  },
+  "chronolog.write": {
+    domain: "sharing",
+    verb: "act",
   },
   "code-runner.reset": {
     domain: "automation",
@@ -10354,6 +10502,26 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     authorityCategory: {
       domain: "accounts",
       verb: "manage",
+    },
+  },
+  "chronolog.read": {
+    title: "Read from Chronolog",
+    action: "read from Chronolog",
+    description: "Read account or workspace information and data from authorized Chronolog groups.",
+    group: "sharing",
+    authorityCategory: {
+      domain: "sharing",
+      verb: "see",
+    },
+  },
+  "chronolog.write": {
+    title: "Write to a Chronolog group",
+    action: "write to a Chronolog group",
+    description: "Review one signed transaction for a specific group.",
+    group: "sharing",
+    authorityCategory: {
+      domain: "sharing",
+      verb: "act",
     },
   },
   "code-runner.reset": {

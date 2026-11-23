@@ -301,7 +301,7 @@ describe("IsolatedDevelopmentHostExecutor", () => {
     expect(isolatedPath.length).toBeGreaterThan(1);
     for (const forbidden of [
       "VIBESTUDIO_ADMIN_TOKEN",
-      "VIBESTUDIO_WORKERD_GATEWAY_TOKEN",
+      "VIBESTUDIO_RUNTIME_GATEWAY_TOKEN",
       "VIBESTUDIO_HUB_RUNTIME_TOKEN",
       "VIBESTUDIO_IDENTITY_DB",
       "VIBESTUDIO_PROFILE_ENCRYPTION_KEY",

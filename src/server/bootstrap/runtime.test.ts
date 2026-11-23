@@ -1,0 +1,291 @@
+import { SingletonRegistry } from "@vibestudio/workspace/singletonRegistry";
+import { schemaProbeEnvironmentForFixture } from "../../../tests/fixtures/schemaProbeEnvironment.js";
+import type { ManagedService } from "@vibestudio/shared/managedService";
+import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
+import type { BuildSystemV2 } from "../buildV2/index.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  nativeCaptureRetentionRoot,
+  parseGatewayAliases,
+  resolveWorkerdServerAliasUrls,
+  wireRuntimeCore,
+  type WorkerdBootstrapDeps,
+} from "./runtime.js";
+
+describe("workerd bootstrap policy", () => {
+  const egressProxyMock = () =>
+    ({
+      startForCaller: vi.fn(),
+      startShared: vi.fn(),
+      setCallerResolver: vi.fn(),
+      dropCaller: vi.fn(async () => {}),
+      stopShared: vi.fn(async () => {}),
+    }) as unknown as WorkerdBootstrapDeps["egressProxy"];
+
+  it("parses JSON and comma-separated gateway aliases", () => {
+    expect(parseGatewayAliases('["https://one.example", "https://two.example", 3]')).toEqual([
+      "https://one.example",
+      "https://two.example",
+    ]);
+    expect(parseGatewayAliases("https://one.example, https://two.example,,")).toEqual([
+      "https://one.example",
+      "https://two.example",
+    ]);
+  });
+
+  it("combines configured aliases with the advertised gateway and removes duplicates", () => {
+    expect(
+      resolveWorkerdServerAliasUrls({
+        getPort: () => 7788,
+        configuredAliases: '["https://alias.example:7788", "http://127.0.0.1:7788"]',
+      })
+    ).toEqual(["https://alias.example:7788", "http://127.0.0.1:7788"]);
+  });
+
+  it("publishes no aliases before the gateway port is finalized", () => {
+    expect(
+      resolveWorkerdServerAliasUrls({
+        getPort: () => null,
+        configuredAliases: "http://alias.example:7788",
+      })
+    ).toEqual([]);
+  });
+
+  it("registers the workerd-to-dispatch lifecycle chain explicitly", () => {
+    const services: ManagedService[] = [];
+    const inert = {};
+    wireRuntimeCore({
+      schemaProbeEnvironment: schemaProbeEnvironmentForFixture("owned-workerd-bootstrap-fixture"),
+      schemaProbeReleaseRoot: "/workspace/release",
+      container: { registerManaged: (service) => services.push(service) },
+      tokenManager: inert as WorkerdBootstrapDeps["tokenManager"],
+      workspacePath: "/workspace",
+      statePath: "/workspace/state",
+      workspaceId: "workspace-1",
+      workspaceDeclarations: inert as WorkerdBootstrapDeps["workspaceDeclarations"],
+      userlandResourceHandles: inert as WorkerdBootstrapDeps["userlandResourceHandles"],
+      routeRegistry: inert as WorkerdBootstrapDeps["routeRegistry"],
+      egressProxy: egressProxyMock(),
+      gatewayToken: "gateway-token",
+      gateway: {
+        getPort: () => 7788,
+        configuredAliases: undefined,
+      },
+      getInternalDoEnv: () => ({}),
+      runtimeDiagnostics: inert as WorkerdBootstrapDeps["runtimeDiagnostics"],
+      eventService: inert as WorkerdBootstrapDeps["eventService"],
+      resolveEgressCaller: (caller) => caller,
+      ensureUserlandDoReady: vi.fn(async () => undefined),
+      ensureUserlandDoPrepared: vi.fn(async () => undefined),
+      withdrawDecisionWaits: vi.fn(),
+      onManagerStarted: vi.fn(),
+      publishSourceBuild: vi.fn(async () => undefined),
+    });
+
+    expect(services.map(({ name, dependencies }) => ({ name, dependencies }))).toEqual([
+      {
+        name: "runtimeManager",
+        dependencies: ["fsService", "rpcServer"],
+      },
+      {
+        name: "doDispatch",
+        dependencies: ["runtimeManager", "rpcServer", "workerdWorkspace"],
+      },
+      { name: "workerdWorkspace", dependencies: ["runtimeManager", "buildSystem"] },
+    ]);
+  });
+
+  it("attaches the exact workspace provider after general workerd startup", async () => {
+    const services: ManagedService[] = [];
+    const manager = { bindWorkspaceProvider: vi.fn(), reconcileManifestRoutes: vi.fn() };
+    const workerNode = {
+      kind: "worker",
+      relativePath: "workers/source",
+      manifest: { durable: { classes: [{ className: "SourceDO" }] } },
+    };
+    const buildSystem = {
+      bindRuntimeImage: vi.fn(),
+      getBuildByKey: vi.fn(),
+      getBuildByExecution: vi.fn(),
+      getGraph: () => ({ allNodes: () => [workerNode] }),
+      onPushBuild: vi.fn(),
+    };
+    const inert = {};
+    const declarations = {
+      routes: [{ source: "workers/source", pattern: "/source/*" }],
+      singletons: new SingletonRegistry([]),
+    } as unknown as WorkerdBootstrapDeps["workspaceDeclarations"];
+    wireRuntimeCore({
+      schemaProbeEnvironment: schemaProbeEnvironmentForFixture("owned-workerd-bootstrap-fixture"),
+      schemaProbeReleaseRoot: "/workspace/release",
+      container: { registerManaged: (service) => services.push(service) },
+      tokenManager: inert as WorkerdBootstrapDeps["tokenManager"],
+      workspacePath: "/workspace",
+      statePath: "/workspace/state",
+      workspaceId: "workspace-1",
+      workspaceDeclarations: declarations,
+      userlandResourceHandles: {
+        reconcileProviders: vi.fn(),
+        reconcileReceiverClasses: vi.fn(),
+      } as unknown as WorkerdBootstrapDeps["userlandResourceHandles"],
+      routeRegistry: {
+        registerDoRoutes: vi.fn(),
+      } as unknown as WorkerdBootstrapDeps["routeRegistry"],
+      egressProxy: egressProxyMock(),
+      gatewayToken: "gateway-token",
+      gateway: {
+        getPort: () => 7788,
+        configuredAliases: undefined,
+      },
+      getInternalDoEnv: () => ({ INTERNAL: "1" }),
+      runtimeDiagnostics: inert as WorkerdBootstrapDeps["runtimeDiagnostics"],
+      eventService: inert as WorkerdBootstrapDeps["eventService"],
+      resolveEgressCaller: (caller) => caller,
+      ensureUserlandDoReady: vi.fn(async () => undefined),
+      ensureUserlandDoPrepared: vi.fn(async () => undefined),
+      withdrawDecisionWaits: vi.fn(),
+      onManagerStarted: vi.fn(),
+      publishSourceBuild: vi.fn(async () => undefined),
+    });
+
+    const attachment = services.find(({ name }) => name === "workerdWorkspace");
+    await expect(
+      attachment?.start?.(<D>(name: string): D | undefined => {
+        if (name === "runtimeManager") return manager as D;
+        if (name === "buildSystem") return buildSystem as D;
+        return undefined;
+      })
+    ).resolves.toBe(manager);
+
+    expect(manager.bindWorkspaceProvider).toHaveBeenCalledOnce();
+    const provider = manager.bindWorkspaceProvider.mock.calls[0]?.[0];
+    expect(provider.getManifestRoutes("workers/source")).toEqual([
+      { source: "workers/source", pattern: "/source/*" },
+    ]);
+    expect(provider.getManifestDoClasses("workers/source")).toEqual([{ className: "SourceDO" }]);
+    const originalRegistry = provider.singletonRegistry;
+    declarations.singletons = new SingletonRegistry([
+      { source: "workers/source", className: "SourceDO", key: "reloaded" },
+    ]);
+    expect(provider.singletonRegistry).toBe(declarations.singletons);
+    expect(provider.singletonRegistry).not.toBe(originalRegistry);
+    expect(provider.singletonRegistry.requireKey("workers/source", "SourceDO")).toBe("reloaded");
+  });
+
+  it("reconciles worker classes from one protected publication without scalar-head branching", async () => {
+    const services: ManagedService[] = [];
+    const reconcileMutableSourceBuild = vi.fn(async () => undefined);
+    const manager = {
+      bindWorkspaceProvider: vi.fn(),
+      registerAllDOClasses: vi.fn(async () => undefined),
+      reconcileManifestRoutes: vi.fn(),
+      reconcileMutableSourceBuild,
+    };
+    let onPushBuild:
+      | ((source: string, trigger?: ProtectedPublicationEvent, buildKey?: string) => void)
+      | undefined;
+    const workerNode = {
+      name: "@workspace-workers/example",
+      kind: "worker",
+      relativePath: "workers/example",
+      manifest: { durable: { classes: [{ className: "ExampleDO" }] } },
+    };
+    const buildSystem = {
+      bindRuntimeImage: vi.fn(),
+      getBuildByKey: vi.fn(),
+      getGraph: () => ({ allNodes: () => [workerNode] }),
+      onPushBuild: (
+        callback: (source: string, trigger?: ProtectedPublicationEvent, buildKey?: string) => void
+      ) => {
+        onPushBuild = callback;
+      },
+    } as unknown as BuildSystemV2;
+    const routeRegistry = { registerDoRoutes: vi.fn() };
+    const userlandResourceHandles = {
+      reconcileProviders: vi.fn(),
+      reconcileReceiverClasses: vi.fn(),
+    };
+    const inert = {};
+    const publishSourceBuild: WorkerdBootstrapDeps["publishSourceBuild"] = vi.fn(
+      async (runtimeManager, source, classes, trigger, buildKey) => {
+        await runtimeManager.reconcileMutableSourceBuild(source, classes, trigger, buildKey);
+      }
+    );
+    wireRuntimeCore({
+      schemaProbeEnvironment: schemaProbeEnvironmentForFixture("owned-workerd-bootstrap-fixture"),
+      schemaProbeReleaseRoot: "/workspace/release",
+      container: { registerManaged: (service) => services.push(service) },
+      tokenManager: inert as WorkerdBootstrapDeps["tokenManager"],
+      workspacePath: "/workspace",
+      statePath: "/workspace/state",
+      workspaceId: "workspace-1",
+      workspaceDeclarations: {
+        routes: [],
+        singletons: [],
+      } as unknown as WorkerdBootstrapDeps["workspaceDeclarations"],
+      userlandResourceHandles:
+        userlandResourceHandles as unknown as WorkerdBootstrapDeps["userlandResourceHandles"],
+      routeRegistry: routeRegistry as unknown as WorkerdBootstrapDeps["routeRegistry"],
+      egressProxy: egressProxyMock(),
+      gatewayToken: "gateway-token",
+      gateway: {
+        getPort: () => 7788,
+        configuredAliases: undefined,
+      },
+      getInternalDoEnv: () => ({}),
+      runtimeDiagnostics: inert as WorkerdBootstrapDeps["runtimeDiagnostics"],
+      eventService: inert as WorkerdBootstrapDeps["eventService"],
+      resolveEgressCaller: (caller) => caller,
+      ensureUserlandDoReady: vi.fn(async () => undefined),
+      ensureUserlandDoPrepared: vi.fn(async () => undefined),
+      withdrawDecisionWaits: vi.fn(),
+      onManagerStarted: vi.fn(),
+      publishSourceBuild,
+    });
+    const workspaceService = services.find(({ name }) => name === "workerdWorkspace");
+    expect(workspaceService).toBeDefined();
+    await workspaceService?.start?.(<D>(name: string): D | undefined => {
+      if (name === "runtimeManager") return manager as D;
+      if (name === "buildSystem") return buildSystem as D;
+      return undefined;
+    });
+    expect(onPushBuild).toBeTypeOf("function");
+    expect(userlandResourceHandles.reconcileProviders).toHaveBeenCalledWith(
+      "workspace-1",
+      ["workers/example"],
+      "workspace providers reconciled"
+    );
+    expect(userlandResourceHandles.reconcileReceiverClasses).toHaveBeenCalledWith(
+      "workspace-1",
+      "workers/example",
+      ["ExampleDO"],
+      "receiver classes reconciled"
+    );
+
+    const publication: ProtectedPublicationEvent = {
+      publicationId: "publication:test",
+      resultHostRefsBasisDigest: "host-refs:test",
+      appliedAt: 42,
+      workspaceStateHash: "state:published",
+      changedPaths: ["workers/example/index.ts"],
+      repositories: [],
+    };
+    onPushBuild?.("workers/example", publication, "build:test");
+
+    await vi.waitFor(() =>
+      expect(reconcileMutableSourceBuild).toHaveBeenCalledWith(
+        "workers/example",
+        [{ className: "ExampleDO" }],
+        publication,
+        "build:test"
+      )
+    );
+  });
+});
+
+it("roots native custody in the managed generation outside a deletable workspace", () => {
+  const statePath = "/owned/retained/generation/workspaces/ws/state";
+  expect(nativeCaptureRetentionRoot(statePath, "workspace", { VIBESTUDIO_RETAIN_NATIVE_STORAGE: "1" })).toBeUndefined();
+  expect(nativeCaptureRetentionRoot(statePath, "workspace", { VIBESTUDIO_SYSTEM_TEST_INSTANCE: "1", VIBESTUDIO_RETAIN_NATIVE_STORAGE: "0" })).toBeUndefined();
+  expect(nativeCaptureRetentionRoot(statePath, "workspace", { VIBESTUDIO_SYSTEM_TEST_INSTANCE: "1", VIBESTUDIO_RETAIN_NATIVE_STORAGE: "1", VIBESTUDIO_INSTANCE_ROOT: "/owned/retained/generation" })).toMatch(/^\/owned\/retained\/generation\/capture-evidence\/workspaces\/[a-f0-9]{64}\/native-storage$/);
+});

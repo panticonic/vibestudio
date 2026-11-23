@@ -112,6 +112,27 @@ function makeService() {
   });
 }
 
+describe("workspace context scratch", () => {
+  it("prepares only the requested scratch path for an authorized terminal", async () => {
+    const ensureContextScratch = vi.fn(async () => "/workspace/scratch/ctx-terminal");
+    const definition = createWorkspaceService({
+      workspace: makeWorkspace(),
+      contextFiles: unavailableContextFiles,
+      getConfig: () => makeConfig(),
+      setConfigField: vi.fn(),
+      ensureContextScratch,
+      resolveCallerContext: () => "ctx-elsewhere",
+    });
+    const extension = { caller: createVerifiedCaller("extension:shell", "extension") };
+    const worker = { caller: createVerifiedCaller("worker:foreign", "worker") };
+    await expect(definition.handler(extension, "ensureContextFolder", ["ctx-terminal"]))
+      .resolves.toEqual({ scratch: "/workspace/scratch/ctx-terminal" });
+    await expect(definition.handler(worker, "ensureContextFolder", ["ctx-terminal"]))
+      .rejects.toMatchObject({ code: "EACCES" });
+    expect(ensureContextScratch).toHaveBeenCalledExactlyOnceWith("ctx-terminal");
+  });
+});
+
 const panelCtx: ServiceContext = {
   caller: createVerifiedCaller(
     "panel-1",

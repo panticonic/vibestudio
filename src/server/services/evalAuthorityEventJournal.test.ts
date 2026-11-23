@@ -6,7 +6,7 @@ function event(
   overrides: Partial<EvalAuthorityEvent> = {}
 ): EvalAuthorityEvent {
   return {
-    objectKey: "owner",
+    host: { source: "workers/session", className: "SessionDO", objectKey: "owner" },
     runId: "run-1",
     kind,
     payload: { kind },
@@ -15,7 +15,7 @@ function event(
 }
 
 describe("EvalAuthorityEventJournal", () => {
-  it("accepts a re-entrant observation without awaiting its EvalDO write", async () => {
+  it("accepts a re-entrant observation without awaiting its eval kernel write", async () => {
     let release!: () => void;
     const pending = new Promise<void>((resolve) => {
       release = resolve;
@@ -30,7 +30,7 @@ describe("EvalAuthorityEventJournal", () => {
     await journal.close();
   });
 
-  it("preserves per-EvalDO event order without serializing independent EvalDOs", async () => {
+  it("preserves per-eval kernel event order without serializing independent eval kernels", async () => {
     let releaseFirst!: () => void;
     const first = new Promise<void>((resolve) => {
       releaseFirst = resolve;
@@ -43,18 +43,33 @@ describe("EvalAuthorityEventJournal", () => {
 
     journal.append(event("authority-requested"));
     journal.append(event("authority-decided"));
-    journal.append(event("authority-requested", { objectKey: "other-owner", runId: "other-run" }));
+    journal.append(
+      event("authority-requested", {
+        host: {
+          source: "workers/agent-worker",
+          className: "AiChatWorker",
+          objectKey: "other-owner",
+        },
+        runId: "other-run",
+      })
+    );
 
     await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(2));
-    expect(dispatch.mock.calls.map((call) => call[0].objectKey)).toEqual(["owner", "other-owner"]);
+    // The entity that hosts the kernel is a session entity or an entity that hosts its own kernel.
+    expect(dispatch.mock.calls.map((call) => call[0].className)).toEqual([
+      "SessionDO",
+      "AiChatWorker",
+    ]);
     releaseFirst();
     await journal.close();
 
     expect(dispatch).toHaveBeenCalledTimes(3);
-    expect(dispatch.mock.calls[2]?.slice(1, 4)).toEqual([
-      "appendAuthorityEvent",
+    // Through the session entity that hosts the kernel, on its host-only method for host-observed facts.
+    expect(dispatch.mock.calls[2]?.slice(1, 5)).toEqual([
+      "recordAuthorityEvent",
       "run-1",
       "authority-decided",
+      expect.anything(),
     ]);
   });
 

@@ -55,7 +55,7 @@ export const STANDALONE_SERVER_RUNTIME_ARTIFACTS = Object.freeze([
   "dist/browserTransport.js",
   ...Object.values(SERVER_WORKER_ENTRIES.standalone).map((filename) => `dist/${filename}`),
   "dist/dependency-content-maintenance.cjs",
-  "dist/internal-do-programs.json",
+  "dist/runtime-app.json",
   "dist/sql-wasm.wasm",
   ...OWNERSHIP_REAPER_ARTIFACTS,
   "dist/host-build-fingerprint.json",
@@ -67,5 +67,4 @@ export const SOURCE_SERVER_PREREQUISITE_ARTIFACTS = Object.freeze([
   ...STANDALONE_SERVER_RUNTIME_ARTIFACTS,
   ...HOST_BRAND_RUNTIME_ARTIFACTS,
   "dist/headless-host",
-  "dist/workerd-programs",
 ]);

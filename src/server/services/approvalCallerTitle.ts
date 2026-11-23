@@ -1,4 +1,5 @@
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
+import { isEvalHostRecord } from "@vibestudio/shared/evalRuntimeIdentity";
 import type { EntityKind, EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import type {
   ApprovalRequesterBreadcrumb,
@@ -54,11 +55,7 @@ function entityKindToRequesterKind(kind: EntityKind): ApprovalRequesterBreadcrum
 }
 
 function isEvalRecord(record: EntityRecord | null | undefined): boolean {
-  return (
-    record?.kind === "do" &&
-    record.className === "EvalDO" &&
-    (record.source.repoPath === "vibestudio/internal" || record.id.includes(":EvalDO:"))
-  );
+  return record ? isEvalHostRecord(record) : false;
 }
 
 function isAgentRecord(record: EntityRecord | null | undefined): boolean {

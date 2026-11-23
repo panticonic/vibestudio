@@ -5,6 +5,7 @@ import {
   type VcsStateNodeRef,
   type VcsInspectInput,
   type VcsCompareInput,
+  type VcsDiscardInput,
   type VcsStatusInput,
   type VcsSemanticNodeRef,
   type VcsListDirectoryInput,
@@ -25,6 +26,14 @@ export interface SemanticReads {
   status(input: VcsStatusInput): Promise<VcsStatusResult>;
   listDirectory(input: VcsListDirectoryInput): Promise<VcsListDirectoryResult>;
   listFiles(input: VcsListFilesInput): Promise<VcsListFilesResult>;
+  repositoryPath?(state: VcsStateNodeRef, repositoryId: string): Promise<string | null>;
+  filePath?(state: VcsStateNodeRef, repositoryId: string, fileId: string): Promise<string | null>;
+  changedLocations?(
+    target: VcsStateNodeRef,
+    source: VcsStateNodeRef
+  ): Promise<Array<Pick<WorkspaceFileAccess, "path" | "kind">>>;
+  mergeLocations?: NonNullable<SemanticReads["changedLocations"]>;
+  hasDiscardReceipt?(discard: VcsDiscardInput): Promise<boolean>;
 }
 
 /** Select paths from authoritative identities at the exact admitted semantic state. */
@@ -57,6 +66,17 @@ export async function vcsFileSelections(
     accesses.push({ effect, path: normalized === "." ? "" : normalized.replace(/\/+$/, ""), kind });
   };
   const repository = async (state: VcsStateNodeRef, id: string) => {
+    if (read.repositoryPath) {
+      const path = await read.repositoryPath(state, id);
+      if (path === null)
+        throw new ServiceError(
+          "vcs",
+          method,
+          "Repository is not present at the requested state",
+          "EINVAL"
+        );
+      return path;
+    }
     const result = await inspect(state, "repository", id);
     if (result.node.kind !== "repository" || result.node.value.kind !== "present")
       throw new ServiceError(
@@ -68,6 +88,17 @@ export async function vcsFileSelections(
     return result.node.value.repoPath;
   };
   const file = async (state: VcsStateNodeRef, repoId: string, fileId: string) => {
+    if (read.filePath) {
+      const path = await read.filePath(state, repoId, fileId);
+      if (path === null)
+        throw new ServiceError(
+          "vcs",
+          method,
+          "File is not present in the requested repository and state",
+          "EINVAL"
+        );
+      return `${await repository(state, repoId)}/${path}`;
+    }
     const result = await inspect(state, "file", fileId, repoId);
     if (
       result.node.kind !== "file" ||
@@ -278,6 +309,7 @@ export async function vcsFileSelections(
         }
       } else if (method === "discard") {
         const [request] = vcsMethods.discard.args.parse([input]);
+        if (await read.hasDiscardReceipt?.(request)) break;
         const status = await read.status({ contextId: request.contextId });
         target = status.committed;
         source = request.expectedWorkingHead;
@@ -285,6 +317,13 @@ export async function vcsFileSelections(
         const [request] = vcsMethods.push.args.parse([input]);
         target = { kind: "event", eventId: request.expectedMainEventId };
         source = { kind: "event", eventId: request.expectedCommittedEventId };
+      }
+      const locations = method === "merge" ? read.mergeLocations : read.changedLocations;
+      if (locations && source.kind !== "external-delta") {
+        for (const { kind, path } of await locations(target, source)) {
+          add("write", path, kind);
+        }
+        break;
       }
       let cursor: string | undefined;
       do {

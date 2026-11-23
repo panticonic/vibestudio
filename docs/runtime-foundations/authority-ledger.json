@@ -1388,762 +1388,6 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/eval-engine/EvalDO.ts:acknowledgeRunResult",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/eval-engine/EvalDO.ts",
-      "source": "vibestudio/internal",
-      "method": "acknowledgeRunResult",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/eval-engine/EvalDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "write",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "runtime.code-execution.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "exact-owned-eval-terminal-acknowledgement",
-        "change": "Acknowledges only the exact retained run and result digests through the existing owner relationship. Commits acknowledgement before removing redelivery debt, preserves result history, and grants no execution or reset authority."
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/eval-engine/EvalDO.ts:acquireKernelLease",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/eval-engine/EvalDO.ts",
-      "source": "vibestudio/internal",
-      "method": "acquireKernelLease",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/eval-engine/EvalDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "write",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "runtime.code-execution.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "host-only-eval-kernel-residency-refresh",
-        "change": "Adds a host-only, gated code-execution authority that creates or refreshes the exact EvalDO incarnation's bounded idle residency lease. The receiver validates the lease identity and duration, and no user or code principal may invoke it directly."
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/eval-engine/EvalDO.ts:appendAuthorityEvent",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/eval-engine/EvalDO.ts",
-      "source": "vibestudio/internal",
-      "method": "appendAuthorityEvent",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/eval-engine/EvalDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "write",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "runtime.code-execution.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "host-only-eval-authority-event-ingress",
-        "change": "Adds the typed host-only write used to append one already receiver-bound authority lifecycle event to an exact eval run. It cannot choose another owner, execute code, or grant authority."
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/eval-engine/EvalDO.ts:attachKernelLeaseHolder",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/eval-engine/EvalDO.ts",
-      "source": "vibestudio/internal",
-      "method": "attachKernelLeaseHolder",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/eval-engine/EvalDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "write",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "runtime.code-execution.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "host-only-eval-kernel-holder-claim",
-        "change": "Adds a host-only, gated code-execution authority that atomically claims the single held-request slot for an already-active exact kernel lease. It cannot create, widen, or extend a lease."
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/eval-engine/EvalDO.ts:cancel",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/eval-engine/EvalDO.ts",
-      "source": "vibestudio/internal",
-      "method": "cancel",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/eval-engine/EvalDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "destructive",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "runtime.code-execution.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "schema-authority",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/eval-engine/EvalDO.ts:deleteScopeValue",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/eval-engine/EvalDO.ts",
-      "source": "vibestudio/internal",
-      "method": "deleteScopeValue",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/eval-engine/EvalDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "destructive",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "runtime.code-execution.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "schema-authority",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/eval-engine/EvalDO.ts:executeRun",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/eval-engine/EvalDO.ts",
-      "source": "vibestudio/internal",
-      "method": "executeRun",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/eval-engine/EvalDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "write",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "runtime.code-execution.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "schema-authority",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/eval-engine/EvalDO.ts:failPendingRun",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/eval-engine/EvalDO.ts",
-      "source": "vibestudio/internal",
-      "method": "failPendingRun",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/eval-engine/EvalDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "write",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "runtime.code-execution.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "schema-authority",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/eval-engine/EvalDO.ts:getRun",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/eval-engine/EvalDO.ts",
-      "source": "vibestudio/internal",
-      "method": "getRun",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/eval-engine/EvalDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "read",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "runtime.code-execution.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "schema-authority",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/eval-engine/EvalDO.ts:getRunEvents",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/eval-engine/EvalDO.ts",
-      "source": "vibestudio/internal",
-      "method": "getRunEvents",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/eval-engine/EvalDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "read",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "runtime.code-execution.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "host-only-bounded-eval-event-page",
-        "change": "Adds a host-only bounded cursor read of durable events for an exact EvalDO run. It performs no execution, mutation, or authority acquisition."
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/eval-engine/EvalDO.ts:getRunReceipt",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/eval-engine/EvalDO.ts",
-      "source": "vibestudio/internal",
-      "method": "getRunReceipt",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/eval-engine/EvalDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "read",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "runtime.code-execution.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "exact-owned-eval-terminal-receipt",
-        "change": "Returns the retained terminal result and immutable run/result digests for the authenticated Eval owner. A delivery hint supplies no result or authority. Nonterminal cancellation remains owned until actual cleanup ends."
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/eval-engine/EvalDO.ts:holdKernelLease",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/eval-engine/EvalDO.ts",
-      "source": "vibestudio/internal",
-      "method": "holdKernelLease",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/eval-engine/EvalDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "write",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "runtime.code-execution.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "host-only-bounded-eval-kernel-hold",
-        "change": "Adds a host-only, gated code-execution authority whose request remains held only for the exact attached lease and settles on expiry, release, or replacement. It exposes no scope data and cannot outlive the receiver-owned lease deadline."
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/eval-engine/EvalDO.ts:listRetainedExecutionRoots",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/eval-engine/EvalDO.ts",
-      "source": "vibestudio/internal",
-      "method": "listRetainedExecutionRoots",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/eval-engine/EvalDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "read",
-      "tier": "open",
-      "sessionAdmission": "family",
-      "capability": "runtime.code-execution.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "host-only-eval-execution-root-census",
-        "change": "Adds a host-only bounded read of immutable execution roots already retained by one EvalDO so the mandatory retention provider can fail closed. It exposes no eval source, result, credential, or mutation path."
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/eval-engine/EvalDO.ts:readScopeTextPage",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/eval-engine/EvalDO.ts",
-      "source": "vibestudio/internal",
-      "method": "readScopeTextPage",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/eval-engine/EvalDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "read",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "runtime.code-execution.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "schema-authority",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/eval-engine/EvalDO.ts:reset",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/eval-engine/EvalDO.ts",
-      "source": "vibestudio/internal",
-      "method": "reset",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/eval-engine/EvalDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "destructive",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "runtime.code-execution.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "schema-authority",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/eval-engine/EvalDO.ts:retainExecutionRoot",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/eval-engine/EvalDO.ts",
-      "source": "vibestudio/internal",
-      "method": "retainExecutionRoot",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/eval-engine/EvalDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "write",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "runtime.code-execution.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "host-only-exact-eval-execution-retention",
-        "change": "Adds a host-only write of one validated immutable execution artifact reference joined to its exact eval run. It cannot fabricate an artifact, widen executable authority, or delete retention."
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/eval-engine/EvalDO.ts:run",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/eval-engine/EvalDO.ts",
-      "source": "vibestudio/internal",
-      "method": "run",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/eval-engine/EvalDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "write",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "runtime.code-execution.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "schema-authority",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/eval-engine/EvalDO.ts:startRun",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/eval-engine/EvalDO.ts",
-      "source": "vibestudio/internal",
-      "method": "startRun",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/eval-engine/EvalDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "write",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "runtime.code-execution.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "schema-authority",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
       "id": "direct:packages/builtin/src/webhook-engine/WebhookStoreDO.ts:create",
       "rpcPlane": "workspace-do",
       "owner": "packages/builtin/src/webhook-engine/WebhookStoreDO.ts",
@@ -2312,14 +1556,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmAdoptWorker",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmAdoptWorker",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "alarmAdoptWorker",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -2354,14 +1598,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmClaimDue",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmClaimDue",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "alarmClaimDue",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -2396,14 +1640,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmClear",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmClear",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "alarmClear",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -2438,14 +1682,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmComplete",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmComplete",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "alarmComplete",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -2480,14 +1724,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmListScheduled",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmListScheduled",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "alarmListScheduled",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -2522,14 +1766,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmNextWakeAt",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmNextWakeAt",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "alarmNextWakeAt",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -2564,14 +1808,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmSet",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmSet",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "alarmSet",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -2606,14 +1850,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmSourceList",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmSourceList",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "alarmSourceList",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -2648,14 +1892,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmSourcePublish",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmSourcePublish",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "alarmSourcePublish",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -2691,14 +1935,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmSourceRequest",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmSourceRequest",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "alarmSourceRequest",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -2733,14 +1977,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:contextEdgeDeleteByChild",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:contextEdgeDeleteByChild",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "contextEdgeDeleteByChild",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -2775,14 +2019,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:contextEdgeListByChild",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:contextEdgeListByChild",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "contextEdgeListByChild",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -2817,14 +2061,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:contextEdgeListByOwner",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:contextEdgeListByOwner",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "contextEdgeListByOwner",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -2859,14 +2103,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:contextEdgeUpsert",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:contextEdgeUpsert",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "contextEdgeUpsert",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -2901,14 +2145,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:durableWorkOwnerList",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:durableWorkOwnerList",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "durableWorkOwnerList",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -2943,14 +2187,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityActivate",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityActivate",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityActivate",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -2985,14 +2229,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityAdvanceExecution",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityAdvanceExecution",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityAdvanceExecution",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3027,14 +2271,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityAdvanceExecutions",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityAdvanceExecutions",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityAdvanceExecutions",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3069,14 +2313,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityCleanupComplete",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityCleanupComplete",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityCleanupComplete",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3111,14 +2355,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityFindIncompleteCleanups",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityFindIncompleteCleanups",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityFindIncompleteCleanups",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3153,14 +2397,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityGc",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityGc",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityGc",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3195,14 +2439,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityListActive",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityListActive",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityListActive",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3237,14 +2481,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityListActiveByKind",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityListActiveByKind",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityListActiveByKind",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3279,14 +2523,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityListByContext",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityListByContext",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityListByContext",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3321,14 +2565,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityListExecutionRoots",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityListExecutionRoots",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityListExecutionRoots",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3363,14 +2607,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityListPreparing",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityListPreparing",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityListPreparing",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3405,14 +2649,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityListPreparingByKind",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityListPreparingByKind",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityListPreparingByKind",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3447,14 +2691,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityPatchStateArgs",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityPatchStateArgs",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityPatchStateArgs",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3489,14 +2733,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityPrepareExecution",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityPrepareExecution",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityPrepareExecution",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3531,14 +2775,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityRebindAgentChannel",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityRebindAgentChannel",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityRebindAgentChannel",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3573,14 +2817,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityReserve",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityReserve",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityReserve",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3615,14 +2859,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityResolve",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityResolve",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityResolve",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3657,14 +2901,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityResolveActive",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityResolveActive",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityResolveActive",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3699,14 +2943,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityResolveContext",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityResolveContext",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityResolveContext",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3741,14 +2985,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityRetire",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityRetire",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityRetire",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3783,14 +3027,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:initializePanels",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:initializePanels",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "initializePanels",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3825,14 +3069,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:lifecycleCompleteEpoch",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:lifecycleCompleteEpoch",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "lifecycleCompleteEpoch",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3867,14 +3111,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:lifecycleLeaseClear",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:lifecycleLeaseClear",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "lifecycleLeaseClear",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3909,14 +3153,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:lifecycleLeaseUpsert",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:lifecycleLeaseUpsert",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "lifecycleLeaseUpsert",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3951,14 +3195,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:lifecycleListLeases",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:lifecycleListLeases",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "lifecycleListLeases",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3993,14 +3237,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:lifecycleListOps",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:lifecycleListOps",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "lifecycleListOps",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -4035,14 +3279,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:lifecycleListResumeTargets",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:lifecycleListResumeTargets",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "lifecycleListResumeTargets",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -4077,14 +3321,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:lifecycleOpenEpoch",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:lifecycleOpenEpoch",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "lifecycleOpenEpoch",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -4119,14 +3363,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:lifecycleRecordOp",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:lifecycleRecordOp",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "lifecycleRecordOp",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -4161,14 +3405,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:panelTreeDetail",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:panelTreeDetail",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "panelTreeDetail",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -4205,14 +3449,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:panelTreePage",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:panelTreePage",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "panelTreePage",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -4249,14 +3493,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:panelTreePath",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:panelTreePath",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "panelTreePath",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -4293,14 +3537,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:panelTreeRootGroups",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:panelTreeRootGroups",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "panelTreeRootGroups",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -4337,14 +3581,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:runtimeResourceBindingEntities",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:runtimeResourceBindingEntities",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "runtimeResourceBindingEntities",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -4379,14 +3623,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:runtimeResourceBindingsForEntity",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:runtimeResourceBindingsForEntity",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "runtimeResourceBindingsForEntity",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -4421,14 +3665,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:runtimeResourceBindingsRelease",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:runtimeResourceBindingsRelease",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "runtimeResourceBindingsRelease",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -4463,14 +3707,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:runtimeResourceBindingsReplace",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:runtimeResourceBindingsReplace",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "runtimeResourceBindingsReplace",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -4505,14 +3749,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotClose",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotClose",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotClose",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -4549,14 +3793,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotCloseCleanupAck",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotCloseCleanupAck",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotCloseCleanupAck",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -4593,14 +3837,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotCloseCleanupPage",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotCloseCleanupPage",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotCloseCleanupPage",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -4637,14 +3881,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotClosedRoots",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotClosedRoots",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotClosedRoots",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -4681,14 +3925,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotCloseOwnedRoots",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotCloseOwnedRoots",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotCloseOwnedRoots",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -4723,14 +3967,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotCommitPreparedNavigation",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotCommitPreparedNavigation",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotCommitPreparedNavigation",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -4767,14 +4011,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotCreate",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotCreate",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotCreate",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -4811,14 +4055,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotGet",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotGet",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotGet",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -4855,14 +4099,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotHistoryEntry",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotHistoryEntry",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotHistoryEntry",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -4899,14 +4143,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotHistoryList",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotHistoryList",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotHistoryList",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -4941,14 +4185,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotHistoryRelative",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotHistoryRelative",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotHistoryRelative",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -4985,14 +4229,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotMove",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotMove",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotMove",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -5029,14 +4273,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotPatchCurrentStateArgs",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotPatchCurrentStateArgs",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotPatchCurrentStateArgs",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -5073,14 +4317,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotPurge",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotPurge",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotPurge",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -5117,14 +4361,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotPurgePlan",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotPurgePlan",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotPurgePlan",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -5161,14 +4405,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotReopen",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotReopen",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotReopen",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -5205,14 +4449,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotReopenPlan",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotReopenPlan",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotReopenPlan",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -5249,14 +4493,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotResolveByEntity",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotResolveByEntity",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotResolveByEntity",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -13617,6 +12861,852 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:chronolog.groups.create",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "groups.create",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "grant-authority",
+      "mechanismFamily": "chronolog.control",
+      "reviewRationale": "The prepared group operation selects the approved membership change.",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0,
+        "path": [
+          "operationId"
+        ]
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:chronolog.groups.create",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chronolog.groups.create#capability:chronolog.write",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "groups.create",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "grant-authority",
+      "mechanismFamily": "chronolog.control",
+      "reviewRationale": "The prepared group operation selects the approved membership change.",
+      "capability": "chronolog.write",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "chronolog.groups.create"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chronolog.groups.identity",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "groups.identity",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "transport",
+      "mechanismFamily": "chronolog.read",
+      "reviewRationale": "Group reads use the authenticated account and a group-scoped grant.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "membership"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:chronolog.groups.identity",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chronolog.groups.invite",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "groups.invite",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "grant-authority",
+      "mechanismFamily": "chronolog.control",
+      "reviewRationale": "The prepared group operation selects the approved membership change.",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0,
+        "path": [
+          "group"
+        ]
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:chronolog.groups.invite",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chronolog.groups.invite#capability:chronolog.write",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "groups.invite",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "grant-authority",
+      "mechanismFamily": "chronolog.control",
+      "reviewRationale": "The prepared group operation selects the approved membership change.",
+      "capability": "chronolog.write",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "chronolog.groups.invite"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chronolog.groups.join",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "groups.join",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "grant-authority",
+      "mechanismFamily": "chronolog.control",
+      "reviewRationale": "The prepared group operation selects the approved membership change.",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0,
+        "path": [
+          "group"
+        ]
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:chronolog.groups.join",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chronolog.groups.join#capability:chronolog.write",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "groups.join",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "grant-authority",
+      "mechanismFamily": "chronolog.control",
+      "reviewRationale": "The prepared group operation selects the approved membership change.",
+      "capability": "chronolog.write",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "chronolog.groups.join"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chronolog.groups.list",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "groups.list",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "transport",
+      "mechanismFamily": "chronolog.read",
+      "reviewRationale": "Group reads use the authenticated account and a group-scoped grant.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "membership"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:chronolog.groups.list",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chronolog.history.current",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "history.current",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "transport",
+      "mechanismFamily": "chronolog.read",
+      "reviewRationale": "Group reads use the authenticated account and a group-scoped grant.",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0,
+        "path": [
+          "group"
+        ]
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:chronolog.history.current",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chronolog.history.publish",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "history.publish",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "grant-authority",
+      "mechanismFamily": "chronolog.control",
+      "reviewRationale": "The prepared group operation selects the approved membership change.",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0,
+        "path": [
+          "group"
+        ]
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:chronolog.history.publish",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chronolog.history.publish#capability:chronolog.write",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "history.publish",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "grant-authority",
+      "mechanismFamily": "chronolog.control",
+      "reviewRationale": "The prepared group operation selects the approved membership change.",
+      "capability": "chronolog.write",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "chronolog.history.publish"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chronolog.history.share",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "history.share",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "grant-authority",
+      "mechanismFamily": "chronolog.control",
+      "reviewRationale": "The prepared group operation selects the approved membership change.",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0,
+        "path": [
+          "group"
+        ]
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:chronolog.history.share",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chronolog.history.share#capability:chronolog.write",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "history.share",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "grant-authority",
+      "mechanismFamily": "chronolog.control",
+      "reviewRationale": "The prepared group operation selects the approved membership change.",
+      "capability": "chronolog.write",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "chronolog.history.share"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chronolog.outcome",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "outcome",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "transport",
+      "mechanismFamily": "chronolog.read",
+      "reviewRationale": "Group reads use the authenticated account and a group-scoped grant.",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0,
+        "path": [
+          "group"
+        ]
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:chronolog.outcome",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chronolog.query",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "query",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "transport",
+      "mechanismFamily": "chronolog.read",
+      "reviewRationale": "Group reads use the authenticated account and a group-scoped grant.",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0,
+        "path": [
+          "group"
+        ]
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:chronolog.query",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chronolog.subscribe",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "subscribe",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "transport",
+      "mechanismFamily": "chronolog.read",
+      "reviewRationale": "Group reads use the authenticated account and a group-scoped grant.",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0,
+        "path": [
+          "group"
+        ]
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:chronolog.subscribe",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chronolog.transact",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "transact",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "protected-write",
+      "mechanismFamily": "chronolog.transact",
+      "reviewRationale": "The prepared program selects the exact group and approved contents.",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0,
+        "path": [
+          "group"
+        ]
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:chronolog.transact",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chronolog.transact#capability:chronolog.write",
+      "rpcPlane": "host-service",
+      "owner": "chronolog",
+      "method": "transact",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "protected-write",
+      "mechanismFamily": "chronolog.transact",
+      "reviewRationale": "The prepared program selects the exact group and approved contents.",
+      "capability": "chronolog.write",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "chronolog.transact.program"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"chronolog.write\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:clients.integrationSnapshot",
       "rpcPlane": "host-service",
       "owner": "clients",
@@ -17024,65 +17114,18 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
-      "id": "host:eval.acknowledge",
+      "id": "host:dynamicCode.admit",
       "rpcPlane": "host-service",
-      "owner": "eval",
-      "method": "acknowledge",
+      "owner": "dynamicCode",
+      "method": "admit",
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "untrusted-execution",
-      "mechanismFamily": "eval.control",
-      "reviewRationale": "Owner-scoped acknowledgement neither executes code nor deletes retained data.",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:eval.acknowledge"
-      },
-      "authorityPrincipals": [
-        "code",
-        "user",
-        "host",
-        "website"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:eval.acknowledge),allOf(capability(user,service:eval.acknowledge),workspace-member),allOf(capability(code,service:eval.acknowledge),workspace-member))",
-      "r3b": {
-        "review": "owner-authenticated-eval-acknowledgement-relay",
-        "change": "Routes exact immutable run/result digest acknowledgement to its owning EvalDO. Preserves terminal history and rejects mismatched receipt identity rather than treating it as successful cleanup."
-      },
-      "capability": "service:eval.acknowledge",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:eval.cancel",
-      "rpcPlane": "host-service",
-      "owner": "eval",
-      "method": "cancel",
-      "tier": "open",
-      "sessionAdmission": "family",
-      "residency": "untrusted-execution",
-      "mechanismFamily": "eval.retire",
+      "mechanismFamily": "eval.create",
       "reviewRationale": "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:eval.cancel"
+        "key": "service:dynamicCode.admit"
       },
       "authorityPrincipals": [
         "code",
@@ -17109,74 +17152,27 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:eval.cancel),allOf(capability(user,service:eval.cancel),workspace-member),allOf(capability(code,service:eval.cancel),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:dynamicCode.admit),allOf(capability(user,service:dynamicCode.admit),workspace-member),allOf(capability(code,service:dynamicCode.admit),workspace-member))",
       "r3b": {
-        "review": "scoped-website-public-workspace-rpc",
-        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+        "review": "unchanged-parity",
+        "change": null
       },
-      "capability": "service:eval.cancel",
+      "capability": "service:dynamicCode.admit",
       "parityAssertion": "generated-census:host-authority"
     },
     {
-      "id": "host:eval.deleteScopeValue",
+      "id": "host:dynamicCode.dispose",
       "rpcPlane": "host-service",
-      "owner": "eval",
-      "method": "deleteScopeValue",
-      "tier": "open",
-      "sessionAdmission": "family",
-      "residency": "untrusted-execution",
-      "mechanismFamily": "eval.retire",
-      "reviewRationale": "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:eval.deleteScopeValue"
-      },
-      "authorityPrincipals": [
-        "code",
-        "user",
-        "host",
-        "website"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:eval.deleteScopeValue),allOf(capability(user,service:eval.deleteScopeValue),workspace-member),allOf(capability(code,service:eval.deleteScopeValue),workspace-member))",
-      "r3b": {
-        "review": "scoped-website-public-workspace-rpc",
-        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
-      },
-      "capability": "service:eval.deleteScopeValue",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:eval.dispose",
-      "rpcPlane": "host-service",
-      "owner": "eval",
+      "owner": "dynamicCode",
       "method": "dispose",
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "untrusted-execution",
       "mechanismFamily": "eval.control",
-      "reviewRationale": "Owned-resource release: the host admits disposal only when this caller declared the isolated EvalDO finite at its immutable first activation",
+      "reviewRationale": "Owned-resource release: the host admits disposal only when this caller declared the scope finite at its immutable first activation",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:eval.dispose"
+        "key": "service:dynamicCode.dispose"
       },
       "authorityPrincipals": [
         "code",
@@ -17203,27 +17199,27 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:eval.dispose),allOf(capability(user,service:eval.dispose),workspace-member),allOf(capability(code,service:eval.dispose),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:dynamicCode.dispose),allOf(capability(user,service:dynamicCode.dispose),workspace-member),allOf(capability(code,service:dynamicCode.dispose),workspace-member))",
       "r3b": {
-        "review": "scoped-website-public-workspace-rpc",
-        "change": "Adds explicit release for an EvalDO whose immutable first activation declared it finite. The receiver derives the exact object from the verified owner and subkey, rejects persistent scopes, erases the finite object's durable records and loaded runtime, and retires it through the normal sealed lifecycle and cleanup reaper. Closing this owned finite resource is open and cannot address another caller's eval state. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+        "review": "unchanged-parity",
+        "change": null
       },
-      "capability": "service:eval.dispose",
+      "capability": "service:dynamicCode.dispose",
       "parityAssertion": "generated-census:host-authority"
     },
     {
-      "id": "host:eval.events",
+      "id": "host:dynamicCode.release",
       "rpcPlane": "host-service",
-      "owner": "eval",
-      "method": "events",
+      "owner": "dynamicCode",
+      "method": "release",
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "untrusted-execution",
-      "mechanismFamily": "eval.control",
-      "reviewRationale": "Owner-scoped bounded read of durable eval lifecycle events",
+      "mechanismFamily": "eval.retire",
+      "reviewRationale": "Owned-resource release of the caller's own admission.",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:eval.events"
+        "key": "service:dynamicCode.release"
       },
       "authorityPrincipals": [
         "code",
@@ -17231,7 +17227,7 @@
         "host",
         "website"
       ],
-      "sensitivity": "read",
+      "sensitivity": "write",
       "authenticatedFacts": [
         "session",
         "acting-user",
@@ -17250,159 +17246,18 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:eval.events),allOf(capability(user,service:eval.events),workspace-member),allOf(capability(code,service:eval.events),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:dynamicCode.release),allOf(capability(user,service:dynamicCode.release),workspace-member),allOf(capability(code,service:dynamicCode.release),workspace-member))",
       "r3b": {
-        "review": "scoped-website-public-workspace-rpc",
-        "change": "Adds the bounded durable cursor catch-up page for one caller-owned eval run. Live delivery remains on watched events; this read performs no execution, cancellation, reset, or authority acquisition. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+        "review": "unchanged-parity",
+        "change": null
       },
-      "capability": "service:eval.events",
+      "capability": "service:dynamicCode.release",
       "parityAssertion": "generated-census:host-authority"
     },
     {
-      "id": "host:eval.get",
+      "id": "host:dynamicCode.reset",
       "rpcPlane": "host-service",
-      "owner": "eval",
-      "method": "get",
-      "tier": "open",
-      "sessionAdmission": "family",
-      "residency": "untrusted-execution",
-      "mechanismFamily": "eval.read",
-      "reviewRationale": "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:eval.get"
-      },
-      "authorityPrincipals": [
-        "code",
-        "user",
-        "host",
-        "website"
-      ],
-      "sensitivity": "read",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:eval.get),allOf(capability(user,service:eval.get),workspace-member),allOf(capability(code,service:eval.get),workspace-member))",
-      "r3b": {
-        "review": "scoped-website-public-workspace-rpc",
-        "change": "Replaces the former asynchronous status method with the sole read-only recovery backstop for the caller-owned run id. The receiver derives the exact owner-scoped EvalDO from verified caller or live owner-session binding and returns only its bounded durable status, progress, and terminal result. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
-      },
-      "capability": "service:eval.get",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:eval.readScopeTextPage",
-      "rpcPlane": "host-service",
-      "owner": "eval",
-      "method": "readScopeTextPage",
-      "tier": "open",
-      "sessionAdmission": "family",
-      "residency": "untrusted-execution",
-      "mechanismFamily": "eval.read",
-      "reviewRationale": "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:eval.readScopeTextPage"
-      },
-      "authorityPrincipals": [
-        "code",
-        "user",
-        "host",
-        "website"
-      ],
-      "sensitivity": "read",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:eval.readScopeTextPage),allOf(capability(user,service:eval.readScopeTextPage),workspace-member),allOf(capability(code,service:eval.readScopeTextPage),workspace-member))",
-      "r3b": {
-        "review": "scoped-website-public-workspace-rpc",
-        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
-      },
-      "capability": "service:eval.readScopeTextPage",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:eval.receipt",
-      "rpcPlane": "host-service",
-      "owner": "eval",
-      "method": "receipt",
-      "tier": "open",
-      "sessionAdmission": "family",
-      "residency": "untrusted-execution",
-      "mechanismFamily": "eval.read",
-      "reviewRationale": "Owner-scoped read of an immutable result; no new execution or authority.",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:eval.receipt"
-      },
-      "authorityPrincipals": [
-        "code",
-        "user",
-        "host",
-        "website"
-      ],
-      "sensitivity": "read",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:eval.receipt),allOf(capability(user,service:eval.receipt),workspace-member),allOf(capability(code,service:eval.receipt),workspace-member))",
-      "r3b": {
-        "review": "owner-authenticated-eval-receipt-relay",
-        "change": "Routes receipt inspection to the exact retained Eval run under the existing authenticated owner relationship. Receipt delivery never trusts a hint's result or imports foreign run ownership."
-      },
-      "capability": "service:eval.receipt",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:eval.reset",
-      "rpcPlane": "host-service",
-      "owner": "eval",
+      "owner": "dynamicCode",
       "method": "reset",
       "tier": "critical",
       "sessionAdmission": "family",
@@ -17411,7 +17266,7 @@
       "reviewRationale": "C3: irreversible destruction outside VCS protection; §2 default {code, session} family",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:eval.reset"
+        "key": "service:dynamicCode.reset"
       },
       "authorityPrincipals": [
         "code",
@@ -17438,103 +17293,12 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:eval.reset),allOf(capability(user,service:eval.reset),workspace-member),allOf(capability(code,service:eval.reset),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:dynamicCode.reset),allOf(capability(user,service:dynamicCode.reset),workspace-member),allOf(capability(code,service:dynamicCode.reset),workspace-member))",
       "r3b": {
-        "review": "scoped-website-public-workspace-rpc",
-        "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
+        "review": "unchanged-parity",
+        "change": null
       },
-      "capability": "service:eval.reset",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:eval.start",
-      "rpcPlane": "host-service",
-      "owner": "eval",
-      "method": "start",
-      "tier": "open",
-      "sessionAdmission": "family",
-      "residency": "untrusted-execution",
-      "mechanismFamily": "eval.create",
-      "reviewRationale": "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:eval.start"
-      },
-      "authorityPrincipals": [
-        "code",
-        "user",
-        "host",
-        "website"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:eval.start),allOf(capability(user,service:eval.start),workspace-member),allOf(capability(code,service:eval.start),workspace-member))",
-      "r3b": {
-        "review": "scoped-website-public-workspace-rpc",
-        "change": "Replaces the split blocking and asynchronous public eval entry points with one gated owner-scoped acceptance method. The caller must choose the run id before transport; the receiver derives owner, context, channel binding, and execution admission from verified host state, rejects semantic replay drift, and preserves the existing EvalDO terminal push. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
-      },
-      "capability": "service:eval.start",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:evalEventIngress.publish",
-      "rpcPlane": "host-service",
-      "owner": "evalEventIngress",
-      "method": "publish",
-      "tier": "open",
-      "sessionAdmission": "codeOnly",
-      "residency": "observability",
-      "mechanismFamily": "evalEventIngress.mutate",
-      "reviewRationale": "Host-internal observability ingress; exact EvalDO/run/owner session binding is re-derived by the receiver",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:evalEventIngress.publish"
-      },
-      "authorityPrincipals": [
-        "code"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "allOf(capability(code,service:evalEventIngress.publish),workspace-member)",
-      "r3b": {
-        "review": "sealed-eval-kernel-observability",
-        "change": "Adds a host-only internal publication path for a persisted EvalDO event. The receiver validates the nonce-bound run and re-derives owner and initiating caller before emitting to watched transports; it accepts no caller-supplied audience. Only the live sealed EvalDO may publish through the host-minted sink for its exact runtime, context, and run. Guest execution sessions cannot impersonate kernel bookkeeping. Callback lifetime is detached from the completed initiating RPC."
-      },
-      "capability": "service:evalEventIngress.publish",
+      "capability": "service:dynamicCode.reset",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -17546,7 +17310,7 @@
       "sessionAdmission": "codeOnly",
       "residency": "untrusted-execution",
       "mechanismFamily": "evalExecutionRoots.control",
-      "reviewRationale": "Sealed eval kernel bookkeeping; exact live EvalDO/run admission and immutable artifact identity are re-derived and verified",
+      "reviewRationale": "Sealed eval kernel bookkeeping; exact live eval kernel/run admission and immutable artifact identity are re-derived and verified",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:evalExecutionRoots.retain"
@@ -17576,7 +17340,7 @@
       "r3aRequirement": "allOf(capability(code,service:evalExecutionRoots.retain),workspace-member)",
       "r3b": {
         "review": "sealed-eval-kernel-retention",
-        "change": "Adds host-only typed lifecycle bookkeeping that retains the exact validated execution artifact for the originating eval run. It creates no executable admission, changes no workspace or user state, and cannot widen or delete retention. Retention is authenticated as the live sealed EvalDO and rechecks the exact active execution admission, run, and immutable imported artifact. Evaluated code cannot call this kernel-only bookkeeping receiver."
+        "change": "Adds host-only typed lifecycle bookkeeping that retains the exact validated execution artifact for the originating eval run. It creates no executable admission, changes no workspace or user state, and cannot widen or delete retention. Retention is authenticated as the live sealed session entity that hosts the kernel and rechecks the exact active execution admission, run, and immutable imported artifact. Evaluated code cannot call this kernel-only bookkeeping receiver."
       },
       "capability": "service:evalExecutionRoots.retain",
       "parityAssertion": "generated-census:host-authority"
@@ -28941,6 +28705,50 @@
         "change": "Makes the method’s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method’s existing capability and sensitivity; administrative lifecycle methods remain closed."
       },
       "capability": "service:runtime.forkSemanticContext",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:runtime.forwardHistoryPacket",
+      "rpcPlane": "host-service",
+      "owner": "runtime",
+      "method": "forwardHistoryPacket",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "transport",
+      "mechanismFamily": "runtime.history",
+      "reviewRationale": "One transfer, sender and remote destination are verified by the host.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:runtime.forwardHistoryPacket"
+      },
+      "authorityPrincipals": [
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(code,service:runtime.forwardHistoryPacket),workspace-member)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:runtime.forwardHistoryPacket",
       "parityAssertion": "generated-census:host-authority"
     },
     {

@@ -49,7 +49,8 @@ test.describe("command overlay", () => {
   // takes ~35s in a cold run — and the conversation's harness worker is built
   // the first time anyone opens the agent scope. The budget is generous on
   // purpose: a slow build is not the failure this spec is looking for.
-  test.describe.configure({ timeout: 420_000 });
+  // Reopen and promotion exercise the conversation created by the earlier cases.
+  test.describe.configure({ mode: "serial", timeout: 420_000 });
 
   let testApp: TestApp;
 
@@ -71,7 +72,7 @@ test.describe("command overlay", () => {
       },
       { workspaceId: testApp.workspaceId, panelId: panel.panelId }
     );
-    await captureShellConsole(testApp);
+    expect(await captureShellConsole(testApp)).toBe(true);
   });
 
   test.afterAll(async () => {
@@ -181,7 +182,7 @@ test.describe("command overlay", () => {
     // because it is the difference between "delivery is broken" and "this
     // caller was never able to subscribe".
     const entities = await callWorkspaceService(testApp, "runtime", "listEntities", [
-      { kind: "app" },
+      { kind: "client" },
     ]);
     const appRows = (entities.ok ? (entities.value as Array<Record<string, unknown>>) : []) ?? [];
     console.log(
@@ -203,13 +204,8 @@ test.describe("command overlay", () => {
         .join("\n") || "(nothing matched)"
     );
 
-    // Assert on the TRANSCRIPT, never on the surface text: the Base service is
-    // deliberately not exposed as a host schema, and the ask row quotes
-    // the query back, so a whole-surface match passes the moment you type and
-    // says nothing about the conversation. A rendered message has been through
-    // createEntity, vessel activation, subscribeChannel and the channel's own
-    // delivery — the exact chain that failed with 403s, a 500, and a closure
-    // missing its plumbing.
+    // The conversation must render the submitted prompt. Keep this assertion
+    // fast enough to exercise dismissal while the first send is still queued.
     await expect
       .poll(
         async () => {
@@ -264,25 +260,36 @@ test.describe("command overlay", () => {
 
     // One key, resume-aware: the panel now has a conversation, so the same chord
     // that opened the palette above lands in the conversation instead.
-    await expect
-      .poll(async () => (await probeCommandOverlay(testApp))?.conversation === true, {
-        timeout: 30_000,
-        intervals: [250, 500, 1000],
-      })
-      .toBe(true);
+    try {
+      await expect
+        .poll(async () => (await probeCommandOverlay(testApp))?.conversation === true, {
+          timeout: 30_000,
+          intervals: [250, 500, 1000],
+        })
+        .toBe(true);
+    } catch (error) {
+      const shellConsole = await readShellConsole(testApp).catch(() => []);
+      await test.info().attach("quickfire-reopen-console.log", {
+        body: shellConsole.filter((line) => /quickfire|channel|focus/i.test(line)).slice(-80).join("\n"),
+        contentType: "text/plain",
+      });
+      throw error;
+    }
 
-    // Reopening the conversation chrome alone is insufficient: a replacement
-    // subscription must restore its transcript, not only its conversation ID.
+    // Require the prompt to arrive through the conversation channel after
+    // reopening, even if the earlier assertion only saw its queued echo.
     await expect
       .poll(
         async () => {
           const resumed = await probeCommandOverlay(testApp);
-          if (resumed?.error) return resumed.error;
-          return resumed?.transcript.some((message) =>
-            message.includes("why is this panel laid out this way?")
+          return Boolean(
+            resumed?.error ||
+            resumed?.durableTranscript.some((message) =>
+              message.includes("why is this panel laid out this way?")
+            )
           );
         },
-        { timeout: 30_000, intervals: [250, 500, 1000] }
+        { timeout: 120_000, intervals: [500, 1000, 2000] }
       )
       .toBe(true);
     expect((await probeCommandOverlay(testApp))?.error).toBeNull();

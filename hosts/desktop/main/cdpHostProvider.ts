@@ -1,7 +1,3 @@
-import {
-  filterConsoleHistoryEntries,
-  pageConsoleHistory,
-} from "@vibestudio/shared/panel/consoleHistory";
 import { serializeRpcFailure, isRpcAbortedBy } from "@vibestudio/rpc";
 import { DOM_SNAPSHOT_EXPRESSION } from "@vibestudio/shared/panel/domSnapshot";
 import { EventEmitter } from "node:events";
@@ -25,6 +21,19 @@ import {
   type PanelEvaluateResult,
 } from "@vibestudio/shared/panel/evaluate";
 import { PanelDocumentBootTransport } from "@vibestudio/shared/panel/bootTransport";
+import {
+  queryPanelConsoleHistory,
+  type PanelConsoleHistoryEntry,
+  type PanelConsoleHistoryLevel,
+  type PanelConsoleHistoryOptions,
+  type PanelConsoleHistoryResult,
+} from "@vibestudio/shared/panel/consoleHistory";
+export type {
+  PanelConsoleHistoryEntry,
+  PanelConsoleHistoryLevel,
+  PanelConsoleHistoryOptions,
+  PanelConsoleHistoryResult,
+};
 import type { ViewManager } from "./viewManager.js";
 import type {
   RuntimeDiagnosticRecord,
@@ -87,45 +96,6 @@ export interface CdpHostProviderSocket {
 export interface CdpHostProviderTarget {
   targetId: string;
   webContentsId: number;
-}
-
-export type PanelConsoleHistoryLevel = "debug" | "info" | "warning" | "error" | "unknown";
-
-export interface PanelConsoleHistoryEntry {
-  seq?: number;
-  timestamp: number;
-  level: PanelConsoleHistoryLevel;
-  message: string;
-  line: number;
-  sourceId: string;
-  url: string;
-  source?: "console" | "lifecycle";
-  fields?: Record<string, unknown>;
-}
-
-export interface PanelConsoleHistoryResult {
-  entries: PanelConsoleHistoryEntry[];
-  errors: PanelConsoleHistoryEntry[];
-  page: { nextBeforeSeq: number | null; hasOlder: boolean };
-  dropped: {
-    entries: number;
-    errors: number;
-  };
-  capacity: {
-    entries: number;
-    errors: number;
-  };
-}
-
-export interface PanelConsoleHistoryOptions {
-  limit?: number;
-  errorLimit?: number;
-  levels?: PanelConsoleHistoryLevel[];
-  sources?: Array<"console" | "lifecycle">;
-  contains?: string;
-  since?: number;
-  until?: number;
-  beforeSeq?: number;
 }
 
 export interface CdpHostProviderOptions {
@@ -462,21 +432,21 @@ export class CdpHostProvider {
       stored?.entries.map(runtimeDiagnosticToPanelConsoleHistoryEntry) ?? history.entries;
     const rawErrors =
       stored?.errors.map(runtimeDiagnosticToPanelConsoleHistoryEntry) ?? history.errors;
-    const entries = stored ? rawEntries : filterConsoleHistoryEntries(rawEntries, options);
-    const errors = stored
-      ? rawErrors
-      : filterConsoleHistoryEntries(rawErrors, { ...options, levels: undefined });
-    return {
-      ...pageConsoleHistory(entries, errors, options),
-      dropped: {
-        entries: stored?.dropped.entries ?? history.droppedEntries,
-        errors: stored?.dropped.errors ?? history.droppedErrors,
+    return queryPanelConsoleHistory(
+      {
+        entries: rawEntries,
+        errors: rawErrors,
+        dropped: {
+          entries: stored?.dropped.entries ?? history.droppedEntries,
+          errors: stored?.dropped.errors ?? history.droppedErrors,
+        },
+        capacity: {
+          entries: stored?.capacity.entries ?? CONSOLE_LOG_HISTORY_CAPACITY,
+          errors: stored?.capacity.errors ?? CONSOLE_ERROR_HISTORY_CAPACITY,
+        },
       },
-      capacity: {
-        entries: stored?.capacity.entries ?? CONSOLE_LOG_HISTORY_CAPACITY,
-        errors: stored?.capacity.errors ?? CONSOLE_ERROR_HISTORY_CAPACITY,
-      },
-    };
+      stored ? { limit: options.limit, errorLimit: options.errorLimit } : options
+    );
   }
 
   /** Both screenshot entry points use Chrome's capture command on the same CDP owner. */

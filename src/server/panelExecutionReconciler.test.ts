@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { WorkspacePanelDetail } from "@vibestudio/shared/panel/workspaceStateSnapshot";
 import type {
   EntityRecord,
@@ -8,8 +9,7 @@ import type {
 import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
 import { PanelExecutionReconciler } from "./panelExecutionReconciler.js";
-import { createTestDO } from "@vibestudio/durable/test-utils";
-import { WorkspaceDOTestable } from "@panticonic/builtin/workspace-state/test-fixture";
+import { createWorkspaceStateTestDO } from "@panticonic/builtin/workspace-state/test-fixture";
 
 it.each([
   { source: "about/new", stateArgs: { welcome: true } },
@@ -25,7 +25,7 @@ it.each([
 ])(
   "activates durable $source template seeds through ordinary preparing-panel recovery",
   async (initialPanel) => {
-    const { instance } = await createTestDO(WorkspaceDOTestable);
+    const { instance } = await createWorkspaceStateTestDO();
     const [seed] = instance.initializePanels([initialPanel]);
     const activate = vi.fn(async (spec: RuntimeCodePanelEntityCreateSpec) => {
       const active = instance.entityAdvanceExecution({
@@ -222,8 +222,9 @@ describe("PanelExecutionReconciler", () => {
     );
   });
 
-  it("does not reread durable slot state on the committed execution handoff", async () => {
+  it("uses the verified source caller without rereading the committed slot", async () => {
     const { reconciler, activate, getDetail } = harness();
+    const sourceCaller = createVerifiedCaller("agent:private-panel", "do");
 
     reconciler.observe({
       kind: "current-entity",
@@ -236,10 +237,16 @@ describe("PanelExecutionReconciler", () => {
         key: entity.key,
         contextId: entity.contextId,
         stateArgs: { mode: "inspect" },
+        ref: `ctx:${entity.contextId}`,
+        sourceCaller,
       },
     });
 
     await vi.waitFor(() => expect(activate).toHaveBeenCalledOnce());
+    expect(activate).toHaveBeenCalledWith(
+      expect.objectContaining({ execution: expect.objectContaining({ ref: `ctx:${entity.contextId}` }) }),
+      sourceCaller
+    );
     expect(getDetail).not.toHaveBeenCalled();
   });
 
@@ -269,6 +276,35 @@ describe("PanelExecutionReconciler", () => {
     await expect(reconciler.ensureExecutable(detail.slot.slot_id, entity.id)).resolves.toBe(true);
 
     expect(activate).toHaveBeenCalledTimes(1);
+  });
+
+  it("an entity that is already active is neither activated nor logged as activating again", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    try {
+      const activate = vi.fn(async () => activeHandle);
+      const reconciler = new PanelExecutionReconciler({
+        getDetail: vi.fn(async () => ({
+          ...detail,
+          entity: { ...detail.entity, status: "active" as const },
+        })),
+        resolveSlotByEntity: vi.fn(async () => detail.slot.slot_id),
+        listPreparingPanels: vi.fn(async () => []),
+        activate,
+        onError: vi.fn(),
+      });
+
+      // Every acquire and every ensureSlot runs this level-triggered check.
+      for (let call = 0; call < 3; call += 1) {
+        await expect(reconciler.ensureExecutable(detail.slot.slot_id, entity.id)).resolves.toBe(
+          true
+        );
+      }
+
+      expect(activate).not.toHaveBeenCalled();
+      expect(info).not.toHaveBeenCalled();
+    } finally {
+      info.mockRestore();
+    }
   });
 
   it("reports supersession as convergence state when the slot changes during activation", async () => {

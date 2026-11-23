@@ -27,6 +27,11 @@ The product goal is small:
    publication authority, and runtime activation keeps the previous runnable
    artifact when a new projection fails.
 
+The November 20 release starts fresh workspaces on Dolt. The release gate
+exercises normal saves, restarts, reviewed publication and integration with
+independent participants. Existing crash and lost-reply results remain useful
+as regression evidence.
+
 There is no compatibility reader, legacy schema, migration, parallel merge
 engine, mutable merge session, merge-state marker, pending merge tree, authorship
 credential, VCS authority service, source-basis capability, merge certificate,
@@ -1956,13 +1961,13 @@ ID, loading a whole graph, or allocating server traversal state.
    independent subscribers. Ensure runtime activation fails closed and retains
    the previous runnable artifact on build, validation, approval, or startup
    failure.
-9. Failure-inject semantic-write/effect/ack crash windows, including lost delta
-   receipts and a missing host basis after restart. Separately verify that a
-   missing or stale temporary checkout is repaired from a newly derived exact
-   command without an effect row or acknowledgement.
+9. Verify that a normal restart reopens the saved working copy and that an
+   approved push makes the committed changes visible in shared history.
 
-Exit criterion: lost replies and process restarts converge exactly once without
-an in-memory registry or second semantic owner.
+Exit criterion: each participant can save privately, reopen the saved work after
+a normal restart and publish through the protected history with approval.
+Additional forced server failures and lost replies are optional follow-up
+coverage.
 
 ### Phase G — Public surface, Git, and skills
 
@@ -1989,7 +1994,7 @@ Run, in order:
 4. semantic workspace/store tests;
 5. RPC/runtime/tool contract parity tests;
 6. context edit/move/copy/commit/discard/integrate integration tests;
-7. publication crash/replay tests;
+7. reviewed publication and integration with two independent participants;
 8. package type checks and repository architecture guards;
 9. headless infrastructure doctor;
 10. smallest exact vague agentic fixtures;
@@ -2013,6 +2018,11 @@ Integrate valid feedback destructively and repeat affected tests.
 ---
 
 ## 14. Acceptance matrix
+
+For the Dolt release, start with a fresh installed workspace. Run the
+participant workflow through a normal shutdown and restart on the same
+runtime. Forced server crashes and lost replies are optional follow-up
+coverage, as in §13.
 
 ### Causality
 
@@ -2045,6 +2055,9 @@ Integrate valid feedback destructively and repeat affected tests.
 ### State and identity
 
 - A committed state is addressed by event ID; a local state by application ID.
+- Resolve each state against the exact Dolt history tip admitted for that
+  participant or for protected main. A stable ID can have different origins
+  in separate histories. Refuse an ambiguous origin at a merged tip.
 - Clean contexts point working head at committed event.
 - Each application basis equals the previous working head.
 - Equal semantic roots may exist in distinct event histories without collapsing
@@ -2100,6 +2113,9 @@ Integrate valid feedback destructively and repeat affected tests.
 
 ### Boundary and durability
 
+- Each participant can reopen saved work in their own working copy after a
+  normal restart. Another participant can read the exact approved revision
+  from protected main and cannot read the unpublished revision.
 - Workspace manifest, semantic store, protected refs, and runtime host share
   one exact destructive system epoch; mismatches fail before readiness.
 - Workers and Durable Objects follow their owning context state by default;
@@ -2124,11 +2140,11 @@ Integrate valid feedback destructively and repeat affected tests.
 - Semantic code invokes no filesystem/ref effects directly and does not
   orchestrate builds.
 - Host ports contain no semantic change/decision/integration branching.
-- Recoverable pending materialization and publication effects retry
-  idempotently after every crash window without being starved by an earlier
-  unapplied publication that still needs its original authority; missing or
-  stale context projections derive and execute a fresh exact repair command
-  without replaying journal state.
+- On normal reopen, pending materialization and publication effects retry
+  idempotently. An earlier unapplied publication awaiting its original
+  authority does not starve later ready work. Missing or stale context
+  projections derive and execute a fresh exact repair command without
+  replaying journal state.
 - A request that derives a future wake does not succeed until the one durable
   alarm row is written. The driver lists due rows without consuming them and
   clears/replaces a row only after the handler outcome is durably acknowledged.

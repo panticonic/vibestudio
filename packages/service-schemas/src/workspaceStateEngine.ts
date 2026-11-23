@@ -114,6 +114,7 @@ const entityCloneProvenanceSchema = z
     sourceAuthoritySessionId: z.string().min(1),
     sourceBuildKey: z.string().min(1),
     sourceExecutionDigest: z.string().min(1),
+    storageCommit: z.string().min(1).optional(),
   })
   .strict();
 const entityReservationSchema = entityActivationSchema
@@ -270,6 +271,7 @@ const contextCloneDefinitionSchema = z
         sourceContextId: z.string().min(1),
         include: z.array(z.string().min(1)).nullable(),
         recursive: z.boolean(),
+        storageAt: z.record(z.string(), z.string()).optional(),
       })
       .strict(),
     author: z

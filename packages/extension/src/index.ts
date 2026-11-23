@@ -342,12 +342,8 @@ export interface ExtensionWorkspaceLike {
     statePath: string;
     contextProjectionsPath: string;
   }>;
-  /**
-   * Materialize a context's working folder on the server host (idempotent) and
-   * return its absolute path. Lets a launch orchestrator confine a
-   * context-scoped session to a real VCS-branched working tree.
-   */
-  ensureContextFolder(contextId: string): Promise<{ source: string; scratch: string }>;
+  /** Prepare the writable scratch directory for a context-scoped tool. */
+  ensureContextFolder(contextId: string): Promise<{ scratch: string }>;
 }
 
 export interface ExtensionNotificationsLike {

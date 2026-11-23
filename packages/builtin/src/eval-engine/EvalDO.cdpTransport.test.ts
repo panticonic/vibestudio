@@ -14,7 +14,7 @@ import { ExecutionJournal } from "./executionJournal.js";
 afterEach(()=>vi.unstubAllGlobals());
 
 async function privateFactories() {
-  const base=process.env.VIBESTUDIO_TEST_BASE_CHECKOUT ?? requireDevelopmentTemplateCheckout(process.cwd(),"base");
+  const base=process.env["VIBESTUDIO_TEST_BASE_CHECKOUT"] ?? requireDevelopmentTemplateCheckout(process.cwd(),"base");
   const modules:Record<string,unknown>={"@vibestudio/service-schemas/mainRpc":{mainRpcMethods},
     "@vibestudio/service-schemas/clients/durableObjectServiceClient":{createDurableObjectServiceClient},
     "@vibestudio/shared/typedRpcServiceClient":{createLazyTypedRpcServiceClient},

@@ -3641,11 +3641,13 @@ app.on("will-quit", (event) => {
       },
       closeRuntimes: async () => {
         const runtimes = [...desktopWorkspaceRuntimes.values()];
-        desktopWorkspaceRuntimes.clear();
-        openNativeControllers.clear();
+        // An admitted startup still checks its slot before publishing.
+        // Join it and close its runtime before withdrawing those slots.
         const unregister = Promise.allSettled(
           runtimes.map(async (runtime) => (await runtime).close())
         ).then((results) => {
+          desktopWorkspaceRuntimes.clear();
+          openNativeControllers.clear();
           systemRuntime = null;
           const errors = results.flatMap((result) =>
             result.status === "rejected" ? [result.reason] : []

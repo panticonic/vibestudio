@@ -151,6 +151,27 @@ Authority principals: `code`, `host`, `user`
 | `chromiumFetch.read` | Read an owner-bound chunk from an open Chromium response. |
 | `chromiumFetch.close` | Close an owner-bound Chromium response. |
 
+## `chronolog`
+
+Read and write authenticated Chronolog groups from this workspace.
+
+Authority principals: `code`, `user`
+
+| Method | Description |
+|--------|-------------|
+| `chronolog.groups.identity` | Get the verified account and workspace node keys for an invitation. |
+| `chronolog.groups.list` | List the locally installed groups where the account can read. |
+| `chronolog.groups.create` | Create an independently stored SQL group and admit the initiating account as administrator. |
+| `chronolog.groups.invite` | Sign a group invitation for one account and its workspace node. |
+| `chronolog.groups.join` | Install the exact invitation in this workspace and verify current membership. |
+| `chronolog.history.current` | Get the exact published workspace history revision for this group. |
+| `chronolog.history.share` | Authorize this Chronolog group to exchange published history with the workspace. |
+| `chronolog.history.publish` | Send one exact published workspace history update to an admitted group workspace. |
+| `chronolog.transact` | Submit one canonical change program signed by the initiating account. |
+| `chronolog.outcome` | Read the status of a transaction signed by the initiating account. |
+| `chronolog.query` | Run a read-only SQL query against the group's selected revision. |
+| `chronolog.subscribe` | Stream current query results as the selected revision changes. |
+
 ## `credentials`
 
 URL-bound userland credential storage and egress
@@ -214,24 +235,18 @@ Authority principals: `code`, `host`, `user`
 |--------|-------------|
 | `durableWork.inspect` | Return bounded, payload-free diagnostics for the host durable-work dispatcher, including hint/recovery attribution and recent phase timings. |
 
-## `eval`
+## `dynamicCode`
 
-Owner-scoped sandbox eval backed by a per-owner internal EvalDO
+Admission of dynamic code: runs of a class an entity hosts, and the host-authority controls of its scope
 
 Authority principals: `code`, `host`, `user`, `website`
 
 | Method | Description |
 |--------|-------------|
-| `eval.start` | Durably accept one caller-owned eval run. A new run executes asynchronously in the owner's EvalDO; replaying the same runId and exact input observes the same run, while input drift is rejected. A trivially fast or replayed settled run may return its terminal snapshot immediately. |
-| `eval.get` | Read the canonical durable snapshot for a caller-owned eval run. This is a recovery/backstop read; agent-owned runs normally settle through the EvalDO's terminal completion push. |
-| `eval.receipt` | Read the exact canonical terminal result and its admission/result digests. Null means no terminal receipt exists; it never means success. |
-| `eval.acknowledge` | Acknowledge a terminal result after durably accepting it. Both admission and result digests must match. The closed identity and result remain retained. |
-| `eval.events` | Read one stable, bounded page of durable events for a caller-owned eval run. Subscribe to the canonical eval:run-event through events.watch for live delivery, then use this cursor page to catch up after reconnect or backpressure. |
-| `eval.reset` | Reset the eval context: wipe the live/durable scope and user `db` tables while preserving kernel infrastructure. The owner's existing eval data is cleared. |
-| `eval.dispose` | Permanently retire one explicitly finite eval scope through its host lifecycle owner. Close admission and drain owned work before releasing the runtime and content. Retained receipts remain closed; use a new scope key for new work. Persistent notebooks cannot be disposed through this method. |
-| `eval.readScopeTextPage` | Read a bounded page from a string in the caller's current durable eval scope. Use this to retrieve a large eval result losslessly after an eval caches it under a scope key; pages are UTF-16LE base64 so every JavaScript string code unit round-trips exactly. |
-| `eval.deleteScopeValue` | Delete one value from the caller's current durable eval scope and persist the deletion. Intended for cleaning up temporary keys used by lossless large-result paging. |
-| `eval.cancel` | Cancel an in-flight or pending run by runId. The durable status is cancelling while registered cleanup runs and becomes cancelled only after cleanup settles, so the eval history and its owned cleanup remain one trust unit with valid teardown authority. Owned cleanup is awaited to real settlement and preserves other runs and scope. An unowned, non-cooperative guest run may trigger bounded recovery, which cancels all non-terminal runs, resets shared scope/user db, and returns forcedReset:true. A terminal run is a no-op with forcedReset:false. |
+| `dynamicCode.admit` | Admit one run of dynamic code for the caller. The host resolves the owner and the hosting session entity (creating it when it does not exist), normalizes the run's authority intent, registers its execution session and task authority, and returns the nonce and the exact start input. The caller then calls the hosting entity's `start(input, nonce)` and pulls with `await` and `events`; it calls `release` when the run is terminal. Replaying the same runId and input returns the same admission. |
+| `dynamicCode.release` | Close the execution session of a run the caller admitted. A run that is still executing is not ended by this call: cancel it on the hosting entity first. Releasing an unknown or already released run answers `released: false`. |
+| `dynamicCode.reset` | Reset the caller's hosted code scope: wipe the live and durable scope and user `db` tables while preserving kernel infrastructure. The owner's existing data in it is cleared. |
+| `dynamicCode.dispose` | Permanently retire one explicitly finite hosted scope through its host lifecycle owner. Close admission and drain owned work before releasing the runtime and content. Retained receipts remain closed; use a new scope key for new work. A persistent scope cannot be disposed through this method. |
 
 ## `events`
 
@@ -563,7 +578,7 @@ Authority principals: `code`, `host`, `user`, `website`
 | `runtime.supervision.activate` | Activate one exact admitted app or extension release. |
 | `runtime.supervision.prepare` | Prepare an immutable app release from a source ref. |
 | `runtime.supervision.retire` | Retire one exact supervised entity through its owning driver. |
-| `runtime.supervision.versions` | List retained versions for an exact release identity, including releases with no active process. For workspace apps, use the exact name from build.listUnits() as releaseId. runtime.supervision.list() returns live entity identities for process inspection; an empty live list does not prevent release-history lookup. |
+| `runtime.supervision.versions` | List retained versions for an exact installed extension or client release, including releases with no active process. Use the exact name from build.listUnits() as releaseId. Panel and worker source history is available through vcs.history. runtime.supervision.list() returns live entity identities for process inspection. |
 | `runtime.supervision.rollback` | Roll back an exact release identity to a retained build. |
 
 ## `serverLog`
@@ -728,7 +743,7 @@ Authority principals: `code`, `host`, `user`
 | `workspace.listSkills` | List repo-embedded workspace skills with identity, paths, and optional onboarding declarations parsed from each repo's top-level SKILL.md frontmatter. Context-bound runtimes use their verified ambient context; contextless host clients must provide an explicit contextId. |
 | `workspace.readSkill` | Return raw SKILL.md contents for a canonical workspace repo path (`skills/code-review`, `packages/foo`, `workers/bar`, or `meta`). Path traversal is rejected. Context-bound runtimes use their verified ambient context; contextless host clients must provide an explicit contextId. |
 | `workspace.sourceTree` | Return the workspace source tree, annotating units, launchables, and skills. |
-| `workspace.ensureContextFolder` | Materialize a context's working folder on the server host (idempotent) and return its absolute path. Used by launch orchestrators (e.g. the shell extension) to place context-scoped terminal sessions inside a real VCS-branched working tree. |
+| `workspace.ensureContextFolder` | Create the context's writable scratch directory on the server host and return its absolute path for context-scoped tools such as terminals. |
 | `workspace.findUnitForPath` | Resolve a workspace-relative path to its owning unit and the path relative to that unit, or null if no unit owns it. |
 
 ## `workspacePresence`
