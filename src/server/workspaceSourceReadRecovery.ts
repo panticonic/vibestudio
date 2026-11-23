@@ -7,8 +7,9 @@ import { gadWireMethods } from "@vibestudio/service-schemas/workspaceSource";
 
 /** Recovery belongs to the versioned read protocol, never the generic POST dispatcher. */
 export function isPinnedWorkspaceRead(method: string, args: readonly unknown[]): boolean {
-  if (method === "vcsReferencesReachable" || method === "vcsIsStateDescendant") {
-    // These are pure receiver-side checks of the exact supplied references.
+  if (method === "vcsReferencesReachable" || method === "vcsIsStateDescendant" ||
+      method === "workspaceSourceTemplateInstallation") {
+    // These read exact references or recheck receiver-side authorization.
     return gadWireMethods[method].args.safeParse(args).success;
   }
   if (!method.startsWith("vcs")) return false;

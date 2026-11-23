@@ -126,17 +126,25 @@ export type WorkspaceSourceSemanticDispatchResult =
     }
   | Extract<RawWorkspaceSourceSemanticDispatchResult, { kind: "host-read" | "host-content" }>;
 
-export function createWorkspaceSemanticPort(
+function workspaceSourceClient(
   dispatch: Pick<DODispatch, "dispatch">,
   provider: WorkspaceSourceProviderRef
-): WorkspaceSemanticPort {
-  const client = createTypedServiceClient(
+) {
+  return createTypedServiceClient(
     "workspaceSource",
     gadWireMethods,
     (_service, method, args) => dispatchWorkspaceSourceRead(
       provider, method, args, (target, request) => dispatch.dispatch(target, method, ...request)
     )
   );
+
+}
+
+export function createWorkspaceSemanticPort(
+  dispatch: Pick<DODispatch, "dispatch">,
+  provider: WorkspaceSourceProviderRef
+): WorkspaceSemanticPort {
+  const client = workspaceSourceClient(dispatch, provider);
   return {
     contentGcRoots: () => client.vcsContentGcRoots(),
     referencesReachable: (input) => client.vcsReferencesReachable(input),
@@ -192,11 +200,7 @@ export function createWorkspaceSourceProviderV1(
   dispatch: Pick<DODispatch, "dispatch">,
   provider: WorkspaceSourceProviderRef
 ): WorkspaceSourceProviderV1 {
-  const client = createTypedServiceClient(
-    "workspaceSource",
-    gadWireMethods,
-    (_service, method, args) => dispatch.dispatch(provider, method, ...args)
-  );
+  const client = workspaceSourceClient(dispatch, provider);
   return {
     readTemplateInstallation: (input) => client.workspaceSourceTemplateInstallation(input),
     initializeExactSnapshot: (input) => {

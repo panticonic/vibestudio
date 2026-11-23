@@ -3,7 +3,7 @@ import { vcsMethods } from "@vibestudio/service-schemas/vcs";
 import { vcsMethods as freshMethods } from "../../packages/service-schemas/src/vcs.js";
 import { AmbiguousDoDispatchError as FreshDispatchError } from "../../packages/shared/src/doDispatcher.js";
 import { AmbiguousDoDispatchError } from "@vibestudio/shared/doDispatcher";
-import { createWorkspaceSemanticPort } from "./workspaceSourceProvider.js";
+import { createWorkspaceSemanticPort, createWorkspaceSourceProviderV1 } from "./workspaceSourceProvider.js";
 import { dispatchWorkspaceSourceRead, isPinnedWorkspaceRead } from "./workspaceSourceReadRecovery.js";
 
 const provider = { source: "workers/workspace-source", className: "GadWorkspaceDO", objectKey: "workspace" };
@@ -48,6 +48,15 @@ describe("versioned workspace read transport recovery", () => {
     });
   });
 
+  it("shares the exact-event read policy with the bootstrap source adapter", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const dispatch = vi.fn().mockRejectedValueOnce(reset()).mockResolvedValueOnce(null);
+    const bootstrap = createWorkspaceSourceProviderV1({ dispatch }, provider);
+    await expect(bootstrap.readTemplateInstallation({ eventId: "event:installation" })).resolves.toBeNull();
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(dispatch.mock.calls[1]).toEqual(dispatch.mock.calls[0]);
+  });
+
   it("preserves both failed transport attempts on exhaustion", async () => {
     const report = vi.spyOn(console, "warn").mockImplementation(() => {});
     const first = reset(), second = reset();
@@ -75,7 +84,8 @@ describe("versioned workspace read transport recovery", () => {
   });
 
   it.each(["vcsEdit", "vcsCopy", "vcsCommit", "vcsStatus", "vcsMainState", "vcsSemanticHostReadAck",
-    "vcsSemanticContentAck", "vcsDropContext", "resolveSource"])("does not replay %s", async method => {
+    "vcsSemanticContentAck", "vcsDropContext", "resolveSource", "workspaceSourceResolve",
+    "workspaceSourceInitializeExactSnapshot", "workspaceSourceCurrent", "workspaceSourceInspectInitialization"])("does not replay %s", async method => {
     const failure = reset();
     const dispatch = vi.fn().mockRejectedValue(failure);
     await expect(dispatchWorkspaceSourceRead(provider, method, [request()], dispatch)).rejects.toBe(failure);
