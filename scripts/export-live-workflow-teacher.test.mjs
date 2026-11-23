@@ -10013,7 +10013,7 @@ test("void TS entries bind actual undefined transport without waiving requested 
  const goal='Apply the independently checked reference effect';
  const entry={program:'skills/reference/review.ts',callable:'review',arguments:{goal},argumentJson:{goal:JSON.stringify(goal)},resultType:'void'};
  const make=()=>{
-  const root={callId:'root',record:{call_id:'root',inputs:{goal:ref(goal)},output:ref(null),executor:{kind:'crisp'},definition:{name:'review',source:'review.ts',returns:'void'}}};
+  const root={callId:'root',record:{call_id:'root',inputs:{goal:ref(goal)},output:ref(null),executor:{kind:'crisp'},definition:{name:'review',source:'review.ts',id:'ts:review.ts#default',returns:'void'}}};
   const proof={passed:true,caseId:'void-reference',contextId:'ctx',goal,entry,actualResultKind:'void',actualResult:null,checks:{actualNativeEffect:true}};
   return {execution:{provenance:{contextId:'ctx'},diagnostics:{openGoalVerification:proof}},exercise:{entry,rootCallIds:['root'],calls:[root],applicationResult:null,applicationResultKind:'void'},workflow:{entry,assignment:{id:'void-reference',goal}},root,proof};
  };
@@ -10026,6 +10026,7 @@ test("void TS entries bind actual undefined transport without waiving requested 
   value=>{delete value.proof.actualResultKind;},
   value=>{value.workflow.entry={...entry,resultType:'Receipt'};},
   value=>{value.root.record.definition.returns='Receipt';},
+  value=>{value.root.record.definition.id='ts:review.ts#other';},
   value=>{value.root.record.executor.kind='agent';},
   value=>{value.exercise.applicationResult={invented:true};},
   value=>{value.root.record.output=ref('wrong');},

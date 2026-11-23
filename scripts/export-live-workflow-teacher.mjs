@@ -7171,7 +7171,8 @@ export function openOutcomeGoalEvidence(execution, exercise, _scenario, workflow
       Object.entries(inputValues).every(([name, value]) => matchesValue(root.inputs[name], value)) &&
       (!entry || isDeepStrictEqual(proof.entry, attestedEntry) &&
         isDeepStrictEqual(exercise.entry, attestedEntry) &&
-        root.definition?.name === entry.callable && returnedValue),
+        root.definition?.name === entry.callable &&
+        (!entry.program.endsWith(".ts") || (root.executor?.kind === "crisp" && root.definition?.id === "ts:"+root.definition?.source+"#default")) && returnedValue),
     "Expected independently verified outcomes bound to the actual workspace and original user goal"
   );
   const evidence = { workspace: { proof, ...(voidReturn ? {applicationReturn:{kind:"void",root_call_id:root.call_id,valueJson:"null",selectedResult:null}} : {}) } };
