@@ -1,3 +1,5 @@
+import { constants as fileConstants } from "node:fs";
+import { NativeCompilerProducts, compilerProductDriver } from "./nativeCompilerProducts.js";
 import { getNativeExecutionInstallation } from "@vibestudio/shared/runtimePaths";
 import { prepareNativeRuntime } from "@vibestudio/shared/nativeRuntimeResources";
 import { materializeImmutableTree } from "./buildV2/immutableTreeMaterializer.js";
@@ -8,7 +10,17 @@ import {
   type NativeDependencyAdmission,
   type NativeDependencyResources,
 } from "./nativeWorkspaceJob.js";
-import { mkdir, realpath, copyFile, lstat, readFile, writeFile, rm } from "node:fs/promises";
+import {
+  mkdir,
+  realpath,
+  copyFile,
+  lstat,
+  readFile,
+  writeFile,
+  rm,
+  mkdtemp,
+  open,
+} from "node:fs/promises";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { createHash, randomUUID } from "node:crypto";
@@ -163,6 +175,7 @@ export async function startNativeWorkspaceRuntime(input: {
     return { sandbox, workerEntry, ripgrep, extensionEntry, executable };
   };
 
+  let compilerProducts: NativeCompilerProducts | undefined;
   let runtimeSetup: Awaited<ReturnType<typeof runtimeRootSetup>>;
   try {
     runtimeSetup = await runtimeRootSetup();
@@ -206,6 +219,7 @@ export async function startNativeWorkspaceRuntime(input: {
   const stopOwnedRuntime = () => {
     if (stopping) return stopping;
     retiring = true;
+    const compilerSettlement = compilerProducts?.close();
     stopping = (async () => {
       const failures: unknown[] = [];
       try {
@@ -218,6 +232,7 @@ export async function startNativeWorkspaceRuntime(input: {
       } catch (error) {
         failures.push(error);
       }
+      if (stopped?.launcherExited) await compilerSettlement;
       if (stopped && !stopped.launcherExited) {
         failures.push(
           Object.assign(new Error("Native workspace launcher still owns its runtime resources"), {
@@ -337,6 +352,52 @@ export async function startNativeWorkspaceRuntime(input: {
         environment: Record<string, string | undefined>,
         options?: ProcessAdapterOptions
       ): ProcessAdapter => sandbox.fork(entry, environment, options),
+      /** Shared frontend work stays off the Workerd event loop and inside native isolation. */
+      async compileProduct(input: {
+        bundle: string;
+        format: "cjs" | "async-cjs";
+        input: unknown;
+      }): Promise<unknown> {
+        if (retiring) throw new Error("Native compiler workspace retired");
+        compilerProducts ??= new NativeCompilerProducts(async (request) => {
+          const jobs = path.join(scratchRoot, "native-compiler-products");
+          await mkdir(jobs, { recursive: true });
+          const directory = await mkdtemp(path.join(jobs, "job-"));
+          const resultPath = path.join(directory, "result.json");
+          try {
+            await this.runJob({
+              bundle: request.bundle,
+              dependencies: "",
+              script: compilerProductDriver(request.input, resultPath, request.format),
+            });
+            const file = await open(
+              resultPath,
+              fileConstants.O_RDONLY | (fileConstants.O_NOFOLLOW ?? 0)
+            );
+            try {
+              const info = await file.stat();
+              if (!info.isFile() || info.size > 32 * 1024 * 1024)
+                throw new Error("Invalid or oversized native compiler product");
+              const data = Buffer.alloc(info.size);
+              let offset = 0;
+              while (offset < data.length) {
+                const part = await file.read(data, offset, data.length - offset, offset);
+                if (!part.bytesRead) break;
+                offset += part.bytesRead;
+              }
+              const extra = await file.read(Buffer.alloc(1), 0, 1, offset);
+              if (offset !== data.length || extra.bytesRead)
+                throw new Error("Native compiler product changed after completion");
+              return JSON.parse(data.toString("utf8"));
+            } finally {
+              await file.close();
+            }
+          } finally {
+            await rm(directory, { recursive: true, force: true });
+          }
+        });
+        return compilerProducts.compile(input);
+      },
       async runJob(input: NativeWorkspaceJob): Promise<void> {
         const directory = path.join(runtimeRoot, "jobs", randomUUID());
         await mkdir(directory, { recursive: true });

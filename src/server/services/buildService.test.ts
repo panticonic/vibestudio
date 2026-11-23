@@ -761,3 +761,98 @@ describe("build service extension diagnostics", () => {
     });
   });
 });
+
+describe("immutable provider compiler source binding", () => {
+  const sha = "a".repeat(64),
+    state = "state:" + "b".repeat(64);
+  const execution = {
+    version: 1,
+    sourceState: {
+      kind: "workspace",
+      workspaceId: "compiler-test",
+      effectiveVersion: sha,
+      state: { kind: "bootstrap-snapshot", snapshotHash: state },
+      contentRoots: [{ repoPath: null, stateHash: state }],
+      sourceClosureDigest: sha,
+    },
+    recipeDigest: sha,
+    buildKey: sha,
+    artifactDigest: sha,
+    executionDigest: sha,
+  };
+  const ctx = { caller: createVerifiedCaller("shell", "shell") };
+  it("builds the compiler at the loaded SDK's immutable source, independent of current head", async () => {
+    const buildSystem = makeBuildSystem();
+    buildSystem.getBuildByExecution = vi.fn(async () => ({
+      metadata: { execution, sourceStateHash: state },
+    })) as any;
+    vi.mocked(buildSystem.getBuild).mockResolvedValue({
+      bundle: "exact",
+      format: "cjs",
+      requiredModules: [],
+      execution,
+    } as any);
+    const compileProduct = vi.fn(async () => ({ schema: "product" }));
+    const service = createBuildService({
+      buildSystem,
+      compileProduct,
+      listUnits: () => [],
+      getCallerContextId: () => null,
+    });
+    expect(
+      await service.handler(ctx, "compileProduct", [
+        "@workspace/provider",
+        execution,
+        { project: { files: {} } },
+      ])
+    ).toEqual({ kind: "product", value: { schema: "product" } });
+    expect(buildSystem.getBuild).toHaveBeenCalledWith("@workspace/provider/compiler", state, {
+      library: true,
+      libraryTarget: "worker",
+      externals: [],
+    });
+    expect(compileProduct).toHaveBeenCalledWith({
+      bundle: "exact",
+      format: "cjs",
+      input: { project: { files: {} } },
+    });
+  });
+  it("rejects unavailable or different SDK identity before executing any compiler", async () => {
+    const buildSystem = makeBuildSystem();
+    buildSystem.getBuildByExecution = vi.fn(async () => ({
+      metadata: {
+        execution: { ...execution, artifactDigest: "c".repeat(64) },
+        sourceStateHash: state,
+      },
+    })) as any;
+    const compileProduct = vi.fn();
+    const service = createBuildService({
+      buildSystem,
+      compileProduct,
+      listUnits: () => [],
+      getCallerContextId: () => null,
+    });
+    await expect(
+      service.handler(ctx, "compileProduct", ["@workspace/provider", execution, {}])
+    ).rejects.toThrow("mismatched");
+    expect(compileProduct).not.toHaveBeenCalled();
+    expect(buildSystem.getBuild).not.toHaveBeenCalled();
+  });
+  it("allows explicit local frontend opt-out without requiring or executing native code", async () => {
+    process.env["VIBESTUDIO_OFFLOAD_NATLANG_COMPILER"] = "0";
+    try {
+      const buildSystem = makeBuildSystem();
+      const service = createBuildService({
+        buildSystem,
+        listUnits: () => [],
+        getCallerContextId: () => null,
+      });
+      expect(
+        await service.handler(ctx, "compileProduct", ["@workspace/provider", execution, {}])
+      ).toEqual({ kind: "local" });
+      expect(buildSystem.getBuild).not.toHaveBeenCalled();
+    } finally {
+      delete process.env["VIBESTUDIO_OFFLOAD_NATLANG_COMPILER"];
+    }
+  });
+});

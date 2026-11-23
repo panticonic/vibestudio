@@ -58,7 +58,7 @@ async function failNativeRuntimeDiskWorkerAdmission(
       sourceRoot,
       scratchRoot: path.join(statePath, "scratch"),
       buildsRoot: path.join(statePath, "builds"),
-      appRoot: process.cwd(),
+      appRoot: process.env["VIBESTUDIO_TEST_INSTALLED_APP_ROOT"] ?? process.cwd(),
     });
   } catch (caught) {
     error = caught;
@@ -164,7 +164,7 @@ it("runs the production disk receiver under its platform execution contract", as
       sourceRoot,
       scratchRoot,
       buildsRoot: path.join(statePath, "builds"),
-      appRoot: process.cwd(),
+      appRoot: process.env["VIBESTUDIO_TEST_INSTALLED_APP_ROOT"] ?? process.cwd(),
     });
     await waitForNativeJob(runtime.fork(probe, {}));
     const scope = {
@@ -321,7 +321,7 @@ process.env.NODE_ENV;
       sourceRoot,
       scratchRoot: path.join(statePath, "scratch", "contexts"),
       buildsRoot: path.join(statePath, "builds"),
-      appRoot: process.cwd(),
+      appRoot: process.env["VIBESTUDIO_TEST_INSTALLED_APP_ROOT"] ?? process.cwd(),
     });
     const concurrentAdmissions = await Promise.all([
       runtime.admitDependencies({
@@ -479,7 +479,7 @@ it("materializes independent dependency realms for workspace package owners", as
       sourceRoot,
       scratchRoot: path.join(statePath, "scratch", "contexts"),
       buildsRoot: path.join(statePath, "builds"),
-      appRoot: process.cwd(),
+      appRoot: process.env["VIBESTUDIO_TEST_INSTALLED_APP_ROOT"] ?? process.cwd(),
     });
     const resources = await runtime.admitDependencies({
       key: "workspace-package-owner-realms",

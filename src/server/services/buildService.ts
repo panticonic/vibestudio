@@ -56,6 +56,11 @@ const SKILLS_PACKAGE_SCOPE = (() => {
 
 export function createBuildService(deps: {
   buildSystem: BuildSystemV2;
+  compileProduct?: (input: {
+    bundle: string;
+    format: "cjs" | "async-cjs";
+    input: unknown;
+  }) => Promise<unknown>;
   listUnits: () => BuildUnitCatalogEntry[] | Promise<BuildUnitCatalogEntry[]>;
   getCallerContextId: (callerId: string) => string | null;
 }): ServiceDefinition {
@@ -90,6 +95,37 @@ export function createBuildService(deps: {
               ...options,
               library: false,
             });
+      },
+      compileProduct: async (_ctx, [source, execution, input]) => {
+        if (process.env["VIBESTUDIO_OFFLOAD_NATLANG_COMPILER"] === "0")
+          return { kind: "local" as const };
+        if (!deps.compileProduct) throw new Error("Native compiler owner is unavailable");
+        // Resolve the already-loaded provider's immutable build, never current HEAD.
+        const provider = await deps.buildSystem.getBuildByExecution(
+          execution.buildKey,
+          execution.executionDigest
+        );
+        if (
+          !provider ||
+          provider.metadata.execution?.artifactDigest !== execution.artifactDigest ||
+          !provider.metadata.sourceStateHash
+        )
+          throw new Error("Native compiler provider artifact is unavailable or mismatched");
+        const compiler = await deps.buildSystem.getBuild(
+          `${source}/compiler`,
+          provider.metadata.sourceStateHash,
+          { library: true, libraryTarget: "worker", externals: [] }
+        );
+        if (!compiler.execution)
+          throw new Error("Native compiler has no immutable execution identity");
+        return {
+          kind: "product" as const,
+          value: await deps.compileProduct({
+            bundle: compiler.bundle,
+            format: compiler.format,
+            input,
+          }),
+        };
       },
       getBuildArtifacts: async (_ctx, [key]) => {
         const build = await deps.buildSystem.getBuildByKey(key);

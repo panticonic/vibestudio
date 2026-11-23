@@ -2914,18 +2914,22 @@ async function main() {
   const { createWorkerService } = await import("./services/workerService.js");
 
   {
+    type NativeCompilerOwner = Awaited<ReturnType<typeof import("./nativeWorkspaceRuntime.js").startNativeWorkspaceRuntime>>;
+    let compilerOwner: NativeCompilerOwner | undefined;
     container.registerManaged({
       name: "build",
-      dependencies: [...BUILD_SERVICE_DEPENDENCIES],
+      dependencies: [...BUILD_SERVICE_DEPENDENCIES,"nativeWorkspace"],
       start: async (resolve) => {
         buildSystemInstance = assertPresent(
           resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
         );
+        compilerOwner=assertPresent(resolve<NativeCompilerOwner>("nativeWorkspace"));
       },
       getServiceDefinition() {
         const buildSystem = assertPresent(buildSystemInstance);
         return createBuildService({
           buildSystem,
+          compileProduct: input=>assertPresent(compilerOwner).compileProduct(input),
           getCallerContextId: (callerId) => callerBuildContextId(entityCache, callerId),
           listUnits: () =>
             listBuildUnitCatalog({

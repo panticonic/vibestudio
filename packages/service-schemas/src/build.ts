@@ -1077,6 +1077,14 @@ export const buildMethods = defineServiceMethods({
     // semantic state, so read-only evals must be able to load workspace code.
     access: READ_ACCESS,
   },
+  compileProduct: {
+    website: {kind:"eligible",rationale:"Isolated workspace-local compiler output only."} as const,
+    tier: {tier:"open",session:"family",residency:"untrusted-execution",family:"build.read",rationale:"Pure compiler products from an exact workspace provider source."},
+    description:"Compile explicit in-memory program sources in the native workspace sandbox, using the compiler at the provider's exact immutable source state.",
+    args:z.tuple([z.string().min(1),executionArtifactRefSchema,z.unknown()]),
+    returns:z.union([z.object({kind:z.literal("local")}).strict(),z.object({kind:z.literal("product"),value:z.unknown()}).strict()]),
+    access:READ_ACCESS,
+  },
   getBuildArtifacts: {
     website: {
       kind: "eligible",

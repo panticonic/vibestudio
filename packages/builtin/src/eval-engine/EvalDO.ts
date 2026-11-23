@@ -3951,6 +3951,11 @@ export class EvalDO extends DurableObjectBase {
       bindings,
       owner,
       retainCaptureEvidence: evidence => this.retainNatlangCaptureEvidence(source, sourceIdentity, owner, evidence),
+      compileProgramProduct: async input => {
+        if(!sourceIdentity?.execution)throw new Error("eval: natlang compiler requires its exact provider artifact");
+        const result=await this.requireActiveEvalExecution().build.compileProduct(source,executionArtifactRefSchema.parse(sourceIdentity.execution),input);
+        return result.kind==="product"?result.value:undefined;
+      },
     });
   }
 
