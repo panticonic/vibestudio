@@ -2906,6 +2906,24 @@ describe("WorkerdManager", () => {
       expect(nextMgr.getBootGeneration()).toBe(2);
     });
 
+    it("publishes transport before earlier-registered lease recovery hooks dispatch", async () => {
+      const mgr = new WorkerdManager(createMockDeps());
+      let relayPort: number | null = null;
+      const recovery = vi.fn(async () => {
+        expect(relayPort).not.toBeNull();
+        expect(relayPort).toBe(mgr.getPort());
+        await mgr.ensureTransportReady();
+      });
+      // Production lifecycle recovery subscribes before index wires relay.
+      mgr.onRestartReady(recovery);
+      mgr.onGenerationClosing(() => {relayPort=null;});
+      mgr.onGenerationReady(({port}) => {relayPort=port;});
+      await mgr.startWorker(startArgs());
+      expect(recovery).not.toHaveBeenCalled();
+      await (mgr as unknown as {restartWorkerd():Promise<void>}).restartWorkerd();
+      expect(recovery).toHaveBeenCalledOnce();
+    });
+
     it("joins generation closing while the old process is still alive", async () => {
       const mgr = new WorkerdManager(createMockDeps());
       await mgr.startWorker(startArgs());
