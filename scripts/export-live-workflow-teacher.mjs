@@ -11140,6 +11140,15 @@ function contentProjectEvidence(execution, exercise) {
       verification.evidence?.length > 0 &&
       verification.semanticReviewRequired === true &&
       input?.actual?.contextId === fixture.contextId &&
+      (!input?.actual?.lifecycle || (
+        input.actual.lifecycle.requestedDisposition === "committed" &&
+        JSON.stringify(input.actual.lifecycle.baseline?.committedEvent) === fixture.before &&
+        isDeepStrictEqual(input.actual.lifecycle.baseline?.workingHead,input.actual.lifecycle.baseline?.committedEvent) &&
+        isDeepStrictEqual(input.actual.lifecycle.current?.workingHead,input.actual.lifecycle.current?.committedEvent) &&
+        input.actual.lifecycle.baseline?.clean === true && input.actual.lifecycle.current?.clean === true &&
+        input.actual.lifecycle.baseline?.protectedMainEventId === input.actual.lifecycle.current?.protectedMainEventId &&
+        isDeepStrictEqual(input.actual.lifecycle.delta,{committedEventChanged:true,workingHeadChanged:true,protectedMainChanged:false})
+      )) &&
       JSON.stringify(input?.actual?.lifecycle?.current?.committedEvent ?? input?.actual?.committedEvent) === fixture.after &&
       (input.actual.lifecycle?.current?.committedEvent ?? input.actual.committedEvent).eventId === exercise.report.eventId &&
       JSON.stringify(input.expected) === JSON.stringify(fixture.request) &&

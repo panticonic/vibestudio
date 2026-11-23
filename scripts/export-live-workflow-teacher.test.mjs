@@ -3761,6 +3761,17 @@ test("content export requires independent semantic review of exact committed byt
   assert.equal(proof.checks.independentSemanticReview, true);
   assert.deepEqual(workspaceEvidence.semanticReview.input, reviewInput);
   assert.equal(proof.calls.length, 2);
+  // Legacy committed-project consumers bind the same explicit lifecycle, while
+  // preserving byte-bound historical reviews with the original input format.
+  const baseline={kind:"event",eventId:"baseline"};
+  diagnostics.contentProjectWorld.before=JSON.stringify(baseline);
+  delete reviewInput.actual.committedEvent;
+  reviewInput.actual.lifecycle={requestedDisposition:"committed",baseline:{committedEvent:baseline,workingHead:baseline,clean:true,protectedMainEventId:"main"},current:{committedEvent:event,workingHead:event,clean:true,protectedMainEventId:"main"},delta:{committedEventChanged:true,workingHeadChanged:true,protectedMainChanged:false}};
+  await save();
+  await exportLiveTeacherWorkflow({...options,out:options.out+"-lifecycle",review});
+  reviewInput.actual.lifecycle.baseline.committedEvent={kind:"event",eventId:"forged"};
+  await save();
+  await assert.rejects(()=>exportLiveTeacherWorkflow({...options,out:options.out+"-forged",review}),/independent content-project readback/);
 });
 
 test("owned operations export requires persisted readbacks and absence after teardown", async (t) => {
