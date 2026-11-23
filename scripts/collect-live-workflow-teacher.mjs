@@ -19,6 +19,8 @@ import {
 import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
 import { groupLiveTeacherCases, terminalStartupFailure } from "./lib/live-teacher-groups.mjs";
 
+import { teacherEpisodeTimeout } from "./lib/live-teacher-budget.mjs";
+
 import { liveTeacherEnvironment, moveRetainedState } from "./lib/live-teacher-retention.mjs";
 
 const args = process.argv.slice(2);
@@ -48,10 +50,7 @@ if (!/^\d+$/u.test(values["cases-per-instance"]) || !Number.isSafeInteger(batchS
 const concurrency = Number(values.concurrency);
 if (!/^\d+$/u.test(values.concurrency) || !Number.isSafeInteger(concurrency) || concurrency < 1)
   throw new Error("--concurrency must be a positive integer");
-const caseTimeout = values["test-timeout-ms"];
-if (caseTimeout !== undefined && (!/^\d+$/u.test(caseTimeout) || !Number.isSafeInteger(Number(caseTimeout)) || Number(caseTimeout) <= 0)) {
-  throw new Error("--test-timeout-ms must be a positive integer");
-}
+const caseTimeout = teacherEpisodeTimeout(values["test-timeout-ms"]);
 if (values["approve-codex-session"] &&
     (list || preflight || values.assignments || !values.model.startsWith("openai-codex:"))) {
   throw new Error("--approve-codex-session requires a live open-goal capture with an openai-codex model");
@@ -263,7 +262,7 @@ if (command(["natlang:vendor", "--check"]) !== 0)
   throw new Error("Vendored Natlang pin check failed");
 const out = path.resolve(values.out);
 mkdirSync(out, { mode: 0o700 });
-const source = { repositories: pinned.repositories, teacher: values.model };
+const source = { repositories: pinned.repositories, teacher: values.model, teacherTimeoutMs: Number(caseTimeout) };
 const writePins = (destination, value) =>
   writeFileSync(destination, JSON.stringify(value, null, 2), { mode: 0o600 });
 
@@ -330,7 +329,7 @@ for (const group of groups) {
         "run", ...batch.map(({ scenario }) => scenario),
         "--model", source.teacher,
         ...(concurrent ? ["--concurrency", String(Math.min(concurrency, batch.length)), "--retain-trajectories"] : []),
-        ...(caseTimeout === undefined ? [] : ["--test-timeout-ms", caseTimeout]),
+        "--test-timeout-ms", caseTimeout,
         ...(values["approve-codex-session"] ? ["--approve-codex-session"] : []),
         "--out-dir", runOut,
       ]);
