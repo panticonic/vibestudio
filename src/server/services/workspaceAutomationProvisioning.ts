@@ -12,6 +12,8 @@ import type { DORef } from "@vibestudio/shared/doDispatcher";
  * coalesces connection/startup notifications in this host process. */
 export function createWorkspaceAutomationProvisioner(deps: {
   appVersion: string;
+  /** Disposable system-test workspaces retain defaults without running them. */
+  quiesceDefaults?: boolean;
   config(): WorkspaceConfig;
   members(): UserSubject[];
   runtime(): Pick<RuntimeServiceInternal, "createEntity">;
@@ -74,12 +76,14 @@ export function createWorkspaceAutomationProvisioner(deps: {
             await deps.dispatch(ref, "initializeAutomation", {
               id,
               contextId: entity.contextId,
-              definition,
+              definition: deps.quiesceDefaults ? { ...definition, state: "paused" } : definition,
+              ...(deps.quiesceDefaults ? { quiesce: true } : {}),
               appVersion: deps.appVersion,
             });
             completed.add(key);
           } catch (error) {
             deps.failed(id, member.userId, error);
+            if (deps.quiesceDefaults) throw error;
           }
         })().finally(() => {
           pending.delete(key);

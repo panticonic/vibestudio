@@ -158,3 +158,19 @@ describe("workspace automation provisioning", () => {
     expect(f.dispatch).toHaveBeenCalledTimes(2);
   });
 });
+
+
+it("provisions only declared defaults paused in disposable workspaces", async () => {
+  const f = fixture();
+  const provisioner = createWorkspaceAutomationProvisioner({ ...f.deps, quiesceDefaults: true });
+  await provisioner.reconcile();
+  expect(f.dispatch).toHaveBeenCalledExactlyOnceWith(expect.anything(), "initializeAutomation", expect.objectContaining({ quiesce: true, definition: { ...definition, state: "paused" } }));
+  expect(f.config.defaultAutomations!.updates).toEqual(definition);
+});
+it("does not hide failed default quiescence as successful setup", async () => {
+  const f = fixture();
+  f.dispatch.mockRejectedValue(new Error("native quiescence failed"));
+  const provisioner = createWorkspaceAutomationProvisioner({ ...f.deps, quiesceDefaults: true });
+  await expect(provisioner.reconcile()).rejects.toThrow("Workspace automation provisioning failed");
+  expect(f.failed).toHaveBeenCalled();
+});

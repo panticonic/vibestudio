@@ -7960,6 +7960,7 @@ async function main() {
   const { createWorkspaceAutomationProvisioner } =
     await import("./services/workspaceAutomationProvisioning.js");
   const automationProvisioner = createWorkspaceAutomationProvisioner({
+    quiesceDefaults: systemTestInstance,
     appVersion: process.env["VIBESTUDIO_CURRENT_APP_VERSION"] ?? WORKSPACE_APP_VERSION,
     config: () => workspaceConfig,
     members: () =>
@@ -8329,7 +8330,8 @@ async function main() {
       // later human decision/application and therefore remains detached.
       await prepareWorkspaceCreationReview();
       unitInstallReviewCoordinator.finishStartupReviewStaging();
-      void reconcileDefaultAutomations();
+      if (systemTestInstance) await reconcileDefaultAutomations();
+      else void reconcileDefaultAutomations();
       void unitInstallReviewCoordinator
         .publishPending("startup")
         .catch((err: unknown) => console.warn("[Units] Failed to publish startup approvals:", err));
