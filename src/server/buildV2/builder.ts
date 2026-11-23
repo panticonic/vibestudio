@@ -2289,6 +2289,13 @@ export interface BuildUnitOptions {
   priority?: BuildPriority;
 }
 
+/** Externals are a union of exact module specifiers; their insertion order and duplicates have no meaning. */
+export function canonicalLibraryExternals(externals: readonly string[]): string[] {
+  return process.env["VIBESTUDIO_CANONICAL_LIBRARY_EXTERNALS"] === "0"
+    ? [...externals]
+    : [...new Set(externals)].sort();
+}
+
 function captureBuildUnitOptions(
   options: BuildUnitOptions | undefined
 ): BuildUnitOptions | undefined {
@@ -2301,7 +2308,9 @@ function captureBuildUnitOptions(
     : undefined;
   return {
     ...options,
-    ...(options.externals ? { externals: [...options.externals] } : {}),
+    ...(options.externals
+      ? { externals: canonicalLibraryExternals(options.externals) }
+      : {}),
     ...(test ? { test } : {}),
   };
 }
@@ -2338,7 +2347,7 @@ export function effectiveBuildVersion(
       .update(
         JSON.stringify({
           artifactFormat: LIBRARY_ARTIFACT_FORMAT_VERSION,
-          externals: options.externals ?? [],
+          externals: canonicalLibraryExternals(options.externals ?? []),
           entry: options.libraryEntrySubpath ?? ".",
           // Distinct conditions ⇒ distinct bundle: a panel-target and a
           // worker-target build of the same package must NOT share a cache key.
@@ -6022,7 +6031,7 @@ function externalLibraryBuildKey(
     sha256Canonical({
       artifactFormat: LIBRARY_ARTIFACT_FORMAT_VERSION,
       source,
-      externals: [...externals].sort(),
+      externals: canonicalLibraryExternals(externals).sort(),
     }),
     false
   );
@@ -6049,6 +6058,7 @@ export async function buildNpmLibrary(
   version: string,
   externals: string[]
 ): Promise<StoredBuildResult> {
+  externals = canonicalLibraryExternals(externals);
   validateNpmSpecifier(specifier);
   validateSandboxNpmLibrarySpecifier(specifier);
   validateNpmVersion(version);
@@ -6191,6 +6201,7 @@ export async function buildPlatformLibrary(
   specifier: string,
   externals: string[]
 ): Promise<StoredBuildResult> {
+  externals = canonicalLibraryExternals(externals);
   if (session.processOwner.appNodeModules.length === 0) {
     throw new Error("App node_modules not configured — cannot build @vibestudio/* packages");
   }
