@@ -1046,6 +1046,43 @@ test("open goal export attests application inputs and rejects a hidden assignmen
   );
 });
 
+test("semantic application export accepts a direct root and alternate internal call trees", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(path.resolve(import.meta.dirname, ".."));
+  const cases = await loadLiveTeacherCases(checkouts);
+  entry.test.name = "open-goal-api-readiness-required-inventory-optional-status";
+  const workflow = cases.get(entry.test.name);
+  assert.ok(workflow?.entry);
+  const pins = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(options.pins, JSON.stringify({ ...pins, workspace: workflow.workspace }));
+  const run = diagnostics.natlangTeacher;
+  run.programPath = workflow.program;
+  const originalChild = structuredClone(run.calls[1]);
+  const root = run.calls[0];
+  const result = { plan: { action: "hold", profileId: null, explanation: "Provider access remains unobserved." }, review: null, audit: null, handoff: null };
+  run.report = result;
+  diagnostics.openGoalVerification = { passed: true, caseId: workflow.assignment.id, contextId: "ctx", goal: workflow.assignment.goal,
+    checks: { groundedNativeState: true, authorizedScopePreserved: true } };
+  bindApplicationResult(run, diagnostics.openGoalVerification, workflow, result);
+  for (const names of [[], ["resolveReadiness"], ["inspectCurrentState", "resolveReadiness", "inspectCurrentState"]]) {
+    run.calls = [root, ...names.map((name, index) => {
+      const call = structuredClone(originalChild);
+      call.callId = call.summary.call_id = `alternative-${index}`;
+      call.record.definition.name = name;
+      call.record.parent_call_id = root.callId;
+      return call;
+    })];
+    await save();
+    const out = path.join(path.dirname(options.out), `application-alternative-${names.length}`);
+    await exportLiveTeacherWorkflow({ ...options, cases, out });
+    const verification = JSON.parse(await readFile(path.join(out, "verification.json"), "utf8"));
+    assert.equal(verification.calls.length, names.length + 1);
+  }
+  diagnostics.openGoalVerification.checks.authorizedScopePreserved = false;
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /independently verified outcomes/);
+});
+
 test("open browser goal export retains CDP evidence and rejects a replaced generation", async (t) => {
   const { options, diagnostics, entry, save } = await fixture(t);
   const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(path.resolve(import.meta.dirname, ".."));

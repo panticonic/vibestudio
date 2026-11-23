@@ -1,0 +1,3397 @@
+{
+  "sourceCommit": "ef810a03c",
+  "activeCatalog": {
+    "allCases": 3169,
+    "openCases": 2327,
+    "kinds": {
+      "research": {
+        "count": 3,
+        "program": "skills/open-user-goal/investigatePublicQuestion.nl",
+        "callable": "investigatePublicQuestion",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "workspace-edit": {
+        "count": 3,
+        "program": "skills/open-user-goal/reviseWorkspaceDocument.nl",
+        "callable": "reviseWorkspaceDocument",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "research-and-edit": {
+        "count": 2,
+        "program": "skills/open-user-goal/reviseFromPublicResearch.nl",
+        "callable": "reviseFromPublicResearch",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "outcome-workspace": {
+        "count": 3,
+        "program": "skills/open-user-goal/reviseWorkspaceDocument.nl",
+        "callable": "reviseWorkspaceDocument",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-outcome-workspace-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "android-audit": {
+        "count": 5,
+        "program": "skills/open-user-goal/auditAndroidGoal.nl",
+        "callable": "auditAndroidGoal",
+        "validator": {
+          "template": "system",
+          "path": "skills/mobile-runtime-audit-bindings/managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "android-delivery": {
+        "count": 8,
+        "program": "skills/open-user-goal/verifyAndroidDelivery.nl",
+        "callable": "verifyAndroidDelivery",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-android-delivery-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "delivery-wake": {
+        "count": 28,
+        "program": "skills/open-user-goal/reviewDeliveryWake.nl",
+        "callable": "reviewDeliveryWake",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-delivery-wake-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "live-local-inventory": {
+        "count": 24,
+        "program": "skills/open-user-goal/compareLiveLocalInventory.nl",
+        "callable": "compareLiveLocalInventory",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-live-local-inventory-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "phoneFirstRun": {
+        "count": 26,
+        "program": "skills/open-user-goal/planPhoneFirstRun.nl",
+        "callable": "planPhoneFirstRun",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-phone-first-run-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "skillMaintenance": {
+        "count": 26,
+        "program": "skills/open-user-goal/maintainWorkspaceSkill.nl",
+        "callable": "maintainWorkspaceSkill",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-skill-maintenance-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "webhook-admission": {
+        "count": 30,
+        "program": "skills/open-user-goal/reviewWebhookAdmission.nl",
+        "callable": "reviewWebhookAdmission",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-webhook-admission-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "development-audit": {
+        "count": 30,
+        "program": "skills/open-user-goal/reviewDevelopmentAudit.nl",
+        "callable": "reviewDevelopmentAudit",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-development-audit-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "desktopReadiness": {
+        "count": 29,
+        "program": "skills/open-user-goal/reviewDesktopReadiness.nl",
+        "callable": "reviewDesktopReadiness",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-desktop-readiness-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "content-archive": {
+        "count": 30,
+        "program": "skills/open-user-goal/recoverContentArchive.nl",
+        "callable": "recoverContentArchive",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-content-archive-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "system-release": {
+        "count": 30,
+        "program": "skills/open-user-goal/reviewSystemRelease.nl",
+        "callable": "reviewSystemRelease",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-system-release-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "testkit-closeout": {
+        "count": 23,
+        "program": "skills/open-user-goal/compareTestkitCloseouts.nl",
+        "callable": "compareTestkitCloseouts",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-testkit-closeout-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "panel-source-migration": {
+        "count": 28,
+        "program": "skills/open-user-goal/migratePanelSource.nl",
+        "callable": "migratePanelSource",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-panel-source-migration-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "workspace-share": {
+        "count": 28,
+        "program": "skills/open-user-goal/reviewWorkspaceShare.nl",
+        "callable": "reviewWorkspaceShare",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-workspace-share-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "notificationState": {
+        "count": 29,
+        "program": "skills/open-user-goal/reviewNotificationState.nl",
+        "callable": "reviewNotificationState",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-notification-state-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "agent-capability": {
+        "count": 26,
+        "program": "skills/open-user-goal/recoverAgentCapability.nl",
+        "callable": "recoverAgentCapability",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-agent-capability-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "mobileContinuity": {
+        "count": 28,
+        "program": "skills/open-user-goal/reviewMobileContinuity.nl",
+        "callable": "reviewMobileContinuity",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/mobile-system-testing/open-continuity.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "installed-package": {
+        "count": 26,
+        "program": "skills/open-user-goal/reviewInstalledPackage.nl",
+        "callable": "reviewInstalledPackage",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-installed-package-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "assetIntegrity": {
+        "count": 26,
+        "program": "skills/open-user-goal/reviewAssetIntegrity.nl",
+        "callable": "reviewAssetIntegrity",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-asset-integrity-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "tendrilRoute": {
+        "count": 20,
+        "program": "skills/open-user-goal/reviewTendrilRoute.nl",
+        "callable": "reviewTendrilRoute",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-tendril-route-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "extension-dossier": {
+        "count": 20,
+        "program": "skills/open-user-goal/reviewExtensionDossier.nl",
+        "callable": "reviewExtensionDossier",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-extension-dossier-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "unit-handoff": {
+        "count": 24,
+        "program": "skills/open-user-goal/reviewUnitHandoffGoal.nl",
+        "callable": "reviewUnitHandoffGoal",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-unit-handoff-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "google-runbook": {
+        "count": 6,
+        "program": "skills/open-user-goal/reconcileGoogleRunbook.nl",
+        "callable": "reconcileGoogleRunbook",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-product-owned-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "news-edition-review": {
+        "count": 6,
+        "program": "skills/open-user-goal/prepareNewsEditionReview.nl",
+        "callable": "prepareNewsEditionReview",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-product-owned-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "assigned-public-brief": {
+        "count": 4,
+        "program": "skills/open-user-goal/answerFromAssignedPublicSources.nl",
+        "callable": "answerFromAssignedPublicSources",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-assigned-public-brief-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "deployed-interface": {
+        "count": 20,
+        "program": "skills/open-user-goal/reviewDeployedInterface.nl",
+        "callable": "reviewDeployedInterface",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-deployed-interface-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "localPresentation": {
+        "count": 20,
+        "program": "skills/open-user-goal/reviewLocalPresentation.nl",
+        "callable": "reviewLocalPresentation",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-local-presentation-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "adventure-journey": {
+        "count": 16,
+        "program": "skills/open-adventure-journey/reviewAdventureJourney.nl",
+        "callable": "reviewAdventureJourney",
+        "validator": {
+          "template": "examples",
+          "path": "skills/open-adventure-journey-runtime/index.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "local-width": {
+        "count": 20,
+        "program": "skills/open-user-goal/reviewLocalExecutionWidth.nl",
+        "callable": "reviewLocalExecutionWidth",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-local-width-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "build-incident": {
+        "count": 20,
+        "program": "skills/open-user-goal/reviewRetainedBuildIncident.nl",
+        "callable": "reviewRetainedBuildIncident",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-build-incidents-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "problem-report": {
+        "count": 16,
+        "program": "skills/open-user-goal/workOnProblemReportGoal.nl",
+        "callable": "workOnProblemReportGoal",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-problem-report-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "compound-recovery": {
+        "count": 19,
+        "program": "skills/open-user-goal/recoverOperatingHandoff.nl",
+        "callable": "recoverOperatingHandoff",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-compound-recovery-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "scheduled-recovery": {
+        "count": 23,
+        "program": "skills/open-owned-scheduled-recovery/recoverScheduledAutomation.nl",
+        "callable": "recoverScheduledAutomation",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-scheduled-recovery-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "automationActivation": {
+        "count": 14,
+        "program": "skills/open-user-goal/activateOwnedAutomation.nl",
+        "callable": "activateOwnedAutomation",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-automation-activation-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "workspace-assembly": {
+        "count": 20,
+        "program": "skills/open-user-goal/workOnAssemblyGoal.nl",
+        "callable": "workOnAssemblyGoal",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-workspace-assembly-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "templateMigration": {
+        "count": 20,
+        "program": "skills/template-candidate/reviewTemplateMigration.nl",
+        "callable": "reviewTemplateMigration",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-template-migration-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "githubWork": {
+        "count": 16,
+        "program": "skills/github/natlang/workOnGitHubGoal.nl",
+        "callable": "workOnGitHubGoal",
+        "validator": {
+          "template": "personal",
+          "path": "skills/github/open-github-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "terminalAppRepair": {
+        "count": 24,
+        "program": "skills/open-user-goal/workOnTerminalApp.nl",
+        "callable": "workOnTerminalApp",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-terminal-app-repair-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "preparedContentProject": {
+        "count": 24,
+        "program": "skills/open-user-goal/prepareContentProject.nl",
+        "callable": "prepareContentProject",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-prepared-content-project-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "clientDiagnostics": {
+        "count": 22,
+        "program": "skills/gad-context/natlang/workOnClientDiagnostics.nl",
+        "callable": "workOnClientDiagnostics",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-client-diagnostics-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "owned-task": {
+        "count": 24,
+        "program": "skills/open-owned-task-recovery/recoverOwnedTask.nl",
+        "callable": "recoverOwnedTask",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-owned-task-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "capability-plan": {
+        "count": 27,
+        "program": "skills/open-user-goal/workOnCapabilityGoal.nl",
+        "callable": "workOnCapabilityGoal",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-capability-plan-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "googleSetup": {
+        "count": 14,
+        "program": "skills/google-drive/setupGoal/workOnGoogleSetupGoal.nl",
+        "callable": "workOnGoogleSetupGoal",
+        "validator": {
+          "template": "google-workspace",
+          "path": "skills/google-drive/open-google-setup-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "unit-rollout": {
+        "count": 13,
+        "program": "skills/open-unit-rollout/repairWorkspaceUnit.nl",
+        "callable": "repairWorkspaceUnit",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-unit-rollout-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "vaultWork": {
+        "count": 50,
+        "program": "skills/spectrolite-review/workOnVaultKnowledgeGoal.nl",
+        "callable": "workOnVaultKnowledgeGoal",
+        "validator": {
+          "template": "spectrolite",
+          "path": "skills/spectrolite-review-fixtures/knowledge-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "local-reconciliation": {
+        "count": 24,
+        "program": "skills/open-user-goal/workOnLocalReconciliationGoal.nl",
+        "callable": "workOnLocalReconciliationGoal",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-reconciliation-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "browser": {
+        "count": 11,
+        "program": "skills/open-user-goal/workInBrowser.nl",
+        "callable": "workInBrowser",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-browser-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "suite": {
+        "count": 16,
+        "program": "skills/open-user-goal/verifyWorkspaceSuite.nl",
+        "callable": "verifyWorkspaceSuite",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-suite-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "examplesAdoption": {
+        "count": 24,
+        "program": "skills/open-user-goal/reviewExamplesAdoption.nl",
+        "callable": "reviewExamplesAdoption",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-examples-adoption-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "grimoireScene": {
+        "count": 24,
+        "program": "skills/open-user-goal/careForGrimoireScene.nl",
+        "callable": "careForGrimoireScene",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-grimoire-scene-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "api-readiness": {
+        "count": 24,
+        "program": "skills/open-user-goal/workOnApiReadinessGoal.nl",
+        "callable": "workOnApiReadinessGoal",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-api-readiness-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "chat-continuity": {
+        "count": 26,
+        "program": "skills/open-user-goal/workOnChatContinuity.nl",
+        "callable": "workOnChatContinuity",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-chat-continuity-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "workspace-config": {
+        "count": 26,
+        "program": "skills/open-user-goal/reconcileWorkspaceConfig.nl",
+        "callable": "reconcileWorkspaceConfig",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-workspace-config-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "gadDurableQuestion": {
+        "count": 24,
+        "program": "skills/gad-context/natlang/reviewDurableQuestion.nl",
+        "callable": "reviewDurableQuestion",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-gad-durable-question-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "board-migration": {
+        "count": 24,
+        "program": "skills/open-user-goal/reviewBoardMigration.nl",
+        "callable": "reviewBoardMigration",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-board-migration-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "live-tendril-board": {
+        "count": 24,
+        "program": "skills/open-user-goal/workOnLiveTendrilBoard.nl",
+        "callable": "workOnLiveTendrilBoard",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-live-tendril-board-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "native-image": {
+        "count": 20,
+        "program": "skills/open-user-goal/generateOwnedIllustration.nl",
+        "callable": "generateOwnedIllustration",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-native-image-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "provenance-question": {
+        "count": 21,
+        "program": "skills/open-user-goal/reviewRecordedQuestion.nl",
+        "callable": "reviewRecordedQuestion",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-provenance-question-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "transcript-surface": {
+        "count": 24,
+        "program": "skills/open-user-goal/reviewTranscriptSurface.nl",
+        "callable": "reviewTranscriptSurface",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-transcript-surface-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "source-attribution": {
+        "count": 26,
+        "program": "skills/open-user-goal/reviewSourceAttribution.nl",
+        "callable": "reviewSourceAttribution",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-source-attribution-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "workspace-smoke": {
+        "count": 26,
+        "program": "skills/open-user-goal/reviewWorkspaceSmoke.nl",
+        "callable": "reviewWorkspaceSmoke",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-workspace-smoke-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "same-turn-eval": {
+        "count": 26,
+        "program": "skills/open-user-goal/recoverSameTurnEval.nl",
+        "callable": "recoverSameTurnEval",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-same-turn-eval-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "cli-route": {
+        "count": 24,
+        "program": "skills/open-user-goal/recoverCliRoute.nl",
+        "callable": "recoverCliRoute",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-cli-route-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "intent-discovery": {
+        "count": 30,
+        "program": "skills/open-user-goal/discoverScopedIntent.nl",
+        "callable": "discoverScopedIntent",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-intent-discovery-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "retained-memory": {
+        "count": 26,
+        "program": "skills/open-user-goal/reviewRetainedMemory.nl",
+        "callable": "reviewRetainedMemory",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-retained-memory-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "coordinated-revision": {
+        "count": 26,
+        "program": "skills/open-user-goal/reviseCoordinatedDocuments.nl",
+        "callable": "reviseCoordinatedDocuments",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-coordinated-revision-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "audience-response": {
+        "count": 22,
+        "program": "skills/open-user-goal/chooseAudienceResponse.nl",
+        "callable": "chooseAudienceResponse",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-audience-response-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "route-authority": {
+        "count": 30,
+        "program": "skills/open-user-goal/chooseAuthorizedEvidenceRoute.nl",
+        "callable": "chooseAuthorizedEvidenceRoute",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-route-authority-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "log-follower": {
+        "count": 27,
+        "program": "skills/open-user-goal/reviewLogFollower.nl",
+        "callable": "reviewLogFollower",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-log-follower-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "launch-state": {
+        "count": 24,
+        "program": "skills/open-user-goal/reconcilePanelLaunchState.nl",
+        "callable": "reconcilePanelLaunchState",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-launch-state-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "scaffoldReview": {
+        "count": 24,
+        "program": "skills/open-user-goal/prepareOwnedScaffold.nl",
+        "callable": "prepareOwnedScaffold",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-scaffold-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "owned-operations": {
+        "count": 24,
+        "program": "skills/open-user-goal/coordinateOwnedOperations.nl",
+        "callable": "coordinateOwnedOperations",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-owned-operations-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "pty-continuity": {
+        "count": 28,
+        "program": "skills/open-user-goal/reviewPtyContinuity.nl",
+        "callable": "reviewPtyContinuity",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-pty-continuity-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "systemCandidateTriage": {
+        "count": 24,
+        "program": "skills/open-user-goal/triageSystemTemplate.nl",
+        "callable": "triageSystemTemplate",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-system-candidate-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "workspace-claims": {
+        "count": 24,
+        "program": "skills/open-user-goal/reviewWorkspaceClaims.nl",
+        "callable": "reviewWorkspaceClaims",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-workspace-claims-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "bridge-delivery": {
+        "count": 26,
+        "program": "skills/open-user-goal/workOnBridgeDelivery.nl",
+        "callable": "workOnBridgeDelivery",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-bridge-delivery-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "editorial-packet": {
+        "count": 26,
+        "program": "skills/open-user-goal/workOnEditorialPacket.nl",
+        "callable": "workOnEditorialPacket",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-editorial-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "demo-portfolio": {
+        "count": 26,
+        "program": "skills/open-user-goal/workOnDemoPortfolio.nl",
+        "callable": "workOnDemoPortfolio",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-portfolio-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "regency-briefing": {
+        "count": 26,
+        "program": "skills/open-user-goal/workOnRegencyBriefing.nl",
+        "callable": "workOnRegencyBriefing",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-regency-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "image-candidate": {
+        "count": 24,
+        "program": "skills/open-user-goal/workOnImageCandidateGoal.nl",
+        "callable": "workOnImageCandidateGoal",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-image-candidate-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "news-evidence": {
+        "count": 20,
+        "program": "skills/open-user-goal/workOnNewsEvidenceGoal.nl",
+        "callable": "workOnNewsEvidenceGoal",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-news-evidence-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "news": {
+        "count": 12,
+        "program": "skills/news-workflows/reviewUserNewsGoal.nl",
+        "callable": "reviewUserNewsGoal",
+        "validator": {
+          "template": "news",
+          "path": "packages/news-live-evidence/open-goal.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "spectrolite": {
+        "count": 11,
+        "program": "skills/spectrolite-review/workTowardVaultGoal.nl",
+        "callable": "workTowardVaultGoal",
+        "validator": {
+          "template": "spectrolite",
+          "path": "skills/spectrolite-review-fixtures/open-goal.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "google": {
+        "count": 7,
+        "program": "skills/google-drive/driveWorkflow/workOnDriveGoal.nl",
+        "callable": "workOnDriveGoal",
+        "validator": {
+          "template": "google-workspace",
+          "path": "skills/google-drive/open-goal-drive.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "personal": {
+        "count": 9,
+        "program": "skills/open-personal-goal/program/workOnMissionGoal.nl",
+        "callable": "workOnMissionGoal",
+        "validator": {
+          "template": "personal",
+          "path": "skills/open-personal-goal/managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "operator": {
+        "count": 12,
+        "program": "skills/open-system-operations/workOnSystemGoal.nl",
+        "callable": "workOnSystemGoal",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-operator-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "recovery": {
+        "count": 9,
+        "program": "skills/open-session-recovery/program/recoverSessionGoal.nl",
+        "callable": "recoverSessionGoal",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-recovery-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "publication": {
+        "count": 14,
+        "program": "skills/publish-preflight/workTowardPublicationGoal.nl",
+        "callable": "workTowardPublicationGoal",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-publication-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "pdf": {
+        "count": 8,
+        "program": "skills/pdf-intake/workOnPdfGoal.nl",
+        "callable": "workOnPdfGoal",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-pdf-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "gmail": {
+        "count": 15,
+        "program": "skills/open-gmail-goal/program/recoverGmailGoal.nl",
+        "callable": "recoverGmailGoal",
+        "validator": {
+          "template": "google-workspace",
+          "path": "skills/open-gmail-goal/managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "pdfVault": {
+        "count": 10,
+        "program": "skills/open-user-goal/correctVaultFromPdf.nl",
+        "callable": "correctVaultFromPdf",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-pdf-vault-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "calendar": {
+        "count": 12,
+        "program": "skills/open-calendar-goal/program/workOnCalendarGoal.nl",
+        "callable": "workOnCalendarGoal",
+        "validator": {
+          "template": "google-workspace",
+          "path": "skills/open-calendar-goal/managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "personal-artifacts": {
+        "count": 9,
+        "program": "skills/open-personal-artifacts/workOnPersonalArtifactsGoal.nl",
+        "callable": "workOnPersonalArtifactsGoal",
+        "validator": {
+          "template": "personal",
+          "path": "skills/open-personal-artifacts-runtime/managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "personal-history": {
+        "count": 24,
+        "program": "skills/open-personal-history/reviewPersonalHistory.nl",
+        "callable": "reviewPersonalHistory",
+        "validator": {
+          "template": "personal",
+          "path": "skills/open-personal-history-runtime/managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "terminal-handoff": {
+        "count": 38,
+        "program": "skills/open-user-goal/workOnTerminalGoal.nl",
+        "callable": "workOnTerminalGoal",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-terminal-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "owned-research": {
+        "count": 6,
+        "program": "skills/open-user-goal/investigatePublicQuestion.nl",
+        "callable": "investigatePublicQuestion",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-owned-research-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "owned-research-and-edit": {
+        "count": 6,
+        "program": "skills/open-user-goal/reviseFromPublicResearch.nl",
+        "callable": "reviseFromPublicResearch",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-owned-research-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "personal-welcome": {
+        "count": 21,
+        "program": "skills/open-user-goal/workOnPersonalWelcomeGoal.nl",
+        "callable": "workOnPersonalWelcomeGoal",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-personal-welcome-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "dictation-handoff": {
+        "count": 20,
+        "program": "skills/open-user-goal/workOnDictationHandoffGoal.nl",
+        "callable": "workOnDictationHandoffGoal",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-dictation-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "specialist-handoff": {
+        "count": 20,
+        "program": "skills/open-user-goal/workOnSpecialistHandoffGoal.nl",
+        "callable": "workOnSpecialistHandoffGoal",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-specialist-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "provider-handoff": {
+        "count": 20,
+        "program": "skills/open-user-goal/workOnProviderHandoffGoal.nl",
+        "callable": "workOnProviderHandoffGoal",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-provider-handoff-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "eval-handoff": {
+        "count": 16,
+        "program": "skills/open-user-goal/workOnEvalHandoffGoal.nl",
+        "callable": "workOnEvalHandoffGoal",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-eval-handoff-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "program-run": {
+        "count": 17,
+        "program": "skills/open-user-goal/workOnProgramRunGoal.nl",
+        "callable": "workOnProgramRunGoal",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-program-run-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "authoring": {
+        "count": 15,
+        "program": "skills/open-user-goal/workOnAuthoringGoal.nl",
+        "callable": "workOnAuthoringGoal",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-authoring-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "google-handoff": {
+        "count": 27,
+        "program": "skills/open-google-handoff-goal/program/reconcileGoogleHandoff.nl",
+        "callable": "reconcileGoogleHandoff",
+        "validator": {
+          "template": "google-workspace",
+          "path": "skills/open-google-handoff-goal/managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "personal-automation": {
+        "count": 26,
+        "program": "skills/open-personal-automation/coordinatePersonalAutomation.nl",
+        "callable": "coordinatePersonalAutomation",
+        "validator": {
+          "template": "personal",
+          "path": "skills/open-personal-automation-runtime/managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "ownedPreview": {
+        "count": 8,
+        "program": "skills/publish-preflight/publishOwnedPreviewGoal.nl",
+        "callable": "publishOwnedPreviewGoal",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-owned-preview-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "system-diagnostics": {
+        "count": 16,
+        "program": "skills/open-system-diagnostics/workTowardDiagnosticGoal.nl",
+        "callable": "workTowardDiagnosticGoal",
+        "validator": {
+          "template": "system",
+          "path": "skills/open-system-diagnostics-runtime/managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "localMethodExchange": {
+        "count": 24,
+        "program": "skills/open-user-goal/reconcileOwnedMethodCall.nl",
+        "callable": "reconcileOwnedMethodCall",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-local-method-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "local-delivery": {
+        "count": 14,
+        "program": "skills/open-local-delivery/workTowardLocalDelivery.nl",
+        "callable": "workTowardLocalDelivery",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-local-delivery-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "visualRecovery": {
+        "count": 7,
+        "program": "skills/panel-health/recoverPanelGoal.nl",
+        "callable": "recoverPanelGoal",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-panel-recovery-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      },
+      "browserMigration": {
+        "count": 10,
+        "program": "skills/browser-import-review/workOnBrowserMigrationGoal.nl",
+        "callable": "workOnBrowserMigrationGoal",
+        "validator": {
+          "template": "personal",
+          "path": "skills/browser-import-runtime/open-migration-managed.ts"
+        },
+        "evidence": "openOutcomeGoalEvidence"
+      }
+    }
+  },
+  "exporterFunctions": {
+    "source": "scripts/export-live-workflow-teacher.mjs",
+    "functions": 152,
+    "activeRoots": [
+      "openOutcomeGoalEvidence",
+      "panelEvidence",
+      "integrationEvidence",
+      "unitRepairEvidence",
+      "contentProjectEvidence",
+      "ownedOperationsEvidence",
+      "localMessagingEvidence",
+      "scratchHandoffEvidence",
+      "integrationHandoffEvidence",
+      "automationLifecycleEvidence",
+      "publicationPreflightEvidence",
+      "pdfIntakeEvidence",
+      "pdfHandoffEvidence",
+      "panelHealthEvidence",
+      "presentationEvidence",
+      "liveTestkitCleanupEvidence",
+      "liveSessionReplayEvidence",
+      "authoringEvidence",
+      "integrationReadinessEvidence",
+      "terminalCheckEvidence",
+      "clientAdmissionEvidence",
+      "publicationRevisionEvidence",
+      "pdfMediaEvidence",
+      "androidPairEvidence",
+      "androidInstallEvidence",
+      "androidAuditEvidence",
+      "deliveryHistoryEvidence",
+      "transcriptCursorEvidence",
+      "unitIdentityEvidence",
+      "gmailComposeHistoryEvidence",
+      "explorerTextEvidence",
+      "tourRehearsalEvidence",
+      "buildPerformanceEvidence",
+      "logCursorEvidence",
+      "logHandoffEvidence",
+      "evalRecoveryEvidence",
+      "pdfLayoutEvidence",
+      "dictationEvidence",
+      "nativeSuiteEvidence",
+      "gitBridgeReviewEvidence",
+      "vcsDeliveryEvidence",
+      "webBriefEvidence",
+      "architectureBoundaryEvidence",
+      "releaseReviewHandoffEvidence",
+      "extensionReleaseEvidence",
+      "authorityReviewEvidence",
+      "problemDraftEvidence",
+      "agenticChangeEvidence",
+      "gadReviewEvidence",
+      "phoneSetupEvidence",
+      "verifiedMemoryEvidence",
+      "hostLogAuditEvidence",
+      "localComparisonEvidence",
+      "provenanceHistoryEvidence",
+      "runtimeProgramEvidence",
+      "incidentContinuationEvidence",
+      "googleSetupEvidence",
+      "driveCheckpointEvidence",
+      "driveSharingEvidence",
+      "driveCheckpointHandoffEvidence",
+      "gmailContinuationEvidence",
+      "newsEvidence",
+      "newsHandoffEvidence",
+      "spectroliteEvidence",
+      "spectroliteHandoffEvidence",
+      "grimoireEvidence",
+      "grimoireHandoffEvidence",
+      "adventureReviewEvidence",
+      "programmedAdventureEvidence",
+      "regencyReviewEvidence",
+      "examplesPortfolioEvidence",
+      "tendrilEvidence",
+      "browserImportEvidence",
+      "browserLibraryEvidence",
+      "collectionEvidence",
+      "channelRosterEvidence",
+      "missionPlanningEvidence",
+      "browserHandoffEvidence",
+      "terminalChecklistEvidence",
+      "onboardingEvidence",
+      "composedReleaseEvidence",
+      "approvalTransitionEvidence",
+      "loadLiveTeacherCases",
+      "workflowSourceGroups",
+      "effectsInGraphOrder",
+      "exportLiveTeacherWorkflow",
+      "requireEvidence"
+    ],
+    "openOutcomeReachable": [
+      {
+        "name": "openOutcomeGoalEvidence",
+        "start": 9506,
+        "end": 9568
+      },
+      {
+        "name": "requireEvidence",
+        "start": 2753,
+        "end": 2755
+      },
+      {
+        "name": "matchesValue",
+        "start": 3998,
+        "end": 4002
+      }
+    ],
+    "exclusiveLegacy": [
+      {
+        "name": "openTemplateGoalEvidence",
+        "start": 9577,
+        "end": 12228
+      },
+      {
+        "name": "verifyPreparedContentProject",
+        "start": 9182,
+        "end": 9290
+      },
+      {
+        "name": "verifyOwnedBoardMigration",
+        "start": 8949,
+        "end": 8979
+      },
+      {
+        "name": "verifyOpenAndroidAudit",
+        "start": 9078,
+        "end": 9129
+      },
+      {
+        "name": "verifyOpenAndroidDelivery",
+        "start": 9131,
+        "end": 9180
+      },
+      {
+        "name": "verifyOpenLiveLocalInventory",
+        "start": 9037,
+        "end": 9076
+      },
+      {
+        "name": "verifyOpenLiveTendril",
+        "start": 8981,
+        "end": 9035
+      },
+      {
+        "name": "verifyOpenCliRoute",
+        "start": 8911,
+        "end": 8947
+      },
+      {
+        "name": "verifyOpenOwnedOperations",
+        "start": 8820,
+        "end": 8909
+      },
+      {
+        "name": "verifyTestkitCloseout",
+        "start": 8721,
+        "end": 8773
+      },
+      {
+        "name": "verifyChatContinuity",
+        "start": 8775,
+        "end": 8818
+      },
+      {
+        "name": "verifyEditorialPacket",
+        "start": 8649,
+        "end": 8719
+      },
+      {
+        "name": "verifyBridgeDelivery",
+        "start": 8583,
+        "end": 8647
+      },
+      {
+        "name": "verifyWorkspaceClaimAudit",
+        "start": 8534,
+        "end": 8581
+      },
+      {
+        "name": "verifyPanelLaunchState",
+        "start": 8475,
+        "end": 8532
+      },
+      {
+        "name": "verifyOwnedRouteAuthority",
+        "start": 8409,
+        "end": 8473
+      },
+      {
+        "name": "verifyWorkspaceConfigEvidence",
+        "start": 8172,
+        "end": 8216
+      },
+      {
+        "name": "verifyAudienceResponse",
+        "start": 8218,
+        "end": 8251
+      },
+      {
+        "name": "verifyCoordinatedRevision",
+        "start": 8253,
+        "end": 8310
+      },
+      {
+        "name": "verifyRetainedMemory",
+        "start": 8312,
+        "end": 8361
+      },
+      {
+        "name": "verifyScopedIntentDiscovery",
+        "start": 8363,
+        "end": 8407
+      },
+      {
+        "name": "verifyDemoPortfolio",
+        "start": 8105,
+        "end": 8170
+      },
+      {
+        "name": "verifyRegencyBriefing",
+        "start": 8042,
+        "end": 8103
+      },
+      {
+        "name": "retainedImageCandidateEvidence",
+        "start": 7994,
+        "end": 8040
+      },
+      {
+        "name": "quietApiReadinessEvidence",
+        "start": 7935,
+        "end": 7992
+      },
+      {
+        "name": "retainedNewsEvidence",
+        "start": 7874,
+        "end": 7933
+      },
+      {
+        "name": "personalWelcomeEvidence",
+        "start": 7807,
+        "end": 7872
+      },
+      {
+        "name": "retainedDictationHandoffEvidence",
+        "start": 7675,
+        "end": 7737
+      },
+      {
+        "name": "retainedSpecialistHandoffEvidence",
+        "start": 7739,
+        "end": 7805
+      },
+      {
+        "name": "retainedProviderHandoffEvidence",
+        "start": 7584,
+        "end": 7673
+      },
+      {
+        "name": "verifyAssignedPublicBrief",
+        "start": 9473,
+        "end": 9504
+      },
+      {
+        "name": "verifiedProductReview",
+        "start": 9400,
+        "end": 9471
+      },
+      {
+        "name": "verifyUnitHandoffTrajectory",
+        "start": 9292,
+        "end": 9337
+      },
+      {
+        "name": "uniqueObservedReads",
+        "start": 9570,
+        "end": 9575
+      },
+      {
+        "name": "verifyOwnedAutomationActivation",
+        "start": 9339,
+        "end": 9398
+      },
+      {
+        "name": "openPdfEffectsValid",
+        "start": 7539,
+        "end": 7582
+      },
+      {
+        "name": "openOwnedResearchEvidence",
+        "start": 12230,
+        "end": 12293
+      },
+      {
+        "name": "openGoalEvidence",
+        "start": 12346,
+        "end": 12438
+      },
+      {
+        "name": "verifiedPublicSearch",
+        "start": 12295,
+        "end": 12344
+      }
+    ],
+    "legacyShared": [
+      "effectsInGraphOrder",
+      "requireEvidence",
+      "matchesValue",
+      "webBriefEvidence"
+    ]
+  },
+  "deletedLegacyTests": [
+    {
+      "file": "scripts/agent-capability-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/assigned-public-brief-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/audience-response-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/bridge-delivery-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/content-archive-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/coordinated-revision-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/delivery-wake-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/deployed-interface-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/development-audit-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/export-live-workflow-proof-values.test.mjs",
+      "deleted": true,
+      "reason": "only remaining tests invoke test-only dead research admission exports",
+      "exclusive": true,
+      "imports": [
+        "openOwnedResearchEvidence",
+        "openTemplateGoalEvidence"
+      ]
+    },
+    {
+      "file": "scripts/extension-dossier-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/installed-package-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/intent-discovery-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/log-follower-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/native-image-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/open-android-audit-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/open-chat-continuity-proof.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/open-cli-route-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/open-demo-portfolio-proof.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/open-editorial-packet-proof.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/open-live-tendril-board-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/open-owned-operations-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/open-regency-briefing-proof.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/open-testkit-closeout-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/owned-route-authority-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/panel-launch-state-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/panel-source-migration-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/personal-welcome-proof.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/product-owned-review-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/pty-continuity-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/public-search-provider-teacher.test.mjs",
+      "deleted": true,
+      "reason": "only remaining tests invoke test-only dead research admission exports",
+      "exclusive": true,
+      "imports": [
+        "openGoalEvidence"
+      ]
+    },
+    {
+      "file": "scripts/quiet-api-readiness-proof.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/recorded-question-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/retained-build-proof.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/retained-dictation-proof.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/retained-image-candidate-proof.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/retained-memory-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/retained-news-evidence-proof.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/retained-provider-proof.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/retained-specialist-proof.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/same-turn-eval-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/source-attribution-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/system-release-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/transcript-surface-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/unit-handoff-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/webhook-admission-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/workspace-claims-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/workspace-config-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/workspace-share-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    },
+    {
+      "file": "scripts/workspace-smoke-teacher.test.mjs",
+      "imports": [
+        "openTemplateGoalEvidence"
+      ],
+      "exclusive": true,
+      "deleted": true
+    }
+  ],
+  "activeValidatorShapeCandidates": {
+    "qualification": "Candidates for semantic review, not proof of a defect. Includes reference-only qualify branches and legitimate native journal joins. User-requested ordering/methods remain requirements.",
+    "rows": [
+      {
+        "kind": "research",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "workspace-edit",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "research-and-edit",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "outcome-workspace",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-outcome-workspace-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "android-audit",
+        "validator": {
+          "template": "system",
+          "path": "skills/mobile-runtime-audit-bindings/managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "android-delivery",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-android-delivery-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "delivery-wake",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-delivery-wake-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "live-local-inventory",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-live-local-inventory-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "phoneFirstRun",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-phone-first-run-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 407,
+            "text": "const rows = journal.filter("
+          },
+          {
+            "line": 476,
+            "text": "journal.filter(({ service }) => service === \"phoneSetupRead\").length === (paired === \"owned\" ? 2 : 0),"
+          }
+        ]
+      },
+      {
+        "kind": "skillMaintenance",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-skill-maintenance-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 457,
+            "text": "const rows = journal.filter("
+          },
+          {
+            "line": 515,
+            "text": "journal.filter((row) => row.service === \"authoringCompiler\").length ==="
+          }
+        ]
+      },
+      {
+        "kind": "webhook-admission",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-webhook-admission-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "development-audit",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-development-audit-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 168,
+            "text": "const expectedEvent = baseline && { at: baseline.updatedAt + 1, kind: \"state\", sequence: baselineJournal.length + 1,"
+          },
+          {
+            "line": 182,
+            "text": "isDeepStrictEqual(paged[run.id], Array.from({ length: Math.ceil(run.journal.length / 2) }, (_, index) => ({"
+          },
+          {
+            "line": 183,
+            "text": "after: index * 2, nextAfter: (index + 1) * 2 < run.journal.length ? (index + 1) * 2 : null,"
+          }
+        ]
+      },
+      {
+        "kind": "desktopReadiness",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-desktop-readiness-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 382,
+            "text": "journal.filter((row) => row.method === method);"
+          }
+        ]
+      },
+      {
+        "kind": "content-archive",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-content-archive-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "system-release",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-system-release-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 224,
+            "text": "reads.length !== assigned.required.length || !sameEvidenceMembers(cases, reads) ||"
+          }
+        ]
+      },
+      {
+        "kind": "testkit-closeout",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-testkit-closeout-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 49,
+            "text": "reads.length !== 2 || !isDeepStrictEqual(report.pair, pair) ||"
+          },
+          {
+            "line": 102,
+            "text": "readReceipts: reads.slice(), staged: stages.slice(), artifact, report: outcome, rejectedForeign, checks,"
+          }
+        ]
+      },
+      {
+        "kind": "panel-source-migration",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-panel-source-migration-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "workspace-share",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-workspace-share-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 221,
+            "text": "const handoffMethods = effects.filter(({ service }) => service === \"workspaceShareHandoff\").map(({ method }) => method);"
+          },
+          {
+            "line": 234,
+            "text": "sameEvidenceMembers(effects.filter(effect => effect.service === \"workspaceShareEvidence\").map(({ method }) => method), expectedReadMethods),"
+          }
+        ]
+      },
+      {
+        "kind": "notificationState",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-notification-state-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 190,
+            "text": "const initial = journal.slice(0,refreshIndex<0?0:refreshIndex).find(row=>row.method===\"read\"&&"
+          },
+          {
+            "line": 195,
+            "text": "const current = refreshIndex<0?undefined:journal.slice(refreshIndex+1).find(row=>row.method===\"read\"&&"
+          }
+        ]
+      },
+      {
+        "kind": "agent-capability",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-agent-capability-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 293,
+            "text": "effects.filter(effect => effect.service === \"agentCapabilityContinue\").length === (mayContinue ? 1 : 0),"
+          }
+        ]
+      },
+      {
+        "kind": "mobileContinuity",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/mobile-system-testing/open-continuity.ts"
+        },
+        "candidates": [
+          {
+            "line": 524,
+            "text": "const current = journal.filter((row) => row.method === method);"
+          }
+        ]
+      },
+      {
+        "kind": "installed-package",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-installed-package-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 194,
+            "text": "const declared = declaredRoutes.length === 1 ? declaredRoutes[0] : null;"
+          }
+        ]
+      },
+      {
+        "kind": "assetIntegrity",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-asset-integrity-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 710,
+            "text": "const attempts = journal.filter((entry) => entry.method === \"stage\");"
+          }
+        ]
+      },
+      {
+        "kind": "tendrilRoute",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-tendril-route-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 471,
+            "text": "const probes = journal.filter((row) => row.method === \"probe\");"
+          },
+          {
+            "line": 562,
+            "text": "journal.every((row) => row.method !== \"retain\"),"
+          }
+        ]
+      },
+      {
+        "kind": "extension-dossier",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-extension-dossier-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 315,
+            "text": "const artifactCount = effects.filter(effect => effect.service === \"extensionDossierWrite\").length;"
+          }
+        ]
+      },
+      {
+        "kind": "unit-handoff",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-unit-handoff-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "google-runbook",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-product-owned-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 140,
+            "text": "const writingCalls = calls.filter(call => call.method === \"apply\");"
+          },
+          {
+            "line": 149,
+            "text": "writingCalls.length === (world.coedit ? 2 : 1) && (!world.coedit ||"
+          },
+          {
+            "line": 152,
+            "text": ": !applied && report?.write === null && !writingCalls.length),"
+          },
+          {
+            "line": 275,
+            "text": ": !artifact && report?.artifact === null && report.presentation === null && calls.every(call => call.method !== \"stage\"),"
+          }
+        ]
+      },
+      {
+        "kind": "news-edition-review",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-product-owned-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 140,
+            "text": "const writingCalls = calls.filter(call => call.method === \"apply\");"
+          },
+          {
+            "line": 149,
+            "text": "writingCalls.length === (world.coedit ? 2 : 1) && (!world.coedit ||"
+          },
+          {
+            "line": 152,
+            "text": ": !applied && report?.write === null && !writingCalls.length),"
+          },
+          {
+            "line": 275,
+            "text": ": !artifact && report?.artifact === null && report.presentation === null && calls.every(call => call.method !== \"stage\"),"
+          }
+        ]
+      },
+      {
+        "kind": "assigned-public-brief",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-assigned-public-brief-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 50,
+            "text": "proof.reads.every(({ page }) => origins.has(new URL(page.url).origin)),"
+          }
+        ]
+      },
+      {
+        "kind": "deployed-interface",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-deployed-interface-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 253,
+            "text": "const methods = (service: string) => effects.filter(effect => effect.service === service).map(effect => effect.method);"
+          },
+          {
+            "line": 259,
+            "text": "let handoff = !shouldStage && stored === null && !added.length && !stageCalls.length;"
+          }
+        ]
+      },
+      {
+        "kind": "localPresentation",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-local-presentation-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 299,
+            "text": "const changes = journal.filter("
+          },
+          {
+            "line": 304,
+            "text": "const attempts = journal.filter((row) => row.method === \"preview\");"
+          }
+        ]
+      },
+      {
+        "kind": "adventure-journey",
+        "validator": {
+          "template": "examples",
+          "path": "skills/open-adventure-journey-runtime/index.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "local-width",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-local-width-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 247,
+            "text": "const stageCount = effects.filter(effect => effect.service === \"localWidthHandoff\" && effect.method === \"stage\").length;"
+          }
+        ]
+      },
+      {
+        "kind": "build-incident",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-build-incidents-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 297,
+            "text": "const stages = effects.filter(event => event.service === \"buildIncidentHandoff\" && event.method === \"stage\");"
+          }
+        ]
+      },
+      {
+        "kind": "problem-report",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-problem-report-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "compound-recovery",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-compound-recovery-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 230,
+            "text": "const stageCalls = effects.filter(row => row.service === \"scratchHandoffWrite\" && row.method === \"stage\");"
+          },
+          {
+            "line": 232,
+            "text": "const exactPreparedBody = !stageCalls.length ||"
+          },
+          {
+            "line": 252,
+            "text": "!accepted && !observedSources.size) && stageCalls.length === (target === \"staged\" || target === \"unverified\" ? 1 : 0) &&"
+          }
+        ]
+      },
+      {
+        "kind": "scheduled-recovery",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-scheduled-recovery-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 382,
+            "text": "const successors = effects.filter(entry => entry.service === \"scheduledMission\" && entry.method === \"change\")"
+          },
+          {
+            "line": 441,
+            "text": "effects.every(entry => entry.service !== \"scheduledHandoff\" || entry.method !== \"submit\") &&"
+          }
+        ]
+      },
+      {
+        "kind": "automationActivation",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-automation-activation-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 192,
+            "text": "plan.operations.length===0&&isDeepStrictEqual(plan.trigger,desired)&&profile!==\"invalid-plan\";"
+          },
+          {
+            "line": 263,
+            "text": "outcome.plan.conversation===\"fresh\" && outcome.plan.operations.length===0 && isDeepStrictEqual(outcome.plan.trigger,desired)"
+          }
+        ]
+      },
+      {
+        "kind": "workspace-assembly",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-workspace-assembly-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "templateMigration",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-template-migration-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 451,
+            "text": "observations.length > 0 &&"
+          },
+          {
+            "line": 452,
+            "text": "observations.every("
+          },
+          {
+            "line": 464,
+            "text": "world.expected.reads.every((id) => liveReads.has(id)) &&"
+          },
+          {
+            "line": 513,
+            "text": "observations.length >= 2 &&"
+          }
+        ]
+      },
+      {
+        "kind": "githubWork",
+        "validator": {
+          "template": "personal",
+          "path": "skills/github/open-github-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 440,
+            "text": "outcome?.decision.route === expected.route &&"
+          }
+        ]
+      },
+      {
+        "kind": "terminalAppRepair",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-terminal-app-repair-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 469,
+            "text": "const edits = journal.filter("
+          }
+        ]
+      },
+      {
+        "kind": "preparedContentProject",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-prepared-content-project-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 326,
+            "text": ": outcome.scope===null && journal.filter(entry=>entry.service===\"contentProjectScope\").length===0),"
+          }
+        ]
+      },
+      {
+        "kind": "clientDiagnostics",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-client-diagnostics-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "owned-task",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-owned-task-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 231,
+            "text": "const changes = effects.filter(effect => effect.service === \"ownedTaskBoard\" && effect.method === \"transition\").map(effect =>"
+          }
+        ]
+      },
+      {
+        "kind": "capability-plan",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-capability-plan-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 206,
+            "text": "return isDeepStrictEqual(sourceRevision, plan.sourceRevision) && plan.steps.every(step => {"
+          },
+          {
+            "line": 276,
+            "text": "plan.steps.every((step, index) => {"
+          },
+          {
+            "line": 354,
+            "text": "boundedText(plan.rationale, 600) && Array.isArray(plan.steps) && plan.steps.length <= 6 &&"
+          },
+          {
+            "line": 355,
+            "text": "plan.steps.every(step => step && typeof step.id === \"string\" && typeof step.sha256 === \"string\" &&"
+          }
+        ]
+      },
+      {
+        "kind": "googleSetup",
+        "validator": {
+          "template": "google-workspace",
+          "path": "skills/google-drive/open-google-setup-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 346,
+            "text": "report?.decision.route === expected.route &&"
+          }
+        ]
+      },
+      {
+        "kind": "unit-rollout",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-unit-rollout-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "vaultWork",
+        "validator": {
+          "template": "spectrolite",
+          "path": "skills/spectrolite-review-fixtures/knowledge-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 368,
+            "text": "const paths = expectation.steps.filter((step) => step.kind === \"write\");"
+          },
+          {
+            "line": 383,
+            "text": "? expectation.steps.length : expectation.steps.findIndex(step => step.kind === \"write\"))"
+          },
+          {
+            "line": 394,
+            "text": "expectation.steps.filter(step => step.kind === \"read\").every(step =>"
+          },
+          {
+            "line": 401,
+            "text": "Array.isArray(report?.reads) && report.reads.every(row =>"
+          }
+        ]
+      },
+      {
+        "kind": "local-reconciliation",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-reconciliation-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 215,
+            "text": "const traces = (service: string, method: string) => effects.filter(entry => entry.service === service && entry.method === method);"
+          },
+          {
+            "line": 273,
+            "text": ": Boolean(release && stagedReads.length && sourcePairs.every(pair =>"
+          }
+        ]
+      },
+      {
+        "kind": "browser",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-browser-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "suite",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-suite-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 81,
+            "text": "discoveredSuites: routes.length > 1 && routes.some(route => route.id === expectedRoute.id &&"
+          }
+        ]
+      },
+      {
+        "kind": "examplesAdoption",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-examples-adoption-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 450,
+            "text": "const rows = journal.filter("
+          },
+          {
+            "line": 521,
+            "text": "journal.every((row) => row.service !== write)),"
+          }
+        ]
+      },
+      {
+        "kind": "grimoireScene",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-grimoire-scene-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 462,
+            "text": "const evidence = journal.filter("
+          },
+          {
+            "line": 587,
+            "text": "journal.every((row) => row.service !== namespaces.write)),"
+          }
+        ]
+      },
+      {
+        "kind": "api-readiness",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-api-readiness-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 234,
+            "text": "(!(observations.at(-1)?.state===\"unverified\")&&observations.length!==destinations.length))return null;"
+          },
+          {
+            "line": 287,
+            "text": "trustedIntegrationSelection:planned.action===\"hold\"?!calls.length&&seenPlan===null&&!observations.length:"
+          },
+          {
+            "line": 288,
+            "text": "calls.length===1&&calls[0]?.profileId===profileId&&calls[0]?.message===planned.message&&!!seenPlan&&"
+          }
+        ]
+      },
+      {
+        "kind": "chat-continuity",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-chat-continuity-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "workspace-config",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-workspace-config-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "gadDurableQuestion",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-gad-durable-question-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "board-migration",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-board-migration-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "live-tendril-board",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-live-tendril-board-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "native-image",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-native-image-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "provenance-question",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-provenance-question-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 189,
+            "text": "preservedLocalQuestionScope: after.clean&&isDeepStrictEqual(after.workingHead,head)&&isDeepStrictEqual(await owner.mainState(),main)&&rereads.every(Boolean),"
+          }
+        ]
+      },
+      {
+        "kind": "transcript-surface",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-transcript-surface-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "source-attribution",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-source-attribution-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "workspace-smoke",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-workspace-smoke-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "same-turn-eval",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-same-turn-eval-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "cli-route",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-cli-route-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "intent-discovery",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-intent-discovery-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "retained-memory",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-retained-memory-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "coordinated-revision",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-coordinated-revision-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "audience-response",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-audience-response-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "route-authority",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-route-authority-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 159,
+            "text": "if(snapshots.length!==operations.length||busy||routeId!==nominated.id||world.route===\"external\"||"
+          },
+          {
+            "line": 178,
+            "text": "if(!world.note||handoff||busy||snapshots.length!==operations.length||report?.handoff!==null||!matchesChoice(report.choice)||"
+          },
+          {
+            "line": 208,
+            "text": "exactScopedRoutePreflight:snapshots.length===operations.length&&operations.every(operation=>snapshots.some(row=>row.operationId===operation.id))&&"
+          }
+        ]
+      },
+      {
+        "kind": "log-follower",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-log-follower-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "launch-state",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-launch-state-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "scaffoldReview",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-scaffold-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 446,
+            "text": "const rows = journal.filter("
+          },
+          {
+            "line": 531,
+            "text": "journal.every((row) => row.service !== write)),"
+          }
+        ]
+      },
+      {
+        "kind": "owned-operations",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-owned-operations-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 90,
+            "text": "if (!reads.length) throw new Error(\"Read the current owned docket before opening a worker\");"
+          }
+        ]
+      },
+      {
+        "kind": "pty-continuity",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-pty-continuity-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "systemCandidateTriage",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-system-candidate-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 611,
+            "text": "const rows = journal.filter("
+          },
+          {
+            "line": 688,
+            "text": "journal.every((row) => row.service !== write)),"
+          }
+        ]
+      },
+      {
+        "kind": "workspace-claims",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-workspace-claims-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "bridge-delivery",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-bridge-delivery-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "editorial-packet",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-editorial-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "demo-portfolio",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-portfolio-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "regency-briefing",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-regency-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "image-candidate",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-image-candidate-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "news-evidence",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-news-evidence-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 371,
+            "text": "(readAllowed||(!reads.length&&!sources.length)),"
+          }
+        ]
+      },
+      {
+        "kind": "news",
+        "validator": {
+          "template": "news",
+          "path": "packages/news-live-evidence/open-goal.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "spectrolite",
+        "validator": {
+          "template": "spectrolite",
+          "path": "skills/spectrolite-review-fixtures/open-goal.ts"
+        },
+        "candidates": [
+          {
+            "line": 69,
+            "text": "const hops: (typeof expected.route)[number][] = [];"
+          },
+          {
+            "line": 281,
+            "text": "originalSpectroliteEditor: observations[0]?.path === world.openPath && observations.every(({ binding }) =>"
+          },
+          {
+            "line": 283,
+            "text": "exactObservedNavigation: expected.route.every(edge => hops.some(hop => isDeepStrictEqual(hop, edge))) &&"
+          },
+          {
+            "line": 284,
+            "text": "expected.route.every(({ to }) => observations.some(({ path }) => path === to)),"
+          },
+          {
+            "line": 296,
+            "text": "(check !== \"navigation\" || [world.openPath, ...expected.route.map(({ to }) => to)].every(path => row.detail.includes(path))) &&"
+          },
+          {
+            "line": 332,
+            "text": "for (const { target } of expected.route) {"
+          }
+        ]
+      },
+      {
+        "kind": "google",
+        "validator": {
+          "template": "google-workspace",
+          "path": "skills/google-drive/open-goal-drive.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "personal",
+        "validator": {
+          "template": "personal",
+          "path": "skills/open-personal-goal/managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "operator",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-operator-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "recovery",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-recovery-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 248,
+            "text": "preservedRetainedChannels: channelReads.every(({ matched }) => matched),"
+          }
+        ]
+      },
+      {
+        "kind": "publication",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-publication-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 283,
+            "text": "localJournalUnchanged: journal.every(({ current: retained, seeded }) => isDeepStrictEqual(retained, seeded)) &&"
+          },
+          {
+            "line": 284,
+            "text": "journal.length === world.targets.filter(target => target.journal).length,"
+          }
+        ]
+      },
+      {
+        "kind": "pdf",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-pdf-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 254,
+            "text": "textReads.every(receipt => receipt.digest === source?.digest) &&"
+          },
+          {
+            "line": 262,
+            "text": "report?.text === null && textProbes.length === 0 && !textReads.length,"
+          },
+          {
+            "line": 263,
+            "text": "layoutEvidence: reads.length === layouts.length && Array.isArray(report?.layouts) &&"
+          }
+        ]
+      },
+      {
+        "kind": "gmail",
+        "validator": {
+          "template": "google-workspace",
+          "path": "skills/open-gmail-goal/managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "pdfVault",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-pdf-vault-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "calendar",
+        "validator": {
+          "template": "google-workspace",
+          "path": "skills/open-calendar-goal/managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "personal-artifacts",
+        "validator": {
+          "template": "personal",
+          "path": "skills/open-personal-artifacts-runtime/managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "personal-history",
+        "validator": {
+          "template": "personal",
+          "path": "skills/open-personal-history-runtime/managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 315,
+            "text": "finding.reads.every((path) =>"
+          }
+        ]
+      },
+      {
+        "kind": "terminal-handoff",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-terminal-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 114,
+            "text": "if (busy || closed || steps.length >= 12) throw new Error(\"Terminal operations must be bounded and serial\");"
+          },
+          {
+            "line": 316,
+            "text": "isDeepStrictEqual(outcome?.events, events) && steps.length === final.sequence.length &&"
+          },
+          {
+            "line": 317,
+            "text": "steps.every((step, index) => {"
+          },
+          {
+            "line": 337,
+            "text": "exactNativeExit: observations.length === final.sequence.filter(step => step === \"quit\" || step === \"interrupt\").length &&"
+          },
+          {
+            "line": 378,
+            "text": "for (const step of world!.expected.sequence) {"
+          }
+        ]
+      },
+      {
+        "kind": "owned-research",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-owned-research-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 151,
+            "text": "readOwnedCacheContinuation: reads.every(read => [...pages.values()].some(page =>"
+          }
+        ]
+      },
+      {
+        "kind": "owned-research-and-edit",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-owned-research-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 151,
+            "text": "readOwnedCacheContinuation: reads.every(read => [...pages.values()].some(page =>"
+          }
+        ]
+      },
+      {
+        "kind": "personal-welcome",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-personal-welcome-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "dictation-handoff",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-dictation-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "specialist-handoff",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-specialist-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 270,
+            "text": "!historyShape(history,verified.artifact,result) || artifactReads.length !== 1 ||"
+          },
+          {
+            "line": 316,
+            "text": "outcome.history?.result.persistedContract === expected.history && artifactReads.length === 1 &&"
+          },
+          {
+            "line": 319,
+            "text": "artifactReads.length === 1 && artifactReads[0]!.message === independent.resultMessage && artifactReads[0]!.value === null :"
+          },
+          {
+            "line": 320,
+            "text": "artifactReads.length === 0),"
+          }
+        ]
+      },
+      {
+        "kind": "provider-handoff",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-provider-handoff-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 250,
+            "text": "discoveredOwnedConversation: targetReads.length === 2 && plan?.channelId === card.channelId && plan.requestId === request.id,"
+          }
+        ]
+      },
+      {
+        "kind": "eval-handoff",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-eval-handoff-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 199,
+            "text": "const observedMatches = ownedCases.length === expected.observations.length && ownedCases.every((observation, index) => {"
+          },
+          {
+            "line": 218,
+            "text": "keptOriginalEvalReceipts: originals.every(Boolean) && originalOrder.length === expected.observations.filter(item => item.role !== \"retry\").length &&"
+          },
+          {
+            "line": 219,
+            "text": "journalReads.size === expected.observations.length && new Set(admitted.map(record => record.native.runDigest)).size === admitted.length,"
+          },
+          {
+            "line": 220,
+            "text": "boundIndependentBlobReadback: observedMatches && blobReads.size === expected.observations.filter(item => item.effect === \"confirmed\").length,"
+          },
+          {
+            "line": 227,
+            "text": "reconciledEvalHandoff: expected.active ? reported?.jobId === jobId && reported.trials.length === expected.observations.length &&"
+          }
+        ]
+      },
+      {
+        "kind": "program-run",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-program-run-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 305,
+            "text": "outcome?.status === \"unresolved\" && outcome.reason === \"program-unavailable\" && observations.length === 0,"
+          }
+        ]
+      },
+      {
+        "kind": "authoring",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-authoring-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 115,
+            "text": "selection.reads.length === (selection.baseline ? 2 : 1);"
+          },
+          {
+            "line": 160,
+            "text": "const expectedRole = selected?.reads.length ? \"baseline\" : \"candidate\";"
+          },
+          {
+            "line": 208,
+            "text": "const actual = selected?.reads.length ? reviewCompilerReadbacks(selected) : null;"
+          }
+        ]
+      },
+      {
+        "kind": "google-handoff",
+        "validator": {
+          "template": "google-workspace",
+          "path": "skills/open-google-handoff-goal/managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "personal-automation",
+        "validator": {
+          "template": "personal",
+          "path": "skills/open-personal-automation-runtime/managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "ownedPreview",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-owned-preview-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "system-diagnostics",
+        "validator": {
+          "template": "system",
+          "path": "skills/open-system-diagnostics-runtime/managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 39,
+            "text": "if (contextId !== runtimeContext || caseId !== world.id || seed.steps.length !== world.lines.length ||"
+          },
+          {
+            "line": 40,
+            "text": "!seed.steps.every((seq, index) => seq > (seed.steps[index - 1] ?? seed.start)))"
+          },
+          {
+            "line": 44,
+            "text": "first < 0 || last < first || last >= seed.steps.length))"
+          },
+          {
+            "line": 178,
+            "text": "isDeepStrictEqual(records.map(sequence), seed.steps.slice(checkpoint.first, checkpoint.last + 1));"
+          },
+          {
+            "line": 204,
+            "text": "selectedRequiredDiagnosticWindows: expectedReads.every(([key, status]) => observed.get(sourceFor(key).source.id)?.status === status),"
+          }
+        ]
+      },
+      {
+        "kind": "localMethodExchange",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-local-method-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 412,
+            "text": "const rows = journal.filter("
+          },
+          {
+            "line": 457,
+            "text": "journal.every((row) => row.service !== write)) &&"
+          }
+        ]
+      },
+      {
+        "kind": "local-delivery",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-local-delivery-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 287,
+            "text": "exactObservedDeliveryScope: expectedReads.every(([key, phrase]) =>"
+          }
+        ]
+      },
+      {
+        "kind": "visualRecovery",
+        "validator": {
+          "template": "system-testing",
+          "path": "skills/system-testing/open-goal-panel-recovery-managed.ts"
+        },
+        "candidates": []
+      },
+      {
+        "kind": "browserMigration",
+        "validator": {
+          "template": "personal",
+          "path": "skills/browser-import-runtime/open-migration-managed.ts"
+        },
+        "candidates": [
+          {
+            "line": 349,
+            "text": "journal.filter(({ method }) => method === \"discover\").length > 0,"
+          },
+          {
+            "line": 354,
+            "text": "journal.filter(({ method }) => method === \"bind\").length === 1 &&"
+          },
+          {
+            "line": 355,
+            "text": "journal.filter(({ method }) => method === \"readOutcome\").length > 0 &&"
+          },
+          {
+            "line": 360,
+            "text": "journal.filter(({ method }) => method === \"inspectHandoff\").length ==="
+          },
+          {
+            "line": 362,
+            "text": "journal.filter(({ method }) => method === \"stageHandoff\").length ==="
+          }
+        ]
+      }
+    ]
+  },
+  "catalogParity": {
+    "allRegisteredWorkflowsUnchanged": 3169,
+    "openUserGoalsUnchanged": 2327,
+    "compared": "entire loaded workflow records, normalizing only function identity and RegExp serialization"
+  }
+}
