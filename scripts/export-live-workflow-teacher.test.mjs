@@ -1013,6 +1013,10 @@ function bindApplicationResult(run, proof, workflow, result) {
   proof.actualResult = result;
   const root = run.calls.find(({ callId }) => callId === run.rootCallIds[0]).record;
   root.definition.name = entry.callable;
+  if(entry.program.endsWith('.ts')){
+    root.definition={...root.definition,id:`ts:${path.basename(entry.program)}#default`,source:path.basename(entry.program),site:'named'};
+    root.program_root=path.dirname(entry.program);root.executor={kind:'crisp'};root.model_turns=[];
+  }
   root.inputs = Object.fromEntries(Object.entries(entry.arguments).map(([name, value]) => [name, reference(value)]));
   root.output = reference(result);
 }
@@ -1080,7 +1084,7 @@ test("semantic application export accepts a direct root and alternate internal c
   diagnostics.openGoalVerification = { passed: true, caseId: workflow.assignment.id, contextId: "ctx", goal: workflow.assignment.goal,
     checks: { groundedNativeState: true, authorizedScopePreserved: true } };
   bindApplicationResult(run, diagnostics.openGoalVerification, workflow, result);
-  for (const names of [[], ["resolveReadiness"], ["inspectCurrentState", "resolveReadiness", "inspectCurrentState"]]) {
+  for (const names of [["resolveReadiness"], ["inspectCurrentState", "resolveReadiness", "inspectCurrentState"]]) {
     run.calls = [root, ...names.map((name, index) => {
       const call = structuredClone(originalChild);
       call.callId = call.summary.call_id = `alternative-${index}`;
@@ -1094,6 +1098,9 @@ test("semantic application export accepts a direct root and alternate internal c
     const verification = JSON.parse(await readFile(path.join(out, "verification.json"), "utf8"));
     assert.equal(verification.calls.length, names.length + 1);
   }
+  run.calls=[root];await save();
+  await assert.rejects(exportLiveTeacherWorkflow({...options,cases,out:path.join(path.dirname(options.out),'crisp-only')}),/at least one captured model generation/);
+  run.calls=[root,originalChild];
   diagnostics.openGoalVerification.checks.authorizedScopePreserved = false;
   await save();
   await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /independently verified outcomes/);

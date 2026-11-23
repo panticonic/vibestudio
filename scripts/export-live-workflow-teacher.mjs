@@ -11254,10 +11254,11 @@ export async function exportLiveTeacherWorkflow({
   const expectedRoot = shared ? "runWorkflow" : workflow.root;
   requireEvidence(
     root?.record.definition?.name === expectedRoot &&
-      root.record.parent_call_id === null &&
-      captured.some(call => generationTurns(call).length > 0),
+      root.record.parent_call_id === null,
     `Expected the actual authored ${expectedRoot} invocation`
   );
+  requireEvidence(captured.some(call => generationTurns(call).length > 0),
+    "Teacher data requires at least one captured model generation; the authored root may have completed entirely in crisp code");
   const code = source.repositories?.natlang;
   const sourceRevisions = Object.values(source.repositories ?? {}).map(
     (revision) => revision.git_commit
