@@ -76,7 +76,7 @@ export function createWorkspaceAutomationProvisioner(deps: {
             await deps.dispatch(ref, "initializeAutomation", {
               id,
               contextId: entity.contextId,
-              definition: deps.quiesceDefaults ? { ...definition, state: "paused" } : definition,
+              definition,
               ...(deps.quiesceDefaults ? { quiesce: true } : {}),
               appVersion: deps.appVersion,
             });

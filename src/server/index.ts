@@ -2300,7 +2300,7 @@ async function main() {
               pendingStartupMetaConfigReload = true;
               return;
             }
-            void reconcileDeclaredWorkspaceUnits(nextConfig, "meta-change").then(
+            await reconcileDeclaredWorkspaceUnits(nextConfig, "meta-change").then(
               reconcileDefaultAutomations
             );
           } catch (err) {
@@ -7984,7 +7984,7 @@ async function main() {
     .get<{ server: import("./rpcServer.js").RpcServer }>("rpcServer")
     .server.setOnClientAuthenticate((_id, kind) => {
       if (kind === "shell" && initialWorkspaceUnitReconcileComplete)
-        void reconcileDefaultAutomations();
+        return reconcileDefaultAutomations();
     });
   // Template panel intent is a workspace fact, committed once together
   // with its reservations and slots. Native clients only observe that tree.
@@ -8333,7 +8333,8 @@ async function main() {
       await prepareWorkspaceCreationReview();
       unitInstallReviewCoordinator.finishStartupReviewStaging();
       if (systemTestInstance) await reconcileDefaultAutomations();
-      else void reconcileDefaultAutomations();
+      else void reconcileDefaultAutomations().catch(error =>
+        console.warn("[Automations] Background default reconciliation failed:", error));
       void unitInstallReviewCoordinator
         .publishPending("startup")
         .catch((err: unknown) => console.warn("[Units] Failed to publish startup approvals:", err));

@@ -665,7 +665,7 @@ export class RpcServer {
       /** Called when an authenticated client disconnects (e.g., for fs handle cleanup) */
       onClientDisconnect?: (callerId: string, callerKind: CallerKind) => void | Promise<void>;
       /** Called when a client successfully authenticates */
-      onClientAuthenticate?: (callerId: string, callerKind: CallerKind) => void;
+      onClientAuthenticate?: (callerId: string, callerKind: CallerKind) => void | Promise<void>;
       /**
        * Optional: the EgressProxy. When provided, `POST /rpc/stream`
        * can serve the `credentials.proxyFetch` fast path with a
@@ -1735,7 +1735,7 @@ export class RpcServer {
   }
 
   /** Register a callback for client authentication events. */
-  setOnClientAuthenticate(handler: (callerId: string, callerKind: CallerKind) => void): void {
+  setOnClientAuthenticate(handler: (callerId: string, callerKind: CallerKind) => void | Promise<void>): void {
     this.deps.onClientAuthenticate = handler;
   }
 
@@ -2366,7 +2366,7 @@ export class RpcServer {
     // Notify auth callback (e.g., for HarnessManager bridge resolution) before
     // acknowledging success. A host integration failure must roll admission
     // back instead of telling the client it owns a usable session.
-    this.deps.onClientAuthenticate?.(callerId, callerKind);
+    await this.deps.onClientAuthenticate?.(callerId, callerKind);
 
     // Send auth result
     const authResult: WsServerMessage = {

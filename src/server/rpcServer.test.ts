@@ -5994,12 +5994,13 @@ describe("RpcServer caller identity", () => {
     expect(JSON.stringify(authResults)).not.toContain("internal pairing lookup detail");
   });
 
-  it("rolls back every admission registry when an asynchronous auth task fails", async () => {
+  it.each([false, true])("rolls back every admission registry when an auth task fails (async: %s)", async (asynchronous) => {
     const { server, tokenManager } = createServer({
       userSubjectSource: {
         resolve: () => ({ userId: "usr_root", handle: "root" }),
       },
       onClientAuthenticate: () => {
+        if (asynchronous) return Promise.reject(new Error("host integration failed"));
         throw new Error("host integration failed");
       },
       sessionTtlMs: { shell: 1 },

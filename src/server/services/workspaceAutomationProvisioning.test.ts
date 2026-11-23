@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createWorkspaceAutomationProvisioner } from "./workspaceAutomationProvisioning";
+import { WorkspaceAutomationSchema } from "@vibestudio/workspace-contracts/automations";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import type { EntityRecord, RuntimeEntityHandle } from "@vibestudio/shared/runtime/entitySpec";
 import type { DORef } from "@vibestudio/shared/doDispatcher";
@@ -162,9 +163,12 @@ describe("workspace automation provisioning", () => {
 
 it("provisions only declared defaults paused in disposable workspaces", async () => {
   const f = fixture();
+  f.dispatch.mockImplementation(async (_ref, _method, input: unknown) => {
+    WorkspaceAutomationSchema.parse((input as { definition: unknown }).definition);
+  });
   const provisioner = createWorkspaceAutomationProvisioner({ ...f.deps, quiesceDefaults: true });
   await provisioner.reconcile();
-  expect(f.dispatch).toHaveBeenCalledExactlyOnceWith(expect.anything(), "initializeAutomation", expect.objectContaining({ quiesce: true, definition: { ...definition, state: "paused" } }));
+  expect(f.dispatch).toHaveBeenCalledExactlyOnceWith(expect.anything(), "initializeAutomation", expect.objectContaining({ quiesce: true, definition }));
   expect(f.config.defaultAutomations!.updates).toEqual(definition);
 });
 it("does not hide failed default quiescence as successful setup", async () => {
