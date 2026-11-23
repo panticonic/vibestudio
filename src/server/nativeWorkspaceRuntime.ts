@@ -1,5 +1,5 @@
 import { constants as fileConstants } from "node:fs";
-import { NativeCompilerProducts, compilerProductDriver } from "./nativeCompilerProducts.js";
+import { NativeCompilerProducts, compilerProductDriver, compilerProductExecArgv } from "./nativeCompilerProducts.js";
 import { getNativeExecutionInstallation } from "@vibestudio/shared/runtimePaths";
 import { prepareNativeRuntime } from "@vibestudio/shared/nativeRuntimeResources";
 import { materializeImmutableTree } from "./buildV2/immutableTreeMaterializer.js";
@@ -369,7 +369,7 @@ export async function startNativeWorkspaceRuntime(input: {
               bundle: request.bundle,
               dependencies: "",
               script: compilerProductDriver(request.input, resultPath, request.format),
-            });
+            }, { execArgv: compilerProductExecArgv() });
             const file = await open(
               resultPath,
               fileConstants.O_RDONLY | (fileConstants.O_NOFOLLOW ?? 0)
@@ -398,7 +398,7 @@ export async function startNativeWorkspaceRuntime(input: {
         });
         return compilerProducts.compile(input);
       },
-      async runJob(input: NativeWorkspaceJob): Promise<void> {
+      async runJob(input: NativeWorkspaceJob, options?: ProcessAdapterOptions): Promise<void> {
         const directory = path.join(runtimeRoot, "jobs", randomUUID());
         await mkdir(directory, { recursive: true });
         let failure: unknown;
@@ -415,7 +415,7 @@ export async function startNativeWorkspaceRuntime(input: {
           const child = sandbox.fork(path.join(directory, "driver.mjs"), {
             VIBESTUDIO_EXTENSION_SMOKE: "1",
             VIBESTUDIO_EXTENSION_SMOKE_BUNDLE: path.join(directory, "bundle.js"),
-          });
+          }, options);
           await waitForNativeJob(child);
         } catch (error) {
           failure = error;

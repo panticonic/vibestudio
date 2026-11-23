@@ -50,6 +50,16 @@ it.skipIf(!process.env["VIBESTUDIO_TEST_NATLANG_COMPILER_ENTRY"])(
       expect(a.build.ok).toBe(true);
       expect(Object.keys(a.build.declarations).length).toBeGreaterThan(0);
       expect(run).toHaveBeenCalledTimes(1);
+      expect(run.mock.calls[0]?.[1]).toEqual({execArgv:["--max-old-space-size=3072"]});
+      // Observe inside the actual native workspace child, not the test parent's flags.
+      const heap = await runtime.compileProduct({
+        bundle: 'module.exports.compileVirtualProjectProduct=()=>({heap:require("node:v8").getHeapStatistics().heap_size_limit,argv:process.execArgv});',
+        format: "cjs",
+        input: {},
+      }) as {heap:number;argv:string[]};
+      expect(heap.argv).toContain("--max-old-space-size=3072");
+      expect(heap.heap).toBeGreaterThanOrEqual(3072*1024*1024);
+      expect(heap.heap).toBeLessThan(3200*1024*1024);
       a.build.diagnostics.push("poison");
       expect(b.build.diagnostics).toEqual([]);
       await expect(

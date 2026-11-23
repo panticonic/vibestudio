@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { NativeCompilerProducts, compilerProductDriver } from "./nativeCompilerProducts.js";
+import { NativeCompilerProducts, compilerProductDriver, compilerProductExecArgv } from "./nativeCompilerProducts.js";
 afterEach(() => {
   delete process.env["VIBESTUDIO_CACHE_COMPILER_PRODUCTS"];
 });
@@ -9,6 +9,13 @@ const request = {
   input: { project: { files: { "a.ts": "source" } }, options: { target: "node" } },
 };
 describe("isolated pure compiler ownership", () => {
+  it("gives only compiler launches explicit bounded heap capacity with an opt-out", () => {
+    expect(compilerProductExecArgv({})).toEqual(["--max-old-space-size=3072"]);
+    expect(compilerProductExecArgv({VIBESTUDIO_COMPILER_HEAP_MIB:"2048"})).toEqual(["--max-old-space-size=2048"]);
+    expect(compilerProductExecArgv({VIBESTUDIO_COMPILER_HEAP_MIB:"0"})).toEqual([]);
+    for (const value of ["-1","1","8193","3.5","3072 --inspect",""])
+      expect(() => compilerProductExecArgv({VIBESTUDIO_COMPILER_HEAP_MIB:value})).toThrow("COMPILER_HEAP_MIB");
+  });
   it("coalesces equal concurrent snapshots and returns separately owned data", async () => {
     const run = vi.fn(async (input) => {
       await Promise.resolve();

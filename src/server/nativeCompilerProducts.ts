@@ -1,3 +1,16 @@
+/** Compiler children do not inherit the host V8 flags. Keep their frontend heap
+ * explicit and bounded; the ledger/cgroup still bounds the entire workspace. */
+export function compilerProductExecArgv(environment: NodeJS.ProcessEnv = process.env): string[] {
+  const value = environment["VIBESTUDIO_COMPILER_HEAP_MIB"] ?? "3072";
+  if (!/^(0|[1-9][0-9]*)$/.test(value))
+    throw new Error("VIBESTUDIO_COMPILER_HEAP_MIB must be 0 or an integer from64 to8192");
+  const mib = Number(value);
+  if (mib === 0) return [];
+  if (mib < 64 || mib > 8192)
+    throw new Error("VIBESTUDIO_COMPILER_HEAP_MIB must be 0 or an integer from64 to8192");
+  return [`--max-old-space-size=${mib}`];
+}
+
 import { createHash } from "node:crypto";
 
 /** One workspace owner's cache. Only serialized frontend data crosses callers. */
