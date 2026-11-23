@@ -4925,6 +4925,18 @@ export class RpcServer {
     }
   }
 
+  private async relayEndpoint() {
+    await this.ensureRelayTransportReady();
+    if (!this.workerdUrl || !this.workerdGatewayToken) {
+      throw new Error("Cannot relay to DO: workerdUrl or workerdGatewayToken not configured");
+    }
+    return {
+      workerdUrl: this.workerdUrl,
+      workerdGatewayToken: this.workerdGatewayToken,
+      workerdDispatchSecret: this.workerdDispatchSecret,
+    };
+  }
+
   private async ensureDirectDoReady(ref: DORef): Promise<void> {
     await this.deps.ensureUserlandDoReady(ref);
   }
@@ -4961,9 +4973,6 @@ export class RpcServer {
           "Cannot relay to DO: tokenManager, workerdUrl, or workerdGatewayToken not configured"
         );
       }
-      const workerdUrl = this.workerdUrl;
-      const workerdGatewayToken = this.workerdGatewayToken;
-      const workerdDispatchSecret = this.workerdDispatchSecret;
       const transportCaller = this.withLiveRuntimeRelationships(
         relayCallerScope?.authenticatedCaller ??
           (await this.verifiedCallerFor(callerId, callerKind))
@@ -4988,6 +4997,9 @@ export class RpcServer {
         signal: meta?.signal,
       });
       const dispatchedArgs = this.resolveOpaqueHandleArgument(args, authorization);
+      // Authority acquisition can outlive a process generation. Bind transport
+      // after it settles, immediately before this still-unsent invocation.
+      const {workerdUrl,workerdGatewayToken,workerdDispatchSecret} = await this.relayEndpoint();
       const inheritedAuthorizingCaller = relayCallerScope?.authorizingCaller
         ? attributedCaller.subject
           ? {
@@ -5141,6 +5153,7 @@ export class RpcServer {
       throw createRelayError("Handle-producing RPC methods cannot stream responses", "EACCES");
     }
     const dispatchedArgs = this.resolveOpaqueHandleArgument(request.args, authorization);
+    const endpoint = await this.relayEndpoint();
     const releaseAuthorityParent = this.beginAuthorityParent(
       targetId,
       authorization,
@@ -5153,11 +5166,11 @@ export class RpcServer {
         request.method,
         dispatchedArgs,
         {
-          workerdUrl: this.workerdUrl,
-          workerdGatewayToken: this.workerdGatewayToken,
+          workerdUrl: endpoint.workerdUrl,
+          workerdGatewayToken: endpoint.workerdGatewayToken,
           resolveExecutableAdmission: this.resolveExecutableAdmission,
-          ...(this.workerdDispatchSecret
-            ? { workerdDispatchSecret: this.workerdDispatchSecret }
+          ...(endpoint.workerdDispatchSecret
+            ? { workerdDispatchSecret: endpoint.workerdDispatchSecret }
             : {}),
           callerId: caller.runtime.id,
           callerKind: caller.runtime.kind,
@@ -5342,14 +5355,15 @@ export class RpcServer {
         method: `__event:${event}`,
         args: [payload],
       });
+      const endpoint = await this.relayEndpoint();
       // `fromId`/`fromKind` become the event envelope's caller — the DO's
       // `handleEvent` surfaces it to listeners as `event.caller`.
       await postEventToDurableObject(ref, event, payload, {
-        workerdUrl: this.workerdUrl,
-        workerdGatewayToken: this.workerdGatewayToken,
+        workerdUrl: endpoint.workerdUrl,
+        workerdGatewayToken: endpoint.workerdGatewayToken,
         resolveExecutableAdmission: this.resolveExecutableAdmission,
-        ...(this.workerdDispatchSecret
-          ? { workerdDispatchSecret: this.workerdDispatchSecret }
+        ...(endpoint.workerdDispatchSecret
+          ? { workerdDispatchSecret: endpoint.workerdDispatchSecret }
           : {}),
         callerId: fromId,
         callerKind: fromKind,

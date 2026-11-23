@@ -2123,6 +2123,26 @@ describe("RpcServer relay behavior", () => {
     expect(fetchMock.mock.calls[0]?.[0]).toMatch(/^http:\/\/127\.0\.0\.1:2222\//);
   });
 
+  it("rebinds an unsent DO relay after authority acquisition crosses a generation", async () => {
+    let server!: RpcServer;
+    const ensureWorkerdTransportReady = vi.fn(async () => {server.setWorkerdUrl("http://127.0.0.1:2222");});
+    const setup=createServer({ensureWorkerdTransportReady});server=setup.server;
+    const targetId="do:workers/example:Store:key";
+    setup.entityCache._onActivate(makeRecord(targetId,"do"));
+    server.setWorkerdUrl("http://127.0.0.1:1111");server.setWorkerdGatewayToken("gateway-token");
+    const internal=testServer(server);
+    const authorize=internal.directDOAuthorization.bind(internal);
+    vi.spyOn(internal,"directDOAuthorization").mockImplementation(async input => {
+      const result=await authorize(input);server.setWorkerdUrl(null);return result;
+    });
+    const original=new TypeError("original dispatch failure");
+    const fetchMock=vi.fn().mockRejectedValue(original);vi.stubGlobal("fetch",fetchMock);
+    await expect(internal.relayToDO("panel:nav-a","panel",targetId,"ping",[])).rejects.toMatchObject({cause:original});
+    expect(ensureWorkerdTransportReady).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0]?.[0]).toMatch(/^http:\/\/127\.0\.0\.1:2222\//);
+  });
+
   it("propagates generation-owner failure without dispatching or retrying", async () => {
     const original = new Error("workerd recovery failed at startup");
     const {server,entityCache} = createServer({ensureWorkerdTransportReady: async () => {throw original;}});
