@@ -11,8 +11,10 @@
  * (workers egress through the proxy; panels are not server-local), so this
  * bridge is the only programmatic path. Clients authenticate before upgrade
  * with the same opaque grant transport as the CDP bridge. The client↔upstream
- * protocol is plain V8 inspector JSON, relayed verbatim.
+ * protocol is V8 inspector JSON; workerd command-shaped empty acknowledgements
+ * are normalized against their exact outstanding commands at this boundary.
  */
+import { WorkerdInspectorProtocol } from "./workerdInspectorProtocol.js";
 import { WebSocket, type WebSocketServer } from "ws";
 import type { IncomingMessage } from "http";
 import type { Duplex } from "stream";
@@ -169,6 +171,7 @@ export class WorkerdInspectorBridge {
     const upstream = this.options.createUpstreamSocket?.(upstreamUrl) ?? new WebSocket(upstreamUrl);
     const session: ProxiedSession = { client, upstream };
     this.sessions.add(session);
+    const protocol = new WorkerdInspectorProtocol();
     const pendingCommands: string[] = [];
     let pendingCommandBytes = 0;
     let tornDown = false;
@@ -177,6 +180,7 @@ export class WorkerdInspectorBridge {
       if (tornDown) return;
       tornDown = true;
       this.sessions.delete(session);
+      protocol.clear();
       if (client.readyState === WebSocket.OPEN) client.close();
       if (upstream.readyState === WebSocket.OPEN) upstream.close();
       else if (upstream.readyState === WebSocket.CONNECTING) upstream.terminate();
@@ -187,6 +191,10 @@ export class WorkerdInspectorBridge {
     // send commands as soon as their socket opens.
     client.on("message", (data) => {
       const message = typeof data === "string" ? data : data.toString();
+      if(!protocol.observeCommand(message)){
+        client.close(1009,"Inspector command tracking exceeded readiness limit");
+        teardown();return;
+      }
       if (upstream.readyState === WebSocket.OPEN) {
         upstream.send(message);
         return;
@@ -207,7 +215,7 @@ export class WorkerdInspectorBridge {
     });
     upstream.on("message", (data) => {
       if (client.readyState === WebSocket.OPEN) {
-        client.send(typeof data === "string" ? data : data.toString());
+        client.send(protocol.receive(typeof data === "string" ? data : data.toString()));
       }
     });
     upstream.on("open", () => {
