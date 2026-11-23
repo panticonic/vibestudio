@@ -224,7 +224,7 @@ const validators = new Map(
 );
 const runtimePin = path.join(checkouts.base, "packages/natlang/vendor/natlang-pin.json");
 const readJson = (file) => JSON.parse(readFileSync(file, "utf8"));
-const git = (...args) => execFileSync("git", args, { cwd: host, env: liveTeacherEnvironment(), encoding: "utf8" }).trim();
+const git = (...args) => execFileSync("git", args, { cwd: host, encoding: "utf8" }).trim();
 
 function pinSources() {
   const entries = Object.entries(checkouts).map(([name, dir]) => {
