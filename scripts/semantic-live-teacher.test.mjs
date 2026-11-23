@@ -45,3 +45,24 @@ test("application admission rejects substituted inputs, results and failed indep
     assert.throws(() => openOutcomeGoalEvidence(fixture.execution, fixture.exercise, "hours", fixture.workflow));
   }
 });
+
+
+test("application source claims require an independent review bound to the returned answer", () => {
+  const goal = "Check the approved opening hours.";
+  const url = "https://example.org/hours";
+  const text = "The approved opening time is 09:30 on weekdays.";
+  const result = { status: "answered", question: goal, statements: [{ text: "Weekdays open at09:30.", cites: [{url,quote:text}] }] };
+  const entry = {program:"skills/research/checkHours.nl",callable:"checkHours",arguments:{goal}};
+  const input = {kind:"public-claims",actual:{goal,answer:JSON.stringify(result),sourceScope:null,citations:[{url,quote:text}],sources:[{url,title:"Hours",text,sha256:createHash("sha256").update(text).digest("hex")}]}};
+  const proof = {passed:true,contextId:"owned",caseId:"hours",goal,entry,actualResult:result,checks:{exactReadback:true},semanticReviewRequired:true,semanticReviewInput:input,
+    fetched:[{url,digest:input.actual.sources[0].sha256,page:{url,title:"Hours"}}]};
+  const execution={provenance:{contextId:"owned"},diagnostics:{openGoalVerification:proof}};
+  const exercise={entry,rootCallIds:["root"],calls:[{callId:"root",record:{definition:{name:entry.callable},inputs:{goal:reference(goal)},output:reference(result)}}]};
+  const workflow={entry,requiresReview:true,assignment:{id:"hours",kind:"research",goal}};
+  assert.equal(openOutcomeGoalEvidence(execution,exercise,"hours",workflow).reviewInput,input);
+  workflow.requiresReview=false;
+  assert.throws(()=>openOutcomeGoalEvidence(execution,exercise,"hours",workflow),/declared before teacher execution/);
+  workflow.requiresReview=true;
+  input.actual.answer=JSON.stringify({...result,status:"insufficient"});
+  assert.throws(()=>openOutcomeGoalEvidence(execution,exercise,"hours",workflow),/actual application result/);
+});
