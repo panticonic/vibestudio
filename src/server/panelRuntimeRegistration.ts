@@ -126,6 +126,7 @@ export interface CommonDeps {
    * Callers retry default lease assignment after a true result.
    */
   ensureDefaultHeadlessHost?: () => Promise<boolean>;
+  ensureOwnedHeadlessHost?: () => Promise<string | null>;
   /** Reload one exact current panel entity through the canonical unit driver. */
   reloadPanel?: (ctx: ServiceContext, panelId: string, runtimeEntityId: string) => Promise<void>;
   getGatewayPort: () => number | null;
@@ -585,11 +586,25 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
           return client.hostConnectionId ?? client.clientSessionId;
         };
         chromiumFetchDefinition = createChromiumFetchService({
-          open: async (url, session) => {
-            const hostConnectionId = await headlessHost();
+          resolveLocalHost: async () => {
+            const host = await deps.ensureOwnedHeadlessHost?.();
+            if (!host || !bridge.isProviderConnected(host))
+              throw new Error("Host-owned local Chromium provider is unavailable");
+            return host;
+          },
+          open: async (url, session, localGrant) => {
+            const hostConnectionId = localGrant?.hostConnectionId ?? (await headlessHost());
+            if (!bridge.isProviderConnected(hostConnectionId))
+              throw new Error("Prepared Chromium provider is no longer connected");
             const response = chromiumFetchMethods.openPublic.returns.parse(
               await bridge.sendProviderCommand(hostConnectionId, "chromiumFetch.open", [
-                { url, session },
+                {
+                  url,
+                  session,
+                  networkAuthority: localGrant
+                    ? { kind: "internal-loopback", origin: localGrant.origin }
+                    : { kind: "public" },
+                },
               ])
             );
             return { hostConnectionId, response };

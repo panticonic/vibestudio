@@ -64,6 +64,7 @@ type AttemptProbe = (slotId: PanelSlotId) => Promise<{
 } | null>;
 
 type DefaultCdpHostOptions = {
+  requiredClientSessionId?: string;
   isHostAvailable?: (hostConnectionId: string) => boolean;
   replaceUnavailableLease?: boolean;
   requiredPlatform?: PanelRuntimeLease["platform"];
@@ -823,6 +824,7 @@ export class PanelRuntimeCoordinator {
       return rank(a) - rank(b) || defaultRank(a) - defaultRank(b);
     });
     for (const client of candidates) {
+      if (options.requiredClientSessionId && client.clientSessionId !== options.requiredClientSessionId) continue;
       const hostConnectionId = client.hostConnectionId ?? client.clientSessionId;
       if (options.requiredPlatform && client.platform !== options.requiredPlatform) continue;
       if (hostConnectionId === options.excludedHostConnectionId) continue;

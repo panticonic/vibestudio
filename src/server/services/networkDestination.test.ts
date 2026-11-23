@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { LookupAddress } from "node:dns";
-import { isPublicNetworkAddress, resolveNetworkDestination } from "./networkDestination.js";
+import { isPublicNetworkAddress, resolveNetworkDestination } from "@vibestudio/shared/networkDestination";
 
 const publicAddress = { address: "93.184.216.34", family: 4 as const };
 

@@ -16,7 +16,7 @@ export interface InjectedAuth {
 }
 
 export interface HeadlessHostServerConnection {
-  rpc: Pick<RpcClient, "call" | "stream">;
+  rpc: Pick<RpcClient, "call" | "stream" | "streamReadable">;
   /** Current auth token, when the transport has one. */
   getToken(): string;
   onResubscribe(handler: () => void | Promise<void>): void;

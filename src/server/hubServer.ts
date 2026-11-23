@@ -127,7 +127,7 @@ import { WORKSPACE_RPC_INTERNAL_ROUTE } from "./workspaceRpcTransport.js";
 import { assertWorkspaceRpcAccess } from "./workspaceRpcAccess.js";
 import { shellCallerId } from "./hostCore/auth/model.js";
 import { authError, authErrorStatus } from "./hostCore/auth/errors.js";
-import { bridgeDuplexSockets } from "./socketBridge.js";
+import { bridgeDuplexSockets } from "@vibestudio/shared/socketBridge";
 import { workspaceIrohReachPaths } from "./hostCore/irohReachPaths.js";
 import { writeFileAtomicSync } from "../atomicFile.js";
 import { getInternalDOPrograms } from "./internalDOs/internalDoLoader.js";

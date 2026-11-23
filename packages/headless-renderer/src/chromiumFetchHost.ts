@@ -1,3 +1,5 @@
+import { ChromiumNetworkProxy } from "@vibestudio/shared/chromiumNetworkProxy";
+import type { NetworkEndpointAuthority } from "@vibestudio/shared/networkDestination";
 import { randomUUID } from "node:crypto";
 import { CdpConnection, type CdpEventEnvelope } from "./browser/cdpConnection.js";
 import { BrowserCookieProjector } from "./browserCookieProjector.js";
@@ -22,7 +24,6 @@ interface StoredResponse extends ChromiumFetchOpenResult {
 
 /** Lightweight, panel-free fetches through the host's real Chromium stack. */
 export class ChromiumFetchHost {
-  private browserContextId: string | null = null;
   private readonly responses = new Map<string, StoredResponse>();
 
   constructor(
@@ -30,22 +31,39 @@ export class ChromiumFetchHost {
     private readonly cookies: BrowserCookieProjector
   ) {}
 
-  async open(url: string, session: "public" | "browser"): Promise<ChromiumFetchOpenResult> {
+  async open(
+    url: string,
+    session: "public" | "browser",
+    authority: NetworkEndpointAuthority = { kind: "public" }
+  ): Promise<ChromiumFetchOpenResult> {
     this.prune();
-    const contextId =
-      session === "browser" ? await this.browserContext() : await this.createBrowserContext();
-    if (session === "browser") await this.cookies.prepare(contextId, url);
-    const target = (await this.cdp.send("Target.createTarget", {
-      url: "about:blank",
-      browserContextId: contextId,
-      background: true,
-    })) as { targetId: string };
-    const attached = (await this.cdp.send("Target.attachToTarget", {
-      targetId: target.targetId,
-      flatten: true,
-    })) as { sessionId: string };
-    const sessionId = attached.sessionId;
+    const targetUrl = new URL(url);
+    if (
+      !["http:", "https:"].includes(targetUrl.protocol) ||
+      targetUrl.username ||
+      targetUrl.password
+    )
+      throw new Error("Chromium fetch requires an HTTP(S) URL without userinfo");
+    const proxy = new ChromiumNetworkProxy(authority);
+    let contextId: string | undefined;
+    let targetId: string | undefined;
+    let storedResponseId: string | undefined;
+    let executionFailure: unknown;
+    let executionFailed = false;
     try {
+      contextId = await this.createBrowserContext(await proxy.ready);
+      if (session === "browser") await this.cookies.prepare(contextId, url);
+      const target = (await this.cdp.send("Target.createTarget", {
+        url: "about:blank",
+        browserContextId: contextId,
+        background: true,
+      })) as { targetId: string };
+      targetId = target.targetId;
+      const attached = (await this.cdp.send("Target.attachToTarget", {
+        targetId,
+        flatten: true,
+      })) as { sessionId: string };
+      const sessionId = attached.sessionId;
       await Promise.all([
         this.cdp.send("Network.enable", undefined, sessionId),
         this.cdp.send("Page.enable", undefined, sessionId),
@@ -71,16 +89,36 @@ export class ChromiumFetchHost {
         headers: response.headers,
         size: bytes.byteLength,
       };
+      storedResponseId = responseId;
       this.responses.set(responseId, { ...result, bytes, expiresAt: Date.now() + RESPONSE_TTL_MS });
       return result;
+    } catch (error) {
+      executionFailed = true;
+      executionFailure = error;
+      throw error;
     } finally {
-      await this.cdp
-        .send("Target.closeTarget", { targetId: target.targetId })
-        .catch(() => undefined);
-      if (session === "public") {
-        await this.cdp
-          .send("Target.disposeBrowserContext", { browserContextId: contextId })
-          .catch(() => undefined);
+      // Revoke endpoint authority before a CDP close can block. Join every owned
+      // disposal independently and retain cleanup failures with the original error.
+      const failures: unknown[] = [];
+      try {
+        await proxy.close();
+      } catch (error) {
+        failures.push(error);
+      }
+      const disposals = await Promise.allSettled([
+        ...(targetId ? [this.cdp.send("Target.closeTarget", { targetId })] : []),
+        ...(contextId
+          ? [this.cdp.send("Target.disposeBrowserContext", { browserContextId: contextId })]
+          : []),
+      ]);
+      for (const disposal of disposals)
+        if (disposal.status === "rejected") failures.push(disposal.reason);
+      if (failures.length) {
+        if (storedResponseId) this.responses.delete(storedResponseId);
+        throw new AggregateError(
+          executionFailed ? [executionFailure, ...failures] : failures,
+          "Chromium fetch resource cleanup failed"
+        );
       }
     }
   }
@@ -101,14 +139,11 @@ export class ChromiumFetchHost {
     this.responses.delete(responseId);
   }
 
-  private async browserContext(): Promise<string> {
-    if (!this.browserContextId) this.browserContextId = await this.createBrowserContext();
-    return this.browserContextId;
-  }
-
-  private async createBrowserContext(): Promise<string> {
+  private async createBrowserContext(proxyServer: string): Promise<string> {
     const result = (await this.cdp.send("Target.createBrowserContext", {
       disposeOnDetach: false,
+      proxyServer,
+      proxyBypassList: "<-loopback>",
     })) as { browserContextId: string };
     return result.browserContextId;
   }

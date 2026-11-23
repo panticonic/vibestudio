@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { connect as netConnect, type Socket } from "node:net";
-import { EgressListener } from "./egressListener.js";
+import { EgressListener } from "@vibestudio/shared/egressListener";
 
 function listener(overrides: Partial<ConstructorParameters<typeof EgressListener>[0]> = {}) {
   return new EgressListener({

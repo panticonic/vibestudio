@@ -15,18 +15,25 @@ const READ_CHUNK_BYTES = 256 * 1024;
  */
 export function createChromiumFetch(
   rpc: Pick<RpcCaller, "call">,
-  session: ChromiumFetchSession
+  session: ChromiumFetchSession,
+  network?: { kind: "loopback"; origin: string }
 ): typeof fetch {
   return (async (input: string | URL | Request, init?: RequestInit) => {
     const url =
       typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    const opened = await rpc.call(
-      "main",
-      mainRpcMethods[
-        session === "browser" ? "chromiumFetch.openBrowser" : "chromiumFetch.openPublic"
-      ],
-      [url]
-    );
+    const opened = network
+      ? await rpc.call("main", mainRpcMethods["chromiumFetch.openLocal"], [
+          url,
+          network.origin,
+          session,
+        ])
+      : await rpc.call(
+          "main",
+          mainRpcMethods[
+            session === "browser" ? "chromiumFetch.openBrowser" : "chromiumFetch.openPublic"
+          ],
+          [url]
+        );
     let offset = 0;
     let closed = false;
     const close = async () => {

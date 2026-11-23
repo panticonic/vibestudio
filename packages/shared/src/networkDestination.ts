@@ -160,3 +160,14 @@ export async function resolveNetworkDestination(
     },
   };
 }
+
+/** CONNECT uses authority-form, never URL paths, credentials, or default ports. */
+export function parseConnectAuthority(value: string): { url: URL; resource: string; port: number } {
+  const match = /^(\[[0-9a-fA-F:.]+\]|[a-zA-Z0-9.-]+):([0-9]{1,5})$/.exec(value);
+  if (!match) throw new Error("Invalid CONNECT authority");
+  const port = Number(match[2]);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("Invalid CONNECT port");
+  const url = new URL(`https://${match[1]}:${port}`);
+  const resource = `${url.hostname}:${port}`;
+  return { url, resource, port };
+}
