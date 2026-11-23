@@ -3948,6 +3948,17 @@ export class EvalDO extends DurableObjectBase {
     });
   }
 
+  /** Host lifecycle archival reads bounded native rows, never model-facing data. */
+  @schemaRpc()
+  readPendingCaptureEvidence(input: {after?: string}): {rows: Array<{key:string;value:string}>;after:string|null} {
+    const rows = this.sql.exec(
+      "SELECT key,value FROM state WHERE key LIKE 'natlang_pending_capture:%' AND key > ? ORDER BY key LIMIT 9",
+      input.after ?? "",
+    ).toArray().map(row => ({key:String(row["key"]),value:String(row["value"])}));
+    const page = rows.slice(0,8);
+    return {rows:page,after:rows.length>8 ? page.at(-1)!.key : null};
+  }
+
   /** Native-only custody survives records-service failure and notebook reset. */
   private async retainNatlangCaptureEvidence(
     source: string,
@@ -3959,8 +3970,8 @@ export class EvalDO extends DurableObjectBase {
     if (this.closedInspectionExecutions.has(execution) || !execution.runId)
       throw new Error("eval: capture retention requires its active owning run");
     const value = evidence as Record<string, unknown> | null;
-    if (!value || value.schema !== "natlang.pending-model-exchanges/1" ||
-        value.runId !== execution.runId || canonicalJson(value.owner) !== canonicalJson(owner))
+    if (!value || value["schema"] !== "natlang.pending-model-exchanges/1" ||
+        value["runId"] !== execution.runId || canonicalJson(value["owner"]) !== canonicalJson(owner))
       throw new Error("eval: pending capture evidence belongs to another owner or run");
     const json = JSON.stringify(evidence);
     const digest = createHash("sha256").update(json).digest("hex");
@@ -3973,7 +3984,7 @@ export class EvalDO extends DurableObjectBase {
       chunks.push(json.slice(offset, end)); offset = end;
     }
     this.ctx.storage.transactionSync(() => {
-      chunks.forEach((chunk, index) => this.setStateValue(`${key}:${index}`, chunk));
+      chunks.forEach((chunk, index) => this.setStateValue(`${key}:${String(index).padStart(8, "0")}`, chunk));
       this.setStateValue(key, JSON.stringify({
         schema: "eval.retained-provider-evidence/1", source, sourceIdentity,
         owner, runId: execution.runId, contextId: execution.contextId,

@@ -1,3 +1,7 @@
+import {mkdtemp,readFile,rm} from "node:fs/promises";
+import {createHash} from "node:crypto";
+import {retainEvalCaptureEvidence} from "../../../../src/server/retainEvalCaptureEvidence.js";
+import {INTERNAL_DO_SOURCE} from "../../../../src/server/internalDOs/internalDoLoader.js";
 /**
  * Natlang provider integration of the EvalDO: lazy load, lowering, the
  * `runCell` wrapper, cancellation, ambient injection, and teardown. The
@@ -437,8 +441,16 @@ describe("native pending model exchange custody",()=>{
   const manifestRow=rows.find(row=>String(row.key).split(":").length===3)!;
   const manifest=JSON.parse(String(manifestRow.value));
   expect(manifest).toMatchObject({schema:"eval.retained-provider-evidence/1",source:NATLANG_SOURCE,runId:"paid-run",chunks:2});
-  const parts=Array.from({length:manifest.chunks},(_,index)=>String(rows.find(row=>row.key===`${manifestRow.key}:${index}`)!.value));
+  const parts=Array.from({length:manifest.chunks},(_,index)=>String(rows.find(row=>row.key===`${manifestRow.key}:${String(index).padStart(8,"0")}`)!.value));
   expect(JSON.parse(parts.join(""))).toEqual(originalEvidence);
+  const archive=await mkdtemp("/home/werg/data/eval-native-custody-");
+  try{
+   const record={id:"do:actual-eval",kind:"do",className:"EvalDO",key:manifest.owner.objectKey,
+    contextId:manifest.contextId,source:{repoPath:INTERNAL_DO_SOURCE,effectiveVersion:"fixture"}} as any;
+   await retainEvalCaptureEvidence(record,archive,input=>Promise.resolve(h.instance.readPendingCaptureEvidence(input)));
+   const directory=archive+"/"+createHash("sha256").update(record.id).digest("hex");
+   expect(JSON.parse(await readFile(directory+"/"+manifest.sha256+".json","utf8"))).toEqual(originalEvidence);
+  }finally{await rm(archive,{recursive:true,force:true});}
   // Notebook reset drops user scope, not native custody.
   (h.instance as unknown as {resetLocked():unknown}).resetLocked();
   expect(sql.exec("SELECT value FROM state WHERE key = ?",manifestRow.key).toArray()).toHaveLength(1);

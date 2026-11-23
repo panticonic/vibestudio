@@ -66,6 +66,8 @@ export interface EvalNatlang {
     execute: () => Promise<T>,
     options: { runId: string; signal: AbortSignal }
   ): Promise<{ value: T; calls: EvalNatlangCallSummary[] }>;
+  /** Native-only pending original exchange journal for recovery; never a target. */
+  pendingCaptureEvidence?(): unknown;
   close(): void;
 }
 

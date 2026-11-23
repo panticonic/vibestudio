@@ -310,3 +310,22 @@ describe("cleanupRuntimeEntity", () => {
     expect(d.workerdManager.retireDOEntity).not.toHaveBeenCalled();
   });
 });
+
+it("retains failed archive custody while still joining runtime cleanup for reaper recovery",async()=>{
+ const d=deps(),entity=record("do");let archived=false;
+ const complete=vi.fn(async()=>{});
+ const {createEntityRetirementCleanup}=await import("./services/entityRetirementCleanup.js");
+ const owner=createEntityRetirementCleanup({resolveRecord:async()=>entity,complete,cleanup:current=>cleanupRuntimeEntity(current,{
+  retireAuthorityOwner:d.retireAuthorityOwner,egressProxy:d.egressProxy,approvalQueue:d.approvalQueue,
+  credentialSessionGrantStore:d.credentialSessionGrantStore,tokenManager:d.tokenManager,
+  releaseBlobRetentions:d.releaseBlobRetentions,getWorkerdManager:()=>d.workerdManager as never,
+  getFsService:()=>d.fsService as never,getWebhookIngress:()=>d.webhookIngress,
+  retainNativeEvidence:async()=>{if(!archived)throw new Error("archive disk unavailable")},
+ })});
+ await expect(owner.retire(entity)).rejects.toThrow("cleanup failed");
+ expect(d.workerdManager.retireDOEntity).toHaveBeenCalled();
+ expect(d.tokenManager.revokeToken).toHaveBeenCalled();
+ expect(complete).not.toHaveBeenCalled();expect(d.releaseBlobRetentions).not.toHaveBeenCalled();
+ archived=true;await owner.retire(entity);expect(complete).toHaveBeenCalledWith(entity.id,entity.authoritySessionId);
+ expect(d.releaseBlobRetentions).toHaveBeenCalled();
+});

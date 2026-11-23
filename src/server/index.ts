@@ -1488,6 +1488,15 @@ async function main() {
       credentialSessionGrantStore,
       tokenManager,
       connectionGrants,
+      retainNativeEvidence: async (record) => {
+        const {retainEvalCaptureEvidence}=await import("./retainEvalCaptureEvidence.js");
+        const {evalEngineMethods}=await import("@vibestudio/service-schemas/evalEngine");
+        const client=createTypedServiceClient("eval-engine",evalEngineMethods,(_service,method,args)=>
+          container.get<import("./doDispatch.js").DODispatch>("doDispatch").dispatch(
+            {source:record.source.repoPath,className:record.className!,objectKey:record.key!},method,...args));
+        await retainEvalCaptureEvidence(record,path.join(statePath,"capture-evidence","natlang"),
+          input=>client.readPendingCaptureEvidence(input));
+      },
       releaseBlobRetentions: async (runtime) => {
         const { blobRetentionNamespace, releaseBlobRetentionNamespace, withBlobContentLock } =
           await import("./storage/blobRetentions.js");

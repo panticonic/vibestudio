@@ -320,6 +320,15 @@ const rawEvalEngineMethods = defineServiceMethods({
     args: z.tuple([]),
     returns: z.array(retainedRootSchema),
   },
+  readPendingCaptureEvidence: {
+    website: { kind: "closed", reason: "Native paid-exchange custody is internal to its lifecycle owner." } as const,
+    ...managed("read"),
+    args: z.tuple([z.object({ after: z.string().optional() }).strict()]),
+    returns: z.object({
+      rows: z.array(z.object({ key: z.string(), value: z.string() }).strict()).max(8),
+      after: z.string().nullable(),
+    }).strict(),
+  },
   cancel: {
     website: {
       kind: "closed",

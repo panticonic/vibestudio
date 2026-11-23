@@ -18,6 +18,7 @@ export interface RuntimeEntityCleanupDeps {
   tokenManager: Pick<TokenManager, "revokeToken">;
   connectionGrants?: Pick<ConnectionGrantService, "revokeForPrincipal">;
   clearPresentationTitle?(entityId: string): Promise<void>;
+  retainNativeEvidence?(record: EntityRecord): Promise<void>;
   releaseBlobRetentions(runtime: Pick<EntityRecord, "kind" | "id">): Promise<void>;
   resourceHandles?: {
     revokeReceiver(
@@ -64,6 +65,10 @@ export async function cleanupRuntimeEntity(
     }
   };
 
+  // Preserve raw paid evidence before logical retirement drops its owners.
+  // Teardown still joins processes if archival fails; the native SQLite state
+  // survives retireDOEntity and cleanupComplete remains false for the reaper.
+  await attempt(() => deps.retainNativeEvidence?.(record));
   const workerdManager = deps.getWorkerdManager();
   await attempt(() => workerdManager?.retireEgressCaller(record.id));
   await attempt(() => deps.egressProxy.dropCaller(record.id));

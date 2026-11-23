@@ -3871,15 +3871,18 @@ describe("runtimeService.cloneContext", () => {
     expect(cloneDurableStorage).toHaveBeenCalledTimes(1);
   });
 
-  it("starts an unbound native execution clone fresh while ordinary DOs preserve their storage snapshots", async () => {
+  it("starts a native execution clone fresh while ordinary DOs preserve their storage snapshots", async () => {
     const { service, instance, cloneDurableStorage } = await buildDeps({
       resolveNativeOwner: (input) =>
-        input.className === "AgentDO"
+        input.className === "NativeExecutionDO"
           ? { incarnation: `storage:${input.key}`, generation: 1 }
           : null,
     });
-    const native = await seedDO(service, "ctx-native-clone", "native");
-    expect(instance.entityResolve(native.id)?.agentBinding).toBeUndefined();
+    const native = (await service.handler({ caller: serverCaller }, "createEntity", [{
+      kind: "do", execution: { surface: "code", source: "workers/native-execution" },
+      className: "NativeExecutionDO", key: "native", contextId: "ctx-native-clone",
+    }])) as {id:string};
+    expect(instance.entityResolve(native.id)?.agentBinding).toEqual({entityId:native.id,channelId:native.id,contextId:"ctx-native-clone"});
     const ordinary = (await service.handler({ caller: serverCaller }, "createEntity", [
       {
         kind: "do",
@@ -3896,8 +3899,8 @@ describe("runtimeService.cloneContext", () => {
     const ordinaryClone = result.entities.find((entity) => entity.sourceId === ordinary.id)!;
     expect(instance.entityResolve(nativeClone.newId)?.cloneProvenance?.storage).toBe("fresh");
     expect(instance.entityResolve(ordinaryClone.newId)?.cloneProvenance?.storage).toBe("snapshot");
-    expect(cloneDurableStorage).toHaveBeenCalledTimes(2);
-    expect(cloneDurableStorage).toHaveBeenCalledWith(
+    expect(cloneDurableStorage).toHaveBeenCalledTimes(1);
+    expect(cloneDurableStorage).not.toHaveBeenCalledWith(
       expect.objectContaining({
         fromKey: "native",
         toKey: nativeClone.newKey,
