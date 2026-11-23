@@ -5314,6 +5314,29 @@ export const PRODUCT_BUILTIN_CATALOG = [
           kind: "open",
         },
       },
+      readPendingCaptureEvidence: {
+        website: {
+          kind: "closed",
+          reason: "Native paid-exchange custody is internal to its lifecycle owner.",
+        },
+        capability: "runtime.code-execution.manage",
+        tier: "gated",
+        session: "family",
+        sensitivity: "read",
+        principals: ["host"],
+        presentation: null,
+        effect: {
+          kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason: "Native paid-exchange custody is internal to its lifecycle owner.",
+          },
+          capability: "runtime.code-execution.manage",
+          resource: {
+            kind: "receiver-object",
+          },
+        },
+      },
       cancel: {
         website: {
           kind: "closed",

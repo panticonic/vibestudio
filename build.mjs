@@ -43,6 +43,13 @@ import {
   writeHostBuildFingerprint,
 } from "./scripts/host-build-fingerprint.mjs";
 
+// The host attester consumes generated builtin policies while native receivers
+// consume live wire schemas. A stale catalog must fail before every build mode,
+// including warm artifact reuse, rather than publish incompatible authorities.
+execFileSync(process.execPath, ["--import", "tsx", "scripts/generate-builtin-catalog.ts", "--check"], {
+  cwd: process.cwd(), stdio: "inherit",
+});
+
 if (process.argv.includes("--production")) process.env.NODE_ENV = "production";
 prepareNativeDependencyFiles();
 const isDev = process.env.NODE_ENV === "development";

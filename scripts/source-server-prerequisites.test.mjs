@@ -133,3 +133,15 @@ test("both host producers stage and validate payloads before stamping their comp
   );
   assert.ok(functionCalls("copyAssets").includes("copySqlJsRuntimeAsset"));
 });
+
+
+test("every host build rejects stale builtin authority before entering any build mode",()=>{
+ const guard=buildAst.program.body.find(node=>node.type==="ExpressionStatement" &&
+  node.expression.type==="CallExpression" && node.expression.callee.name==="execFileSync" &&
+  buildSource.slice(node.start,node.end).includes("generate-builtin-catalog.ts"));
+ assert.ok(guard);
+ assert.match(buildSource.slice(guard.start,guard.end),/"--check"/u);
+ const dispatch=buildAst.program.body.find(node=>node.type==="IfStatement" &&
+  buildSource.slice(node.start,node.end).includes("--internal-do-only"));
+ assert.ok(dispatch);assert.ok(guard.end<dispatch.start);
+});
