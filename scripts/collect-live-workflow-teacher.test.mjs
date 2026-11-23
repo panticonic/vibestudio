@@ -28,6 +28,7 @@ test("a batch reuses each workspace instance and retains successes across failur
     new URL("lib/live-teacher-groups.mjs", import.meta.url),
     path.join(root, "scripts/lib/live-teacher-groups.mjs")
   );
+  await put("src/dev/instanceRegistry.js", 'exports.persistentInstanceRoot = (host, instance) => host + "/state/" + instance;');
   await put("src/dev/cliWorkspaceSelection.js",
     'exports.isSystemTestWorkspace = value => ["system", "personal"].includes(value);');
   const sourceCommit = "a".repeat(40);
@@ -94,6 +95,12 @@ exit 0
     const [command, ...args] = remaining;
     if (launcher === 'natlang:vendor') process.exit(0);
     fs.appendFileSync('commands.jsonl', JSON.stringify({ instance, workspace, devices, command, args }) + '\\n');
+    const retainedState = path.join('state', instance, 'retained', 'generation-one');
+    if (command === 'doctor') {
+      fs.mkdirSync(retainedState, {recursive:true});
+      fs.writeFileSync(path.join(retainedState, 'native-records.sqlite'), 'durable original bytes');
+    }
+    if (command === 'stop' && fs.existsSync(retainedState)) fs.writeFileSync(path.join(retainedState, 'stopped'), 'joined');
     if (command === 'list') {
       const names = workspace === 'personal' ? ['personal'] : ['passing', 'failing'];
       console.log(JSON.stringify(names.map(name => ({
@@ -104,6 +111,7 @@ exit 0
     const out = args[args.indexOf('--out-dir') + 1];
     if (command === 'run') {
       fs.mkdirSync(path.join(out, '${runId}'));
+      if (process.env.VIBE_TEST_INTERRUPT) process.exit(1);
       if (args.includes('--retain-trajectories')) {
         const run = path.join(out, '${runId}');
         const failure = path.join(run, 'failure-evidence');
@@ -162,6 +170,20 @@ exit 0
     }
   );
   assert.equal(result.status, 1, result.stderr);
+  const retainedDirectories = (await import("node:fs/promises")).readdir;
+  assert.ok((await retainedDirectories(out)).some(name => name.startsWith("retained-state-")));
+  for (const name of (await retainedDirectories(out)).filter((name) =>
+    name.startsWith("retained-state-")
+  )) {
+    assert.equal(
+      await readFile(path.join(out, name, "generation-one", "native-records.sqlite"), "utf8"),
+      "durable original bytes"
+    );
+    assert.equal(
+      await readFile(path.join(out, name, "generation-one", "stopped"), "utf8"),
+      "joined"
+    );
+  }
   assert.match(result.stderr, /Teacher case failing failed/);
   assert.match(result.stderr, /Its full trajectory was retained/u);
   const commands = (await readFile(path.join(root, "commands.jsonl"), "utf8"))
@@ -236,4 +258,15 @@ exit 0
     "doctor", "list", "stop", "doctor", "list", "stop",
   ]);
   assert.ok(preflightCommands.slice(3).every(({ devices }) => devices[0] === "desktop"));
+  const interruptedOut = path.join(root, "interrupted-capture");
+  const interrupted = spawnSync(process.execPath, [
+    "scripts/collect-live-workflow-teacher.mjs", "--assignments", "--case", "passing", "--case", "failing", "--concurrency", "2", "--out", interruptedOut,
+  ], { cwd: root, env: { ...process.env, PATH: path.join(root,"bin") + path.delimiter + process.env.PATH, VIBE_TEST_INTERRUPT:"1" }, encoding:"utf8" });
+  assert.equal(interrupted.status, 1, interrupted.stderr);
+  assert.match(interrupted.stderr, /Teacher case passing failed/);
+  assert.match(interrupted.stderr, /Teacher case failing failed/);
+  const interruptedFiles = (await retainedDirectories(interruptedOut)).filter(name => name.startsWith("retained-state-"));
+  assert.equal(interruptedFiles.length,1);
+  assert.equal(await readFile(path.join(interruptedOut,interruptedFiles[0],"generation-one","native-records.sqlite"),"utf8"),"durable original bytes");
+
 });

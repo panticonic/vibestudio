@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { persistentInstanceRoot } from "../src/dev/instanceRegistry.js";
 import { isSystemTestWorkspace } from "../src/dev/cliWorkspaceSelection.js";
 import {
   requireDevelopmentTemplateCheckouts,
@@ -352,7 +353,7 @@ for (const group of groups) {
           } else if (systemTest(["trajectory", runId, scenario, "--full", "--json", "--out-dir", directory], "ignore") !== 0) {
             throw new Error(`Unable to retrieve the durable trajectory for ${runId}`);
           }
-          if (failed.has(scenario) || (!concurrent && status !== 0)) {
+          if (failed.has(scenario) || (status !== 0 && (!concurrent || !existsSync(summaryPath)))) {
             throw new Error(`System test ${runId} failed. Its full trajectory was retained in ${directory}`);
           }
           if (JSON.stringify(pinSources()) !== JSON.stringify(pinned))
@@ -374,6 +375,36 @@ for (const group of groups) {
     failures.push(error);
   } finally {
     stopStatus = systemTest(["stop"]);
+    // The supervisor has joined all state owners. Move its retained state into
+    // this capture tree; the campaign archives the whole tree before cleanup.
+    // A failed move leaves the original durable state intact for recovery.
+    const retained = path.join(persistentInstanceRoot(host, instance), "retained");
+    if (stopStatus === 0 && existsSync(retained)) {
+      const destination = path.join(out, `retained-state-${instance}`);
+      try {
+        mkdirSync(destination, { recursive: true, mode: 0o700 });
+        for (const entry of readdirSync(retained)) {
+          const target = path.join(destination, entry);
+          if (existsSync(target))
+            throw new Error(`Retained state destination already exists: ${target}`);
+          renameSync(path.join(retained, entry), target);
+        }
+        writeFileSync(
+          path.join(destination, "retention.json"),
+          JSON.stringify({
+            instance,
+            original: retained,
+            stopped: stopStatus === 0,
+            archived: false,
+          }) + "\n",
+          { mode: 0o600 }
+        );
+      } catch (error) {
+        failures.push(
+          new Error(`Native state remains recoverable at ${retained}: ${String(error)}`)
+        );
+      }
+    }
   }
   if (stopStatus !== 0) {
     failures.push(new Error(`Could not retire the managed ${workspace} workspace ${instance}`));

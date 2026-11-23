@@ -70,9 +70,11 @@ describe("system-test evidence storage", () => {
 
   it("preserves an explicitly chosen export directory", async () => {
     const run = fixture();
-    run.artifactDir = path.join(path.dirname(run.artifactDir), "caller-export");
+    run.artifactDir = path.join(roots[roots.length - 1]!, "caller-export", run.runId);
     saveSystemTestRun(run);
-    fs.mkdirSync(run.artifactDir);
+    expect(JSON.parse(fs.readFileSync(path.join(run.artifactDir, "run.json"), "utf8"))).toEqual(
+      run
+    );
     fs.writeFileSync(path.join(run.artifactDir, "trajectory-example-full.json"), "{}");
     writeSystemTestArtifact(run.runId, "summary", { status: "completed" });
     expect((await compactCompletedSystemTestTrajectories()).files).toBe(0);

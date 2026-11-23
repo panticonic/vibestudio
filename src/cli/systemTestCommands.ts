@@ -66,6 +66,8 @@ import {
   type StoredSystemTestRun,
 } from "./systemTestStore.js";
 
+import { retainNativeSystemTestEvidence } from "./systemTestEvidence.js";
+
 type EvalStatus = Omit<SystemTestRunnerSnapshot, "result"> & {
   result?: NonNullable<SystemTestRunnerSnapshot["result"]> & { returnValue?: unknown };
 };
@@ -354,6 +356,9 @@ async function startRun(
     runnerEntityId: runner.id,
     runnerTargetId: runner.targetId,
     artifactDir: systemTestArtifactDir(runId, artifactRoot),
+    ...(process.env["VIBESTUDIO_INSTANCE_ROOT"]
+      ? { stateDir: process.env["VIBESTUDIO_INSTANCE_ROOT"] }
+      : {}),
     config,
   };
   // Record the durable address before start so ambiguous acknowledgements and
@@ -684,7 +689,7 @@ async function run(inv: ParsedInvocation): Promise<number> {
         all ||
         names.length === 0 ||
         new Set(names).size !== names.length ||
-        names.some(name => !name.startsWith("open-goal-")) ||
+        names.some((name) => !name.startsWith("open-goal-")) ||
         typeof inv.flags["model"] !== "string" ||
         !inv.flags["model"].startsWith("openai-codex:"))
     ) {
@@ -736,7 +741,10 @@ async function run(inv: ParsedInvocation): Promise<number> {
         },
         approvalObservation
       );
-      if (await signalCancellation.ensureCancellation()) return 130;
+      if (await signalCancellation.ensureCancellation()) {
+        if (stored) await retainInterruptedRunEvidence(scope, stored, "cancelled");
+        return 130;
+      }
       if (inv.flags["detach"] === true) {
         const value = {
           runId: stored.runId,
@@ -758,13 +766,19 @@ async function run(inv: ParsedInvocation): Promise<number> {
             approveManagedCodexSession(scope, observation.signal).then(() => completion),
           ]).finally(() => observation.abort())
         : completion);
-      if (await signalCancellation.ensureCancellation()) return 130;
+      if (await signalCancellation.ensureCancellation()) {
+        if (stored) await retainInterruptedRunEvidence(scope, stored, "cancelled");
+        return 130;
+      }
       const value = resultValue(status, stored.runId);
       const artifact = writeSystemTestArtifact(stored.runId, "summary", value, stored.artifactDir);
       await retainFailedRunEvidence(scope, stored, value);
       if (retainTrajectories) await retainPassingTestTrajectories(scope, stored, value);
       printRun(value, json, artifact);
       return failedSummary(value) ? 1 : 0;
+    } catch (error) {
+      if (stored) await retainInterruptedRunEvidence(scope, stored, error);
+      throw error;
     } finally {
       signalCancellation.dispose();
     }
@@ -813,7 +827,14 @@ async function status(inv: ParsedInvocation): Promise<number> {
       await retainFailedRunEvidence(scope, stored, state.result.returnValue);
     }
     printResult(value, { json });
-    if (state.status === "unknown" || state.status === "cancelled") return 1;
+    if (
+      state.status === "unknown" ||
+      state.status === "cancelled" ||
+      (state.status === "done" && !state.result?.success)
+    ) {
+      await retainInterruptedRunEvidence(scope, stored, state.result?.error ?? state.status);
+      return 1;
+    }
     if (state.status === "done") {
       if (!state.result?.success) return 1;
       return failedSummary(state.result.returnValue) ? 1 : 0;
@@ -1044,6 +1065,54 @@ export async function retainPassingTestTrajectories(
   }
 }
 
+/** Orchestration failure has no completed summary. Attempt every case and
+ * preserve native partial records before the managed owner can be retired. */
+export async function retainInterruptedRunEvidence(
+  scope: SessionScope,
+  stored: StoredSystemTestRun,
+  error: unknown
+): Promise<void> {
+  const dir = failureEvidenceDir(stored);
+  const errors: string[] = [];
+  writeSystemTestArtifact(
+    stored.runId,
+    "interruption",
+    { runId: stored.runId, error: formatRpcFailure(error), inferenceCount: null },
+    stored.artifactDir
+  );
+  try {
+    const state = await readRunState(scope, stored);
+    writeSystemTestArtifact(stored.runId, "interrupted-status", state, dir);
+  } catch (failure) {
+    errors.push(`status: ${formatRpcFailure(failure)}`);
+  }
+  for (const name of stored.config.names) {
+    for (const full of [false, true]) {
+      try {
+        writeSystemTestArtifact(
+          stored.runId,
+          trajectoryArtifactName(name, full),
+          await fetchTrajectory(scope, stored, name, full),
+          dir
+        );
+      } catch (failure) {
+        errors.push(`${name}/${full ? "full" : "bounded"}: ${formatRpcFailure(failure)}`);
+      }
+    }
+  }
+  try {
+    await retainNativeSystemTestEvidence(scope, stored);
+  } catch (failure) {
+    errors.push(`native records: ${formatRpcFailure(failure)}`);
+  }
+  writeSystemTestArtifact(
+    stored.runId,
+    "retention",
+    { runId: stored.runId, complete: errors.length === 0, errors, inferenceCount: null },
+    stored.artifactDir
+  );
+}
+
 /**
  * A failed run's evidence must outlive the instance that produced it. When a
  * terminal summary reports failures, keep the bounded inspection packet and the
@@ -1264,7 +1333,10 @@ async function rerun(inv: ParsedInvocation): Promise<number> {
           stored = created;
         }
       );
-      if (await signalCancellation.ensureCancellation()) return 130;
+      if (await signalCancellation.ensureCancellation()) {
+        if (stored) await retainInterruptedRunEvidence(scope, stored, "cancelled");
+        return 130;
+      }
       if (inv.flags["detach"] === true) {
         printResult(
           { runId: stored.runId, rerunOf: sourceRunId, tests: names, status: "running" },
@@ -1277,12 +1349,18 @@ async function rerun(inv: ParsedInvocation): Promise<number> {
         stored,
         positiveInt(inv, "poll-ms", DEFAULT_POLL_MS) ?? DEFAULT_POLL_MS
       );
-      if (await signalCancellation.ensureCancellation()) return 130;
+      if (await signalCancellation.ensureCancellation()) {
+        if (stored) await retainInterruptedRunEvidence(scope, stored, "cancelled");
+        return 130;
+      }
       const result = resultValue(state, stored.runId);
       const artifact = writeSystemTestArtifact(stored.runId, "summary", result, stored.artifactDir);
       await retainFailedRunEvidence(scope, stored, result);
       printRun(result, json, artifact);
       return failedSummary(result) ? 1 : 0;
+    } catch (error) {
+      if (stored) await retainInterruptedRunEvidence(scope, stored, error);
+      throw error;
     } finally {
       signalCancellation.dispose();
     }
@@ -1299,6 +1377,7 @@ async function cancel(inv: ParsedInvocation): Promise<number> {
     const scope = await resolveSystemTestScope(inv, stored?.sessionName ?? SYSTEM_TEST_SESSION);
     if (!stored) throw new CliError(`no local metadata for system-test run ${runId}`);
     await cancelRun(scope, stored);
+    await retainInterruptedRunEvidence(scope, stored, "cancelled");
     printResult({ runId, ok: true }, { json });
     return 0;
   } catch (error) {
