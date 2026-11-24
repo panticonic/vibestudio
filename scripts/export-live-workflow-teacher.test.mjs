@@ -994,6 +994,7 @@ test("live panel export binds real test world, independent checks and exact Eval
   const receipt = JSON.parse(await readFile(path.join(options.out, "verification.json"), "utf8"));
   assert.deepEqual(receipt.world, manifest.world);
   assert.equal(receipt.run_id, "outer");
+  assert.deepEqual(receipt.requirements, { semantic_review: false });
   assert.equal(receipt.calls[1].run_id, "eval");
   assert.deepEqual(
     receipt.evidence.map(({ kind }) => kind),
@@ -3814,6 +3815,7 @@ test("content export requires independent semantic review of exact committed byt
   const workspaceEvidence = JSON.parse(
     await readFile(path.join(options.out, "workspace.json"), "utf8")
   );
+  assert.deepEqual(proof.requirements, { semantic_review: true });
   assert.equal(proof.checks.independentSemanticReview, true);
   assert.deepEqual(workspaceEvidence.semanticReview.input, reviewInput);
   assert.equal(proof.calls.length, 2);
@@ -10054,17 +10056,32 @@ test("void TS entries bind actual undefined transport without waiving requested 
  const goal='Apply the independently checked reference effect';
  const entry={program:'skills/reference/review.ts',callable:'review',arguments:{goal},argumentJson:{goal:JSON.stringify(goal)},resultType:'void'};
  const make=()=>{
-  const root={callId:'root',record:{call_id:'root',inputs:{goal:ref(goal)},output:ref(null),executor:{kind:'crisp'},definition:{name:'review',source:'review.ts',id:'ts:review.ts#default',returns:'void'}}};
+  const root={callId:'root',record:{call_id:'root',outcome:'done',inputs:{goal:ref(goal)},output:ref(null),executor:{kind:'crisp'},definition:{name:'review',source:'review.ts',id:'ts:review.ts#default',returns:'void'}}};
   const proof={passed:true,caseId:'void-reference',contextId:'ctx',goal,entry,actualResultKind:'void',actualResult:null,checks:{actualNativeEffect:true}};
   return {execution:{provenance:{contextId:'ctx'},diagnostics:{openGoalVerification:proof}},exercise:{entry,rootCallIds:['root'],calls:[root],applicationResult:null,applicationResultKind:'void'},workflow:{entry,assignment:{id:'void-reference',goal}},root,proof};
  };
  const good=make();expectVoid(good);
+ const interrupted=make();
+ interrupted.root.record.outcome='error';
+ interrupted.root.record.error={name:'Error',message:'Optional follow-up failed after the native effect'};
+ delete interrupted.root.record.output;
+ delete interrupted.proof.actualResultKind;delete interrupted.proof.actualResult;
+ delete interrupted.exercise.applicationResultKind;delete interrupted.exercise.applicationResult;
+ const nativeOnly=openOutcomeGoalEvidence(interrupted.execution,interrupted.exercise,'void-reference',interrupted.workflow);
+ assert.equal(Object.hasOwn(nativeOnly.evidence.workspace,'applicationReturn'),false);
+ assert.equal(nativeOnly.evidence.workspace.proof,interrupted.proof);
+ assert.equal(interrupted.root.record.outcome,'error');
+ interrupted.proof.checks.actualNativeEffect=false;
+ assert.throws(()=>openOutcomeGoalEvidence(interrupted.execution,interrupted.exercise,'void-reference',interrupted.workflow),/independently verified outcomes/);
+
  function expectVoid({execution,exercise,workflow}){
   const observed=openOutcomeGoalEvidence(execution,exercise,'void-reference',workflow);
   assert.deepEqual(observed.evidence.workspace.applicationReturn,{kind:'void',root_call_id:'root',valueJson:'null',selectedResult:null});
  }
  for(const corrupt of [
   value=>{delete value.proof.actualResultKind;},
+  value=>{value.root.record.outcome='error';},
+  value=>{delete value.root.record.outcome;},
   value=>{value.workflow.entry={...entry,resultType:'Receipt'};},
   value=>{value.root.record.definition.returns='Receipt';},
   value=>{value.root.record.definition.id='ts:review.ts#other';},

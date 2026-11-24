@@ -19,7 +19,10 @@ import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { stateLayout } from "./stateLayout.js";
 import { INTERNAL_DO_SOURCE } from "./internalDOs/internalDoLoader.js";
-import { schemaProbeEnvironmentForFixture, mockSchemaProbeDiskSpace } from "../../tests/fixtures/schemaProbeEnvironment.js";
+import {
+  schemaProbeEnvironmentForFixture,
+  mockSchemaProbeDiskSpace,
+} from "../../tests/fixtures/schemaProbeEnvironment.js";
 import { stageInstalledSchemaProbeEvidence } from "../../scripts/lib/schema-probe-evidence.mjs";
 import { closeDerivedCacheCoordinators } from "@vibestudio/shared/derivedCache";
 import {
@@ -1322,32 +1325,92 @@ describe("WorkerdManager", () => {
     const deps = createMockDeps();
     deps.nativeStorageRetentionRoot = path.join(deps.statePath,"capture-evidence","native-storage");
     const mgr = new WorkerdManager(deps);
-    const ref = {source:"vibestudio/internal",className:"EvalDO",objectKey:"pre-run-retention"};
-    const internals = mgr as unknown as {durableObjectStorageLocation(target:typeof ref):{dir:string;hash:string}};
-    const location=internals.durableObjectStorageLocation(ref);await fs.promises.mkdir(location.dir,{recursive:true});
-    const nativeFile=path.join(location.dir,location.hash+".sqlite");
-    const db=new DatabaseSync(nativeFile);db.exec("CREATE TABLE runs(id TEXT); CREATE TABLE diagnostic(value TEXT); INSERT INTO diagnostic VALUES ('failed before run');");db.close();
-    await mgr.destroyRetiredDOStorage(ref);expect(fs.existsSync(nativeFile)).toBe(true);
-    await mgr.shutdown();expect(fs.existsSync(nativeFile)).toBe(false);
-    const manifests=(await fs.promises.readdir(deps.nativeStorageRetentionRoot,{recursive:true})).filter(n=>n.endsWith("manifest.json"));expect(manifests).toHaveLength(1);
-    const manifestPath=path.join(deps.nativeStorageRetentionRoot,manifests[0]!);const proof=JSON.parse(await fs.promises.readFile(manifestPath,"utf8"));expect(proof.identity.target).toEqual(ref);
-    const retained=new DatabaseSync(path.join(path.dirname(manifestPath),location.hash+".sqlite"),{readOnly:true});
-    try{expect(retained.prepare("SELECT COUNT(*) AS n FROM runs").get()).toEqual({n:0});expect(retained.prepare("SELECT value FROM diagnostic").get()).toEqual({value:"failed before run"});}finally{retained.close();}
+    const ref = {
+      source: "vibestudio/internal",
+      className: "EvalDO",
+      objectKey: "pre-run-retention",
+    };
+    const internals = mgr as unknown as {
+      durableObjectStorageLocation(target: typeof ref): { dir: string; hash: string };
+    };
+    const location = internals.durableObjectStorageLocation(ref);
+    await fs.promises.mkdir(location.dir, { recursive: true });
+    const nativeFile = path.join(location.dir, location.hash + ".sqlite");
+    const db = new DatabaseSync(nativeFile);
+    db.exec(
+      "CREATE TABLE runs(id TEXT); CREATE TABLE diagnostic(value TEXT); INSERT INTO diagnostic VALUES ('failed before run');"
+    );
+    db.close();
+    await mgr.destroyRetiredDOStorage(ref);
+    expect(fs.existsSync(nativeFile)).toBe(true);
+    await mgr.shutdown();
+    expect(fs.existsSync(nativeFile)).toBe(false);
+    const manifests = (
+      await fs.promises.readdir(deps.nativeStorageRetentionRoot, { recursive: true })
+    ).filter((n) => n.endsWith("manifest.json"));
+    expect(manifests).toHaveLength(1);
+    const manifestPath = path.join(deps.nativeStorageRetentionRoot, manifests[0]!);
+    const proof = JSON.parse(await fs.promises.readFile(manifestPath, "utf8"));
+    expect(proof.identity.target).toEqual(ref);
+    const retained = new DatabaseSync(
+      path.join(path.dirname(manifestPath), location.hash + ".sqlite"),
+      { readOnly: true }
+    );
+    try {
+      expect(retained.prepare("SELECT COUNT(*) AS n FROM runs").get()).toEqual({ n: 0 });
+      expect(retained.prepare("SELECT value FROM diagnostic").get()).toEqual({
+        value: "failed before run",
+      });
+    } finally {
+      retained.close();
+    }
   });
 
   it("native retention failure leaves originals and the maintenance journal resumable", async () => {
-    const deps=createMockDeps();const blocked=path.join(deps.statePath,"blocked-capture-root");await fs.promises.writeFile(blocked,"not a directory");deps.nativeStorageRetentionRoot=blocked;
-    const ref={source:"vibestudio/internal",className:"EvalDO",objectKey:"retry-capture"};
-    type CaptureInternals={durableObjectStorageLocation(target:typeof ref):{dir:string;hash:string};readOpenDurableObjectMaintenance():Array<{operationId:string;kind:string}>};
-    const first=new WorkerdManager(deps),location=(first as unknown as CaptureInternals).durableObjectStorageLocation(ref);await fs.promises.mkdir(location.dir,{recursive:true});
-    const original=path.join(location.dir,location.hash+".sqlite");const db=new DatabaseSync(original);db.exec("CREATE TABLE preparation(value TEXT); INSERT INTO preparation VALUES ('native');");db.close();
-    await first.destroyRetiredDOStorage(ref);const [debt]=(first as unknown as CaptureInternals).readOpenDurableObjectMaintenance();
-    await expect(first.shutdown()).rejects.toThrow("shutdown failed");expect(fs.existsSync(original)).toBe(true);
-    await fs.promises.unlink(blocked);await fs.promises.mkdir(blocked);
-    const resumed=new WorkerdManager(deps);await resumed.shutdown();expect(fs.existsSync(original)).toBe(false);
-    const journal=new DatabaseSync(stateLayout(deps.statePath).databases.durableObjectMaintenanceDb,{readOnly:true});
-    try{expect(journal.prepare("SELECT status FROM do_maintenance WHERE operation_id=?").get(debt!.operationId)).toEqual({status:"complete"});}finally{journal.close();}
-    expect(debt?.kind).toBe("destroy");expect((await fs.promises.readdir(blocked,{recursive:true})).filter(n=>n.endsWith("manifest.json"))).toHaveLength(1);
+    const deps = createMockDeps();
+    const blocked = path.join(deps.statePath, "blocked-capture-root");
+    await fs.promises.writeFile(blocked, "not a directory");
+    deps.nativeStorageRetentionRoot = blocked;
+    const ref = { source: "vibestudio/internal", className: "EvalDO", objectKey: "retry-capture" };
+    type CaptureInternals = {
+      durableObjectStorageLocation(target: typeof ref): { dir: string; hash: string };
+      readOpenDurableObjectMaintenance(): Array<{ operationId: string; kind: string }>;
+    };
+    const first = new WorkerdManager(deps),
+      location = (first as unknown as CaptureInternals).durableObjectStorageLocation(ref);
+    await fs.promises.mkdir(location.dir, { recursive: true });
+    const original = path.join(location.dir, location.hash + ".sqlite");
+    const db = new DatabaseSync(original);
+    db.exec("CREATE TABLE preparation(value TEXT); INSERT INTO preparation VALUES ('native');");
+    db.close();
+    await first.destroyRetiredDOStorage(ref);
+    const [debt] = (first as unknown as CaptureInternals).readOpenDurableObjectMaintenance();
+    await expect(first.shutdown()).rejects.toThrow("shutdown failed");
+    expect(fs.existsSync(original)).toBe(true);
+    await fs.promises.unlink(blocked);
+    await fs.promises.mkdir(blocked);
+    const resumed = new WorkerdManager(deps);
+    await resumed.shutdown();
+    expect(fs.existsSync(original)).toBe(false);
+    const journal = new DatabaseSync(
+      stateLayout(deps.statePath).databases.durableObjectMaintenanceDb,
+      { readOnly: true }
+    );
+    try {
+      expect(
+        journal
+          .prepare("SELECT status FROM do_maintenance WHERE operation_id=?")
+          .get(debt!.operationId)
+      ).toEqual({ status: "complete" });
+    } finally {
+      journal.close();
+    }
+    expect(debt?.kind).toBe("destroy");
+    expect(
+      (await fs.promises.readdir(blocked, { recursive: true })).filter((n) =>
+        n.endsWith("manifest.json")
+      )
+    ).toHaveLength(1);
   });
 
   it("tombstones retired internal storage without restarting live peers and collects it at shutdown", async () => {
@@ -2133,6 +2196,76 @@ describe("WorkerdManager", () => {
       );
       expect(serviceCode?.egressIdentity).toBe(first!.egressIdentity);
       expect(unregisterEgressCaller).not.toHaveBeenCalledWith(first!.egressIdentity);
+    });
+
+    it("preserves sealed siblings and their bearer after a class declaration is withdrawn", async () => {
+      const unregisterEgressCaller = vi.fn();
+      const deps = createMockDeps({ unregisterEgressCaller });
+      const manager = new WorkerdManager(deps);
+      const source = "workers/new-do",
+        className = "NewDO";
+      try {
+        for (const key of ["first", "second"]) {
+          const prepared = await manager.ensureDurableObjectEntity({
+            source,
+            className,
+            key,
+            contextId: "ctx-sealed",
+          });
+          await manager.restoreDurableObjectEntity({
+            id: prepared.targetId,
+            kind: "do",
+            key,
+            className,
+            source: { repoPath: source, effectiveVersion: prepared.effectiveVersion },
+            activeBuildKey: prepared.buildKey,
+            activeExecutionDigest: prepared.executionDigest,
+            activeAuthority: prepared.authority,
+            contextId: "ctx-sealed",
+            createdAt: 1,
+            status: "active",
+            cleanupComplete: false,
+          });
+        }
+        const first = manager.getDoAdmission(source, className, "first")!;
+        const second = manager.getDoAdmission(source, className, "second")!;
+        const original = await manager.getDoCode(
+          source,
+          className,
+          first.executableVersion,
+          "first"
+        );
+        expect(original).not.toBeNull();
+        const revoke = vi.spyOn(deps.tokenManager, "revokeToken");
+        revoke.mockClear();
+        unregisterEgressCaller.mockClear();
+
+        await manager.reconcileMutableSourceBuild(source, []);
+        expect(manager.getDoAdmission(source, className)).toBeNull();
+        expect(manager.getDoAdmission(source, className, "first")).toEqual(first);
+        expect(manager.getDoAdmission(source, className, "second")).toEqual(second);
+        expect(
+          await manager.getDoCode(source, className, second.executableVersion, "second")
+        ).toEqual(original);
+        expect(revoke).not.toHaveBeenCalledWith(`do-service:${source}:${className}`);
+        expect(unregisterEgressCaller).not.toHaveBeenCalledWith(original!.egressIdentity);
+
+        await manager.retireDOEntity({ source, className, objectKey: "first" });
+        expect(manager.getDoAdmission(source, className, "first")).toBeNull();
+        expect(manager.getDoAdmission(source, className, "second")).toEqual(second);
+        expect(revoke).not.toHaveBeenCalledWith(`do-service:${source}:${className}`);
+        expect(unregisterEgressCaller).not.toHaveBeenCalledWith(original!.egressIdentity);
+
+        await manager.retireDOEntity({ source, className, objectKey: "second" });
+        expect(manager.getDoAdmission(source, className, "second")).toBeNull();
+        expect(
+          await manager.getDoCode(source, className, second.executableVersion, "second")
+        ).toBeNull();
+        expect(revoke).toHaveBeenCalledWith(`do-service:${source}:${className}`);
+        expect(unregisterEgressCaller).toHaveBeenCalledWith(original!.egressIdentity);
+      } finally {
+        await manager.shutdown();
+      }
     });
 
     it("serves object-specific state and source coordinates in the admitted facet props", async () => {

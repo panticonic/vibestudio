@@ -7,7 +7,7 @@ import { isDeepStrictEqual, parseArgs } from "node:util";
 import { gunzipSync } from "node:zlib";
 import { requireDevelopmentTemplateCheckouts } from "../src/dev/developmentTemplateConfig.cjs";
 import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
-import { sourceClaimKinds, sourceClaimReviewInput, workspaceEditReviewInput, sourceClaimProgramIdentity, sourceClaimReviewMatches, sourceClaimReviewPath } from "./lib/source-claim-admission.mjs";
+import { sourceClaimKinds, sourceClaimReviewInput, workspaceEditReviewInput, editorialReviewInput, coordinatedRevisionReviewInput, outcomeWorkspaceReviewInput, sourceContentReviewInput, sourceClaimProgramIdentity, sourceClaimReviewMatches, sourceClaimReviewPath } from "./lib/source-claim-admission.mjs";
 
 const sharedProgram = "skills/vibestudio-workflows/runWorkflow.nl";
 const templateGoalDomains = {
@@ -1504,7 +1504,7 @@ export async function loadLiveTeacherCases(checkouts) {
         ...(assignment.devices ? { devices: assignment.devices } : {}),
         ...(assignment.requiresAndroidEmulator ? { requiresAndroidEmulator: true } : {}),
         ...(assignment.requiresDeploymentPackage ? { requiresDeploymentPackage: true } : {}),
-        ...((sourceClaimKinds.has(assignment.kind)||assignment.kind==="workspace-edit"||assignment.kind==="google-runbook"&&assignment.action==="revise") ? { requiresReview: true } : {}),
+        ...((sourceClaimKinds.has(assignment.kind)||assignment.kind==="workspace-edit"||assignment.kind==="editorial-packet"||assignment.kind==="coordinated-revision"||assignment.kind==="outcome-workspace"||assignment.kind==="google-runbook"&&assignment.action==="revise"||assignment.kind==="spectrolite"&&assignment.writablePath||assignment.kind==="vaultWork"&&assignment.expected.steps.some(step=>step.kind==="write")||assignment.kind==="pdfVault"&&assignment.vault.writablePath) ? { requiresReview: true } : {}),
         ...(assignment.kind === "preparedContentProject" &&
           (assignment.profile === "commit" || assignment.profile === "draft") ? { requiresReview:true } : {}),
         ...(assignment.workspaceBaseline ? { workspaceBaseline: assignment.workspaceBaseline } : {}),
@@ -7154,17 +7154,31 @@ export function openOutcomeGoalEvidence(execution, exercise, _scenario, workflow
   const attestedEntry = entry && { program: entry.program, callable: entry.callable, arguments: entry.arguments,
     ...(entry.resultType === "void" ? {resultType:"void"} : {}),
     ...(entry.argumentJson ? { argumentJson: entry.argumentJson } : {}) };
-  const voidReturn = entry?.resultType === "void" || proof?.actualResultKind === "void" || exercise.applicationResultKind === "void";
-  const returnedValue = voidReturn
-    ? entry?.resultType === "void" && entry.program.endsWith(".ts") &&
+  const declaredVoid = entry?.resultType === "void";
+  const dimensionRequirement = proof?.outcomeDimensions?.returnedValue?.required;
+  const contractRequirement = proof?.outcomeContract?.returnedValue?.required;
+  const requirementValid = [dimensionRequirement, contractRequirement].every(value => value === undefined || typeof value === "boolean") &&
+    (dimensionRequirement === undefined || contractRequirement === undefined || dimensionRequirement === contractRequirement);
+  const explicitReturnRequirement = dimensionRequirement ?? contractRequirement;
+  const returnRequired = explicitReturnRequirement ?? !declaredVoid;
+  const actualReturnProvided = proof?.actualResultKind !== undefined || exercise.applicationResultKind !== undefined ||
+    Object.hasOwn(proof ?? {}, "actualResult") || Object.hasOwn(exercise, "applicationResult");
+  const voidWitnessProvided = proof?.actualResultKind !== undefined || exercise.applicationResultKind !== undefined ||
+    declaredVoid && (Object.hasOwn(proof ?? {}, "actualResult") || Object.hasOwn(exercise, "applicationResult"));
+  const declaredVoidEntry = declaredVoid && entry.program.endsWith(".ts") &&
+    root?.executor?.kind === "crisp" && root?.definition?.returns === "void";
+  const returnedValue = voidWitnessProvided
+    ? declaredVoidEntry && root?.outcome === "done" &&
       proof?.actualResultKind === "void" && Object.hasOwn(proof,"actualResult") && proof.actualResult === null &&
-      exercise.applicationResultKind === "void" && exercise.applicationResult === null &&
-      root?.executor?.kind === "crisp" && root?.definition?.returns === "void" && matchesValue(root.output,null)
-    : proof?.actualResultKind === undefined && exercise.applicationResultKind === undefined && matchesValue(root?.output,proof?.actualResult);
+      exercise.applicationResultKind === "void" && exercise.applicationResult === null && matchesValue(root.output,null)
+    : proof?.actualResultKind === undefined && exercise.applicationResultKind === undefined && matchesValue(root?.output,proof?.actualResult) &&
+      (!Object.hasOwn(exercise, "applicationResult") || matchesValue(root?.output, exercise.applicationResult));
   const inputValues = entry?.arguments ?? { goal: world.goal };
   requireEvidence(
     proof?.passed === true && proof.caseId === world.id && proof.goal === world.goal &&
-      (!voidReturn || returnedValue) &&
+      requirementValid && (!actualReturnProvided || returnedValue) &&
+      (explicitReturnRequirement !== true || returnedValue) &&
+      (!declaredVoid || declaredVoidEntry) && (!voidWitnessProvided || returnedValue) &&
       typeof proof.contextId === "string" && proof.contextId === execution.provenance?.contextId &&
       Object.keys(checks).length > 0 && Object.values(checks).every(value => value === true) &&
       isDeepStrictEqual(Object.keys(root?.inputs ?? {}).sort(), Object.keys(inputValues).sort()) &&
@@ -7172,10 +7186,10 @@ export function openOutcomeGoalEvidence(execution, exercise, _scenario, workflow
       (!entry || isDeepStrictEqual(proof.entry, attestedEntry) &&
         isDeepStrictEqual(exercise.entry, attestedEntry) &&
         root.definition?.name === entry.callable &&
-        (!entry.program.endsWith(".ts") || (root.executor?.kind === "crisp" && root.definition?.id === "ts:"+root.definition?.source+"#default")) && returnedValue),
+        (!entry.program.endsWith(".ts") || (root.executor?.kind === "crisp" && root.definition?.id === "ts:"+root.definition?.source+"#default")) && (!returnRequired || returnedValue)),
     "Expected independently verified outcomes bound to the actual workspace and original user goal"
   );
-  const evidence = { workspace: { proof, ...(voidReturn ? {applicationReturn:{kind:"void",root_call_id:root.call_id,valueJson:"null",selectedResult:null}} : {}) } };
+  const evidence = { workspace: { proof, ...(declaredVoid && voidWitnessProvided ? {applicationReturn:{kind:"void",root_call_id:root.call_id,valueJson:"null",selectedResult:null}} : {}) } };
   const worldBinding = { context_id: proof.contextId, case_id: proof.caseId };
   if (world.kind === "browser") {
     const { panelId, inspections, attempts, after } = proof;
@@ -7200,6 +7214,22 @@ export function openOutcomeGoalEvidence(execution, exercise, _scenario, workflow
     requireEvidence(workflow.requiresReview === true, "Source claim review must be declared before teacher execution");
     const reviewInput = sourceClaimReviewInput(proof, world);
     return { world: worldBinding, checks: { ...checks }, evidence, reviewInput };
+  }
+  if(world.kind==="spectrolite"&&world.writablePath||world.kind==="vaultWork"&&world.expected.steps.some(step=>step.kind==="write")||world.kind==="pdfVault"&&world.vault.writablePath){
+    requireEvidence(workflow.requiresReview===true,"Authored source content review must be declared before teacher execution");
+    return {world:worldBinding,checks:{...checks},evidence,reviewInput:sourceContentReviewInput(proof,world)};
+  }
+  if(world.kind==="outcome-workspace"){
+    requireEvidence(workflow.requiresReview===true,"Workspace outcome content review must be declared before teacher execution");
+    return {world:worldBinding,checks:{...checks},evidence,reviewInput:outcomeWorkspaceReviewInput(proof,world)};
+  }
+  if(world.kind==="coordinated-revision"){
+    requireEvidence(workflow.requiresReview===true,"Coordinated revision content review must be declared before teacher execution");
+    return {world:worldBinding,checks:{...checks},evidence,reviewInput:coordinatedRevisionReviewInput(proof,world)};
+  }
+  if(world.kind==="editorial-packet"){
+    requireEvidence(workflow.requiresReview===true,"Editorial content review must be declared before teacher execution");
+    return {world:worldBinding,checks:{...checks},evidence,reviewInput:editorialReviewInput(proof,world)};
   }
   if(world.kind==="workspace-edit"||world.kind==="google-runbook"&&world.action==="revise"){
     requireEvidence(workflow.requiresReview===true,"Workspace edit content review must be declared before teacher execution");
@@ -11395,6 +11425,7 @@ export async function exportLiveTeacherWorkflow({
     run_id: source.run_id,
     world,
     status: "passed",
+    requirements: { semantic_review: workflow.requiresReview === true },
     checks: observed.checks,
     ...(workflow.interaction === "open-user-goal" ? { split } : {}),
     ...interaction,
