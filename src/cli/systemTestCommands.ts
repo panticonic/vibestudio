@@ -505,9 +505,11 @@ function installSystemTestRunCancellation(
     disposed = true;
     process.off("SIGINT", onSignal);
     process.off("SIGTERM", onSignal);
+    process.off("SIGHUP", onSignal);
   };
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
+  process.on("SIGHUP", onSignal);
 
   return {
     wasInterrupted: () => received !== null,

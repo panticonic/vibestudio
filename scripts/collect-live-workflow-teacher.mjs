@@ -1,9 +1,18 @@
 #!/usr/bin/env node
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { createRequire } from "node:module";
 import { parseArgs } from "node:util";
 import { persistentInstanceRoot } from "../src/dev/instanceRegistry.js";
 import { isSystemTestWorkspace } from "../src/dev/cliWorkspaceSelection.js";
@@ -20,6 +29,8 @@ import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
 import { groupLiveTeacherCases, terminalStartupFailure } from "./lib/live-teacher-groups.mjs";
 
 import { teacherEpisodeTimeout } from "./lib/live-teacher-budget.mjs";
+
+import { collectionInterruption, runTeacherCommand } from "./lib/live-teacher-interruption.mjs";
 
 import { liveTeacherEnvironment, moveRetainedState } from "./lib/live-teacher-retention.mjs";
 
@@ -39,10 +50,15 @@ const { values } = parseArgs({
     model: { type: "string", default: "openai-codex:gpt-6-luna" },
     "open-goals": { type: "boolean" },
     assignments: { type: "boolean" },
+    "checkpoint-request": { type: "string" },
   },
 });
-const list = values.list && !values.preflight && values.case === undefined && values.out === undefined;
-const preflight = values.preflight && !values.list && values.out === undefined &&
+const list =
+  values.list && !values.preflight && values.case === undefined && values.out === undefined;
+const preflight =
+  values.preflight &&
+  !values.list &&
+  values.out === undefined &&
   values["review-model"] === undefined;
 const batchSize = Number(values["cases-per-instance"]);
 if (!/^\d+$/u.test(values["cases-per-instance"]) || !Number.isSafeInteger(batchSize))
@@ -51,9 +67,13 @@ const concurrency = Number(values.concurrency);
 if (!/^\d+$/u.test(values.concurrency) || !Number.isSafeInteger(concurrency) || concurrency < 1)
   throw new Error("--concurrency must be a positive integer");
 const caseTimeout = teacherEpisodeTimeout(values["test-timeout-ms"]);
-if (values["approve-codex-session"] &&
-    (list || preflight || values.assignments || !values.model.startsWith("openai-codex:"))) {
-  throw new Error("--approve-codex-session requires a live open-goal capture with an openai-codex model");
+if (
+  values["approve-codex-session"] &&
+  (list || preflight || values.assignments || !values.model.startsWith("openai-codex:"))
+) {
+  throw new Error(
+    "--approve-codex-session requires a live open-goal capture with an openai-codex model"
+  );
 }
 const requested = values.case ?? [];
 if (
@@ -72,16 +92,23 @@ const liveTeacherCases = await loadLiveTeacherCases(checkouts);
 for (const [scenario, workflow] of liveTeacherCases) {
   if ((workflow.interaction === "open-user-goal") === Boolean(values.assignments)) {
     liveTeacherCases.delete(scenario);
-  } else if (workflow.interaction === "open-user-goal" && !isSystemTestWorkspace(workflow.workspace ?? "system")) {
-    throw new Error(`Open goal ${scenario} requires an instantiable System Test workspace, received ${workflow.workspace}`);
+  } else if (
+    workflow.interaction === "open-user-goal" &&
+    !isSystemTestWorkspace(workflow.workspace ?? "system")
+  ) {
+    throw new Error(
+      `Open goal ${scenario} requires an instantiable System Test workspace, received ${workflow.workspace}`
+    );
   } else if (workflow.interaction === "open-user-goal" && !workflow.entry) {
     throw new Error(`Collection requires an application entry for ${scenario}`);
   }
 }
 if (!liveTeacherCases.size) {
-  throw new Error(values.assignments
-    ? "No assigned workflows are installed in these checkouts"
-    : "No open user goals are installed in these checkouts");
+  throw new Error(
+    values.assignments
+      ? "No assigned workflows are installed in these checkouts"
+      : "No open user goals are installed in these checkouts"
+  );
 }
 if (list) {
   for (const [scenario, workflow] of liveTeacherCases)
@@ -92,13 +119,17 @@ if (list) {
         sourceGroup: workflow.group,
         workspace: workflow.workspace ?? "system",
         sourceGroups: workflowSourceGroups(workflow),
-        ...(workflow.interaction ? {
-          interaction: workflow.interaction,
-          split: workflow.split,
-          taskId: `${workflow.namespace}:${scenario}`,
-          goalSha256: createHash("sha256").update(JSON.stringify(workflow.assignment.goal)).digest("hex"),
-          ...(workflow.entry ? { entry: workflow.entry } : {}),
-        } : {}),
+        ...(workflow.interaction
+          ? {
+              interaction: workflow.interaction,
+              split: workflow.split,
+              taskId: `${workflow.namespace}:${scenario}`,
+              goalSha256: createHash("sha256")
+                .update(JSON.stringify(workflow.assignment.goal))
+                .digest("hex"),
+              ...(workflow.entry ? { entry: workflow.entry } : {}),
+            }
+          : {}),
         requiresReview: Boolean(workflow.requiresReview),
         ...(workflow.workspaceBaseline ? { workspaceBaseline: workflow.workspaceBaseline } : {}),
         ...(workflow.devices ? { devices: workflow.devices } : {}),
@@ -118,35 +149,70 @@ if (unknown.length) {
 
 const groups = groupLiveTeacherCases(scenarios, liveTeacherCases, preflight ? 0 : batchSize);
 
-function command(args, stdout = "inherit") {
-  const result = spawnSync("pnpm", args, { cwd: host, env: liveTeacherEnvironment(), stdio: ["inherit", stdout, "inherit"] });
-  if (result.error) throw result.error;
-  return result.status ?? 1;
+// These are the documented package commands, invoked directly so the parent
+// owns the actual launcher rather than a package-manager signal intermediary.
+function commandInvocation(args) {
+  if (args[0] === "--silent") args = args.slice(1);
+  const [name, ...rest] = args;
+  if (name === "system-test")
+    return [
+      "--import",
+      pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href,
+      path.join(host, "src/dev/runSystemTest.ts"),
+      ...rest,
+    ];
+  if (name === "natlang:vendor") return [path.join(host, "scripts/natlang-vendor.mjs"), ...rest];
+  throw new Error(`Unsupported collection command: ${name}`);
+}
+async function captureCommand(args, stdout = "inherit", signal) {
+  return runTeacherCommand(
+    process.execPath,
+    commandInvocation(args),
+    {
+      cwd: host,
+      env: liveTeacherEnvironment(),
+      stdio: ["inherit", stdout, "inherit"],
+    },
+    signal
+  );
+}
+async function command(args, stdout = "inherit", signal) {
+  return (await captureCommand(args, stdout, signal)).status;
 }
 
 function systemTestArgs({ instance, workspace, workspaceBaseline, devices }, args) {
   return [
-    "system-test", "--instance", instance, "--workspace", workspace,
+    "system-test",
+    "--instance",
+    instance,
+    "--workspace",
+    workspace,
     ...(workspaceBaseline ? ["--workspace-baseline", workspaceBaseline] : []),
     ...devices.flatMap((device) => ["--device", device]),
     ...args,
   ];
 }
 
-function installedTests(group) {
+async function installedTests(group, signal) {
   const { workspace } = group;
-  const result = spawnSync("pnpm", [
-    "--silent", ...systemTestArgs(group, ["list", "--json"]),
-  ], { cwd: host, env: liveTeacherEnvironment(), encoding: "utf8", maxBuffer: 8 * 1024 * 1024, stdio: ["ignore", "pipe", "inherit"] });
-  if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error(`Could not list tests in managed workspace ${workspace}`);
+  const result = await captureCommand(
+    ["--silent", ...systemTestArgs(group, ["list", "--json"])],
+    "pipe",
+    signal
+  );
+  if (result.status !== 0)
+    throw new Error(`Could not list tests in managed workspace ${workspace}`);
   const tests = JSON.parse(result.stdout);
   const byName = new Map();
   if (!Array.isArray(tests)) throw new Error(`Invalid system-test catalog for ${workspace}`);
   for (const row of tests) {
-    if (typeof row?.name !== "string" || byName.has(row.name) ||
-        typeof row.installed !== "boolean" || typeof row.orchestrated !== "boolean" ||
-        !Array.isArray(row.requiresUnits)) {
+    if (
+      typeof row?.name !== "string" ||
+      byName.has(row.name) ||
+      typeof row.installed !== "boolean" ||
+      typeof row.orchestrated !== "boolean" ||
+      !Array.isArray(row.requiresUnits)
+    ) {
       throw new Error(`Invalid system-test descriptor in ${workspace}`);
     }
     byName.set(row.name, row);
@@ -154,12 +220,15 @@ function installedTests(group) {
   return byName;
 }
 
-const deploymentPackageProblem = scenarios.some((scenario) => liveTeacherCases.get(scenario).requiresDeploymentPackage)
+const deploymentPackageProblem = scenarios.some(
+  (scenario) => liveTeacherCases.get(scenario).requiresDeploymentPackage
+)
   ? await (async () => {
       const input = process.env.VIBESTUDIO_MANAGED_DEPLOYMENT_PACKAGE?.trim();
       if (!input) return "set VIBESTUDIO_MANAGED_DEPLOYMENT_PACKAGE to an installed server package";
       try {
-        const { requireInstalledDeploymentPackage } = await import("./lib/owned-deployment-target.mjs");
+        const { requireInstalledDeploymentPackage } =
+          await import("./lib/owned-deployment-target.mjs");
         await requireInstalledDeploymentPackage(path.resolve(host, input));
         return null;
       } catch (error) {
@@ -183,10 +252,15 @@ if (preflight) {
     const placement = { workspace, workspaceBaseline, ...(devices.length ? { devices } : {}) };
     let stopStatus;
     try {
-      if (command(systemTestArgs(group, ["doctor", "--approve-startup", "--model", values.model]), "ignore") !== 0) {
+      if (
+        (await command(
+          systemTestArgs(group, ["doctor", "--approve-startup", "--model", values.model]),
+          "ignore"
+        )) !== 0
+      ) {
         throw new Error("Managed workspace did not pass readiness checks");
       }
-      const catalog = installedTests(group);
+      const catalog = await installedTests(group);
       const unavailable = cases.flatMap((scenario) => {
         const reason = unavailableCase(catalog, scenario);
         return reason ? [{ scenario, reason }] : [];
@@ -197,7 +271,7 @@ if (preflight) {
       unavailableCount += cases.length;
       console.log(JSON.stringify({ ...placement, checked: 0, error: String(error) }));
     } finally {
-      stopStatus = command(systemTestArgs(group, ["stop"]), "ignore");
+      stopStatus = await command(systemTestArgs(group, ["stop"]), "ignore");
     }
     if (stopStatus !== 0) {
       throw new Error(`Could not retire the managed ${workspace} workspace ${group.instance}`);
@@ -249,155 +323,237 @@ function pinSources() {
     repositories,
     validators: Object.fromEntries(
       [...validators].map(([scenario, validator]) => {
-        if (!digests.has(validator)) digests.set(validator, createHash("sha256").update(readFileSync(validator)).digest("hex"));
+        if (!digests.has(validator))
+          digests.set(
+            validator,
+            createHash("sha256").update(readFileSync(validator)).digest("hex")
+          );
         return [scenario, digests.get(validator)];
       })
     ),
   };
 }
 
-
 const pinned = pinSources();
-if (command(["natlang:vendor", "--check"]) !== 0)
+if ((await command(["natlang:vendor", "--check"])) !== 0)
   throw new Error("Vendored Natlang pin check failed");
 const out = path.resolve(values.out);
 mkdirSync(out, { mode: 0o700 });
-const source = { repositories: pinned.repositories, teacher: values.model, teacherTimeoutMs: Number(caseTimeout) };
+const source = {
+  repositories: pinned.repositories,
+  teacher: values.model,
+  teacherTimeoutMs: Number(caseTimeout),
+};
 const writePins = (destination, value) =>
   writeFileSync(destination, JSON.stringify(value, null, 2), { mode: 0o600 });
 
 const single = scenarios.length === 1;
 const casesDir = path.join(out, "cases");
 if (!single) {
-  const instances = Object.fromEntries(
-    groups.map(({ key, instance }) => [key, instance])
-  );
+  const instances = Object.fromEntries(groups.map(({ key, instance }) => [key, instance]));
   const legacy = groups.length === 1 ? { instance: groups[0].instance } : {};
   writePins(path.join(out, "source.json"), { ...source, ...legacy, instances, scenarios });
   mkdirSync(casesDir, { mode: 0o700 });
 }
-const failures = [];
-const unavailableScopes = new Set();
-for (const group of groups) {
-  const { instance, workspace, workspaceBaseline, devices } = group;
-  if (unavailableScopes.has(group.scope)) continue;
-  const systemTest = (args, stdout) =>
-    command(systemTestArgs(group, args), stdout);
-  const cases = group.cases.map((scenario) => {
-    const directory = single ? out : path.join(casesDir, scenario);
-    if (!single) mkdirSync(directory, { mode: 0o700 });
-    const pins = path.join(directory, "source.json");
-    const caseSource = {
-      ...source,
-      instance,
-      workspace,
-      ...(workspaceBaseline ? { workspace_baseline_commit: workspaceBaseline } : {}),
-      ...(devices.length ? { devices } : {}),
-      validator_sha256: pinned.validators[scenario],
-    };
-    writePins(pins, caseSource);
-    return { scenario, directory, pins, caseSource };
-  });
-  let stopStatus;
-  try {
-    const doctor = spawnSync("pnpm", systemTestArgs(group, ["doctor", "--approve-startup", "--model", source.teacher]), {
-      cwd: host, env: liveTeacherEnvironment(), encoding: "utf8", stdio: ["inherit", "pipe", "inherit"],
+const interruption = collectionInterruption({
+  requestPath: values["checkpoint-request"]
+    ? path.resolve(values["checkpoint-request"])
+    : undefined,
+  out,
+  cases: scenarios,
+});
+try {
+  const failures = [];
+  const unavailableScopes = new Set();
+  for (const group of groups) {
+    const { instance, workspace, workspaceBaseline, devices } = group;
+    if (interruption.signal.aborted) break;
+    if (unavailableScopes.has(group.scope)) continue;
+    const systemTest = (args, stdout, signal) =>
+      command(systemTestArgs(group, args), stdout, signal);
+    const cases = group.cases.map((scenario) => {
+      const directory = single ? out : path.join(casesDir, scenario);
+      if (!single) mkdirSync(directory, { mode: 0o700 });
+      const pins = path.join(directory, "source.json");
+      const caseSource = {
+        ...source,
+        instance,
+        workspace,
+        ...(workspaceBaseline ? { workspace_baseline_commit: workspaceBaseline } : {}),
+        ...(devices.length ? { devices } : {}),
+        validator_sha256: pinned.validators[scenario],
+      };
+      writePins(pins, caseSource);
+      return { scenario, directory, pins, caseSource };
     });
-    if (doctor.error) throw doctor.error;
-    process.stdout.write(doctor.stdout);
-    if (doctor.status !== 0) {
-      if (terminalStartupFailure(doctor.stdout)) unavailableScopes.add(group.scope);
-      throw new Error(`The managed ${workspace} workspace did not pass readiness checks`);
-    }
-    const catalog = installedTests(group);
-    const ready = cases.filter(({ scenario }) => {
-      const reason = unavailableCase(catalog, scenario);
-      if (!reason) return true;
-      const error = new Error(reason);
-      console.error(`Teacher case ${scenario} failed: ${String(error)}`);
-      failures.push(error);
-      return false;
-    });
-    const runSize = concurrency === 1 ? 1 : ready.length;
-    for (let offset = 0; offset < ready.length; offset += runSize) {
-      const batch = ready.slice(offset, offset + runSize);
-      const concurrent = batch.length > 1;
-      const runOut = concurrent ? mkdtempSync(path.join(out, "managed-")) : batch[0].directory;
-      if (JSON.stringify(pinSources()) !== JSON.stringify(pinned))
-        throw new Error("Source pins changed before starting the batch");
-      systemTest([
-        "run", ...batch.map(({ scenario }) => scenario),
-        "--model", source.teacher,
-        ...(concurrent ? ["--concurrency", String(Math.min(concurrency, batch.length)), "--retain-trajectories"] : []),
-        "--test-timeout-ms", caseTimeout,
-        ...(values["approve-codex-session"] ? ["--approve-codex-session"] : []),
-        "--out-dir", runOut,
-      ]);
-      const runs = readdirSync(runOut).filter((entry) => /^st_[a-f0-9]{32}$/u.test(entry));
-      if (runs.length !== 1) throw new Error("Expected one managed system-test run");
-      const [runId] = runs;
-      const summaryPath = path.join(runOut, runId, "summary.json");
-      const summary = concurrent && existsSync(summaryPath) ? JSON.parse(readFileSync(summaryPath, "utf8")) : {};
-      const failed = new Set([...(summary.failedTests ?? []), ...(summary.testsWithUnexpectedToolFailures ?? [])]);
-      for (const { scenario, directory, pins, caseSource } of batch) {
-        try {
-          writePins(pins, { ...caseSource, run_id: runId });
-          const filename = `trajectory-${scenario}-full.json.gz`;
-          const target = path.join(directory, runId, filename);
-          const retained = [path.join(runOut, runId, filename), path.join(runOut, runId, "failure-evidence", filename)]
-            .find(candidate => existsSync(candidate));
-          if (retained) {
-            if (retained !== target) {
-              mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
-              copyFileSync(retained, target);
+    let stopStatus;
+    try {
+      const doctor = await captureCommand(
+        systemTestArgs(group, ["doctor", "--approve-startup", "--model", source.teacher]),
+        "pipe",
+        interruption.signal
+      );
+      process.stdout.write(doctor.stdout);
+      interruption.signal.throwIfAborted();
+      if (doctor.status !== 0) {
+        if (terminalStartupFailure(doctor.stdout)) unavailableScopes.add(group.scope);
+        throw new Error(`The managed ${workspace} workspace did not pass readiness checks`);
+      }
+      const catalog = await installedTests(group, interruption.signal);
+      const ready = cases.filter(({ scenario }) => {
+        const reason = unavailableCase(catalog, scenario);
+        if (!reason) return true;
+        const error = new Error(reason);
+        console.error(`Teacher case ${scenario} failed: ${String(error)}`);
+        failures.push(error);
+        return false;
+      });
+      const runSize = concurrency === 1 ? 1 : ready.length;
+      for (let offset = 0; offset < ready.length; offset += runSize) {
+        if (interruption.signal.aborted) break;
+        const batch = ready.slice(offset, offset + runSize);
+        const concurrent = batch.length > 1;
+        const runOut = concurrent ? mkdtempSync(path.join(out, "managed-")) : batch[0].directory;
+        if (JSON.stringify(pinSources()) !== JSON.stringify(pinned))
+          throw new Error("Source pins changed before starting the batch");
+        await systemTest(
+          [
+            "run",
+            ...batch.map(({ scenario }) => scenario),
+            "--model",
+            source.teacher,
+            ...(concurrent
+              ? [
+                  "--concurrency",
+                  String(Math.min(concurrency, batch.length)),
+                  "--retain-trajectories",
+                ]
+              : []),
+            "--test-timeout-ms",
+            caseTimeout,
+            ...(values["approve-codex-session"] ? ["--approve-codex-session"] : []),
+            "--out-dir",
+            runOut,
+          ],
+          undefined,
+          interruption.signal
+        );
+        const runs = readdirSync(runOut).filter((entry) => /^st_[a-f0-9]{32}$/u.test(entry));
+        if (runs.length !== 1) {
+          if (interruption.signal.aborted && runs.length === 0) break;
+          throw new Error("Expected one managed system-test run");
+        }
+        const [runId] = runs;
+        const summaryPath = path.join(runOut, runId, "summary.json");
+        const summary = existsSync(summaryPath)
+          ? JSON.parse(readFileSync(summaryPath, "utf8"))
+          : {};
+        const interruptedStatusPath = path.join(
+          runOut,
+          runId,
+          "failure-evidence",
+          "interrupted-status.json"
+        );
+        const interruptedStatus = existsSync(interruptedStatusPath)
+          ? readJson(interruptedStatusPath)
+          : null;
+        const terminalCases = new Set(
+          interruptedStatus?.progress?.completed?.map((row) => row.name) ?? []
+        );
+        if (summary.status === "completed")
+          for (const row of batch) terminalCases.add(row.scenario);
+        interruption.complete([...terminalCases]);
+        const failed = new Set([
+          ...(summary.failedTests ?? []),
+          ...(summary.testsWithUnexpectedToolFailures ?? []),
+        ]);
+        for (const { scenario, directory, pins, caseSource } of batch) {
+          try {
+            writePins(pins, { ...caseSource, run_id: runId });
+            const filename = `trajectory-${scenario}-full.json.gz`;
+            const target = path.join(directory, runId, filename);
+            const retained = [
+              path.join(runOut, runId, filename),
+              path.join(runOut, runId, "failure-evidence", filename),
+            ].find((candidate) => existsSync(candidate));
+            if (retained) {
+              if (retained !== target) {
+                mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+                copyFileSync(retained, target);
+              }
+            } else if (
+              (await systemTest(
+                ["trajectory", runId, scenario, "--full", "--json", "--out-dir", directory],
+                "ignore"
+              )) !== 0
+            ) {
+              throw new Error(`Unable to retrieve the durable trajectory for ${runId}`);
             }
-          } else if (systemTest(["trajectory", runId, scenario, "--full", "--json", "--out-dir", directory], "ignore") !== 0) {
-            throw new Error(`Unable to retrieve the durable trajectory for ${runId}`);
+            // An explicit cancellation preserves the real partial packet, but an
+            // unfinished case has no terminal goal verdict to export as completed.
+            if (interruption.signal.aborted && !terminalCases.has(scenario)) continue;
+            // Overall interruption and a missing aggregate summary do not invalidate
+            // independent completed cases. The exporter verifies this packet
+            // against its exact source/model/root/outcome before admitting it.
+            if (failed.has(scenario)) {
+              throw new Error(
+                `System test ${runId} failed. Its full trajectory was retained in ${directory}`
+              );
+            }
+            if (JSON.stringify(pinSources()) !== JSON.stringify(pinned))
+              throw new Error("Source pins changed during the live run");
+            const destination = path.join(directory, "verified");
+            await exportLiveTeacherWorkflow({
+              trajectory: target,
+              pins,
+              validator: validators.get(scenario),
+              out: destination,
+              split: liveTeacherCases.get(scenario).split ?? "train",
+              review,
+              cases: liveTeacherCases,
+            });
+            interruption.complete([scenario]);
+            console.log(path.join(destination, "manifest.json"));
+          } catch (error) {
+            const label =
+              interruption.signal.aborted && !terminalCases.has(scenario)
+                ? "Teacher evidence"
+                : "Teacher case";
+            console.error(`${label} ${scenario} failed: ${String(error)}`);
+            failures.push(error);
           }
-          // Overall interruption and a missing aggregate summary do not invalidate
-          // independent completed cases. The exporter verifies this packet
-          // against its exact source/model/root/outcome before admitting it.
-          if (failed.has(scenario)) {
-            throw new Error(`System test ${runId} failed. Its full trajectory was retained in ${directory}`);
-          }
-          if (JSON.stringify(pinSources()) !== JSON.stringify(pinned))
-            throw new Error("Source pins changed during the live run");
-          const destination = path.join(directory, "verified");
-          await exportLiveTeacherWorkflow({
-            trajectory: target, pins, validator: validators.get(scenario), out: destination,
-            split: liveTeacherCases.get(scenario).split ?? "train", review, cases: liveTeacherCases,
-          });
-          console.log(path.join(destination, "manifest.json"));
+        }
+      }
+    } catch (error) {
+      if (error !== interruption.signal.reason) {
+        console.error(`Teacher workspace ${workspace} failed: ${String(error)}`);
+        failures.push(error);
+      }
+    } finally {
+      stopStatus = await systemTest(["stop"]);
+      // The supervisor has joined all state owners. Move its retained state into
+      // this capture tree; the campaign archives the whole tree before cleanup.
+      // A failed move leaves the original durable state intact for recovery.
+      const retained = path.join(persistentInstanceRoot(host, instance), "retained");
+      if (stopStatus === 0 && existsSync(retained)) {
+        const destination = path.join(out, `retained-state-${instance}`);
+        try {
+          moveRetainedState({ retained, destination, instance, stopped: stopStatus === 0 });
         } catch (error) {
-          console.error(`Teacher case ${scenario} failed: ${String(error)}`);
-          failures.push(error);
+          failures.push(
+            new Error(`Native state remains recoverable at ${retained}: ${String(error)}`)
+          );
         }
       }
     }
-  } catch (error) {
-    console.error(`Teacher workspace ${workspace} failed: ${String(error)}`);
-    failures.push(error);
-  } finally {
-    stopStatus = systemTest(["stop"]);
-    // The supervisor has joined all state owners. Move its retained state into
-    // this capture tree; the campaign archives the whole tree before cleanup.
-    // A failed move leaves the original durable state intact for recovery.
-    const retained = path.join(persistentInstanceRoot(host, instance), "retained");
-    if (stopStatus === 0 && existsSync(retained)) {
-      const destination = path.join(out, `retained-state-${instance}`);
-      try {
-        moveRetainedState({ retained, destination, instance, stopped: stopStatus === 0 });
-      } catch (error) {
-        failures.push(
-          new Error(`Native state remains recoverable at ${retained}: ${String(error)}`)
-        );
-      }
+    if (stopStatus !== 0) {
+      failures.push(new Error(`Could not retire the managed ${workspace} workspace ${instance}`));
+      break;
     }
   }
-  if (stopStatus !== 0) {
-    failures.push(new Error(`Could not retire the managed ${workspace} workspace ${instance}`));
-    break;
-  }
+  if (failures.length)
+    throw new AggregateError(failures, `${failures.length} live teacher operation(s) failed`);
+  if (interruption.signal.aborted) process.exitCode = 130;
+} finally {
+  interruption.dispose();
 }
-if (failures.length)
-  throw new AggregateError(failures, `${failures.length} live teacher operation(s) failed`);
