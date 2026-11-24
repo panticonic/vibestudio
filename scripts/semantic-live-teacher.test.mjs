@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { test } from "node:test";
 import { openOutcomeGoalEvidence } from "./export-live-workflow-teacher.mjs";
-import {editorialReviewInput,coordinatedRevisionReviewInput,outcomeWorkspaceReviewInput}from "./lib/source-claim-admission.mjs";
+import {editorialReviewInput,coordinatedRevisionReviewInput,outcomeWorkspaceReviewInput,sourceContentReviewInput}from "./lib/source-claim-admission.mjs";
 
 const reference = value => {
   const json = JSON.stringify(value);
@@ -106,6 +106,17 @@ test("workspace outcome review binds requested answers or actual scoped edits",(
  assert.equal(outcomeWorkspaceReviewInput(proof,world),proof.semanticReviewInput);
  proof.semanticReviewInput.actual.actualAnswer={answer:"Opening is unobserved"};
  assert.throws(()=>outcomeWorkspaceReviewInput(proof,world),/actual retained content/);
+});
+
+test("source content review binds native retained MDX and verified PDF handoff without altering observations",()=>{
+ const goal="Correct the active vault instruction.",path="notice.mdx",evidence={originalDocuments:{[path]:"Old source"},observedDocuments:[{path,revision:"observed"}],retainedDocuments:{[path]:"Corrected source"},committedDocuments:{[path]:"Old source"},currentDocument:{path,revision:"current",source:"Corrected source",sourceHash:"native-hash",visible:"Corrected view",preview:[],binding:{panelId:"owned"}},writes:[{path,toSourceHash:"native-hash"}]};
+ const proof={semanticReviewRequired:true,sourceContentEvidence:evidence,semanticReviewInput:{actual:{goal,...evidence},expected:{goal,editablePaths:[path]},rubric:"Judge actual source meaning and useful rendering against the request."}};
+ assert.equal(sourceContentReviewInput(proof,{kind:"spectrolite",goal,writablePath:path}),proof.semanticReviewInput);
+ const original=structuredClone(proof),handoff={status:"bound",source:{document:"approved.pdf",digest:"pdf-digest",citations:[{page:2,line:0,quote:"Approved value"}]}};
+ const combined=sourceContentReviewInput({proof:{vault:proof,handoff}},{kind:"pdfVault",goal,vault:{writablePath:path}});
+ assert.deepEqual(combined.actual.pdfHandoff,handoff);assert.deepEqual(proof,original);
+ proof.semanticReviewInput.actual={...proof.semanticReviewInput.actual,retainedDocuments:{[path]:"Unobserved source"}};
+ assert.throws(()=>sourceContentReviewInput(proof,{kind:"spectrolite",goal,writablePath:path}),/actual native documents/);
 });
 
 

@@ -77,6 +77,22 @@ export function outcomeWorkspaceReviewInput(proof,world){
   return input;
 }
 
+export function sourceContentReviewInput(proof,world){
+  const nested=world.kind==="pdfVault"?proof.proof?.vault:proof;
+  const input=nested?.semanticReviewInput,evidence=nested?.sourceContentEvidence;
+  const paths=world.kind==="vaultWork"?world.expected.steps.filter(step=>step.kind==="write").map(step=>step.path):
+    world.kind==="pdfVault"?[world.vault.writablePath]:[world.writablePath];
+  requireFact(nested?.semanticReviewRequired===true&&input?.actual?.goal===world.goal&&input.expected?.goal===world.goal&&
+    paths.length>0&&paths.every(path=>typeof path==="string"&&path)&&equal(input.expected.editablePaths,paths)&&
+    evidence&&equal(input.actual,{goal:world.goal,...evidence})&&typeof input.rubric==="string"&&input.rubric.trim(),
+    "Source content review differs from actual native documents, current readback or authorized paths");
+  if(world.kind!=="pdfVault")return input;
+  requireFact(proof.proof?.handoff?.status==="bound"&&proof.proof.handoff.source,
+    "PDF-backed source review requires its exact independently verified PDF handoff");
+  return {...input,actual:{...input.actual,goal:world.goal,pdfHandoff:proof.proof.handoff},expected:{...input.expected,goal:world.goal},
+    rubric:input.rubric+" The requested source correction must be supported by the supplied independently verified PDF handoff and its exact page/quote evidence. Judge the actual retained vault source against those facts; do not infer a different PDF authority from a filename or an optional returned receipt."};
+}
+
 /** Bind semantic policy inputs to actual returned values and independent readback. */
 export function sourceClaimReviewInput(proof, world) {
   requireFact(sourceClaimKinds.has(world.kind) && proof.semanticReviewRequired === true,
