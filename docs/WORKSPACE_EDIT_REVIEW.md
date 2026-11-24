@@ -1,0 +1,9 @@
+# Retained document content review
+
+SST's shared workspace edit verifier and Calendar runbook verifier bind exact actual native revisions, retained-byte readback, authorized edit regions, protected text and unrelated files. Authored reference prose identifies edit scope, not a required answer string. A native pass is therefore necessary but not sufficient for semantic admission.
+
+`source-claim-admission.mjs` binds each review's original draft, authority, retained edit and SHA256 to independently observed task evidence. Public/owned research-and-edit passes those edits to the existing typed public-claims judge, which judges both research and actual written prose in one invocation. Pure workspace edits and mutating Google runbooks use the existing generic rubric judge with exact retained documents and authority. Its decision must cover correctness, literal requested facts, conditions, unsupported additions and the actual user goal. The exporter requires this review before admission; there is no gold wording or fixed teacher route.
+
+Activate these Host changes with the SST successor implementing `workspace-edit-evidence.ts`. Refresh only `requiresReview` metadata for the three workspace-edit rows and two mutating Google runbook rows; preserve all task IDs, user goals, source groups and held splits. Existing source-query reviews remain required. Holds and inspection goals still require unchanged protected bytes.
+
+A reviewer accepts an optional AbortSignal. Before provider preparation and every model request it checks cancellation; an already in-flight turn may settle. Interrupted exchanges are retained as immutable, content-addressed `.interrupted-<sha>.json` artifacts with no accepted verdict, and cannot be reused as completed review evidence. The collector owns resumable pending-review accounting.

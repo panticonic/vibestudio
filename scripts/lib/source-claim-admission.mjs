@@ -1,11 +1,41 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { isDeepStrictEqual as equal } from "node:util";
-import { validatePublicClaimAssessment } from "../review-live-workflow-teacher.mjs";
+import { validatePublicClaimAssessment,validateDocumentEdits } from "../review-live-workflow-teacher.mjs";
 
 export const sourceClaimKinds = new Set(["research", "research-and-edit", "owned-research", "owned-research-and-edit", "assigned-public-brief"]);
 const sha = value => createHash("sha256").update(value).digest("hex");
 const requireFact = (value, message) => { if (!value) throw new Error(message); };
+
+function bindWorkspaceEdit(proof,world,edits){
+  validateDocumentEdits(edits);
+  requireFact(edits.length===1,"Workspace review needs the assigned retained edit");
+  const edit=edits[0];
+  if(world.kind==="google-runbook"){
+    const current=proof.productReview?.documents?.find(document=>document.path==="operations-runbook.md");
+    requireFact(world.action==="revise"&&edit.path==="operations-runbook.md"&&edit.originalText===world.before&&
+      edit.authority.path==="approved-instructions.md"&&edit.authority.text===world.approval&&edit.concurrentAddition===(world.coedit??"")&&
+      current?.text===edit.retainedText&&current.version===edit.retainedSha256,"Runbook review differs from the actual retained document and approval");
+    return;
+  }
+  const scope=world.edit??world,observed=proof.document??proof;
+  requireFact(edit.path===scope.destination&&edit.originalText===scope.files?.[edit.path]&&
+    edit.authority.path===scope.source&&edit.authority.text===scope.files?.[scope.source]&&
+    edit.concurrentAddition===scope.concurrentAddition&&edit.retainedText===observed.contents?.[edit.path]&&
+    observed.reads?.some(read=>read.path===edit.path&&read.version===edit.retainedSha256),
+    "Workspace review differs from actual retained bytes or assigned authority");
+}
+
+export function workspaceEditReviewInput(proof,world){
+  const input=proof.semanticReviewInput;
+  requireFact((world.kind==="workspace-edit"||world.kind==="google-runbook"&&world.action==="revise")&&proof.semanticReviewRequired===true&&input?.actual?.goal===world.goal&&
+    input?.expected?.goal===world.goal&&typeof input.rubric==="string"&&input.rubric.trim(),
+    "Workspace edits require their independent goal-bound content review");
+  bindWorkspaceEdit(proof,world,input.actual.documentEdits);
+  const documents=world.kind==="google-runbook"?proof.productReview.documents.map(({path,text})=>({path,text})):Object.entries(proof.contents).map(([path,text])=>({path,text}));
+  requireFact(equal(input.actual.documents,documents),"Workspace review changed the independently retained documents");
+  return input;
+}
 
 /** Bind semantic policy inputs to actual returned values and independent readback. */
 export function sourceClaimReviewInput(proof, world) {
@@ -13,6 +43,7 @@ export function sourceClaimReviewInput(proof, world) {
     "Source claims require independently configured semantic review");
   const input = proof.semanticReviewInput;
   const actual = validatePublicClaimAssessment(input);
+  if(world.kind.endsWith("-and-edit"))bindWorkspaceEdit(proof,world,actual.documentEdits);
   const subject = world.kind.endsWith("-and-edit") ? proof.actualResult?.research : proof.actualResult;
   let answer;
   try { answer = JSON.parse(actual.answer); } catch { throw new Error("Source claim answer must retain the actual typed value"); }

@@ -2,11 +2,16 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {pathToFileURL} from 'node:url';
-import {validatePublicClaimAssessment,assessPublicClaims} from './review-live-workflow-teacher.mjs';
+import {validatePublicClaimAssessment,assessPublicClaims,workflowReviewer} from './review-live-workflow-teacher.mjs';
 const text='These example domains are not available for registration or transfer.';
 const input={kind:'public-claims',actual:{goal:'May I register an example domain?',answer:JSON.stringify({status:'answered',statements:[{text:'No.',cites:[{url:'https://www.iana.org/help/example-domains',quote:text}]}]}),sourceScope:null,
  citations:[{url:'https://www.iana.org/help/example-domains',quote:text}],
  sources:[{url:'https://www.iana.org/help/example-domains',title:'Example domains',text,sha256:createHash('sha256').update(text).digest('hex')} ]}};
+test('a checkpointed review starts no provider preparation or new turn',async()=>{
+ const controller=new AbortController();controller.abort();
+ const reviewer=workflowReviewer('openai-codex:gpt-6-luna','/missing/provider/must-not-be-loaded');
+ await assert.rejects(()=>reviewer(input,'reference:offline',controller.signal),error=>error.name==='AbortError');
+});
 test('crisp review binds source bytes, exact quotation, and explicit user scope',()=>{
  assert.equal(validatePublicClaimAssessment(input),input.actual);
  const forged=structuredClone(input);forged.actual.sources[0].text+=' altered';
@@ -15,6 +20,16 @@ test('crisp review binds source bytes, exact quotation, and explicit user scope'
  assert.throws(()=>validatePublicClaimAssessment(quote),/not a span/);
  const scope=structuredClone(input);scope.actual.sourceScope=['https://example.com/'];
  assert.throws(()=>validatePublicClaimAssessment(scope),/explicit scope/);
+});
+test('combined review binds exact retained edit bytes and protected spans without a gold sentence',()=>{
+ const enriched=structuredClone(input),hash=value=>createHash('sha256').update(value).digest('hex');
+ const original='Registration is available.\n',replacement='Registration is unavailable (see IANA).\n',suffix='Concurrent note.\n',authority='Correct the registration statement.';
+ enriched.actual.documentEdits=[{path:'tutorial.md',originalText:original,originalSha256:hash(original),retainedText:replacement+suffix,retainedSha256:hash(replacement+suffix),editableOriginal:original,actualReplacement:replacement,protectedPrefix:'',protectedSuffix:suffix,concurrentAddition:suffix,authority:{path:'scope.md',text:authority,sha256:hash(authority)}}];
+ assert.equal(validatePublicClaimAssessment(enriched),enriched.actual);
+ const forged=structuredClone(enriched);forged.actual.documentEdits[0].retainedText+=' unsupported';
+ assert.throws(()=>validatePublicClaimAssessment(forged),/exact protected scope/);
+ const changed=structuredClone(enriched);changed.actual.documentEdits[0].retainedText='Changed concurrent note.\n';changed.actual.documentEdits[0].retainedSha256=hash(changed.actual.documentEdits[0].retainedText);
+ assert.throws(()=>validatePublicClaimAssessment(changed),/exact protected scope/);
 });
 test('actual pure typed Natlang assessor runs independently and retains program/input identity',async()=>{
  const repo=process.env.NATLANG_REPO??'/home/werg/natlang';

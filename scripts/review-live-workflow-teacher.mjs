@@ -24,8 +24,22 @@ export function validatePublicClaimAssessment(input) {
     if(typeof cite.quote!=="string" || !normalized(cite.quote) || !actual.sources.some(source=>
       source.url===cite.url && normalized(source.text).includes(normalized(cite.quote))))
       throw new Error("Public claim citation is not a span of a captured source");
+  if(actual.documentEdits!==undefined)validateDocumentEdits(actual.documentEdits);
   return actual;
 }
+
+export function validateDocumentEdits(documentEdits){
+    if(!Array.isArray(documentEdits)||!documentEdits.length)throw Error("Document review needs retained edit evidence");
+    for(const edit of documentEdits){
+      if(typeof edit.path!=="string"||!edit.path||typeof edit.originalText!=="string"||typeof edit.retainedText!=="string"||
+        sha(edit.originalText)!==edit.originalSha256||sha(edit.retainedText)!==edit.retainedSha256||
+        typeof edit.authority?.path!=="string"||typeof edit.authority.text!=="string"||sha(edit.authority.text)!==edit.authority.sha256||
+        ["protectedPrefix","protectedSuffix","editableOriginal","actualReplacement","concurrentAddition"].some(key=>typeof edit[key]!=="string")||
+        edit.originalText+edit.concurrentAddition!==edit.protectedPrefix+edit.editableOriginal+edit.protectedSuffix||
+        edit.retainedText!==edit.protectedPrefix+edit.actualReplacement+edit.protectedSuffix)
+        throw Error("Document review must bind original and retained bytes to the exact protected scope");
+    }
+  }
 
 export async function assessPublicClaims(input, driver, loader) {
   const actual=validatePublicClaimAssessment(input);
@@ -62,7 +76,8 @@ export function workflowReviewer(
   const modelId = model.slice(separator + 1);
   const loader = (relative) =>
     import(pathToFileURL(path.resolve(repo, "ts-host/dist", relative)).href);
-  const reviewer = async (input, teacher) => {
+  const reviewer = async (input, teacher, signal) => {
+    signal?.throwIfAborted();
     if (model === teacher) throw new Error("Choose a reviewer model distinct from the executor");
     const [{ createPiModelBackend }, { modelOracleJudge }] = await Promise.all([
       loader("model/pi-provider.js"),
@@ -72,8 +87,10 @@ export function workflowReviewer(
     let exchange;
     const exchanges=[];
     try {
+      signal?.throwIfAborted();
       await backend.prepare();
       const turn=async (request) => {
+        signal?.throwIfAborted();
         const reply = await backend.turn(request);
         if (reply.raw_response?.provider !== provider || reply.raw_response?.model !== modelId) {
           throw new Error("Review reply does not identify the chosen reviewer");
@@ -86,6 +103,13 @@ export function workflowReviewer(
       const verdict=assessment?.verdict ?? await modelOracleJudge(turn)(input);
       return { schema: "natlang.live-workflow-review/1", model, teacher, input, exchange, exchanges, verdict,
         ...(assessment?{semanticResult:assessment.semanticResult,program:assessment.program,inputSha256:assessment.inputSha256}:{}) };
+    } catch(error) {
+      if(signal?.aborted){
+        const failure=error instanceof Error?error:new Error(String(error));
+        failure.reviewCapture={schema:"natlang.live-workflow-review-interrupted/1",model,teacher,input,exchange,exchanges,complete:false};
+        throw failure;
+      }
+      throw error;
     } finally {
       backend.close();
     }

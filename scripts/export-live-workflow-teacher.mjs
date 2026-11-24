@@ -7,7 +7,7 @@ import { isDeepStrictEqual, parseArgs } from "node:util";
 import { gunzipSync } from "node:zlib";
 import { requireDevelopmentTemplateCheckouts } from "../src/dev/developmentTemplateConfig.cjs";
 import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
-import { sourceClaimKinds, sourceClaimReviewInput, sourceClaimProgramIdentity, sourceClaimReviewMatches, sourceClaimReviewPath } from "./lib/source-claim-admission.mjs";
+import { sourceClaimKinds, sourceClaimReviewInput, workspaceEditReviewInput, sourceClaimProgramIdentity, sourceClaimReviewMatches, sourceClaimReviewPath } from "./lib/source-claim-admission.mjs";
 
 const sharedProgram = "skills/vibestudio-workflows/runWorkflow.nl";
 const templateGoalDomains = {
@@ -1504,7 +1504,7 @@ export async function loadLiveTeacherCases(checkouts) {
         ...(assignment.devices ? { devices: assignment.devices } : {}),
         ...(assignment.requiresAndroidEmulator ? { requiresAndroidEmulator: true } : {}),
         ...(assignment.requiresDeploymentPackage ? { requiresDeploymentPackage: true } : {}),
-        ...(sourceClaimKinds.has(assignment.kind) ? { requiresReview: true } : {}),
+        ...((sourceClaimKinds.has(assignment.kind)||assignment.kind==="workspace-edit"||assignment.kind==="google-runbook"&&assignment.action==="revise") ? { requiresReview: true } : {}),
         ...(assignment.kind === "preparedContentProject" &&
           (assignment.profile === "commit" || assignment.profile === "draft") ? { requiresReview:true } : {}),
         ...(assignment.workspaceBaseline ? { workspaceBaseline: assignment.workspaceBaseline } : {}),
@@ -7201,6 +7201,10 @@ export function openOutcomeGoalEvidence(execution, exercise, _scenario, workflow
     const reviewInput = sourceClaimReviewInput(proof, world);
     return { world: worldBinding, checks: { ...checks }, evidence, reviewInput };
   }
+  if(world.kind==="workspace-edit"||world.kind==="google-runbook"&&world.action==="revise"){
+    requireEvidence(workflow.requiresReview===true,"Workspace edit content review must be declared before teacher execution");
+    return {world:worldBinding,checks:{...checks},evidence,reviewInput:workspaceEditReviewInput(proof,world)};
+  }
   if (!workflow.requiresReview) return { world: worldBinding, checks, evidence };
   const project = proof.preparedContentProject;
   const artifact = project?.artifact;
@@ -11341,7 +11345,16 @@ export async function exportLiveTeacherWorkflow({
     }
     const retainedReview = semanticReview !== undefined;
     if (!retainedReview) {
-      semanticReview = await review(observed.reviewInput, source.teacher);
+      try { semanticReview = await review(observed.reviewInput, source.teacher); }
+      catch(error){
+        if(error?.reviewCapture){
+          const bytes=`${JSON.stringify(error.reviewCapture,null,2)}\n`;
+          const capturedPath=`${reviewPath}.interrupted-${hash(bytes)}.json`;
+          try{await writeFile(capturedPath,bytes,{mode:0o600,flag:"wx"});}catch(writeError){if(writeError.code!=="EEXIST")throw writeError;}
+          error.reviewCapturePath=capturedPath;
+        }
+        throw error;
+      }
       requireEvidence(!claims || sourceClaimReviewMatches(semanticReview, observed.reviewInput, review.model, source.teacher, program),
         "Source claim reviewer did not bind the actual typed value and assessor program");
     }
