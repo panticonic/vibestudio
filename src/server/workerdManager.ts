@@ -1011,6 +1011,24 @@ export class WorkerdManager {
     return manager.revokeWorkerBearer?.(callerId) ?? manager.revokeToken(callerId);
   }
 
+  /** A withdrawn class can still have sealed objects using its original bearer. */
+  private releaseUnownedDoServiceBearer(source: string, className: string): void {
+    const serviceKey = doServiceKey(source, className);
+    const service = this.doServices.get(serviceKey);
+    const entityPrefix = canonicalEntityId({ kind: "do", source, className, key: "" });
+    const preparationPrefix = canonicalJson([source, className]).slice(0, -1) + ",";
+    if (
+      (service?.imageId && this.runtimeImages.get(service.imageId)) ||
+      this.preparedDoExecutables.has(serviceKey) ||
+      [...this.executablePreparations.keys()].some((key) => key.startsWith(preparationPrefix)) ||
+      [...this.preparingDoExecutables.keys()].some((key) => key.startsWith(preparationPrefix)) ||
+      [...this.sealedDoImages.keys()].some((key) => key.startsWith(entityPrefix)) ||
+      [...this.doObjectBuilds.keys()].some((key) => key.startsWith(`${serviceKey}/`))
+    )
+      return;
+    this.revokeWorkerBearer(`do-service:${serviceKey}`);
+  }
+
   private async bindRuntimeImage(
     imageId: string,
     source: string,
@@ -1843,6 +1861,7 @@ export class WorkerdManager {
       });
     }
     if (!isInternalDOSource(ref.source)) {
+      this.releaseUnownedDoServiceBearer(ref.source, ref.className);
       this.reconcileDoCodeUnitOwnership();
       const rssBytes = this.process?.pid ? this.readProcessRssBytes(this.process.pid) : null;
       this.maybeCompactRetiredDynamicIsolates(rssBytes);
@@ -3541,6 +3560,11 @@ export class WorkerdManager {
       const prepared = this.preparedDoExecutables.get(serviceKey);
       if (prepared && prepared.version === version) return true;
       if (this.preparingDoExecutables.has(canonicalJson([source, className, version]))) return true;
+      const entityPrefix = canonicalEntityId({ kind: "do", source, className, key: "" });
+      for (const [id, image] of this.sealedDoImages) {
+        if (id.startsWith(entityPrefix) && runtimeExecutableVersion(image) === version) return true;
+      }
+      if (this.executablePreparations.has(canonicalJson([source, className, version]))) return true;
       for (const [key, binding] of this.doObjectBuilds) {
         if (!key.startsWith(`${serviceKey}/`)) continue;
         if (binding.admission.executableVersion === version) return true;
@@ -3607,7 +3631,13 @@ export class WorkerdManager {
     // created without rebuilding; they are not live executions. Only actual
     // worker instances and object-specific DO bindings make a process restart
     // user-visible.
-    return this.instances.size > 0 || this.doObjectBuilds.size > 0;
+    return (
+      this.instances.size > 0 ||
+      this.doObjectBuilds.size > 0 ||
+      this.sealedDoImages.size > 0 ||
+      this.executablePreparations.size > 0 ||
+      this.preparingDoExecutables.size > 0
+    );
   }
 
   private stopWorkerdMemorySampling(): void {
@@ -4171,6 +4201,8 @@ export class WorkerdManager {
         await preparation;
       } finally {
         this.executablePreparations.delete(key);
+        this.reconcileDoCodeUnitOwnership();
+        this.releaseUnownedDoServiceBearer(image.source, className);
       }
     }
   }
@@ -5279,17 +5311,22 @@ export class WorkerdManager {
     if (this.deps.nativeStorageRetentionRoot) {
       const capture = await retainNativeStorageBeforeErase({
         archiveRoot: this.deps.nativeStorageRetentionRoot,
-        directory: dir, hash, workspaceId: this.deps.workspaceId, target: ref,
-        verifySqlite: paths => this.sqliteIntegrityWorker.verify(paths, { readOnly: false }),
+        directory: dir,
+        hash,
+        workspaceId: this.deps.workspaceId,
+        target: ref,
+        verifySqlite: (paths) => this.sqliteIntegrityWorker.verify(paths, { readOnly: false }),
       });
-      const manifest = JSON.parse(await fs.promises.readFile(path.join(capture, "manifest.json"), "utf8")) as {files:Array<{name:string}>};
-      capturedFiles = manifest.files.map(file => file.name).sort();
+      const manifest = JSON.parse(
+        await fs.promises.readFile(path.join(capture, "manifest.json"), "utf8")
+      ) as { files: Array<{ name: string }> };
+      capturedFiles = manifest.files.map((file) => file.name).sort();
     }
     const files = await fs.promises.readdir(dir).catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return [] as string[];
       throw error;
     });
-    const ownedFiles = files.filter(file => file.startsWith(`${hash}.`)).sort();
+    const ownedFiles = files.filter((file) => file.startsWith(`${hash}.`)).sort();
     if (capturedFiles && JSON.stringify(ownedFiles) !== JSON.stringify(capturedFiles)) {
       throw new Error("Native storage changed after retention; refusing erasure");
     }
@@ -5536,19 +5573,12 @@ export class WorkerdManager {
       }
       for (const [serviceKey, svc] of Array.from(this.doServices.entries())) {
         if (svc.source !== source || newClassNames.has(svc.className)) continue;
-        this.revokeWorkerBearer(`do-service:${serviceKey}`);
         this.doServices.delete(serviceKey);
         if (svc.imageId) this.runtimeImages.delete(svc.imageId);
-        for (const key of Array.from(this.doObjectBuilds.keys())) {
-          if (key.startsWith(`${source}:${svc.className}/`)) {
-            const objectBuild = this.doObjectBuilds.get(key);
-            if (objectBuild) {
-              this.runtimeImages.delete(objectBuild.imageId);
-              this.sealedDoImages.delete(objectBuild.imageId);
-            }
-            this.doObjectBuilds.delete(key);
-          }
-        }
+        // Source publication withdraws the mutable class route, not the sealed
+        // identities of objects already admitted from an earlier build. Their
+        // lifecycle owner joins and retires them through retireDOEntity().
+        this.releaseUnownedDoServiceBearer(source, svc.className);
         this.deps.routeRegistry?.unregisterDoRoutes(source, svc.className);
         log.info(`Unregistered stale DO class ${serviceKey} after manifest change`);
       }
