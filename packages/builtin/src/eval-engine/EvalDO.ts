@@ -578,7 +578,7 @@ export class EvalDO extends DurableObjectBase {
   private readonly cancellationGraceMs = CANCELLATION_GRACE_MS;
   /** Instance field so the terminal drain bound can be exercised without a real one-second test. */
   /** Serializes eval runs — ScopeManager has a single in-progress flag + one current scope. */
-  private runChain: Promise<unknown> = Promise.resolve();
+  private runChain: Promise<void> = Promise.resolve();
   /** In-flight runs in THIS instance, keyed by runId → the single execution promise. A concurrent
    *  `executeRun` (e.g. a deferRedrive that races the first dispatch) SHARES this promise instead of
    *  starting a second sandbox run; it also lets `reset` abort live runs. */
@@ -1794,7 +1794,13 @@ export class EvalDO extends DurableObjectBase {
           kernel = this.kernelStatusForRun();
         }
       });
-      this.runChain = ran.catch(() => undefined);
+      // The queue owns ordering, never a guest result. A fulfilled catch-only
+      // tail retains the raw return graph after the durable result is stored,
+      // including objects or closures that keep the entire guest heap alive.
+      this.runChain = ran.then(
+        () => undefined,
+        () => undefined
+      );
       result = await ran;
       if (controller.signal.aborted && deadlineAt !== null) {
         if (
@@ -2681,6 +2687,7 @@ export class EvalDO extends DurableObjectBase {
 
   /** Heap release never erases the canonical admission or retained content. */
   private releaseKernelReferences(): void {
+    this.runChain = Promise.resolve();
     this.engine = null;
     this.scopeManager = null;
     this.runtimeSupport = null;

@@ -305,6 +305,35 @@ function redeliveryState(sql: {
 }
 
 describe("EvalDO cancellation + forced recovery", () => {
+  it.each([true, false])(
+    "keeps the serialization queue free of settled guest results (success=%s)",
+    async (success) => {
+      const { instance, sql } = await createTestDO(EvalDO, { RPC_FETCH: successfulTestRpcFetch });
+      const returned = { owned: "guest-result", values: Array.from({ length: 32 }, (_, i) => i) };
+      setPriv(instance, "runLocked", async () => ({ success, console: "", returnValue: returned }));
+      seedPendingRun(sql, "queue-result-retention");
+
+      const result = await priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+        instance,
+        "queue-result-retention"
+      );
+
+      expect(result.returnValue).toEqual(returned);
+      expect(instance.getRun("queue-result-retention").result?.returnValue).toEqual(returned);
+      // The durable receipt retains the answer. The ordering-only tail must not
+      // keep another raw guest graph alive between cells or after retirement.
+      await expect(priv<Promise<unknown>>(instance, "runChain")).resolves.toBeUndefined();
+      await prepareLifecycle(instance, {
+        epoch: "queue-result-release",
+        mode: "retire",
+        reason: "test",
+        deadlineMs: 0,
+      });
+      await expect(priv<Promise<unknown>>(instance, "runChain")).resolves.toBeUndefined();
+      expect(instance.getRun("queue-result-retention").result?.returnValue).toEqual(returned);
+    }
+  );
+
   it("seals admission at quiesce and reopens only when preparation is cancelled", async () => {
     const { instance, sql } = await createTestDO(EvalDO);
     const input = {
