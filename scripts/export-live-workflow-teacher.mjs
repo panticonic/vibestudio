@@ -7,7 +7,7 @@ import { isDeepStrictEqual, parseArgs } from "node:util";
 import { gunzipSync } from "node:zlib";
 import { requireDevelopmentTemplateCheckouts } from "../src/dev/developmentTemplateConfig.cjs";
 import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
-import { sourceClaimKinds, sourceClaimReviewInput, workspaceEditReviewInput, sourceClaimProgramIdentity, sourceClaimReviewMatches, sourceClaimReviewPath } from "./lib/source-claim-admission.mjs";
+import { sourceClaimKinds, sourceClaimReviewInput, workspaceEditReviewInput, editorialReviewInput, coordinatedRevisionReviewInput, outcomeWorkspaceReviewInput, sourceContentReviewInput, sourceClaimProgramIdentity, sourceClaimReviewMatches, sourceClaimReviewPath } from "./lib/source-claim-admission.mjs";
 
 const sharedProgram = "skills/vibestudio-workflows/runWorkflow.nl";
 const templateGoalDomains = {
@@ -1504,7 +1504,7 @@ export async function loadLiveTeacherCases(checkouts) {
         ...(assignment.devices ? { devices: assignment.devices } : {}),
         ...(assignment.requiresAndroidEmulator ? { requiresAndroidEmulator: true } : {}),
         ...(assignment.requiresDeploymentPackage ? { requiresDeploymentPackage: true } : {}),
-        ...((sourceClaimKinds.has(assignment.kind)||assignment.kind==="workspace-edit"||assignment.kind==="google-runbook"&&assignment.action==="revise") ? { requiresReview: true } : {}),
+        ...((sourceClaimKinds.has(assignment.kind)||assignment.kind==="workspace-edit"||assignment.kind==="editorial-packet"||assignment.kind==="coordinated-revision"||assignment.kind==="outcome-workspace"||assignment.kind==="google-runbook"&&assignment.action==="revise"||assignment.kind==="spectrolite"&&assignment.writablePath||assignment.kind==="vaultWork"&&assignment.expected.steps.some(step=>step.kind==="write")||assignment.kind==="pdfVault"&&assignment.vault.writablePath) ? { requiresReview: true } : {}),
         ...(assignment.kind === "preparedContentProject" &&
           (assignment.profile === "commit" || assignment.profile === "draft") ? { requiresReview:true } : {}),
         ...(assignment.workspaceBaseline ? { workspaceBaseline: assignment.workspaceBaseline } : {}),
@@ -7200,6 +7200,22 @@ export function openOutcomeGoalEvidence(execution, exercise, _scenario, workflow
     requireEvidence(workflow.requiresReview === true, "Source claim review must be declared before teacher execution");
     const reviewInput = sourceClaimReviewInput(proof, world);
     return { world: worldBinding, checks: { ...checks }, evidence, reviewInput };
+  }
+  if(world.kind==="spectrolite"&&world.writablePath||world.kind==="vaultWork"&&world.expected.steps.some(step=>step.kind==="write")||world.kind==="pdfVault"&&world.vault.writablePath){
+    requireEvidence(workflow.requiresReview===true,"Authored source content review must be declared before teacher execution");
+    return {world:worldBinding,checks:{...checks},evidence,reviewInput:sourceContentReviewInput(proof,world)};
+  }
+  if(world.kind==="outcome-workspace"){
+    requireEvidence(workflow.requiresReview===true,"Workspace outcome content review must be declared before teacher execution");
+    return {world:worldBinding,checks:{...checks},evidence,reviewInput:outcomeWorkspaceReviewInput(proof,world)};
+  }
+  if(world.kind==="coordinated-revision"){
+    requireEvidence(workflow.requiresReview===true,"Coordinated revision content review must be declared before teacher execution");
+    return {world:worldBinding,checks:{...checks},evidence,reviewInput:coordinatedRevisionReviewInput(proof,world)};
+  }
+  if(world.kind==="editorial-packet"){
+    requireEvidence(workflow.requiresReview===true,"Editorial content review must be declared before teacher execution");
+    return {world:worldBinding,checks:{...checks},evidence,reviewInput:editorialReviewInput(proof,world)};
   }
   if(world.kind==="workspace-edit"||world.kind==="google-runbook"&&world.action==="revise"){
     requireEvidence(workflow.requiresReview===true,"Workspace edit content review must be declared before teacher execution");

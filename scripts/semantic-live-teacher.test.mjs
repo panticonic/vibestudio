@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { test } from "node:test";
 import { openOutcomeGoalEvidence } from "./export-live-workflow-teacher.mjs";
+import {editorialReviewInput,coordinatedRevisionReviewInput,outcomeWorkspaceReviewInput,sourceContentReviewInput}from "./lib/source-claim-admission.mjs";
 
 const reference = value => {
   const json = JSON.stringify(value);
@@ -74,6 +75,48 @@ test("workspace edit admission requires content review bound to actual retained 
  fixture.workflow.requiresReview=true;
  proof.semanticReviewInput.actual.documentEdits[0].retainedText="Unobserved replacement";
  assert.throws(()=>openOutcomeGoalEvidence(fixture.execution,fixture.exercise,"hours",fixture.workflow));
+});
+
+test("editorial content review binds retained copy, current mission and exact approved citations",()=>{
+ const goal="Correct the opening hours from the approved PDF.",original={path:"candidate.md",version:"before",text:"Old hours"},stored={path:"candidate.md",version:"current",text:"Approved hours"},mission={id:"owned",description:"Approved attachment: current.pdf."};
+ const pdf={digest:"pdf-sha",citations:[{page:1,line:0,quote:"Hours: 09:00"}]};
+ const proof={semanticReviewRequired:true,stored,snapshots:[{candidate:original,mission}],plan:{operation:"revise"},attempts:[{result:{status:"written"}}],sources:[{request:{document:"current.pdf"},pdf}],artifact:null};
+ proof.semanticReviewInput={actual:{goal,retainedDocument:stored,originalDocument:original,currentObservation:original,currentMission:mission,approvedTextSources:[{document:"current.pdf",...pdf}],retainedHandoff:null},expected:{goal,fields:["Hours"],literalApprovedWording:false,operation:"revise",returnedDecisionRequired:false,retainedHandoffRequired:false},rubric:"Judge actual field facts, not example wording."};
+ const world={kind:"editorial-packet",goal,fields:[{label:"Hours"}]};
+ assert.equal(editorialReviewInput(proof,world),proof.semanticReviewInput);
+ proof.semanticReviewInput.actual.retainedDocument={...stored,text:"Unobserved text"};
+ assert.throws(()=>editorialReviewInput(proof,world),/actual stored copy/);
+});
+
+test("coordinated review binds exact atomic readback and signed source observations",()=>{
+ const goal="Correct both door notes.",files=[{path:"a.md",text:"North door",version:"a"},{path:"approved.md",text:"Use north door",version:"source"}];
+ const proof={semanticReviewRequired:true,attempts:[{receipt:{status:"applied"}}],snapshots:[{scope:{files}}],documents:files,nativeReadback:{files},reviewScope:files,report:{status:"updated"}};
+ proof.semanticReviewInput={actual:{goal,documents:files,originalDocuments:files,currentObservedDocuments:files,returnedDecision:null},expected:{goal,editablePaths:["a.md"],returnedDecisionRequired:false},rubric:"Judge actual content against signed authority."};
+ const world={kind:"coordinated-revision",goal,changes:[{path:"a.md"}]};
+ assert.equal(coordinatedRevisionReviewInput(proof,world),proof.semanticReviewInput);
+ proof.semanticReviewInput.actual.documents=[{...files[0],text:"Invented retained value"}];
+ assert.throws(()=>coordinatedRevisionReviewInput(proof,world),/exact native batch/);
+});
+
+test("workspace outcome review binds requested answers or actual scoped edits",()=>{
+ const goal="What time do the doors open?",files={"approved.md":"Doors open at 10:45."},answer={answer:"Doors open at 10:45.",citations:[]};
+ const proof={semanticReviewRequired:true,contents:files,actualResult:answer};
+ const world={kind:"outcome-workspace",goal,target:null,authority:"approved.md",files};
+ proof.semanticReviewInput={actual:{goal,documents:files,originalDocuments:files,actualAnswer:answer},expected:{goal,target:null,authority:world.authority,returnedAnswerRequired:true},rubric:"Judge actual answer against the approved original."};
+ assert.equal(outcomeWorkspaceReviewInput(proof,world),proof.semanticReviewInput);
+ proof.semanticReviewInput.actual.actualAnswer={answer:"Opening is unobserved"};
+ assert.throws(()=>outcomeWorkspaceReviewInput(proof,world),/actual retained content/);
+});
+
+test("source content review binds native retained MDX and verified PDF handoff without altering observations",()=>{
+ const goal="Correct the active vault instruction.",path="notice.mdx",evidence={originalDocuments:{[path]:"Old source"},observedDocuments:[{path,revision:"observed"}],retainedDocuments:{[path]:"Corrected source"},committedDocuments:{[path]:"Old source"},currentDocument:{path,revision:"current",source:"Corrected source",sourceHash:"native-hash",visible:"Corrected view",preview:[],binding:{panelId:"owned"}},writes:[{path,toSourceHash:"native-hash"}]};
+ const proof={semanticReviewRequired:true,sourceContentEvidence:evidence,semanticReviewInput:{actual:{goal,...evidence},expected:{goal,editablePaths:[path]},rubric:"Judge actual source meaning and useful rendering against the request."}};
+ assert.equal(sourceContentReviewInput(proof,{kind:"spectrolite",goal,writablePath:path}),proof.semanticReviewInput);
+ const original=structuredClone(proof),handoff={status:"bound",source:{document:"approved.pdf",digest:"pdf-digest",citations:[{page:2,line:0,quote:"Approved value"}]}};
+ const combined=sourceContentReviewInput({proof:{vault:proof,handoff}},{kind:"pdfVault",goal,vault:{writablePath:path}});
+ assert.deepEqual(combined.actual.pdfHandoff,handoff);assert.deepEqual(proof,original);
+ proof.semanticReviewInput.actual={...proof.semanticReviewInput.actual,retainedDocuments:{[path]:"Unobserved source"}};
+ assert.throws(()=>sourceContentReviewInput(proof,{kind:"spectrolite",goal,writablePath:path}),/actual native documents/);
 });
 
 

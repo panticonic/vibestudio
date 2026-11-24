@@ -37,6 +37,62 @@ export function workspaceEditReviewInput(proof,world){
   return input;
 }
 
+export function editorialReviewInput(proof,world){
+  const input=proof.semanticReviewInput;
+  const approved=proof.sources?.flatMap(source=>source.pdf?[{document:source.request?.document,digest:source.pdf.digest,citations:source.pdf.citations}]:[]);
+  const handoff=proof.artifact?JSON.parse(proof.artifact):null;
+  const note=world.note??"none",needsHandoff=note==="diagnostic"||note==="ready-only"&&["ready","already-current"].includes(world.end);
+  requireFact(world.kind==="editorial-packet"&&proof.semanticReviewRequired===true&&input?.actual?.goal===world.goal&&
+    input.expected?.goal===world.goal&&input.expected.literalApprovedWording===(world.literalApprovedWording??false)&&
+    input.expected.operation===proof.plan?.operation&&input.expected.returnedDecisionRequired===!proof.attempts?.some(attempt=>attempt.result?.status==="written")&&
+    input.expected.retainedHandoffRequired===needsHandoff&&equal(input.actual.retainedHandoff,handoff)&&
+    equal(input.expected.fields,world.fields.map(field=>field.label))&&equal(input.actual.retainedDocument,proof.stored)&&
+    equal(input.actual.originalDocument,proof.snapshots?.[0]?.candidate)&&equal(input.actual.approvedTextSources,approved)&&
+    equal(input.actual.currentObservation,proof.snapshots?.at(-1)?.candidate)&&equal(input.actual.currentMission,proof.snapshots?.at(-1)?.mission)&&
+    typeof input.rubric==="string"&&input.rubric.trim(),"Editorial review differs from actual stored copy or approved original evidence");
+  return input;
+}
+
+export function coordinatedRevisionReviewInput(proof,world){
+  const input=proof.semanticReviewInput;
+  const applied=proof.attempts?.some(attempt=>attempt.receipt?.status==="applied");
+  const original=proof.snapshots?.[0]?.scope?.files??[];
+  const observed=proof.reviewScope;
+  requireFact(world.kind==="coordinated-revision"&&proof.semanticReviewRequired===true&&input?.actual?.goal===world.goal&&
+    input.expected?.goal===world.goal&&input.expected.returnedDecisionRequired===!applied&&
+    equal(input.expected.editablePaths,world.changes.map(change=>change.path))&&equal(input.actual.documents,proof.documents)&&
+    equal(input.actual.originalDocuments,original)&&equal(input.actual.currentObservedDocuments,observed)&&proof.snapshots?.some(snapshot=>equal(snapshot.scope.files,observed))&&
+    equal(input.actual.returnedDecision,applied?null:proof.report)&&equal(proof.nativeReadback?.files,proof.documents)&&
+    typeof input.rubric==="string"&&input.rubric.trim(),"Coordinated revision review differs from the exact native batch and signed authority");
+  return input;
+}
+
+export function outcomeWorkspaceReviewInput(proof,world){
+  const input=proof.semanticReviewInput;
+  requireFact(world.kind==="outcome-workspace"&&proof.semanticReviewRequired===true&&input?.actual?.goal===world.goal&&
+    input.expected?.goal===world.goal&&input.expected.target===world.target&&input.expected.authority===world.authority&&
+    input.expected.returnedAnswerRequired===(world.target===null)&&equal(input.actual.documents,proof.contents)&&
+    equal(input.actual.originalDocuments,world.files)&&equal(input.actual.actualAnswer,world.target===null?proof.actualResult:null)&&
+    typeof input.rubric==="string"&&input.rubric.trim(),"Workspace outcome review differs from actual retained content and authority");
+  return input;
+}
+
+export function sourceContentReviewInput(proof,world){
+  const nested=world.kind==="pdfVault"?proof.proof?.vault:proof;
+  const input=nested?.semanticReviewInput,evidence=nested?.sourceContentEvidence;
+  const paths=world.kind==="vaultWork"?world.expected.steps.filter(step=>step.kind==="write").map(step=>step.path):
+    world.kind==="pdfVault"?[world.vault.writablePath]:[world.writablePath];
+  requireFact(nested?.semanticReviewRequired===true&&input?.actual?.goal===world.goal&&input.expected?.goal===world.goal&&
+    paths.length>0&&paths.every(path=>typeof path==="string"&&path)&&equal(input.expected.editablePaths,paths)&&
+    evidence&&equal(input.actual,{goal:world.goal,...evidence})&&typeof input.rubric==="string"&&input.rubric.trim(),
+    "Source content review differs from actual native documents, current readback or authorized paths");
+  if(world.kind!=="pdfVault")return input;
+  requireFact(proof.proof?.handoff?.status==="bound"&&proof.proof.handoff.source,
+    "PDF-backed source review requires its exact independently verified PDF handoff");
+  return {...input,actual:{...input.actual,goal:world.goal,pdfHandoff:proof.proof.handoff},expected:{...input.expected,goal:world.goal},
+    rubric:input.rubric+" The requested source correction must be supported by the supplied independently verified PDF handoff and its exact page/quote evidence. Judge the actual retained vault source against those facts; do not infer a different PDF authority from a filename or an optional returned receipt."};
+}
+
 /** Bind semantic policy inputs to actual returned values and independent readback. */
 export function sourceClaimReviewInput(proof, world) {
   requireFact(sourceClaimKinds.has(world.kind) && proof.semanticReviewRequired === true,
