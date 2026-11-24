@@ -510,7 +510,9 @@ export function createBuildProcessOwner(input: {
 export interface BuilderSession {
   readonly processOwner: BuildProcessOwner;
   readonly runNativeJob: RunNativeWorkspaceJob;
-  readonly ensureBuildProvider?: (target: "react-native") => Promise<void>;
+  readonly ensureBuildProvider?: (
+    target: "react-native"
+  ) => Promise<import("@vibestudio/shared/buildProvider").BuildProvider | void>;
   readonly signal: AbortSignal;
   readonly inFlightBuilds: Map<string, BuildFlight<StoredBuildResult>>;
   readonly inFlightLibraryBuilds: Map<string, Promise<StoredBuildResult>>;
@@ -525,7 +527,9 @@ export interface BuilderSession {
 export function createBuilderSession(input: {
   processOwner: BuildProcessOwner;
   runNativeJob: RunNativeWorkspaceJob;
-  ensureBuildProvider?: (target: "react-native") => Promise<void>;
+  ensureBuildProvider?: (
+    target: "react-native"
+  ) => Promise<import("@vibestudio/shared/buildProvider").BuildProvider | void>;
   signal?: AbortSignal;
   ownerSignal?: AbortSignal;
   source: BuildSourceProvider & { readonly workspaceId: string };
@@ -2308,9 +2312,7 @@ function captureBuildUnitOptions(
     : undefined;
   return {
     ...options,
-    ...(options.externals
-      ? { externals: canonicalLibraryExternals(options.externals) }
-      : {}),
+    ...(options.externals ? { externals: canonicalLibraryExternals(options.externals) } : {}),
     ...(test ? { test } : {}),
   };
 }
@@ -2397,8 +2399,7 @@ function preparedRuntimeBuild(
     !options?.test &&
     !options?.website &&
     node.kind !== "package" &&
-    node.kind !== "template" &&
-    !(node.kind === "client" && node.manifest.client?.runtime === "react-native")
+    node.kind !== "template"
       ? source.preparedBuildForContent?.(stateRef, node.relativePath)
       : null;
   if (prepared && prepared.effectiveVersion !== ev) {
@@ -2482,13 +2483,15 @@ async function buildUnitStoredUnchecked(
     !capturedOptions?.test &&
     !capturedOptions?.website &&
     node.kind === "client" &&
-    node.manifest.client?.runtime === "react-native"
+    node.manifest.client?.runtime === "react-native" &&
+    !prepared
   ) {
     // The provider is an input to the artifact, so resolve it before cache
     // lookup, coalescing, or taking a compilation slot.
     try {
-      await session.ensureBuildProvider?.("react-native");
-      provider = resolveBuildProvider("react-native");
+      provider =
+        (await session.ensureBuildProvider?.("react-native")) ??
+        resolveBuildProvider("react-native");
     } catch (error) {
       throw new Error(
         `React Native client ${node.name} cannot be built because its build provider is unavailable: ${error instanceof Error ? error.message : String(error)}. ` +

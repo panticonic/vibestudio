@@ -24,12 +24,7 @@ export async function prepareWorkspaceRuntimeBuilds(
   reportProgress?: (event: WorkspaceRuntimeProgressEvent) => void
 ): Promise<Array<{ source: string; binding: RuntimeBuild }>> {
   signal?.throwIfAborted();
-  const runtimes = nodes.filter(
-    (node) =>
-      node.kind !== "package" &&
-      node.kind !== "template" &&
-      !(node.kind === "client" && node.manifest.client?.runtime === "react-native")
-  );
+  const runtimes = nodes.filter((node) => node.kind !== "package" && node.kind !== "template");
   reportProgress?.({ type: "planned", count: runtimes.length });
   const outcomes = await Promise.allSettled(
     runtimes.map(async (node) => {

@@ -7,3 +7,5 @@ export type {
   ExtensionSource,
   RegistryEntry,
 } from "./types.js";
+
+export { createExtensionBuildProvider, extensionPrimaryArtifactPath } from "./buildProvider.js";

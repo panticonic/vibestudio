@@ -15,7 +15,7 @@
  */
 
 import type { RpcSessionChannel } from "./rpcServer/sessionChannel.js";
-import type { RpcEnvelope, RpcMessage, RpcTransport } from "@vibestudio/rpc";
+import type { EnvelopeRpcTransport, RpcEnvelope, RpcMessage, RpcTransport } from "@vibestudio/rpc";
 import { createHandlerRegistry, envelopeFromMessage } from "@vibestudio/rpc";
 
 /** Error code stamped on rejections caused by the underlying WS closing. */
@@ -146,4 +146,27 @@ export function createSessionServerTransport(
   };
 
   return transport;
+}
+
+export function envelopeTransportFromSessionServer(
+  transport: SessionServerTransportInternal
+): EnvelopeRpcTransport {
+  return {
+    async send(envelope) {
+      await transport.sendEnvelope(envelope);
+    },
+    onMessage(handler) {
+      return transport.onAnyMessage((sourceId, message, callerKind) => {
+        handler(
+          envelopeFromMessage({
+            selfId: "server",
+            from: sourceId,
+            target: "server",
+            message,
+            callerKind: callerKind ?? "unknown",
+          })
+        );
+      });
+    },
+  };
 }

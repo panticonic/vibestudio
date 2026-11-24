@@ -50,6 +50,7 @@ import {
 } from "./buildV2/effectiveVersion.js";
 import { resolveBuildStoreRoots } from "./buildV2/buildStore.js";
 import { prepareWorkspaceRuntimeBuilds } from "./workspaceTemplateBuilds.js";
+import { createPreparedBuildProviders } from "./preparedBuildProviders.js";
 import { startNativeWorkspaceRuntime } from "./nativeWorkspaceRuntime.js";
 import { getExistingAppNodeModulesRoots } from "@vibestudio/shared/runtimePaths";
 import { exportReleaseBuild } from "../../scripts/prebuild-release-userland.mjs";
@@ -658,6 +659,18 @@ async function produceWorkspaceTemplates(
           appRoot: input.appRoot,
         });
         let builds: Awaited<ReturnType<typeof initBuildSystemV2>> | undefined;
+        const buildProviders = createPreparedBuildProviders({
+          sourcePath,
+          statePath,
+          stateHash,
+          workspaceId,
+          native,
+          builds: () => {
+            if (!builds) throw new Error("Prepared build system has not initialized");
+            return builds;
+          },
+          signal: input.signal,
+        });
         let retirement: ReturnType<typeof native.stop> | undefined;
         const retireNative = () => (retirement ??= native.stop());
         const retireExecutor = async () => {
@@ -673,7 +686,7 @@ async function produceWorkspaceTemplates(
         // after its last role borrower has withdrawn.
         roleRetirements.push(() =>
           runOwnedCleanupSteps(
-            [() => builds?.shutdown(), retireExecutor],
+            [() => builds?.shutdown(), () => buildProviders.close(), retireExecutor],
             "Template preparation resource retirement failed"
           )
         );
@@ -697,6 +710,7 @@ async function produceWorkspaceTemplates(
             dependencyFingerprint,
             runNativeJob: (job) => native.runJob(job),
             admitNativeDependencies: (deps) => native.admitDependencies(deps),
+            ensureBuildProvider: (target) => buildProviders.ensure(target),
           });
           const preparedAt = performance.now();
           console.log(`[workspace-release] Preparing runtimes for ${role}`);
