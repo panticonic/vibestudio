@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import {observedContentKinds,observedContentNeedsReview,observedContentReviewInput} from "./lib/observed-content-admission.mjs";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -584,6 +585,7 @@ const panelHealthWorkflow = {
 };
 const presentationWorkflow = {
   family: "workspace-presentation",
+  requiresReview:true,
   namespace: "vibestudio:visualize",
   group: "component-selection-and-grounding",
   validator: { template: "system-testing", path: "skills/system-testing/presentation-managed.ts" },
@@ -851,6 +853,7 @@ const gitBridgeReviewWorkflow = {
 };
 const vcsDeliveryWorkflow = {
   family: "workspace-live-semantic-vcs-delivery",
+  requiresReview:true,
   workspace: "examples",
   namespace: "vibestudio:semantic-vcs",
   group: "assigned-file-and-context-delivery",
@@ -1504,7 +1507,7 @@ export async function loadLiveTeacherCases(checkouts) {
         ...(assignment.devices ? { devices: assignment.devices } : {}),
         ...(assignment.requiresAndroidEmulator ? { requiresAndroidEmulator: true } : {}),
         ...(assignment.requiresDeploymentPackage ? { requiresDeploymentPackage: true } : {}),
-        ...((sourceClaimKinds.has(assignment.kind)||assignment.kind==="workspace-edit"||assignment.kind==="editorial-packet"||assignment.kind==="coordinated-revision"||assignment.kind==="outcome-workspace"||assignment.kind==="google-runbook"&&assignment.action==="revise"||assignment.kind==="spectrolite"&&assignment.writablePath||assignment.kind==="vaultWork"&&assignment.expected.steps.some(step=>step.kind==="write")||assignment.kind==="pdfVault"&&assignment.vault.writablePath) ? { requiresReview: true } : {}),
+        ...((observedContentNeedsReview(assignment)||sourceClaimKinds.has(assignment.kind)||assignment.kind==="workspace-edit"||assignment.kind==="editorial-packet"||assignment.kind==="coordinated-revision"||assignment.kind==="outcome-workspace"||assignment.kind==="google-runbook"&&assignment.action==="revise"||assignment.kind==="spectrolite"&&assignment.writablePath||assignment.kind==="vaultWork"&&assignment.expected.steps.some(step=>step.kind==="write")||assignment.kind==="pdfVault"&&assignment.vault.writablePath) ? { requiresReview: true } : {}),
         ...(assignment.kind === "preparedContentProject" &&
           (assignment.profile === "commit" || assignment.profile === "draft") ? { requiresReview:true } : {}),
         ...(assignment.workspaceBaseline ? { workspaceBaseline: assignment.workspaceBaseline } : {}),
@@ -2188,10 +2191,11 @@ export async function loadLiveTeacherCases(checkouts) {
       assignment: world,
     });
   }
-  for (const { id, expected } of managedPresentationWorlds) {
+  for (const { id, expected, request } of managedPresentationWorlds) {
     cases.set(`presentation-live-${id}`, {
       ...presentationWorkflow,
       caseId: id,
+      request,
       renderedIds: expected.filter((view) => Object.hasOwn(view, "labels")).map(({ id }) => id),
       interactions: expected.flatMap(({ id, interaction }) =>
         interaction ? [{ id, ...interaction }] : []
@@ -2793,7 +2797,14 @@ function presentationEvidence(execution, exercise, _scenario, workflow) {
       "The presentation must demonstrate its assigned controls in the live browser"
     );
   }
+  const reviewInput=verification.semanticReviewInput;
+  requireEvidence(workflow.requiresReview===true&&verification.semanticReviewRequired===true&&
+    isDeepStrictEqual(reviewInput?.actual,{goal:workflow.request?.goal,observations:{request:workflow.request,observation:verification.nativeContentObservation},artifacts:{},requestedReturn:exercise.report})&&
+    isDeepStrictEqual(verification.nativeContentObservation?.rendered,verification.rendered)&&
+    isDeepStrictEqual(reviewInput.expected,{goal:workflow.request?.goal,requestedReturnRequired:true})&&typeof reviewInput.rubric==="string"&&reviewInput.rubric.trim(),
+    "Presentation findings review must bind the actual request, return and native browser observation");
   return {
+    reviewInput,
     world: { context_id: fixture.contextId, panel_attempt: verification.panelAttempt },
     checks: verification.checks,
     evidence: { workspace: { fixture } },
@@ -6901,7 +6912,7 @@ function gitBridgeReviewEvidence(execution, exercise, _scenario, workflow) {
 function vcsDeliveryEvidence(execution, exercise, _scenario, workflow) {
   const fixture = execution.diagnostics.managedVcsDelivery;
   const { caseId, contextId, request, snapshot, checks } = fixture ?? {};
-  const { id, goal, path, repository, seedPath, text, commit, next, terms } = workflow.assignment;
+  const { id, goal, path, repository, seedPath, text, commit, next } = workflow.assignment;
   const changed = seedPath === path;
   const report = exercise.report;
   const file = snapshot?.file;
@@ -6982,8 +6993,7 @@ function vcsDeliveryEvidence(execution, exercise, _scenario, workflow) {
       Array.isArray(report.review.checks) &&
       report.review.checks.every((check) => typeof check === "string") &&
       (changed
-        ? terms.every((term) => report.review.effect.toLowerCase().includes(term)) &&
-          terms.some((term) => report.review.checks.join(" ").toLowerCase().includes(term))
+        ? true
         : report.review.checks.length === 0) &&
       matchesValue(chain?.inputs?.snapshot, snapshot) &&
       matchesValue(chain.output, report.chain) &&
@@ -6998,7 +7008,13 @@ function vcsDeliveryEvidence(execution, exercise, _scenario, workflow) {
       matchesValue(decision.output, report.next),
     "VCS delivery needs the nested inspection, focused verification and exact next step"
   );
+  const reviewInput=fixture.semanticReviewInput;
+  requireEvidence(workflow.requiresReview===true&&fixture.semanticReviewRequired===true&&
+    isDeepStrictEqual(reviewInput?.actual,{goal,observations:{snapshot},artifacts:{},requestedReturn:report})&&
+    isDeepStrictEqual(reviewInput.expected,{goal,requestedReturnRequired:true})&&typeof reviewInput.rubric==="string"&&reviewInput.rubric.trim(),
+    "VCS interpretation review must bind the exact observed file and actual return");
   return {
+    reviewInput,
     world: { context_id: contextId, path, repository },
     checks,
     evidence: { workspace: { fixture } },
@@ -7209,6 +7225,11 @@ export function openOutcomeGoalEvidence(execution, exercise, _scenario, workflow
   if (world.kind === "suite") {
     requireEvidence(!proof.execution || proof.execution.receipt?.stateHash === proof.plan?.stateHash,
       "Suite execution evidence must belong to the independently observed workspace state");
+  }
+  if(observedContentKinds.has(world.kind)){
+    const reviewInput=observedContentReviewInput(proof,world);
+    requireEvidence((workflow.requiresReview===true)===Boolean(reviewInput),"Domain content meaning review must match the declared requested content");
+    return {world:worldBinding,checks:{...checks},evidence,...(reviewInput?{reviewInput}:{})};
   }
   if (sourceClaimKinds.has(world.kind)) {
     requireEvidence(workflow.requiresReview === true, "Source claim review must be declared before teacher execution");
