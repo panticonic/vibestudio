@@ -325,6 +325,10 @@ async function serve(ownership, config, options, hooks) {
   const baseEnv = {
     ...process.env,
     ...workspaceTemplateEnv,
+    // Select the runtime's mode at this launch boundary. An installed server
+    // must not borrow its caller's development dependency installation policy.
+    NODE_ENV:
+      options.dev || process.env.VIBESTUDIO_SERVER_ENTRY === "live" ? "development" : "production",
     VIBESTUDIO_HOST_ARTIFACT_ROOT:
       hostArtifactRoot ?? hostArtifactRootForServerEntry(repoRoot, serverEntryArg(repoRoot)),
     VIBESTUDIO_GATEWAY_PORT: String(options.port),
@@ -333,7 +337,6 @@ async function serve(ownership, config, options, hooks) {
       : {}),
     ...(options.dev
       ? {
-          NODE_ENV: "development",
           // `remote serve --dev` promises a disposable copy. pnpm's desktop
           // dev loop intentionally mirrors commits back to the template, but
           // unattended/system-test hosts must never mutate the source checkout.
