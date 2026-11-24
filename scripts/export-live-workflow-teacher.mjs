@@ -11411,6 +11411,7 @@ export async function exportLiveTeacherWorkflow({
     run_id: source.run_id,
     world,
     status: "passed",
+    requirements: { semantic_review: workflow.requiresReview === true },
     checks: observed.checks,
     ...(workflow.interaction === "open-user-goal" ? { split } : {}),
     ...interaction,

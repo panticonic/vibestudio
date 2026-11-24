@@ -994,6 +994,7 @@ test("live panel export binds real test world, independent checks and exact Eval
   const receipt = JSON.parse(await readFile(path.join(options.out, "verification.json"), "utf8"));
   assert.deepEqual(receipt.world, manifest.world);
   assert.equal(receipt.run_id, "outer");
+  assert.deepEqual(receipt.requirements, { semantic_review: false });
   assert.equal(receipt.calls[1].run_id, "eval");
   assert.deepEqual(
     receipt.evidence.map(({ kind }) => kind),
@@ -3814,6 +3815,7 @@ test("content export requires independent semantic review of exact committed byt
   const workspaceEvidence = JSON.parse(
     await readFile(path.join(options.out, "workspace.json"), "utf8")
   );
+  assert.deepEqual(proof.requirements, { semantic_review: true });
   assert.equal(proof.checks.independentSemanticReview, true);
   assert.deepEqual(workspaceEvidence.semanticReview.input, reviewInput);
   assert.equal(proof.calls.length, 2);
