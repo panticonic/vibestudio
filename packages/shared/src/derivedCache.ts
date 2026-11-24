@@ -200,7 +200,7 @@ export class DerivedCacheCoordinator {
       // This database owns reconstructable caches and live-process leases, not
       // user data. WAL NORMAL preserves cross-process atomicity without forcing
       // a power-loss barrier for every lease; a power loss ends all lease owners.
-      const durability = process.env.VIBESTUDIO_DERIVED_CACHE_DURABILITY ?? "normal";
+      const durability = process.env["VIBESTUDIO_DERIVED_CACHE_DURABILITY"] ?? "normal";
       if (durability !== "normal" && durability !== "full")
         throw new Error("VIBESTUDIO_DERIVED_CACHE_DURABILITY must be normal or full");
       this.db.exec(`PRAGMA synchronous = ${durability === "full" ? "FULL" : "NORMAL"}`);

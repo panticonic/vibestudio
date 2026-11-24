@@ -169,7 +169,7 @@ it("provisions only declared defaults paused in disposable workspaces", async ()
   const provisioner = createWorkspaceAutomationProvisioner({ ...f.deps, quiesceDefaults: true });
   await provisioner.reconcile();
   expect(f.dispatch).toHaveBeenCalledExactlyOnceWith(expect.anything(), "initializeAutomation", expect.objectContaining({ quiesce: true, definition }));
-  expect(f.config.defaultAutomations!.updates).toEqual(definition);
+  expect(f.config.defaultAutomations!["updates"]).toEqual(definition);
 });
 it("does not hide failed default quiescence as successful setup", async () => {
   const f = fixture();

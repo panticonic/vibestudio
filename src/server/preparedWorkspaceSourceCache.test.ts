@@ -53,7 +53,7 @@ async function fixture() {
 }
 async function produce(root: string, selected: PreparedWorkspaceSourceIdentity = identity) {
   for (const role of Object.keys(selected.templates)) {
-    const directory = preparedWorkspaceTemplatePath(root, selected.templates[role], "use");
+    const directory = preparedWorkspaceTemplatePath(root, selected.templates[role]!, "use");
     const blob = blobCasPath(path.join(directory, "blobs"), digest);
     await fs.mkdir(path.dirname(blob), { recursive: true });
     await fs.writeFile(blob, bytes);

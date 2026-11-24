@@ -7991,6 +7991,7 @@ async function main() {
     .server.setOnClientAuthenticate((_id, kind) => {
       if (kind === "shell" && initialWorkspaceUnitReconcileComplete)
         return reconcileDefaultAutomations();
+      return undefined;
     });
   // Template panel intent is a workspace fact, committed once together
   // with its reservations and slots. Native clients only observe that tree.

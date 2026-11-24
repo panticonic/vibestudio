@@ -9,7 +9,7 @@ const HASH_CONCURRENCY = 8;
 // Lease more than one I/O group at a time. Metadata stays bounded; hashing and
 // publication never exceed HASH_CONCURRENCY, and every lease outlives its work.
 function publicationBatchSize(): number {
-  const value = Number(process.env.VIBESTUDIO_DEPENDENCY_CONTENT_BATCH_FILES ?? 64);
+  const value = Number(process.env["VIBESTUDIO_DEPENDENCY_CONTENT_BATCH_FILES"] ?? 64);
   if (!Number.isInteger(value) || value < 1 || value > 256)
     throw new Error("VIBESTUDIO_DEPENDENCY_CONTENT_BATCH_FILES must be an integer from 1 to 256");
   return value;

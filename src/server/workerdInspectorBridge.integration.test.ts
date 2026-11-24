@@ -30,7 +30,7 @@ it("runs strict CDP profiling against the actual workerd inspector dialect throu
   bridge=new WorkerdInspectorBridge({port:(server.address() as {port:number}).port,getInspectorUrl:()=>`http://127.0.0.1:${inspectorPort}`});
   server.on("upgrade",(request,socket,head)=>bridge!.handleUpgrade(request,socket,head,wss));
   const endpoint=bridge.getEndpoint("probe","test-owner")!;
-  const base=process.env.VIBESTUDIO_TEST_BASE_CHECKOUT!;
+  const base=process.env["VIBESTUDIO_TEST_BASE_CHECKOUT"]!;
   const output=await build({stdin:{contents:"export {CdpConnection} from './packages/cdp-client/src/worker.ts'",resolveDir:base},bundle:true,write:false,format:"cjs",platform:"neutral",plugins:[{name:"sdk-socket",setup(b){b.onResolve({filter:/^@vibestudio\/rpc\/protocol\/cdpSocket$/},()=>({path:process.cwd()+"/packages/rpc/src/protocol/cdpSocket.ts"}));}}]});
   const module={exports:{} as any};runInContext(output.outputFiles[0]!.text,createContext({module,exports:module.exports,WebSocket,URL,AbortSignal,AbortController,TextEncoder,TextDecoder,setTimeout,clearTimeout,queueMicrotask,btoa,atob}));
   connection=await module.exports.CdpConnection.connect(endpoint.wsEndpoint,endpoint.token);
