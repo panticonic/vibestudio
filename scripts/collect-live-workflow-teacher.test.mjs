@@ -93,6 +93,9 @@ test(
       const source = JSON.parse(await readFile(pins, 'utf8'));
       const run = JSON.parse(await readFile(trajectory, 'utf8'));
       if (run.scenario === 'failing') throw new Error('Fixture outcome failed');
+      if (process.env.VIBE_TEST_REVIEW_CAPTURE) throw Object.assign(new Error('Checkpoint during settled review exchange'), {
+        reviewCapture: {schema:'natlang.live-workflow-review-interrupted/1',complete:false,exchanges:[{request:{actual:'request'},reply:{actual:'reply'}}]}
+      });
       if (process.env.VIBE_TEST_REVIEW_REQUIRED) await review({kind:'actual-retained-fixture'},source.teacher);
       await mkdir(out);
       await writeFile(path.join(out, 'manifest.json'), JSON.stringify({ source, run }));
@@ -395,7 +398,7 @@ exit 0
       { code: "ENOENT" }
     );
 
-    for (const mode of ["signal", "checkpoint", "review-checkpoint"]) {
+    for (const mode of ["signal", "checkpoint", "checkpoint-plus-term", "review-checkpoint", "review-in-flight"]) {
       const interruptedOut = path.join(root, `actual-interruption-${mode}`);
       const request = path.join(root, `checkpoint-${mode}.json`);
       const child = spawn(
@@ -415,7 +418,7 @@ exit 0
           interruptedOut,
           "--checkpoint-request",
           request,
-          ...(mode === "review-checkpoint" ? ["--review-model", "fixture:reviewer"] : []),
+          ...(mode.startsWith("review-") ? ["--review-model", "fixture:reviewer"] : []),
         ],
         {
           cwd: root,
@@ -423,7 +426,8 @@ exit 0
             ...process.env,
             PATH: path.join(root, "bin") + path.delimiter + process.env.PATH,
             VIBE_TEST_WAIT: "1",
-            ...(mode === "review-checkpoint" ? {VIBE_TEST_REVIEW_REQUIRED:"1"} : {}),
+            ...(mode.startsWith("review-") ? {VIBE_TEST_REVIEW_REQUIRED:"1"} : {}),
+            ...(mode === "review-in-flight" ? {VIBE_TEST_REVIEW_CAPTURE:"1"} : {}),
           },
           stdio: ["ignore", "pipe", "pipe"],
         }
@@ -443,14 +447,17 @@ exit 0
         });
       });
       if (mode === "signal") child.kill("SIGTERM");
-      else await writeFile(request, JSON.stringify({ reason: "test wave checkpoint" }));
+      else {
+        await writeFile(request, JSON.stringify({ reason: "test wave checkpoint" }));
+        if (mode === "checkpoint-plus-term") child.kill("SIGTERM");
+      }
       assert.deepEqual(await exited, [130, null], stderr);
       const state = JSON.parse(
         await readFile(path.join(interruptedOut, "collection-interruption.json"), "utf8")
       );
-      assert.deepEqual(state.completedCases, mode === "review-checkpoint" ? [] : ["passing"]);
-      assert.deepEqual(state.interruptedCases, mode === "review-checkpoint" ? ["passing","failing","personal"] : ["failing", "personal"]);
-      if (mode === "review-checkpoint") {
+      assert.deepEqual(state.completedCases, mode.startsWith("review-") ? [] : ["passing"]);
+      assert.deepEqual(state.interruptedCases, mode.startsWith("review-") ? ["passing","failing","personal"] : ["failing", "personal"]);
+      if (mode.startsWith("review-")) {
         assert.equal(state.interruptedReasons.passing,"pending-review");
         await assert.rejects(readFile(path.join(interruptedOut,"cases/passing/verified/manifest.json")),{code:"ENOENT"});
       } else

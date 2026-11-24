@@ -519,7 +519,10 @@ try {
             interruption.complete([scenario]);
             console.log(path.join(destination, "manifest.json"));
           } catch (error) {
-            if (error === interruption.signal.reason && liveTeacherCases.get(scenario).requiresReview) {
+            if (interruption.signal.aborted &&
+                (error === interruption.signal.reason ||
+                  error?.reviewCapture?.schema === "natlang.live-workflow-review-interrupted/1") &&
+                liveTeacherCases.get(scenario).requiresReview) {
               interruption.defer(scenario, "pending-review");
               console.error(`Teacher case ${scenario} pending review after interruption; actual packet retained`);
               continue;

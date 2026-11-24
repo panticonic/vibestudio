@@ -65,7 +65,19 @@ export function collectionInterruption({ requestPath, out, cases, processSignals
     persist();
     controller.abort(request);
   };
-  const onSignal = (signal) => receive(signal, `Interrupted by ${signal}`);
+  let unixSignalReceived = false;
+  const onSignal = (signal) => {
+    if (unixSignalReceived) {
+      // A file checkpoint plus its first Unix signal is one request. Only a
+      // second actual Unix signal explicitly abandons canonical cleanup.
+      watcher?.close();
+      for (const registered of signals) processSignals.off(registered, onSignal);
+      processSignals.kill(processSignals.pid, signal);
+      return;
+    }
+    unixSignalReceived = true;
+    receive(signal, `Interrupted by ${signal}`);
+  };
   const signals = ["SIGINT", "SIGTERM", "SIGHUP"];
   for (const signal of signals) processSignals.on(signal, onSignal);
   const checkRequest = () => {
