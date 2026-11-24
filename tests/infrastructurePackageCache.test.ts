@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildInfrastructurePackages,
   emitInfrastructurePackages,
@@ -72,12 +72,30 @@ function fixture(): string {
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const directory of temporaryDirectories.splice(0)) {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
 
 describe("infrastructure package cache", () => {
+  it("honors the declared operation budget for custom package builders", () => {
+    vi.stubEnv("VIBESTUDIO_MAX_CONCURRENT_BUILDS", "1");
+    const cwd = fixture();
+    const plan = inspectInfrastructurePackageBuilds({ cwd });
+    const commands: string[][] = [];
+    emitInfrastructurePackages(
+      plan,
+      ["@vibestudio/base", "@vibestudio/bridge", "@vibestudio/consumer"],
+      (args: string[]) => {
+        commands.push(args);
+      }
+    );
+    expect(commands).toHaveLength(1);
+    expect(commands[0]!.slice(0, 2)).toEqual(["--workspace-concurrency", "1"]);
+    expect(commands[0]).toContain("@vibestudio/base");
+    expect(commands[0]).toContain("@vibestudio/consumer");
+  });
   it("batches compatible compiler projects and preserves custom build barriers", () => {
     const cwd = fixture();
     write(cwd, "package.json", JSON.stringify({ name: "fixture", type: "module" }));

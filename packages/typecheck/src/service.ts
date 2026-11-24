@@ -11,6 +11,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createRequire } from "node:module";
+import { configureNativeCompilerMemory } from "@vibestudio/shared/compilerResourcePolicy";
 import { compileSvelteTypeSource, projectSvelteDeclarations, svelteTypeEnvironment } from "@vibestudio/svelte-type-source";
 import { TraceMap, AnyMap, originalPositionFor } from "@jridgewell/trace-mapping";
 import {
@@ -178,6 +179,7 @@ export class TypeCheckService {
 
     const tsserverPath =
       config.tsserverPath ?? process.env["VIBESTUDIO_TYPESCRIPT_SERVER_PATH"]?.trim();
+    configureNativeCompilerMemory();
     this.api = new API({
       cwd: this.panelPath,
       collectTiming: config.collectTiming,

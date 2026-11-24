@@ -1,5 +1,6 @@
 import path from "node:path";
 import os from "node:os";
+import { configuredCompilerConcurrency } from "@vibestudio/shared/compilerResourcePolicy";
 import { statSync } from "node:fs";
 import {
   deserializeRpcFailure,
@@ -56,8 +57,8 @@ export function resolveReleaseBuildConcurrency({
   availableParallelism = os.availableParallelism(),
   totalMemoryBytes = os.totalmem(),
 }) {
-  const explicit = Number.parseInt(configured ?? "", 10);
-  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  const explicit = configuredCompilerConcurrency(configured);
+  if (explicit !== undefined) return explicit;
   const processors = Math.max(1, Math.floor(availableParallelism));
   const memory = Math.max(0, totalMemoryBytes);
   const reserve = Math.min(4 * GIB, memory / 3);

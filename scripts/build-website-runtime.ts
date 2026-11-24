@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { parse } from "@babel/parser";
 import { API } from "typescript/unstable/sync";
+import { configureNativeCompilerMemory } from "@vibestudio/shared/compilerResourcePolicy";
 import {
   prepareUserlandDependencyProjection,
   type UserlandDependencyProjection,
@@ -297,6 +298,7 @@ export async function buildWebsiteRuntime(
       );
       if (!reactDeclaration) throw new Error("Website React declarations are empty");
       fs.writeFileSync(path.join(temporary, "connection.d.ts"), reactDeclaration);
+      configureNativeCompilerMemory();
       const compiler = new API({ cwd: hostRoot });
       try {
         const snapshot = compiler.updateSnapshot({ openProjects: [validationConfig] });

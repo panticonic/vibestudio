@@ -8,6 +8,10 @@ import { compilerInputs, compilerOutputs } from "./lib/compiler-inputs.mjs";
 import { fileDigest } from "./lib/file-digest.mjs";
 import { hostInstalledDependencyHash } from "./lib/host-installed-dependencies.mjs";
 import { execPnpmSync } from "./cli/lib/package-manager.mjs";
+import {
+  configureNativeCompilerMemory,
+  configuredCompilerConcurrency,
+} from "@vibestudio/shared/compilerResourcePolicy";
 
 export const INFRASTRUCTURE_CACHE_VERSION = 3;
 export const INFRASTRUCTURE_CACHE_PATH = ".cache/vibestudio-infrastructure-build.json";
@@ -230,6 +234,7 @@ function executionSelection(dirty, packages) {
 /** Emit in dependency order, sharing one compiler process per contiguous realm.
  * Custom builders retain their package-manager lifecycle and form graph barriers. */
 export function emitInfrastructurePackages(plan, selectedPackages, run) {
+  const concurrency = configuredCompilerConcurrency(process.env.VIBESTUDIO_MAX_CONCURRENT_BUILDS);
   const selected = new Set(selectedPackages);
   const visited = new Set();
   const ordered = [];
@@ -250,10 +255,17 @@ export function emitInfrastructurePackages(plan, selectedPackages, run) {
       projects = [];
     }
     if (custom.length) {
-      run([...sourcePackages, ...custom].flatMap((name) => ["--filter", name]).concat("build"), {
-        cwd: plan.cwd,
-        stdio: "inherit",
-      });
+      run(
+        [
+          ...(concurrency === undefined ? [] : ["--workspace-concurrency", String(concurrency)]),
+          ...[...sourcePackages, ...custom].flatMap((name) => ["--filter", name]),
+          "build",
+        ],
+        {
+          cwd: plan.cwd,
+          stdio: "inherit",
+        }
+      );
       custom = [];
     }
   };
@@ -284,6 +296,7 @@ function readCache(cwd) {
 }
 
 export function inspectInfrastructurePackageBuilds({ cwd = process.cwd(), toolchainDigest } = {}) {
+  configureNativeCompilerMemory();
   const api = new API({ cwd });
   let packages;
   try {

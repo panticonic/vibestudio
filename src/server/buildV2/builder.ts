@@ -1,5 +1,6 @@
 import { isTerminalAppLocation } from "@vibestudio/workspace-contracts/sourceDirs";
 import { logVerbose } from "@vibestudio/dev-log";
+import { configuredCompilerConcurrency } from "@vibestudio/shared/compilerResourcePolicy";
 import {
   PANEL_CONDITIONS,
   WEBSITE_CONDITIONS,
@@ -715,8 +716,8 @@ export function collectWorkspaceRpcMethods(
 // ---------------------------------------------------------------------------
 
 function resolveMaxConcurrentBuilds(): number {
-  const parsed = Number.parseInt(process.env["VIBESTUDIO_MAX_CONCURRENT_BUILDS"] ?? "", 10);
-  if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  const parsed = configuredCompilerConcurrency(process.env["VIBESTUDIO_MAX_CONCURRENT_BUILDS"]);
+  if (parsed !== undefined) return parsed;
   // A unit build already fans out through esbuild, native TypeScript, package
   // resolution, and hashing, so unconstrained machine-wide concurrency makes
   // each user-visible fold slower. Three lanes are nevertheless useful because

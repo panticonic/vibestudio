@@ -421,6 +421,7 @@ async function withReleaseConsumerSession(
           "NO_PROXY",
           "NODE_EXTRA_CA_CERTS",
           "VIBESTUDIO_MAX_CONCURRENT_BUILDS",
+          "GOMEMLIMIT",
         ])
           if (process.env[key] !== undefined) inherited[key] = process.env[key];
         // Release coordinates come from the installed pointer; configuration,
