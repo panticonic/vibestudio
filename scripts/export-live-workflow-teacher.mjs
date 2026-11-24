@@ -7154,17 +7154,20 @@ export function openOutcomeGoalEvidence(execution, exercise, _scenario, workflow
   const attestedEntry = entry && { program: entry.program, callable: entry.callable, arguments: entry.arguments,
     ...(entry.resultType === "void" ? {resultType:"void"} : {}),
     ...(entry.argumentJson ? { argumentJson: entry.argumentJson } : {}) };
-  const voidReturn = entry?.resultType === "void" || proof?.actualResultKind === "void" || exercise.applicationResultKind === "void";
-  const returnedValue = voidReturn
-    ? entry?.resultType === "void" && entry.program.endsWith(".ts") &&
+  const declaredVoid = entry?.resultType === "void";
+  const voidWitnessProvided = proof?.actualResultKind !== undefined || exercise.applicationResultKind !== undefined ||
+    declaredVoid && (Object.hasOwn(proof ?? {}, "actualResult") || Object.hasOwn(exercise, "applicationResult"));
+  const declaredVoidEntry = declaredVoid && entry.program.endsWith(".ts") &&
+    root?.executor?.kind === "crisp" && root?.definition?.returns === "void";
+  const returnedValue = voidWitnessProvided
+    ? declaredVoidEntry && root?.outcome === "done" &&
       proof?.actualResultKind === "void" && Object.hasOwn(proof,"actualResult") && proof.actualResult === null &&
-      exercise.applicationResultKind === "void" && exercise.applicationResult === null &&
-      root?.executor?.kind === "crisp" && root?.definition?.returns === "void" && matchesValue(root.output,null)
+      exercise.applicationResultKind === "void" && exercise.applicationResult === null && matchesValue(root.output,null)
     : proof?.actualResultKind === undefined && exercise.applicationResultKind === undefined && matchesValue(root?.output,proof?.actualResult);
   const inputValues = entry?.arguments ?? { goal: world.goal };
   requireEvidence(
     proof?.passed === true && proof.caseId === world.id && proof.goal === world.goal &&
-      (!voidReturn || returnedValue) &&
+      (!declaredVoid || declaredVoidEntry) && (!voidWitnessProvided || returnedValue) &&
       typeof proof.contextId === "string" && proof.contextId === execution.provenance?.contextId &&
       Object.keys(checks).length > 0 && Object.values(checks).every(value => value === true) &&
       isDeepStrictEqual(Object.keys(root?.inputs ?? {}).sort(), Object.keys(inputValues).sort()) &&
@@ -7172,10 +7175,10 @@ export function openOutcomeGoalEvidence(execution, exercise, _scenario, workflow
       (!entry || isDeepStrictEqual(proof.entry, attestedEntry) &&
         isDeepStrictEqual(exercise.entry, attestedEntry) &&
         root.definition?.name === entry.callable &&
-        (!entry.program.endsWith(".ts") || (root.executor?.kind === "crisp" && root.definition?.id === "ts:"+root.definition?.source+"#default")) && returnedValue),
+        (!entry.program.endsWith(".ts") || (root.executor?.kind === "crisp" && root.definition?.id === "ts:"+root.definition?.source+"#default")) && (declaredVoid || returnedValue)),
     "Expected independently verified outcomes bound to the actual workspace and original user goal"
   );
-  const evidence = { workspace: { proof, ...(voidReturn ? {applicationReturn:{kind:"void",root_call_id:root.call_id,valueJson:"null",selectedResult:null}} : {}) } };
+  const evidence = { workspace: { proof, ...(declaredVoid && voidWitnessProvided ? {applicationReturn:{kind:"void",root_call_id:root.call_id,valueJson:"null",selectedResult:null}} : {}) } };
   const worldBinding = { context_id: proof.contextId, case_id: proof.caseId };
   if (world.kind === "browser") {
     const { panelId, inspections, attempts, after } = proof;
