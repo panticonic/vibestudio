@@ -139,3 +139,38 @@ test("application source claims require an independent review bound to the retur
   input.actual.answer=JSON.stringify({...result,status:"insufficient"});
   assert.throws(()=>openOutcomeGoalEvidence(execution,exercise,"hours",workflow),/actual application result/);
 });
+
+
+test("optional application receipts do not gate verified effects after a root exception",()=>{
+ const make=()=>{
+  const fixture=applicationFixture(),root=fixture.exercise.calls[0].record;
+  root.outcome="error";root.error={name:"PostGoalFailure",message:"Follow-up failed after saved edit"};
+  delete root.output;delete fixture.execution.diagnostics.openGoalVerification.actualResult;
+  fixture.exercise.executionError=root.error;
+  return fixture;
+ };
+ for(const requirement of ["dimensions","contract","both"]){
+  const fixture=make(),proof=fixture.execution.diagnostics.openGoalVerification;
+  if(requirement!=="contract")proof.outcomeDimensions={returnedValue:{required:false}};
+  if(requirement!=="dimensions")proof.outcomeContract={returnedValue:{required:false}};
+  const evidence=openOutcomeGoalEvidence(fixture.execution,fixture.exercise,"hours",fixture.workflow);
+  assert.equal(evidence.checks.storedRequestedHours,true);
+  assert.equal(Object.hasOwn(evidence.evidence.workspace,"applicationReturn"),false);
+  assert.equal(fixture.exercise.calls[0].record.outcome,"error");
+ }
+ for(const mutate of [
+  fixture=>{},
+  fixture=>{fixture.execution.diagnostics.openGoalVerification.outcomeDimensions={returnedValue:{required:true}};},
+  fixture=>{const p=fixture.execution.diagnostics.openGoalVerification;p.outcomeDimensions={returnedValue:{required:false}};p.outcomeContract={returnedValue:{required:true}};},
+  fixture=>{const p=fixture.execution.diagnostics.openGoalVerification;p.outcomeDimensions={returnedValue:{required:false}};p.actualResult={revision:"invented"};},
+  fixture=>{const p=fixture.execution.diagnostics.openGoalVerification;p.outcomeDimensions={returnedValue:{required:false}};fixture.exercise.applicationResult={revision:"invented"};},
+  fixture=>{const p=fixture.execution.diagnostics.openGoalVerification;p.outcomeDimensions={returnedValue:{required:false}};fixture.exercise.calls[0].record.inputs.goal=reference("Different goal");},
+ ]){const fixture=make();mutate(fixture);assert.throws(()=>openOutcomeGoalEvidence(fixture.execution,fixture.exercise,"hours",fixture.workflow));}
+ const provided=applicationFixture(),proof=provided.execution.diagnostics.openGoalVerification;
+ proof.outcomeDimensions={returnedValue:{required:false}};
+ provided.exercise.applicationResult={revision:"invented"};
+ assert.throws(()=>openOutcomeGoalEvidence(provided.execution,provided.exercise,"hours",provided.workflow));
+ delete provided.exercise.applicationResult;
+ provided.exercise.calls[0].record.output=reference({revision:"unobserved"});
+ assert.throws(()=>openOutcomeGoalEvidence(provided.execution,provided.exercise,"hours",provided.workflow));
+});

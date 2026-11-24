@@ -7155,6 +7155,14 @@ export function openOutcomeGoalEvidence(execution, exercise, _scenario, workflow
     ...(entry.resultType === "void" ? {resultType:"void"} : {}),
     ...(entry.argumentJson ? { argumentJson: entry.argumentJson } : {}) };
   const declaredVoid = entry?.resultType === "void";
+  const dimensionRequirement = proof?.outcomeDimensions?.returnedValue?.required;
+  const contractRequirement = proof?.outcomeContract?.returnedValue?.required;
+  const requirementValid = [dimensionRequirement, contractRequirement].every(value => value === undefined || typeof value === "boolean") &&
+    (dimensionRequirement === undefined || contractRequirement === undefined || dimensionRequirement === contractRequirement);
+  const explicitReturnRequirement = dimensionRequirement ?? contractRequirement;
+  const returnRequired = explicitReturnRequirement ?? !declaredVoid;
+  const actualReturnProvided = proof?.actualResultKind !== undefined || exercise.applicationResultKind !== undefined ||
+    Object.hasOwn(proof ?? {}, "actualResult") || Object.hasOwn(exercise, "applicationResult");
   const voidWitnessProvided = proof?.actualResultKind !== undefined || exercise.applicationResultKind !== undefined ||
     declaredVoid && (Object.hasOwn(proof ?? {}, "actualResult") || Object.hasOwn(exercise, "applicationResult"));
   const declaredVoidEntry = declaredVoid && entry.program.endsWith(".ts") &&
@@ -7163,10 +7171,13 @@ export function openOutcomeGoalEvidence(execution, exercise, _scenario, workflow
     ? declaredVoidEntry && root?.outcome === "done" &&
       proof?.actualResultKind === "void" && Object.hasOwn(proof,"actualResult") && proof.actualResult === null &&
       exercise.applicationResultKind === "void" && exercise.applicationResult === null && matchesValue(root.output,null)
-    : proof?.actualResultKind === undefined && exercise.applicationResultKind === undefined && matchesValue(root?.output,proof?.actualResult);
+    : proof?.actualResultKind === undefined && exercise.applicationResultKind === undefined && matchesValue(root?.output,proof?.actualResult) &&
+      (!Object.hasOwn(exercise, "applicationResult") || matchesValue(root?.output, exercise.applicationResult));
   const inputValues = entry?.arguments ?? { goal: world.goal };
   requireEvidence(
     proof?.passed === true && proof.caseId === world.id && proof.goal === world.goal &&
+      requirementValid && (!actualReturnProvided || returnedValue) &&
+      (explicitReturnRequirement !== true || returnedValue) &&
       (!declaredVoid || declaredVoidEntry) && (!voidWitnessProvided || returnedValue) &&
       typeof proof.contextId === "string" && proof.contextId === execution.provenance?.contextId &&
       Object.keys(checks).length > 0 && Object.values(checks).every(value => value === true) &&
@@ -7175,7 +7186,7 @@ export function openOutcomeGoalEvidence(execution, exercise, _scenario, workflow
       (!entry || isDeepStrictEqual(proof.entry, attestedEntry) &&
         isDeepStrictEqual(exercise.entry, attestedEntry) &&
         root.definition?.name === entry.callable &&
-        (!entry.program.endsWith(".ts") || (root.executor?.kind === "crisp" && root.definition?.id === "ts:"+root.definition?.source+"#default")) && (declaredVoid || returnedValue)),
+        (!entry.program.endsWith(".ts") || (root.executor?.kind === "crisp" && root.definition?.id === "ts:"+root.definition?.source+"#default")) && (!returnRequired || returnedValue)),
     "Expected independently verified outcomes bound to the actual workspace and original user goal"
   );
   const evidence = { workspace: { proof, ...(declaredVoid && voidWitnessProvided ? {applicationReturn:{kind:"void",root_call_id:root.call_id,valueJson:"null",selectedResult:null}} : {}) } };
