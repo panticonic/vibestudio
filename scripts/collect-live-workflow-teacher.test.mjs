@@ -9,7 +9,7 @@ import { test } from "node:test";
 
 test(
   "a batch reuses each workspace instance and retains successes across failures",
-  { timeout: 60_000 },
+  { timeout: 90_000 },
   async (t) => {
     const root = await mkdtemp(path.join(os.tmpdir(), "live-teacher-batch-"));
     t.after(() => rm(root, { recursive: true, force: true }));
@@ -79,7 +79,7 @@ test(
       `import { mkdir, readFile, writeFile } from 'node:fs/promises';
     import path from 'node:path';
     export const liveTeacherCases = new Map(['passing', 'failing', 'personal'].map(caseId =>
-      [caseId, { family: 'fixture', group: 'group', workspace: caseId === 'personal' ? 'personal' : undefined, devices: caseId === 'personal' ? ['desktop'] : undefined, validator: {template:'system-testing',path:'skills/system-testing/oracle.ts'} }]
+      [caseId, { family: 'fixture', group: 'group', workspace: caseId === 'personal' ? 'personal' : undefined, devices: caseId === 'personal' ? ['desktop'] : undefined, requiresReview: caseId === 'passing' && Boolean(process.env.VIBE_TEST_REVIEW_REQUIRED), validator: {template:'system-testing',path:'skills/system-testing/oracle.ts'} }]
     ));
     liveTeacherCases.set('open-café', {
       family: 'open', group: 'open', interaction: 'open-user-goal', split: 'train',
@@ -89,10 +89,11 @@ test(
     });
     export async function loadLiveTeacherCases() { return liveTeacherCases; }
     export function workflowSourceGroups(workflow) { return [workflow.group]; }
-    export async function exportLiveTeacherWorkflow({ out, pins, trajectory }) {
+    export async function exportLiveTeacherWorkflow({ out, pins, trajectory, review }) {
       const source = JSON.parse(await readFile(pins, 'utf8'));
       const run = JSON.parse(await readFile(trajectory, 'utf8'));
       if (run.scenario === 'failing') throw new Error('Fixture outcome failed');
+      if (process.env.VIBE_TEST_REVIEW_REQUIRED) await review({kind:'actual-retained-fixture'},source.teacher);
       await mkdir(out);
       await writeFile(path.join(out, 'manifest.json'), JSON.stringify({ source, run }));
     }`
@@ -394,7 +395,7 @@ exit 0
       { code: "ENOENT" }
     );
 
-    for (const mode of ["signal", "checkpoint"]) {
+    for (const mode of ["signal", "checkpoint", "review-checkpoint"]) {
       const interruptedOut = path.join(root, `actual-interruption-${mode}`);
       const request = path.join(root, `checkpoint-${mode}.json`);
       const child = spawn(
@@ -414,6 +415,7 @@ exit 0
           interruptedOut,
           "--checkpoint-request",
           request,
+          ...(mode === "review-checkpoint" ? ["--review-model", "fixture:reviewer"] : []),
         ],
         {
           cwd: root,
@@ -421,6 +423,7 @@ exit 0
             ...process.env,
             PATH: path.join(root, "bin") + path.delimiter + process.env.PATH,
             VIBE_TEST_WAIT: "1",
+            ...(mode === "review-checkpoint" ? {VIBE_TEST_REVIEW_REQUIRED:"1"} : {}),
           },
           stdio: ["ignore", "pipe", "pipe"],
         }
@@ -445,8 +448,12 @@ exit 0
       const state = JSON.parse(
         await readFile(path.join(interruptedOut, "collection-interruption.json"), "utf8")
       );
-      assert.deepEqual(state.completedCases, ["passing"]);
-      assert.deepEqual(state.interruptedCases, ["failing", "personal"]);
+      assert.deepEqual(state.completedCases, mode === "review-checkpoint" ? [] : ["passing"]);
+      assert.deepEqual(state.interruptedCases, mode === "review-checkpoint" ? ["passing","failing","personal"] : ["failing", "personal"]);
+      if (mode === "review-checkpoint") {
+        assert.equal(state.interruptedReasons.passing,"pending-review");
+        await assert.rejects(readFile(path.join(interruptedOut,"cases/passing/verified/manifest.json")),{code:"ENOENT"});
+      } else
       assert.equal(
         JSON.parse(
           await readFile(path.join(interruptedOut, "cases/passing/verified/manifest.json"), "utf8")

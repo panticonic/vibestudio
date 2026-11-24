@@ -11236,8 +11236,10 @@ export async function exportLiveTeacherWorkflow({
   const exercise = execution?.diagnostics?.natlangTeacher;
   const shared = exercise?.programPath === sharedProgram;
   requireEvidence(
-    exercise?.trainingEligible === true &&
-      !exercise.executionError &&
+    // Goal completion is established by workflow.evidence below. A later
+    // optional root failure must remain in the capture without vetoing the
+    // independently verified outcome or discarding its valid decisions.
+    exercise &&
       !exercise.captureErrors?.length &&
       (shared || (workflow.program && exercise.programPath === workflow.program)) &&
       Array.isArray(exercise.calls) &&

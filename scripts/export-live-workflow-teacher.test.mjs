@@ -926,6 +926,40 @@ async function fixture(t) {
   return { options, diagnostics, entry, save };
 }
 
+test("goal evidence admits and preserves valid decisions after an optional root exception", async t => {
+  const {options,diagnostics,entry,save}=await fixture(t);
+  const exercise=diagnostics.natlangTeacher;
+  exercise.trainingEligible=false;
+  exercise.executionError="Optional post-goal follow-up failed";
+  exercise.calls[0].record.outcome="error";
+  exercise.calls[0].record.error={name:"Error",message:exercise.executionError};
+  exercise.calls[0].record.effects=[{service:"workspaceDocuments",method:"write",returned:"actual committed revision"}];
+  exercise.calls[1].record.outcome="done";
+  exercise.calls[1].record.outputs={report:"actual required readback"};
+  exercise.captureErrors=["missing exchange"];
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow(options),/Missing eligible authored/);
+  exercise.captureErrors=[];
+  exercise.calls[1].summary.owner_key="other-owner";
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow(options),/different EvalDO owner/);
+  exercise.calls[1].summary.owner_key="fixture";
+  diagnostics.panelDraftVerification.passed=false;
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow(options));
+  diagnostics.panelDraftVerification.passed=true;
+  await save();
+  const original=await readFile(options.trajectory,"utf8");
+  await exportLiveTeacherWorkflow(options);
+  assert.equal(await readFile(options.trajectory,"utf8"),original);
+  for(const [index,call] of exercise.calls.entries())
+    assert.deepEqual(JSON.parse(await readFile(path.join(options.out,`call-${index}.json`),"utf8")),call);
+  const verification=JSON.parse(await readFile(path.join(options.out,"verification.json"),"utf8"));
+  assert.equal(verification.status,"passed");
+  assert.deepEqual(verification.root_call_ids,["root"]);
+  assert.equal(entry.result.passed,true);
+});
+
 test("case admission uses actual tool failures without requiring a suite summary", async t => {
   const {options,entry,save} = await fixture(t);
   for (const failure of [{name:"broken"},{name:"broken",expected:false},null]) {

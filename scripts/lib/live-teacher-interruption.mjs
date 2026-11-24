@@ -39,6 +39,7 @@ export async function runTeacherCommand(command, args, options, signal) {
 export function collectionInterruption({ requestPath, out, cases, processSignals = process }) {
   const controller = new AbortController();
   const completed = new Set();
+  const interruptedReasons = new Map();
   let request;
   let watcher;
   const persist = () => {
@@ -50,6 +51,7 @@ export function collectionInterruption({ requestPath, out, cases, processSignals
           ...request,
           interruptedCases: cases.filter((name) => !completed.has(name)),
           completedCases: cases.filter((name) => completed.has(name)),
+          ...(interruptedReasons.size ? { interruptedReasons: Object.fromEntries(interruptedReasons) } : {}),
         },
         null,
         2
@@ -85,7 +87,12 @@ export function collectionInterruption({ requestPath, out, cases, processSignals
   return {
     signal: controller.signal,
     complete(names) {
-      for (const name of names) if (cases.includes(name)) completed.add(name);
+      for (const name of names) if (cases.includes(name)) { completed.add(name); interruptedReasons.delete(name); }
+      persist();
+    },
+    defer(name, reason) {
+      completed.delete(name);
+      interruptedReasons.set(name, reason);
       persist();
     },
     dispose() {

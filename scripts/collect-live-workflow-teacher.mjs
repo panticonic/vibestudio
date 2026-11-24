@@ -362,6 +362,10 @@ const interruption = collectionInterruption({
   out,
   cases: scenarios,
 });
+const admittedReview = review ? Object.assign((input, teacher) => {
+  interruption.signal.throwIfAborted();
+  return review(input, teacher, interruption.signal);
+}, { model: review.model }) : undefined;
 try {
   const failures = [];
   const unavailableScopes = new Set();
@@ -509,12 +513,17 @@ try {
               validator: validators.get(scenario),
               out: destination,
               split: liveTeacherCases.get(scenario).split ?? "train",
-              review,
+              review: admittedReview,
               cases: liveTeacherCases,
             });
             interruption.complete([scenario]);
             console.log(path.join(destination, "manifest.json"));
           } catch (error) {
+            if (error === interruption.signal.reason && liveTeacherCases.get(scenario).requiresReview) {
+              interruption.defer(scenario, "pending-review");
+              console.error(`Teacher case ${scenario} pending review after interruption; actual packet retained`);
+              continue;
+            }
             const label =
               interruption.signal.aborted && !terminalCases.has(scenario)
                 ? "Teacher evidence"
