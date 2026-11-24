@@ -37,6 +37,46 @@ export function workspaceEditReviewInput(proof,world){
   return input;
 }
 
+export function editorialReviewInput(proof,world){
+  const input=proof.semanticReviewInput;
+  const approved=proof.sources?.flatMap(source=>source.pdf?[{document:source.request?.document,digest:source.pdf.digest,citations:source.pdf.citations}]:[]);
+  const handoff=proof.artifact?JSON.parse(proof.artifact):null;
+  const note=world.note??"none",needsHandoff=note==="diagnostic"||note==="ready-only"&&["ready","already-current"].includes(world.end);
+  requireFact(world.kind==="editorial-packet"&&proof.semanticReviewRequired===true&&input?.actual?.goal===world.goal&&
+    input.expected?.goal===world.goal&&input.expected.literalApprovedWording===(world.literalApprovedWording??false)&&
+    input.expected.operation===proof.plan?.operation&&input.expected.returnedDecisionRequired===!proof.attempts?.some(attempt=>attempt.result?.status==="written")&&
+    input.expected.retainedHandoffRequired===needsHandoff&&equal(input.actual.retainedHandoff,handoff)&&
+    equal(input.expected.fields,world.fields.map(field=>field.label))&&equal(input.actual.retainedDocument,proof.stored)&&
+    equal(input.actual.originalDocument,proof.snapshots?.[0]?.candidate)&&equal(input.actual.approvedTextSources,approved)&&
+    equal(input.actual.currentObservation,proof.snapshots?.at(-1)?.candidate)&&equal(input.actual.currentMission,proof.snapshots?.at(-1)?.mission)&&
+    typeof input.rubric==="string"&&input.rubric.trim(),"Editorial review differs from actual stored copy or approved original evidence");
+  return input;
+}
+
+export function coordinatedRevisionReviewInput(proof,world){
+  const input=proof.semanticReviewInput;
+  const applied=proof.attempts?.some(attempt=>attempt.receipt?.status==="applied");
+  const original=proof.snapshots?.[0]?.scope?.files??[];
+  const observed=proof.reviewScope;
+  requireFact(world.kind==="coordinated-revision"&&proof.semanticReviewRequired===true&&input?.actual?.goal===world.goal&&
+    input.expected?.goal===world.goal&&input.expected.returnedDecisionRequired===!applied&&
+    equal(input.expected.editablePaths,world.changes.map(change=>change.path))&&equal(input.actual.documents,proof.documents)&&
+    equal(input.actual.originalDocuments,original)&&equal(input.actual.currentObservedDocuments,observed)&&proof.snapshots?.some(snapshot=>equal(snapshot.scope.files,observed))&&
+    equal(input.actual.returnedDecision,applied?null:proof.report)&&equal(proof.nativeReadback?.files,proof.documents)&&
+    typeof input.rubric==="string"&&input.rubric.trim(),"Coordinated revision review differs from the exact native batch and signed authority");
+  return input;
+}
+
+export function outcomeWorkspaceReviewInput(proof,world){
+  const input=proof.semanticReviewInput;
+  requireFact(world.kind==="outcome-workspace"&&proof.semanticReviewRequired===true&&input?.actual?.goal===world.goal&&
+    input.expected?.goal===world.goal&&input.expected.target===world.target&&input.expected.authority===world.authority&&
+    input.expected.returnedAnswerRequired===(world.target===null)&&equal(input.actual.documents,proof.contents)&&
+    equal(input.actual.originalDocuments,world.files)&&equal(input.actual.actualAnswer,world.target===null?proof.actualResult:null)&&
+    typeof input.rubric==="string"&&input.rubric.trim(),"Workspace outcome review differs from actual retained content and authority");
+  return input;
+}
+
 /** Bind semantic policy inputs to actual returned values and independent readback. */
 export function sourceClaimReviewInput(proof, world) {
   requireFact(sourceClaimKinds.has(world.kind) && proof.semanticReviewRequired === true,
