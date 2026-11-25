@@ -94,7 +94,7 @@ async function main({ signal, ownership, scratchRoot }) {
   await prepareServerTemplateRelease(path.join(outRoot, "server"), ownership, signal);
   assertNoBundledUserlandSource(path.join(outRoot, "server"), "staged server npm package");
   console.log("\n✔ Staged dist-packages/server. Validate with:");
-  console.log("    pnpm npm:authenticated publish dist-packages/server --dry-run");
+  console.log("    pnpm publish:server-npm -- --skip-build --skip-stage --dry-run-only");
 }
 
 /** Compile against a real installation of the staged package. Publication
