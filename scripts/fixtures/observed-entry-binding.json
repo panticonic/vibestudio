@@ -1,0 +1,432 @@
+{
+  "originalCaptureSha256": "d4ebe34d092777633c2c1da8999b59c40bd3cf8fb8ac67c193de24c21280acbd",
+  "execution": {
+    "provenance": {
+      "contextId": "3c88e9ea-0b98-496b-964b-0efda3997f60",
+      "channelId": null,
+      "branchId": null,
+      "agentEntityId": null,
+      "agentTargetId": null
+    },
+    "diagnostics": {
+      "openGoalVerification": {
+        "outcomeContract": {
+          "effects": {
+            "checks": [
+              "foundCurrentIncident",
+              "preservedNeighbor",
+              "verifiedExactLocalDraft",
+              "stayedLocal"
+            ],
+            "rationale": "Authoritative native state, captured operations and durable artifact readback establish these facts independently of copied public values."
+          },
+          "returnedValue": {
+            "checks": [
+              "returnedProblemDraft"
+            ],
+            "required": false,
+            "rationale": "A requested domain answer is required; an extra result copy is optional after the requested native mutation or artifact is independently established."
+          },
+          "incidentalValues": {
+            "checks": [],
+            "rationale": "Known incorrect actual emitted values are masked with their source-bound root definition."
+          }
+        },
+        "incorrectReturnValues": [],
+        "passed": true,
+        "checks": {
+          "foundCurrentIncident": true,
+          "preservedNeighbor": true,
+          "verifiedExactLocalDraft": true,
+          "stayedLocal": true
+        },
+        "caseId": "problem-draft-print-extension",
+        "contextId": "3c88e9ea-0b98-496b-964b-0efda3997f60",
+        "goal": "Add a check to my current Print preview extension draft. It is the landscape footer crash in our own source. Keep the existing symptom and leave the archived printer connection report alone.",
+        "activeId": "b05913b3-abfe-47a2-9532-8a5bb9cda9f7",
+        "candidates": [
+          {
+            "id": "b05913b3-abfe-47a2-9532-8a5bb9cda9f7",
+            "title": "Print preview extension",
+            "surface": "Print preview extension",
+            "state": "current",
+            "observation": "Our extension throws ReferenceError: footerRows is not defined."
+          },
+          {
+            "id": "db4b11ed-2096-4b11-b909-42021cacfe4f",
+            "title": "Print preview extension",
+            "surface": "Print preview extension",
+            "state": "archived",
+            "observation": "A retired desktop report concerned pairing the office printer."
+          }
+        ],
+        "openings": [
+          {
+            "id": "b05913b3-abfe-47a2-9532-8a5bb9cda9f7",
+            "result": {
+              "operationId": "44b37d90-9c68-45ec-8564-56e338cfa617"
+            }
+          }
+        ],
+        "draft": {
+          "passed": true,
+          "caseId": "problem-draft-print-extension",
+          "contextId": "3c88e9ea-0b98-496b-964b-0efda3997f60",
+          "request": {
+            "goal": "Add a check to my current Print preview extension draft. It is the landscape footer crash in our own source. Keep the existing symptom and leave the archived printer connection report alone.",
+            "operationId": "44b37d90-9c68-45ec-8564-56e338cfa617"
+          },
+          "source": {
+            "draft": {
+              "id": "7f79af7e-f8b3-44bc-b640-9d98f961daab",
+              "revision": 2,
+              "existingSections": [
+                "symptom"
+              ]
+            },
+            "review": {
+              "goal": "Add a check to my current Print preview extension draft. It is the landscape footer crash in our own source. Keep the existing symptom and leave the archived printer connection report alone.",
+              "account": {
+                "goal": "Preview our worksheet in landscape orientation.",
+                "observed": "Our extension throws ReferenceError: footerRows is not defined.",
+                "expected": "Landscape Print preview shows the same footer rows as the worksheet.",
+                "attempts": "Portrait still works using our extension.",
+                "operation": "printPreview.render",
+                "reproduced": false
+              },
+              "consent": "save",
+              "draft": {
+                "id": "7f79af7e-f8b3-44bc-b640-9d98f961daab",
+                "revision": 2,
+                "basisRevision": 2,
+                "userEdits": false
+              },
+              "evidence": [],
+              "frozen": null
+            }
+          },
+          "created": null,
+          "saved": {
+            "id": "7f79af7e-f8b3-44bc-b640-9d98f961daab",
+            "revision": 3,
+            "sectionIds": [
+              "a0a1a640-3741-4fb6-a028-ac786c960ae5"
+            ],
+            "sections": [
+              {
+                "section": "verification",
+                "claims": "unverified",
+                "markdown": "The user reports that portrait still works using the extension. To distinguish the reported failure from the expected result, render the worksheet in landscape orientation with the extension and check whether the preview shows the same footer rows as the worksheet or throws `ReferenceError: footerRows is not defined`. Expected: \u201cLandscape Print preview shows the same footer rows as the worksheet.\u201d"
+              }
+            ]
+          },
+          "checks": {
+            "source": true,
+            "result": true,
+            "opening": true,
+            "retention": true,
+            "persisted": true,
+            "localOnly": true
+          }
+        },
+        "unboundReturnContributions": [],
+        "outcomeDimensions": {
+          "effects": {
+            "passed": true,
+            "checks": {
+              "foundCurrentIncident": true,
+              "preservedNeighbor": true,
+              "verifiedExactLocalDraft": true,
+              "stayedLocal": true
+            }
+          },
+          "returnedValue": {
+            "required": false,
+            "passed": true,
+            "checks": {
+              "returnedProblemDraft": true
+            }
+          },
+          "incidentalValues": {
+            "passed": true,
+            "checks": {},
+            "incorrectReturns": []
+          }
+        },
+        "observedChecks": {
+          "foundCurrentIncident": true,
+          "preservedNeighbor": true,
+          "verifiedExactLocalDraft": true,
+          "returnedProblemDraft": true,
+          "stayedLocal": true
+        },
+        "entry": {
+          "program": "skills/open-user-goal/workOnProblemReportGoal.ts",
+          "callable": "workOnProblemReportGoal",
+          "resultType": "OpenProblemOutcome",
+          "arguments": {
+            "goal": "Add a check to my current Print preview extension draft. It is the landscape footer crash in our own source. Keep the existing symptom and leave the archived printer connection report alone."
+          },
+          "argumentJson": {
+            "goal": "\"Add a check to my current Print preview extension draft. It is the landscape footer crash in our own source. Keep the existing symptom and leave the archived printer connection report alone.\""
+          }
+        },
+        "actualResult": {
+          "defect": "user-code",
+          "status": "saved-local",
+          "next": "keep-local",
+          "saved": {
+            "id": "7f79af7e-f8b3-44bc-b640-9d98f961daab",
+            "revision": 3,
+            "sectionIds": [
+              "a0a1a640-3741-4fb6-a028-ac786c960ae5"
+            ],
+            "sections": [
+              {
+                "section": "verification",
+                "claims": "unverified",
+                "markdown": "The user reports that portrait still works using the extension. To distinguish the reported failure from the expected result, render the worksheet in landscape orientation with the extension and check whether the preview shows the same footer rows as the worksheet or throws `ReferenceError: footerRows is not defined`. Expected: \u201cLandscape Print preview shows the same footer rows as the worksheet.\u201d"
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "exercise": {
+    "entry": {
+      "program": "skills/open-user-goal/workOnProblemReportGoal.ts",
+      "callable": "workOnProblemReportGoal",
+      "resultType": "OpenProblemOutcome",
+      "arguments": {
+        "goal": "Add a check to my current Print preview extension draft. It is the landscape footer crash in our own source. Keep the existing symptom and leave the archived printer connection report alone."
+      },
+      "argumentJson": {
+        "goal": "\"Add a check to my current Print preview extension draft. It is the landscape footer crash in our own source. Keep the existing symptom and leave the archived printer connection report alone.\""
+      }
+    },
+    "applicationResult": {
+      "defect": "user-code",
+      "status": "saved-local",
+      "next": "keep-local",
+      "saved": {
+        "id": "7f79af7e-f8b3-44bc-b640-9d98f961daab",
+        "revision": 3,
+        "sectionIds": [
+          "a0a1a640-3741-4fb6-a028-ac786c960ae5"
+        ],
+        "sections": [
+          {
+            "section": "verification",
+            "claims": "unverified",
+            "markdown": "The user reports that portrait still works using the extension. To distinguish the reported failure from the expected result, render the worksheet in landscape orientation with the extension and check whether the preview shows the same footer rows as the worksheet or throws `ReferenceError: footerRows is not defined`. Expected: \u201cLandscape Print preview shows the same footer rows as the worksheet.\u201d"
+          }
+        ]
+      }
+    },
+    "rootCallIds": [
+      "task-2-e5d4603a-2923-4adb-bbad-4ec6f61e24db/1"
+    ],
+    "calls": [
+      {
+        "callId": "task-2-e5d4603a-2923-4adb-bbad-4ec6f61e24db/1",
+        "summary": {
+          "call_id": "task-2-e5d4603a-2923-4adb-bbad-4ec6f61e24db/1",
+          "parent_call_id": null,
+          "definition_id": "ts:workOnProblemReportGoal.ts#default",
+          "definition_name": "workOnProblemReportGoal",
+          "definition_key": "9b006e7de15aa210794974e8e8201af6",
+          "definition_source": "workOnProblemReportGoal.ts",
+          "executor": "crisp",
+          "model_id": null,
+          "outcome": "done",
+          "started_at": "2026-11-25T04:34:13.771Z",
+          "wall_ms": 112454,
+          "tokens_in": 0,
+          "tokens_out": 0,
+          "approach_hash": null,
+          "program_root": "skills/open-user-goal",
+          "audit_of": null,
+          "run_label": null,
+          "owner_kind": "user",
+          "owner_key": "c1040a75c208403e7ecacf6ca3d798132357b2b1",
+          "agent_ref": null,
+          "channel_id": null,
+          "run_id": "system-test-runner:teacher:95182ba6-75ca-41da-b55d-280fe468764f"
+        },
+        "name": "workOnProblemReportGoal",
+        "outcome": "done",
+        "model": null,
+        "record": {
+          "version": "natlang.calls/1",
+          "call_id": "task-2-e5d4603a-2923-4adb-bbad-4ec6f61e24db/1",
+          "parent_call_id": null,
+          "parent_action_index": null,
+          "task_id": "task-2-e5d4603a-2923-4adb-bbad-4ec6f61e24db",
+          "program_id": null,
+          "program_root": "skills/open-user-goal",
+          "definition": {
+            "id": "ts:workOnProblemReportGoal.ts#default",
+            "name": "workOnProblemReportGoal",
+            "source": "workOnProblemReportGoal.ts",
+            "key": "9b006e7de15aa210794974e8e8201af6",
+            "interface": "e3b0c44298fc1c149afbf4c8996fb924",
+            "site": "named",
+            "subtype": "function",
+            "params": [
+              {
+                "name": "goal",
+                "type": "string"
+              }
+            ],
+            "returns": "OpenProblemOutcome",
+            "types": {},
+            "instructions": {
+              "complete": true,
+              "hash": "50da542b4b43cc24d50911d1e5ffbbd695d708b40d89e63e5626297320af853f",
+              "bytes": 762
+            }
+          },
+          "executor": {
+            "kind": "crisp",
+            "model_id": null,
+            "model_revision": null
+          },
+          "inputs": {
+            "goal": {
+              "complete": true,
+              "hash": "87e712cf514377f4cc075ce7565ba86a64f0441e41b950fe5d72d63b20721a32",
+              "bytes": 192
+            }
+          },
+          "output": {
+            "complete": true,
+            "hash": "efd36cf403fb65708e19c2722edf301c1533f55140721691fadcba1422e305b4",
+            "bytes": 666
+          },
+          "outcome": "done",
+          "detail": "",
+          "started_at": "2026-11-25T04:34:13.771Z",
+          "ended_at": "2026-11-25T04:36:06.225Z",
+          "cost": {
+            "model_requests": 0,
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "wall_ms": 112454,
+            "turns": 0,
+            "evals": 0
+          },
+          "approach": {
+            "hash": null,
+            "evals": []
+          },
+          "audit_of": null,
+          "events": null,
+          "build_hash": null,
+          "captures": {},
+          "capture_writes": [],
+          "graph_custody": {
+            "schema": "natlang.call-graph-chronology/1",
+            "task_id": "task-2-e5d4603a-2923-4adb-bbad-4ec6f61e24db",
+            "child_call_ids": [
+              "task-2-e5d4603a-2923-4adb-bbad-4ec6f61e24db/2",
+              "task-2-e5d4603a-2923-4adb-bbad-4ec6f61e24db/6"
+            ],
+            "sha256": "dc84dc926add122baad7e24f819f8a4d2441eeb2fe77690bb082ba691911f03a"
+          },
+          "effects": [
+            {
+              "service": "problemIncident",
+              "method": "discover",
+              "args": {
+                "complete": true,
+                "hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+                "bytes": 2
+              },
+              "by": "crisp",
+              "order": 0,
+              "graph_order": 0,
+              "result": {
+                "complete": true,
+                "hash": "615e495bf13b07d5fb22363d2c9a3d898bcbdf38c1ec66cfd59da68cb841b9fa",
+                "bytes": 429
+              },
+              "async": true
+            },
+            {
+              "service": "problemIncident",
+              "method": "open",
+              "args": {
+                "complete": true,
+                "hash": "68c310bf4334ad14b9fe636d938e4f4fcf0534fcea8bc928d95979023b5080a6",
+                "bytes": 40
+              },
+              "by": "crisp",
+              "order": 1,
+              "graph_order": 1,
+              "result": {
+                "complete": true,
+                "hash": "77762568c537eaadcab528dca6a7600bcf8bfb0eed64f0131280cf404fabcbd8",
+                "bytes": 54
+              },
+              "async": true
+            }
+          ],
+          "folder": null,
+          "features": {
+            "len:goal": 190,
+            "tok:goal:add": true,
+            "tok:goal:a": true,
+            "tok:goal:check": true,
+            "tok:goal:to": true,
+            "tok:goal:my": true,
+            "tok:goal:current": true,
+            "tok:goal:print": true,
+            "tok:goal:preview": true,
+            "tok:goal:extension": true,
+            "tok:goal:draft": true,
+            "tok:goal:it": true,
+            "tok:goal:is": true,
+            "tok:goal:the": true,
+            "tok:goal:landscape": true,
+            "tok:goal:footer": true,
+            "tok:goal:crash": true,
+            "tok:goal:in": true,
+            "tok:goal:our": true,
+            "tok:goal:own": true,
+            "tok:goal:source": true,
+            "tok:goal:keep": true,
+            "tok:goal:existing": true,
+            "tok:goal:symptom": true,
+            "tok:goal:and": true,
+            "tok:goal:leave": true,
+            "tok:goal:archived": true,
+            "tok:goal:printer": true,
+            "tok:goal:connection": true,
+            "tok:goal:report": true,
+            "tok:goal:alone": true
+          }
+        },
+        "events": null,
+        "annotations": []
+      }
+    ]
+  },
+  "workflow": {
+    "entry": {
+      "program": "skills/open-user-goal/workOnProblemReportGoal.ts",
+      "callable": "workOnProblemReportGoal",
+      "resultType": "OpenProblemOutcome",
+      "arguments": {
+        "goal": "Add a check to my current Print preview extension draft. It is the landscape footer crash in our own source. Keep the existing symptom and leave the archived printer connection report alone."
+      },
+      "argumentJson": {
+        "goal": "\"Add a check to my current Print preview extension draft. It is the landscape footer crash in our own source. Keep the existing symptom and leave the archived printer connection report alone.\""
+      }
+    },
+    "assignment": {
+      "id": "problem-draft-print-extension",
+      "goal": "Add a check to my current Print preview extension draft. It is the landscape footer crash in our own source. Keep the existing symptom and leave the archived printer connection report alone."
+    }
+  }
+}

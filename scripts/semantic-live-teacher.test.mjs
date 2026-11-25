@@ -15,7 +15,7 @@ function applicationFixture() {
   const entry = { program: "skills/documents/reconcileHours.nl", callable: "reconcileHours",
     arguments: { goal, approval: { opens: "09:30" } }, resultType: "RevisionReceipt" };
   const result = { revision: "observed-working-head" };
-  const binding = { program: entry.program, callable: entry.callable, arguments: entry.arguments };
+  const binding = { program: entry.program, callable: entry.callable, arguments: entry.arguments, resultType: entry.resultType };
   const execution = { provenance: { contextId: "owned" }, diagnostics: {
     openGoalVerification: { passed: true, contextId: "owned", caseId: "hours", goal,
       entry: binding, actualResult: result, checks: { storedRequestedHours: true, preservedOtherCopy: true } },
@@ -173,4 +173,18 @@ test("optional application receipts do not gate verified effects after a root ex
  delete provided.exercise.applicationResult;
  provided.exercise.calls[0].record.output=reference({revision:"unobserved"});
  assert.throws(()=>openOutcomeGoalEvidence(provided.execution,provided.exercise,"hours",provided.workflow));
+});
+
+// This is a projection of the original failed export, not a hand-authored consumer fixture.
+test("actual native-pass capture retains its declared nonvoid entry type", async()=>{
+ const {readFile}=await import("node:fs/promises");
+ const captured=JSON.parse(await readFile(new URL("./fixtures/observed-entry-binding.json",import.meta.url),"utf8"));
+ assert.equal(captured.originalCaptureSha256,"d4ebe34d092777633c2c1da8999b59c40bd3cf8fb8ac67c193de24c21280acbd");
+ assert.equal(captured.exercise.entry.resultType,"OpenProblemOutcome");
+ assert.equal(openOutcomeGoalEvidence(captured.execution,captured.exercise,"actual",captured.workflow).checks,captured.execution.diagnostics.openGoalVerification.checks);
+ for(const target of ["proof","capture"]){
+  const changed=structuredClone(captured);
+  (target==="proof"?changed.execution.diagnostics.openGoalVerification.entry:changed.exercise.entry).resultType="UnobservedReturn";
+  assert.throws(()=>openOutcomeGoalEvidence(changed.execution,changed.exercise,"actual",changed.workflow));
+ }
 });

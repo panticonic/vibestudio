@@ -7168,7 +7168,7 @@ export function openOutcomeGoalEvidence(execution, exercise, _scenario, workflow
   const checks = proof?.checks ?? {};
   const entry = workflow.entry;
   const attestedEntry = entry && { program: entry.program, callable: entry.callable, arguments: entry.arguments,
-    ...(entry.resultType === "void" ? {resultType:"void"} : {}),
+    ...(entry.resultType !== undefined ? {resultType:entry.resultType} : {}),
     ...(entry.argumentJson ? { argumentJson: entry.argumentJson } : {}) };
   const declaredVoid = entry?.resultType === "void";
   const dimensionRequirement = proof?.outcomeDimensions?.returnedValue?.required;

@@ -43,7 +43,7 @@ test("retained handoff review binds the actual audience and note text without re
 test("whole application admission requires declared review and binds the actual requested answer",()=>{
  const f=fixture(),reference=value=>{const raw=JSON.stringify(value);return {complete:true,bytes:Buffer.byteLength(raw),hash:createHash("sha256").update(raw).digest("hex")};};
  const entry={program:"skills/gad-context/natlang/workOnClientDiagnostics.nl",callable:"workOnClientDiagnostics",resultType:"ClientDiagnosticResult",arguments:{goal:f.world.goal}};
- const binding={program:entry.program,callable:entry.callable,arguments:entry.arguments};
+ const binding={program:entry.program,callable:entry.callable,arguments:entry.arguments,resultType:entry.resultType};
  const proof={...f.proof,passed:true,checks:{joinedNative:true,resolvedClientGoal:true},contextId:"owned",caseId:"client-case",goal:f.world.goal,entry:binding,actualResult:f.value};
  const execution={provenance:{contextId:"owned"},diagnostics:{openGoalVerification:proof}};
  const exercise={entry:binding,rootCallIds:["root"],calls:[{callId:"root",record:{definition:{name:entry.callable},inputs:{goal:reference(f.world.goal)},output:reference(f.value)}}]};
