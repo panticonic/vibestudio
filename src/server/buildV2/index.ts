@@ -282,7 +282,9 @@ export interface BuildSystemRootOptions {
     input: NativeDependencyAdmission
   ) => Promise<NativeDependencyResources>;
   /** Demand the admitted native build provider before a target build starts. */
-  ensureBuildProvider?: (target: "react-native") => Promise<void>;
+  ensureBuildProvider?: (
+    target: "react-native"
+  ) => Promise<import("@vibestudio/shared/buildProvider").BuildProvider | void>;
   /** Whether this workspace identity survives a process restart. Diagnostics only. */
   /**
    * Host app root containing package.json/pnpm-lock.yaml/pnpm-workspace.yaml.

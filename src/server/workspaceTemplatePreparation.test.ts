@@ -586,3 +586,25 @@ describe("workspace source preparation ownership", () => {
     expect(fs.existsSync(path.join(root, "ready-failed", "scratch"))).toBe(false);
   });
 });
+
+it("prepares optional selected roots through the same native producer without changing default workspace pins", async () => {
+  const news = {
+    url: "git+https://example.test/news.git",
+    ref: "refs/tags/v1",
+    commit: "9".repeat(40),
+  };
+  stage.snapshots.set(news.commit, {
+    ...stage.snapshots.get(pins.base.commit)!,
+    commit: news.commit,
+  });
+  const source = JSON.parse(process.env["VIBESTUDIO_WORKSPACE_SOURCES"]!);
+  source.push({ ...source[0], pin: news, checkout: path.join(root, "news") });
+  vi.stubEnv("VIBESTUDIO_WORKSPACE_SOURCES", JSON.stringify(source));
+  vi.stubEnv("VIBESTUDIO_PREPARE_WORKSPACE_TEMPLATES", JSON.stringify({ ...pins, news }));
+  await launch("optional");
+  expect(stage.native).toHaveBeenCalledTimes(4);
+  const input = stage.publish.mock.calls[0]![0];
+  expect(Object.keys(input.templates).sort()).toEqual(["base", "news", "personal", "system"]);
+  expect(input.templates.news).toEqual(news);
+  expect(JSON.parse(process.env["VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES"]!)).toEqual(pins);
+});

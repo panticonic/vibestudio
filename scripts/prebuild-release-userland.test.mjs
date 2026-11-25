@@ -1335,3 +1335,62 @@ test("a requested stop is judged by its exit code except where stopping terminat
   // Windows has no SIGTERM: a stop request is a termination there.
   assert.equal(requestedStopExitedCleanly(1, "win32"), true);
 });
+
+test("fresh verification creates optional workspaces from exact prepared pins and reuses their builds", async () => {
+  const root = await fixture(),
+    records = [
+      ...verificationRecords(),
+      { workspace: "news", source: "panels/news", buildKey: "9".repeat(64), builtAt: "news" },
+    ];
+  const context = await verificationFixture(root, records),
+    pin = { url: "git+https://example.test/news.git", ref: "refs/tags/v1", commit: "9".repeat(40) };
+  await fs.writeFile(
+    path.join(context.resources, "userland-builds/release.json"),
+    JSON.stringify({ builds: records, templates: { news: pin } })
+  );
+  const metadata = path.join(
+    context.env.VIBESTUDIO_INSTANCE_ROOT,
+    "workspaces/news-workspace/state/builds",
+    records.at(-1).buildKey
+  );
+  await fs.mkdir(metadata, { recursive: true });
+  await fs.writeFile(path.join(metadata, "metadata.json"), JSON.stringify({ builtAt: "news" }));
+  const commands = [];
+  const cli = async (args) => {
+    commands.push(args);
+    if (args[1] === "create-workspace")
+      return { name: args[2] === "release-news" ? "news-workspace" : "base-workspace" };
+    return {};
+  };
+  await verifyPreparedReleaseUserland({
+    ...context,
+    cli,
+    runBuildBatch: async (sources) => ({
+      outcomes: sources.map((source) => ({
+        status: "fulfilled",
+        source,
+        buildKey: records.find((row) => row.source === source).buildKey,
+      })),
+    }),
+  });
+  assert.deepEqual(
+    commands.find((args) => args[2] === "release-news"),
+    [
+      "remote",
+      "create-workspace",
+      "release-news",
+      "--operation-id",
+      "release_verification_news",
+      "--template",
+      pin.url,
+      "--template-ref",
+      pin.ref,
+      "--template-commit",
+      pin.commit,
+    ]
+  );
+  assert.deepEqual(
+    commands.filter((args) => args[1] === "select").map((args) => args[2]),
+    ["base-workspace", "system-workspace", "personal-workspace", "news-workspace"]
+  );
+});

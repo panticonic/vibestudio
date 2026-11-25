@@ -2433,6 +2433,76 @@ describe("RuntimeManager", () => {
       expect(unregisterEgressCaller).not.toHaveBeenCalledWith(first!.egressIdentity);
     });
 
+    it("preserves sealed siblings and their bearer after a class declaration is withdrawn", async () => {
+      const unregisterEgressCaller = vi.fn();
+      const deps = createMockDeps({ unregisterEgressCaller });
+      const manager = new RuntimeManager(deps);
+      const source = "workers/new-do",
+        className = "NewDO";
+      try {
+        for (const key of ["first", "second"]) {
+          const prepared = await manager.ensureDurableObjectEntity({
+            source,
+            className,
+            key,
+            contextId: "ctx-sealed",
+          });
+          await manager.restoreDurableObjectEntity({
+            id: prepared.targetId,
+            kind: "do",
+            key,
+            className,
+            source: { repoPath: source, effectiveVersion: prepared.effectiveVersion },
+            activeBuildKey: prepared.buildKey,
+            activeExecutionDigest: prepared.executionDigest,
+            activeAuthority: prepared.authority,
+            contextId: "ctx-sealed",
+            createdAt: 1,
+            status: "active",
+            cleanupComplete: false,
+          });
+        }
+        const first = manager.getDoAdmission(source, className, "first")!;
+        const second = manager.getDoAdmission(source, className, "second")!;
+        const original = await manager.getDoCode(
+          source,
+          className,
+          first.executableVersion,
+          "first"
+        );
+        expect(original).not.toBeNull();
+        const revoke = vi.spyOn(deps.tokenManager, "revokeToken");
+        revoke.mockClear();
+        unregisterEgressCaller.mockClear();
+
+        await manager.reconcileMutableSourceBuild(source, []);
+        expect(manager.getDoAdmission(source, className)).toBeNull();
+        expect(manager.getDoAdmission(source, className, "first")).toEqual(first);
+        expect(manager.getDoAdmission(source, className, "second")).toEqual(second);
+        expect(
+          await manager.getDoCode(source, className, second.executableVersion, "second")
+        ).toEqual(original);
+        expect(revoke).not.toHaveBeenCalledWith(`do-service:${source}:${className}`);
+        expect(unregisterEgressCaller).not.toHaveBeenCalledWith(original!.egressIdentity);
+
+        await manager.retireDOEntity({ source, className, objectKey: "first" });
+        expect(manager.getDoAdmission(source, className, "first")).toBeNull();
+        expect(manager.getDoAdmission(source, className, "second")).toEqual(second);
+        expect(revoke).not.toHaveBeenCalledWith(`do-service:${source}:${className}`);
+        expect(unregisterEgressCaller).not.toHaveBeenCalledWith(original!.egressIdentity);
+
+        await manager.retireDOEntity({ source, className, objectKey: "second" });
+        expect(manager.getDoAdmission(source, className, "second")).toBeNull();
+        expect(
+          await manager.getDoCode(source, className, second.executableVersion, "second")
+        ).toBeNull();
+        expect(revoke).toHaveBeenCalledWith(`do-service:${source}:${className}`);
+        expect(unregisterEgressCaller).toHaveBeenCalledWith(original!.egressIdentity);
+      } finally {
+        await manager.shutdown();
+      }
+    });
+
     it("serves object-specific state and source coordinates in the admitted facet props", async () => {
       const deps = createMockDeps();
       const mgr = new RuntimeManager(deps);

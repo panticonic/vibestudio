@@ -264,6 +264,7 @@ export function createRelayBackhaulClient(deps: RelayBackhaulDeps): RelayBackhau
   const oauthTxs = new Map<string, OAuthPlatform>();
 
   let ws: WebSocket | null = null;
+  const ownedSockets = new Map<WebSocket, Promise<void>>();
   let stopped = false;
   let backoff = minBackoff;
   let reconnectTimer: NodeJS.Timeout | null = null;
@@ -309,11 +310,8 @@ export function createRelayBackhaulClient(deps: RelayBackhaulDeps): RelayBackhau
   }
 
   function teardown(socket: WebSocket): void {
-    try {
-      socket.removeAllListeners?.();
-    } catch {
-      /* noop */
-    }
+    // ws reports termination during CONNECTING as an asynchronous error before
+    // close. Its existing terminal listeners own that error until actual close.
     try {
       socket.terminate?.();
     } catch {
@@ -335,6 +333,15 @@ export function createRelayBackhaulClient(deps: RelayBackhaulDeps): RelayBackhau
       relayId: deps.identity.relayId,
     });
     const socket = new WsCtor(url);
+    ownedSockets.set(
+      socket,
+      new Promise<void>((resolve) => {
+        socket.once("close", () => {
+          ownedSockets.delete(socket);
+          resolve();
+        });
+      })
+    );
     ws = socket;
 
     handshakeTimer = setTimeout(() => {
@@ -358,6 +365,7 @@ export function createRelayBackhaulClient(deps: RelayBackhaulDeps): RelayBackhau
     });
 
     socket.on("message", (data: unknown) => {
+      if (stopped || ws !== socket) return;
       void handleMessage(String(data));
     });
 
@@ -492,6 +500,7 @@ export function createRelayBackhaulClient(deps: RelayBackhaulDeps): RelayBackhau
           teardown(socket);
         }
       }
+      await Promise.all(ownedSockets.values());
     },
     registerWebhook(subscriptionId: string): void {
       webhookSubs.add(subscriptionId);

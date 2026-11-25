@@ -8,6 +8,7 @@ import type { StoredBuildResult } from "./buildStore.js";
 import { createBuilderTestSession } from "./builderTestSession.js";
 import { PackageGraph, type GraphNode } from "./packageGraph.js";
 import { runIsolatedBuildJob } from "./nativeJobTestFixture.js";
+import { createHash } from "node:crypto";
 
 const state = `state:${"a".repeat(64)}`;
 const ev = "b".repeat(64);
@@ -98,6 +99,70 @@ describe("prepared template artifacts", () => {
     expect(
       resolveBuildUnitKey(buildSession.rootFingerprint, buildSession.source, node, ev, state)
     ).toBe(key);
+    expect(materializeForBuild).not.toHaveBeenCalled();
+  });
+
+  it("loads a prepared mobile client without activating a compiler provider or recompiling", async () => {
+    const { source, materializeForBuild } = provider();
+    const buildSession = await open(source);
+    const ensureProvider = vi
+      .fn()
+      .mockRejectedValue(new Error("No compiler belongs in an installed launch"));
+    Object.assign(buildSession, { ensureBuildProvider: ensureProvider });
+    const mobile = {
+      ...node,
+      kind: "client",
+      relativePath: "clients/mobile",
+      manifest: {
+        client: { id: "browser", runtime: "react-native", hostAbi: "rn-host-6" },
+      },
+    } as GraphNode;
+    const directory = path.join(root!, "published-mobile");
+    for (const platform of ["android", "ios"]) {
+      fs.mkdirSync(path.join(directory, platform), { recursive: true });
+      fs.writeFileSync(path.join(directory, platform, "index.bundle"), "prepared-mobile");
+    }
+    const integrity = `sha256-${createHash("sha256").update("prepared-mobile").digest("hex")}`;
+    const artifact = {
+      ...preparedResult,
+      dir: directory,
+      metadata: {
+        ...preparedResult.metadata,
+        kind: "client",
+        execution: { executionDigest: "e".repeat(64) },
+        details: {
+          kind: "client",
+          clientId: "browser",
+          runtime: "react-native",
+          hostAbi: "rn-host-6",
+          provider: {
+            name: "@workspace-extensions/react-native",
+            activeEv: ev,
+            activeBuildKey: key,
+            contractVersion: "vibestudio-build-provider-v2",
+          },
+        },
+      },
+      artifacts: ["android", "ios"].map((platform) => ({
+        path: `${platform}/index.bundle`,
+        platform,
+        role: "primary",
+        contentType: "application/javascript",
+        integrity,
+      })),
+    } as StoredBuildResult;
+    const hydrate = vi.spyOn(buildSession.store, "getOrHydrate").mockResolvedValue(artifact);
+    const result = await buildUnit(
+      buildSession,
+      mobile,
+      ev,
+      new PackageGraph(),
+      "/consumer-with-different-dependencies",
+      state
+    );
+    expect(result.buildKey).toBe(key);
+    expect(hydrate).toHaveBeenCalledWith(key, state);
+    expect(ensureProvider).not.toHaveBeenCalled();
     expect(materializeForBuild).not.toHaveBeenCalled();
   });
 

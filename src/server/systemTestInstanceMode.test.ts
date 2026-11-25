@@ -31,7 +31,7 @@ it("carries collector retention through the actual supervisor and workspace envi
   for (const optOut of [false, true]) {
     const collector = liveTeacherEnvironment(optOut ? { [NATIVE_CAPTURE_RETENTION_ENV]: "0" } : {});
     const supervisor = systemTestInstanceEnvironment(collector);
-    const server = developmentInstanceEnvironment({ parent: supervisor, repoRoot: "/owned/app", instanceRoot: "/owned/retained/generation", instanceId: "capture", sourceCoupled: false, disposable: true });
+    const server = developmentInstanceEnvironment({ parent: supervisor, repoRoot: "/owned/app", instanceRoot: "/owned/runtime/generation", captureEvidenceRoot: "/owned/retained/generation", instanceId: "capture", sourceCoupled: false, disposable: true });
     const workspace = buildWorkspaceChildEnv({
       baseEnv: server, appRoot: "/owned/app", workspaceName: "system", workspaceId: "owned-workspace",
       hubUrl: "http://127.0.0.1:7788", identityDbPath: "/owned/identity.db", workspaceChildToken: "test-child-token",
@@ -39,7 +39,7 @@ it("carries collector retention through the actual supervisor and workspace envi
     expect(readNativeCaptureRetentionMode(workspace)).toBe(!optOut);
     expect(workspace[NATIVE_CAPTURE_RETENTION_ENV]).toBe(optOut ? "0" : "1");
     const {captureEvidenceForWorkspace}=await import("./captureEvidenceOwnership.js");
-    const selected=captureEvidenceForWorkspace("/owned/retained/generation/workspaces/owned-workspace/state","owned-workspace",workspace);
+    const selected=captureEvidenceForWorkspace("/owned/runtime/generation/workspaces/owned-workspace/state","owned-workspace",workspace);
     expect(selected.root).toMatch(optOut ? /workspaces\/owned-workspace\/state\/capture-evidence$/ : /^\/owned\/retained\/generation\/capture-evidence\/workspaces\/[a-f0-9]{64}$/);
   }
 });

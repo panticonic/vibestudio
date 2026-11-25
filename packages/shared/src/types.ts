@@ -67,6 +67,7 @@ export interface PackageManifest {
   };
   /** Extension-only configuration (valid only for packages under extensions/). */
   extension?: {
+    contributes?: { buildTargets?: ("react-native")[] };
     /** v1 accepts only eager activation (`"*"`). */
     activationEvents?: string[];
     /**

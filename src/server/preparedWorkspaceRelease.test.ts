@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import fsNative from "node:fs";
 import { gzipSync } from "node:zlib";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { preparedWorkspaceTemplatePath } from "./preparedWorkspaceTemplate.js";
 import {
   preparedWorkspaceReleaseManifestSchema,
@@ -34,6 +35,17 @@ vi.mock("./buildV2/effectiveVersion.js", async (importOriginal) => ({
     return captured;
   }),
 }));
+// These exercise retained-cache reuse, not host disk-pressure eviction. Real
+// pressure pruning has its independent DerivedCache tests; runner disk usage
+// must not turn a warm fixture into an unrelated cold producer.
+beforeEach(() => {
+  const stat = fsNative.statfsSync(os.tmpdir());
+  vi.spyOn(fsNative, "statfsSync").mockReturnValue({
+    ...stat,
+    bavail: Math.ceil((30 * 1024 ** 3) / stat.bsize),
+  });
+  syncBuiltinESMExports();
+});
 const roots: string[] = [];
 const basePin = {
   url: "git+https://example.test/vibestudio.git",
@@ -63,10 +75,17 @@ afterEach(async () => {
   vi.unstubAllEnvs();
   vi.clearAllMocks();
   vi.restoreAllMocks();
+  syncBuiltinESMExports();
   capturedHostRoots.clear();
 });
 
-async function fixture() {
+async function fixture(optional = false) {
+  const selectedTemplates = optional
+    ? { ...templates, news: { ...basePin, commit: "a".repeat(40) } }
+    : templates;
+  const selectedLayers = Object.fromEntries(
+    Object.entries(selectedTemplates).map(([name, pin]) => [name, [pin]])
+  );
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "prepared-workspace-release-"));
   roots.push(root);
   const output = path.join(root, "release");
@@ -84,7 +103,7 @@ async function fixture() {
   const rootFingerprint = await computeRootDependencyFingerprint(root);
   capturedHostRoots.set(root, rootFingerprint);
   const builds = [];
-  for (const workspace of ["base", "personal", "system"] as const) {
+  for (const workspace of Object.keys(selectedTemplates)) {
     const buildKey = createHash("sha256").update(workspace).digest("hex");
     const artifactBytes = Buffer.from(`runtime-${workspace}`);
     const sourceBytes = Buffer.from(`source-${workspace}`);
@@ -92,10 +111,15 @@ async function fixture() {
     const record = {
       format: "vibestudio-prepared-workspace/1",
       purpose: "use",
-      pin: templates[workspace],
-      layers: [templates[workspace]],
+      pin: selectedTemplates[workspace as keyof typeof selectedTemplates],
+      layers: [selectedTemplates[workspace as keyof typeof selectedTemplates]],
       installation: {
-        sources: [{ pin: templates[workspace], manifest: "manifest.yml" }],
+        sources: [
+          {
+            pin: selectedTemplates[workspace as keyof typeof selectedTemplates],
+            manifest: "manifest.yml",
+          },
+        ],
       },
       snapshot: `v1-sha256:${"d".repeat(64)}`,
       files: [],
@@ -138,7 +162,11 @@ async function fixture() {
       path.join(buildDirectory, "executable-modules.json.gz"),
       gzipSync(Buffer.from("[]"))
     );
-    const recordDir = preparedWorkspaceTemplatePath(output, templates[workspace], "use");
+    const recordDir = preparedWorkspaceTemplatePath(
+      output,
+      selectedTemplates[workspace as keyof typeof selectedTemplates],
+      "use"
+    );
     await fs.mkdir(recordDir, { recursive: true });
     await fs.writeFile(path.join(recordDir, "template.json"), JSON.stringify(record));
     const sourcePath = blobCasPath(path.join(recordDir, "blobs"), sourceDigest);
@@ -152,15 +180,19 @@ async function fixture() {
     });
   }
   const { publishPreparedWorkspaceRelease } = await import("./preparedWorkspaceRelease.js");
-  await publishPreparedWorkspaceRelease({ appRoot: root, output, templates, layers }, builds, {
-    appDependencyFingerprint: rootFingerprint.value,
-    hostBuild,
-    compilerProtocol: {
-      cacheVersion: "test-cache",
-      panelEntryProtocolFingerprint: "b".repeat(64),
-    },
-  });
-  return { root, output, builds, rootFingerprint };
+  await publishPreparedWorkspaceRelease(
+    { appRoot: root, output, templates: selectedTemplates, layers: selectedLayers },
+    builds,
+    {
+      appDependencyFingerprint: rootFingerprint.value,
+      hostBuild,
+      compilerProtocol: {
+        cacheVersion: "test-cache",
+        panelEntryProtocolFingerprint: "b".repeat(64),
+      },
+    }
+  );
+  return { root, output, builds, rootFingerprint, selectedTemplates, selectedLayers };
 }
 
 describe("prepared workspace release admission", () => {
@@ -717,4 +749,51 @@ describe("prepared workspace release admission", () => {
       validateExistingPreparedWorkspaceRelease({ appRoot: root, output, templates, layers })
     ).rejects.toThrow(/Invalid release artifact path/);
   });
+});
+
+it("publishes and independently admits optional exact-template artifacts and rejects omitted inventory", async () => {
+  const { root, output, selectedTemplates, selectedLayers } = await fixture(true);
+  const { validateExistingPreparedWorkspaceRelease } =
+    await import("./preparedWorkspaceRelease.js");
+  const input = { appRoot: root, output, templates: selectedTemplates, layers: selectedLayers };
+  expect(await validateExistingPreparedWorkspaceRelease(input)).toBe(true);
+  const file = path.join(output, "userland-builds/release.json"),
+    manifest = JSON.parse(await fs.readFile(file, "utf8"));
+  expect(manifest.preparedTemplates.map((row: { workspace: string }) => row.workspace)).toContain(
+    "news"
+  );
+  expect(manifest.builds.some((row: { workspace: string }) => row.workspace === "news")).toBe(true);
+  manifest.preparedTemplates = manifest.preparedTemplates.filter(
+    (row: { workspace: string }) => row.workspace !== "news"
+  );
+  await fs.writeFile(file, JSON.stringify(manifest));
+  await expect(validateExistingPreparedWorkspaceRelease(input)).rejects.toThrow(
+    "incomplete selected templates"
+  );
+});
+
+it("preserves exact release mismatch dimensions across the native RPC error boundary", async () => {
+  const { root, output } = await fixture();
+  const { validateExistingPreparedWorkspaceRelease } =
+    await import("./preparedWorkspaceRelease.js");
+  const { serializeRpcFailure } = await import("@vibestudio/rpc");
+  const wanted = { ...templates, system: { ...templates.system, commit: "9".repeat(40) } };
+  let failure: unknown;
+  try {
+    await validateExistingPreparedWorkspaceRelease({
+      appRoot: root,
+      output,
+      templates: wanted,
+      layers,
+    });
+  } catch (error) {
+    failure = error;
+  }
+  const encoded = serializeRpcFailure(failure);
+  expect(encoded.code).toBe("EWORKSPACE_RELEASE_INPUTS");
+  expect(encoded.errorData).toEqual({
+    schema: "vibestudio.workspace-release-input-mismatch/1",
+    mismatches: { templates: { expected: wanted, actual: templates } },
+  });
+  expect(encoded.message).toContain("templates");
 });

@@ -926,6 +926,40 @@ async function fixture(t) {
   return { options, diagnostics, entry, save };
 }
 
+test("goal evidence admits and preserves valid decisions after an optional root exception", async t => {
+  const {options,diagnostics,entry,save}=await fixture(t);
+  const exercise=diagnostics.natlangTeacher;
+  exercise.trainingEligible=false;
+  exercise.executionError="Optional post-goal follow-up failed";
+  exercise.calls[0].record.outcome="error";
+  exercise.calls[0].record.error={name:"Error",message:exercise.executionError};
+  exercise.calls[0].record.effects=[{service:"workspaceDocuments",method:"write",returned:"actual committed revision"}];
+  exercise.calls[1].record.outcome="done";
+  exercise.calls[1].record.outputs={report:"actual required readback"};
+  exercise.captureErrors=["missing exchange"];
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow(options),/Missing eligible authored/);
+  exercise.captureErrors=[];
+  exercise.calls[1].summary.owner_key="other-owner";
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow(options),/different EvalDO owner/);
+  exercise.calls[1].summary.owner_key="fixture";
+  diagnostics.panelDraftVerification.passed=false;
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow(options));
+  diagnostics.panelDraftVerification.passed=true;
+  await save();
+  const original=await readFile(options.trajectory,"utf8");
+  await exportLiveTeacherWorkflow(options);
+  assert.equal(await readFile(options.trajectory,"utf8"),original);
+  for(const [index,call] of exercise.calls.entries())
+    assert.deepEqual(JSON.parse(await readFile(path.join(options.out,`call-${index}.json`),"utf8")),call);
+  const verification=JSON.parse(await readFile(path.join(options.out,"verification.json"),"utf8"));
+  assert.equal(verification.status,"passed");
+  assert.deepEqual(verification.root_call_ids,["root"]);
+  assert.equal(entry.result.passed,true);
+});
+
 test("case admission uses actual tool failures without requiring a suite summary", async t => {
   const {options,entry,save} = await fixture(t);
   for (const failure of [{name:"broken"},{name:"broken",expected:false},null]) {
@@ -960,6 +994,7 @@ test("live panel export binds real test world, independent checks and exact Eval
   const receipt = JSON.parse(await readFile(path.join(options.out, "verification.json"), "utf8"));
   assert.deepEqual(receipt.world, manifest.world);
   assert.equal(receipt.run_id, "outer");
+  assert.deepEqual(receipt.requirements, { semantic_review: false });
   assert.equal(receipt.calls[1].run_id, "eval");
   assert.deepEqual(
     receipt.evidence.map(({ kind }) => kind),
@@ -1013,8 +1048,38 @@ function bindApplicationResult(run, proof, workflow, result) {
   proof.actualResult = result;
   const root = run.calls.find(({ callId }) => callId === run.rootCallIds[0]).record;
   root.definition.name = entry.callable;
+  if(entry.program.endsWith('.ts')){
+    root.definition={...root.definition,id:`ts:${path.basename(entry.program)}#default`,source:path.basename(entry.program),site:'named'};
+    root.program_root=path.dirname(entry.program);root.executor={kind:'crisp'};root.model_turns=[];
+  }
   root.inputs = Object.fromEntries(Object.entries(entry.arguments).map(([name, value]) => [name, reference(value)]));
   root.output = reference(result);
+}
+
+// These fixtures exercise exporter admission, using the production content-input
+// producer and an explicit independent reviewer double; no provider is contacted.
+function fixtureContentReviewer(expectedInput) {
+  const boundInput = structuredClone(expectedInput);
+  return async (input, teacher) => {
+    assert.deepEqual(input, boundInput);
+    assert.notEqual(teacher, "fixture:independent-reviewer");
+    return {
+      schema: "natlang.live-workflow-review/1", model: "fixture:independent-reviewer", input,
+      exchange: { request: { input }, reply: { accepted: true } }, verdict: { accepted: true },
+    };
+  };
+}
+
+async function fixtureObservedContent(proof, goal, result, observations, artifacts = []) {
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(path.resolve(import.meta.dirname, ".."));
+  const { observedContentReview } = await import(pathToFileURL(path.join(checkouts.base,
+    "packages/application-outcomes/observed-content-review.ts")).href);
+  const outcomeContract = {
+    effects: { checks: [], rationale: "Native checks are supplied separately by this exporter fixture." },
+    returnedValue: { checks: [], required: true, rationale: "The query requests these returned findings." },
+    incidentalValues: { checks: [], rationale: "No incidental return is required by this fixture." },
+  };
+  return { outcomeContract, ...observedContentReview({ ...proof, goal }, outcomeContract, result, observations, artifacts) };
 }
 
 test("open goal export attests application inputs and rejects a hidden assignment", async (t) => {
@@ -1045,10 +1110,37 @@ test("open goal export attests application inputs and rejects a hidden assignmen
       preservedOtherDocuments: true, reportedStoredRevision: true,
     },
   };
-  bindApplicationResult(run, diagnostics.openGoalVerification, workflow, { status: "edited", path: "guide.md", version: "new" });
+  const { checkWorkspaceEditEvidence } = await import(pathToFileURL(path.join(checkouts["system-testing"],
+    "skills/system-testing/workspace-edit-evidence.ts")).href);
+  const world = workflow.assignment;
+  const digest = text => createHash("sha256").update(text).digest("hex");
+  const contents = { ...world.files, [world.destination]: world.expected };
+  const reads = Object.entries(world.files).map(([path, text]) => ({ path, version: digest(text) }));
+  reads.push({ path: world.destination, version: digest(contents[world.destination]) });
+  const attempts = [
+    { path: world.destination, version: digest(world.files[world.destination]), text: world.expected, status: "changed" },
+    { path: world.destination, version: digest(world.files[world.destination] + world.concurrentAddition), text: world.expected, status: "written" },
+  ];
+  const native = checkWorkspaceEditEvidence(world, { contents, reads, attempts });
+  assert.ok(Object.values(native.checks).every(Boolean));
+  const proof = diagnostics.openGoalVerification;
+  Object.assign(proof, { contents, reads, attempts, semanticReviewRequired: true, semanticReviewInput: {
+    actual: { goal, documentEdits: [native.edit], documents: Object.entries(contents).map(([path, text]) => ({ path, text })) },
+    expected: { goal, authority: { path: world.source, text: world.files[world.source] } },
+    rubric: "Review the retained correction against its original goal and authoritative source.",
+  } });
+  const review = fixtureContentReviewer(proof.semanticReviewInput);
+  bindApplicationResult(run, proof, workflow, { status: "edited", path: world.destination, version: digest(world.expected) });
   await save();
   await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases, split: "test" }), /predeclared split/u);
-  await exportLiveTeacherWorkflow({ ...options, cases });
+  const retained = native.edit.retainedText;
+  native.edit.retainedText += "unbound edit";
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases, review }), /exact protected scope/);
+  native.edit.retainedText = retained;
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /reviewer must be configured/);
+  await exportLiveTeacherWorkflow({ ...options, cases, review });
   const manifest = JSON.parse(await readFile(path.join(options.out, "manifest.json"), "utf8"));
   const verification = JSON.parse(await readFile(path.join(options.out, "verification.json"), "utf8"));
   assert.deepEqual(manifest.interaction, { kind: "open-user-goal", goal, program: workflow.program, entry: run.entry });
@@ -1057,7 +1149,7 @@ test("open goal export attests application inputs and rejects a hidden assignmen
   root.record.inputs.work = {};
   await save();
   await assert.rejects(
-    exportLiveTeacherWorkflow({ ...options, cases, out: path.join(path.dirname(options.out), "rejected") }),
+    exportLiveTeacherWorkflow({ ...options, cases, review, out: path.join(path.dirname(options.out), "rejected") }),
     /original user goal/u
   );
 });
@@ -1080,7 +1172,14 @@ test("semantic application export accepts a direct root and alternate internal c
   diagnostics.openGoalVerification = { passed: true, caseId: workflow.assignment.id, contextId: "ctx", goal: workflow.assignment.goal,
     checks: { groundedNativeState: true, authorizedScopePreserved: true } };
   bindApplicationResult(run, diagnostics.openGoalVerification, workflow, result);
-  for (const names of [[], ["resolveReadiness"], ["inspectCurrentState", "resolveReadiness", "inspectCurrentState"]]) {
+  Object.assign(diagnostics.openGoalVerification, await fixtureObservedContent(diagnostics.openGoalVerification,
+    workflow.assignment.goal, result, ["index", "snapshots", "planned", "calls", "seenPlan", "observations", "audit"], ["artifact"]));
+  const review = fixtureContentReviewer(diagnostics.openGoalVerification.semanticReviewInput);
+  diagnostics.openGoalVerification.semanticReviewInput.actual.requestedReturn = { unrelated: true };
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases, review }), /Content meaning review/);
+  diagnostics.openGoalVerification.semanticReviewInput.actual.requestedReturn = result;
+  for (const names of [["resolveReadiness"], ["inspectCurrentState", "resolveReadiness", "inspectCurrentState"]]) {
     run.calls = [root, ...names.map((name, index) => {
       const call = structuredClone(originalChild);
       call.callId = call.summary.call_id = `alternative-${index}`;
@@ -1090,13 +1189,16 @@ test("semantic application export accepts a direct root and alternate internal c
     })];
     await save();
     const out = path.join(path.dirname(options.out), `application-alternative-${names.length}`);
-    await exportLiveTeacherWorkflow({ ...options, cases, out });
+    await exportLiveTeacherWorkflow({ ...options, cases, out, review });
     const verification = JSON.parse(await readFile(path.join(out, "verification.json"), "utf8"));
     assert.equal(verification.calls.length, names.length + 1);
   }
+  run.calls=[root];await save();
+  await assert.rejects(exportLiveTeacherWorkflow({...options,cases,review,out:path.join(path.dirname(options.out),'crisp-only')}),/at least one captured model generation/);
+  run.calls=[root,originalChild];
   diagnostics.openGoalVerification.checks.authorizedScopePreserved = false;
   await save();
-  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /independently verified outcomes/);
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases, review }), /independently verified outcomes/);
 });
 
 test("open browser goal export retains CDP evidence and rejects a replaced generation", async (t) => {
@@ -1219,12 +1321,19 @@ test("open Drive goal export accepts a different callable and requires verified 
       groundedDriveFindings: true, preservedReadOnlyScope: true },
   };
   bindApplicationResult(run, diagnostics.openGoalVerification, workflow, outcome);
+  Object.assign(diagnostics.openGoalVerification, await fixtureObservedContent(diagnostics.openGoalVerification,
+    goal, outcome, ["requests", "discovery", "observed"]));
+  const review = fixtureContentReviewer(diagnostics.openGoalVerification.semanticReviewInput);
+  diagnostics.openGoalVerification.semanticReviewInput.actual.observations.observed = { unrelated: true };
   await save();
-  await exportLiveTeacherWorkflow({ ...options, cases });
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases, review }), /Content meaning review/);
+  diagnostics.openGoalVerification.semanticReviewInput.actual.observations.observed = diagnostics.openGoalVerification.observed;
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases, review });
   diagnostics.openGoalVerification.checks.preservedReadOnlyScope = false;
   await save();
   await assert.rejects(
-    exportLiveTeacherWorkflow({ ...options, cases, out: path.join(path.dirname(options.out), "replaced") }),
+    exportLiveTeacherWorkflow({ ...options, cases, review, out: path.join(path.dirname(options.out), "replaced") }),
     /independently verified outcomes/u
   );
 });
@@ -1320,6 +1429,7 @@ test("presentation export ties the exact MDX to the managed browser readback", a
   );
   const cases = await loadLiveTeacherCases(checkouts);
   entry.test.name = "presentation-live-unsampled-hall";
+  const world = cases.get(entry.test.name);
   const run = diagnostics.natlangTeacher;
   const mdx = '<Stats items={[{"label":"Confirmed bookings","value":24}]} />';
   run.report = { views: [{ id: "counts", status: "ready", rendered: { mdx } }] };
@@ -1349,12 +1459,21 @@ test("presentation export ties the exact MDX to the managed browser readback", a
     mdxDigests: [createHash("sha256").update(mdx).digest("hex")],
   };
   diagnostics.managedPresentation = { contextId: "ctx", caseId: "unsampled-hall", verification };
+  const observation = structuredClone(verification);
+  const { outcomeContract: _contract, ...reviewFields } = await fixtureObservedContent(
+    { request: world.request, observation }, world.request.goal, run.report, ["request", "observation"]);
+  Object.assign(verification, reviewFields, { nativeContentObservation: observation });
+  const review = fixtureContentReviewer(verification.semanticReviewInput);
+  verification.semanticReviewInput.actual.requestedReturn = { views: [] };
   await save();
-  await exportLiveTeacherWorkflow({ ...options, cases });
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases, review }), /Presentation findings review/);
+  verification.semanticReviewInput.actual.requestedReturn = run.report;
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases, review });
   run.report.views[0].rendered.mdx = mdx.replace("24", "240");
   await save();
   await assert.rejects(
-    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-wrong-mdx` }),
+    exportLiveTeacherWorkflow({ ...options, cases, review, out: `${options.out}-wrong-mdx` }),
     /match its managed browser readback and exact MDX/u
   );
 });
@@ -1404,12 +1523,21 @@ test("presentation export rejects a chart table that changes a plotted value", a
     ),
   };
   diagnostics.managedPresentation = { contextId: "ctx", caseId: world.caseId, verification };
+  const observation = structuredClone(verification);
+  const { outcomeContract: _contract, ...reviewFields } = await fixtureObservedContent(
+    { request: world.request, observation }, world.request.goal, run.report, ["request", "observation"]);
+  Object.assign(verification, reviewFields, { nativeContentObservation: observation });
+  const review = fixtureContentReviewer(verification.semanticReviewInput);
+  verification.nativeContentObservation = { ...observation, rendered: { ids: [] } };
   await save();
-  await exportLiveTeacherWorkflow({ ...options, cases });
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases, review }), /Presentation findings review/);
+  verification.nativeContentObservation = observation;
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases, review });
   verification.rendered.interactions[0].cells[1][1] = "700";
   await save();
   await assert.rejects(
-    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-wrong-table` }),
+    exportLiveTeacherWorkflow({ ...options, cases, review, out: `${options.out}-wrong-table` }),
     /demonstrate its assigned controls in the live browser/u
   );
 });
@@ -3773,6 +3901,7 @@ test("content export requires independent semantic review of exact committed byt
   const workspaceEvidence = JSON.parse(
     await readFile(path.join(options.out, "workspace.json"), "utf8")
   );
+  assert.deepEqual(proof.requirements, { semantic_review: true });
   assert.equal(proof.checks.independentSemanticReview, true);
   assert.deepEqual(workspaceEvidence.semanticReview.input, reviewInput);
   assert.equal(proof.calls.length, 2);
@@ -6389,20 +6518,28 @@ test("VCS delivery export checks the original revision read and the nested decis
       decision,
     ],
   };
+  const { outcomeContract: _contract, ...reviewFields } = await fixtureObservedContent(
+    { snapshot }, goal, report, ["snapshot"]);
+  Object.assign(diagnostics.managedVcsDelivery, reviewFields);
+  const reviewContent = fixtureContentReviewer(diagnostics.managedVcsDelivery.semanticReviewInput);
+  diagnostics.managedVcsDelivery.semanticReviewInput.actual.observations.snapshot = { ...snapshot, contextId: "another-context" };
   await save();
-  await exportLiveTeacherWorkflow({ ...options, cases });
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases, review: reviewContent }), /VCS interpretation review/);
+  diagnostics.managedVcsDelivery.semanticReviewInput.actual.observations.snapshot = snapshot;
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases, review: reviewContent });
 
   observed.result = ref({ ...snapshot, relation: "behind" });
   await save();
   await assert.rejects(
-    exportLiveTeacherWorkflow({ ...options, cases }),
+    exportLiveTeacherWorkflow({ ...options, cases, review: reviewContent }),
     /actual semantic snapshot/u
   );
 
   observed.result = ref(snapshot);
   decision.record.output = ref("already-current");
   await save();
-  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /exact next step/u);
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases, review: reviewContent }), /exact next step/u);
 });
 
 test("Git Bridge export rejects stale remote facts and a substituted candidate decision", async (t) => {
@@ -10006,4 +10143,44 @@ test('project content review binds explicit baseline/current/delta without infer
  assert.equal(openOutcomeGoalEvidence(execution,exercise,'draft',workflow).reviewInput,reviewInput);
  reviewInput.actual.lifecycle.delta.committedEventChanged=true;
  assert.throws(()=>openOutcomeGoalEvidence(execution,exercise,'draft',workflow),/independently read back project/u);
+});
+
+test("void TS entries bind actual undefined transport without waiving requested values",()=>{
+ const ref=value=>{const text=JSON.stringify(value);return {complete:true,bytes:Buffer.byteLength(text),hash:createHash('sha256').update(text).digest('hex')};};
+ const goal='Apply the independently checked reference effect';
+ const entry={program:'skills/reference/review.ts',callable:'review',arguments:{goal},argumentJson:{goal:JSON.stringify(goal)},resultType:'void'};
+ const make=()=>{
+  const root={callId:'root',record:{call_id:'root',outcome:'done',inputs:{goal:ref(goal)},output:ref(null),executor:{kind:'crisp'},definition:{name:'review',source:'review.ts',id:'ts:review.ts#default',returns:'void'}}};
+  const proof={passed:true,caseId:'void-reference',contextId:'ctx',goal,entry,actualResultKind:'void',actualResult:null,checks:{actualNativeEffect:true}};
+  return {execution:{provenance:{contextId:'ctx'},diagnostics:{openGoalVerification:proof}},exercise:{entry,rootCallIds:['root'],calls:[root],applicationResult:null,applicationResultKind:'void'},workflow:{entry,assignment:{id:'void-reference',goal}},root,proof};
+ };
+ const good=make();expectVoid(good);
+ const interrupted=make();
+ interrupted.root.record.outcome='error';
+ interrupted.root.record.error={name:'Error',message:'Optional follow-up failed after the native effect'};
+ delete interrupted.root.record.output;
+ delete interrupted.proof.actualResultKind;delete interrupted.proof.actualResult;
+ delete interrupted.exercise.applicationResultKind;delete interrupted.exercise.applicationResult;
+ const nativeOnly=openOutcomeGoalEvidence(interrupted.execution,interrupted.exercise,'void-reference',interrupted.workflow);
+ assert.equal(Object.hasOwn(nativeOnly.evidence.workspace,'applicationReturn'),false);
+ assert.equal(nativeOnly.evidence.workspace.proof,interrupted.proof);
+ assert.equal(interrupted.root.record.outcome,'error');
+ interrupted.proof.checks.actualNativeEffect=false;
+ assert.throws(()=>openOutcomeGoalEvidence(interrupted.execution,interrupted.exercise,'void-reference',interrupted.workflow),/independently verified outcomes/);
+
+ function expectVoid({execution,exercise,workflow}){
+  const observed=openOutcomeGoalEvidence(execution,exercise,'void-reference',workflow);
+  assert.deepEqual(observed.evidence.workspace.applicationReturn,{kind:'void',root_call_id:'root',valueJson:'null',selectedResult:null});
+ }
+ for(const corrupt of [
+  value=>{delete value.proof.actualResultKind;},
+  value=>{value.root.record.outcome='error';},
+  value=>{delete value.root.record.outcome;},
+  value=>{value.workflow.entry={...entry,resultType:'Receipt'};},
+  value=>{value.root.record.definition.returns='Receipt';},
+  value=>{value.root.record.definition.id='ts:review.ts#other';},
+  value=>{value.root.record.executor.kind='agent';},
+  value=>{value.exercise.applicationResult={invented:true};},
+  value=>{value.root.record.output=ref('wrong');},
+ ]){const value=make();corrupt(value);assert.throws(()=>expectVoid(value),/independently verified outcomes/);}
 });

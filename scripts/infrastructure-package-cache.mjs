@@ -6,9 +6,14 @@ import { DatabaseSync } from "node:sqlite";
 import { API } from "typescript/unstable/sync";
 import { compilerInputs, compilerOutputs } from "./lib/compiler-inputs.mjs";
 import { fileDigest } from "./lib/file-digest.mjs";
+import { hostInstalledDependencyHash } from "./lib/host-installed-dependencies.mjs";
 import { execPnpmSync } from "./cli/lib/package-manager.mjs";
+import {
+  configureNativeCompilerMemory,
+  configuredCompilerConcurrency,
+} from "@vibestudio/shared/compilerResourcePolicy";
 
-export const INFRASTRUCTURE_CACHE_VERSION = 2;
+export const INFRASTRUCTURE_CACHE_VERSION = 3;
 export const INFRASTRUCTURE_CACHE_PATH = ".cache/vibestudio-infrastructure-build.json";
 
 const ROOT_INPUTS = [
@@ -18,6 +23,9 @@ const ROOT_INPUTS = [
   "scripts/infrastructure-package-cache.mjs",
   "scripts/lib/compiler-inputs.mjs",
   "scripts/lib/file-digest.mjs",
+  "scripts/lib/host-installed-dependencies.mjs",
+  "scripts/lib/installed-package-graph.mjs",
+  "scripts/lib/installed-package-graph.d.mts",
   "tsconfig.json",
 ];
 const IGNORED_INPUT_DIRECTORIES = new Set([
@@ -168,7 +176,7 @@ function installedToolchainDigest(cwd) {
   return digestParts(roots.flatMap((root) => [path.relative(cwd, root), treeDigest(root)]));
 }
 
-function commonInputDigest(cwd, toolchainDigest) {
+function commonInputDigest(cwd, toolchainDigest, packages) {
   const parts = [
     `cache-version:${INFRASTRUCTURE_CACHE_VERSION}`,
     `node:${process.version}`,
@@ -176,6 +184,7 @@ function commonInputDigest(cwd, toolchainDigest) {
     `arch:${process.arch}`,
     `extension-host-publish:${process.env.VIBESTUDIO_EXTHOST_PUBLISH ?? ""}`,
     `toolchain:${toolchainDigest ?? installedToolchainDigest(cwd)}`,
+    `installed:${hostInstalledDependencyHash(cwd, { packageDirectories: [...packages.values()].map((pkg) => pkg.directory), tree: (root) => treeDigest(root, { ignoreBuildInfo: true }) })}`,
   ];
   for (const relative of ROOT_INPUTS) {
     const absolute = path.join(cwd, relative);
@@ -237,6 +246,7 @@ function executionSelection(dirty, packages) {
 /** Emit in dependency order, sharing one compiler process per contiguous realm.
  * Custom builders retain their package-manager lifecycle and form graph barriers. */
 export function emitInfrastructurePackages(plan, selectedPackages, run) {
+  const concurrency = configuredCompilerConcurrency(process.env.VIBESTUDIO_MAX_CONCURRENT_BUILDS);
   const selected = new Set(selectedPackages);
   const visited = new Set();
   const ordered = [];
@@ -257,10 +267,17 @@ export function emitInfrastructurePackages(plan, selectedPackages, run) {
       projects = [];
     }
     if (custom.length) {
-      run([...sourcePackages, ...custom].flatMap((name) => ["--filter", name]).concat("build"), {
-        cwd: plan.cwd,
-        stdio: "inherit",
-      });
+      run(
+        [
+          ...(concurrency === undefined ? [] : ["--workspace-concurrency", String(concurrency)]),
+          ...[...sourcePackages, ...custom].flatMap((name) => ["--filter", name]),
+          "build",
+        ],
+        {
+          cwd: plan.cwd,
+          stdio: "inherit",
+        }
+      );
       custom = [];
     }
   };
@@ -291,6 +308,7 @@ function readCache(cwd) {
 }
 
 export function inspectInfrastructurePackageBuilds({ cwd = process.cwd(), toolchainDigest } = {}) {
+  configureNativeCompilerMemory();
   const api = new API({ cwd });
   let packages;
   try {
@@ -299,7 +317,7 @@ export function inspectInfrastructurePackageBuilds({ cwd = process.cwd(), toolch
     api.close();
   }
   const buildPackages = [...packages.values()].filter((pkg) => pkg.build);
-  const commonDigest = commonInputDigest(cwd, toolchainDigest);
+  const commonDigest = commonInputDigest(cwd, toolchainDigest, packages);
   const cache = readCache(cwd);
   const states = buildPackages
     .map((pkg) => {

@@ -51,6 +51,7 @@
     "./connect": "./src/connect.ts",
     "./connectionGrants": "./src/connectionGrants.ts",
     "./constants": "./src/constants.ts",
+    "./compilerResourcePolicy": "./src/compilerResourcePolicy.mjs",
     "./contentTree/*": "./src/contentTree/*.ts",
     "./contentType": "./src/contentType.ts",
     "./contextBinding": "./src/contextBinding.ts",

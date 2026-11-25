@@ -1,3 +1,4 @@
+import { createExtensionBuildProvider, extensionPrimaryArtifactPath } from "./buildProvider.js";
 import { traceInvocation } from "./invocationTrace.js";
 import { websiteAuthorityIdentity } from "@vibestudio/shared/serviceDispatcher";
 import { randomUUID } from "node:crypto";
@@ -34,11 +35,7 @@ import type { ExecutionPublicationPort } from "@vibestudio/shared/execution/rete
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
 import { rpcDiagnosticIdOf } from "@vibestudio/rpc";
 import { EXTENSION_RUNTIME_ABI_VERSION } from "@vibestudio/shared/extensionRuntimeAbi";
-import type {
-  BuildProvider,
-  BuildProviderOutput,
-  BuildProviderTarget,
-} from "@vibestudio/shared/buildProvider";
+import type { BuildProvider, BuildProviderTarget } from "@vibestudio/shared/buildProvider";
 import type { PendingUnitInstallReviewApproval, ReviewedUnit } from "@vibestudio/shared/approvals";
 import type { CapabilityPresentationResolver } from "@vibestudio/shared/authorityPresentation";
 import type {
@@ -189,7 +186,6 @@ interface BuildSystemLike {
 }
 
 type ExtensionBuildMetadataLike = StoredBuildResult["metadata"];
-type ExtensionBuildArtifactLike = StoredBuildResult["artifacts"][number];
 
 function sameExtensionActiveIdentity(left: RegistryEntry, right: RegistryEntry): boolean {
   return (
@@ -2502,56 +2498,17 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       return;
     }
     for (const target of nextTargets) {
-      this.deps.registerBuildProvider({
-        name: entry.name,
-        target,
-        contractVersion: "vibestudio-build-provider-v2",
-        activeEv: entry.activeEv,
-        activeBuildKey: entry.activeBundleKey,
-        build: async (input) => {
-          const invocation: ExtensionInvocation = {
-            requestId: randomUUID(),
-            extensionName: entry.name,
-            method: "build",
-            caller: {
-              callerId: "server:build-system",
-              callerKind: "server",
-            },
-          };
-          const output = await this.deps.extensionTransport.call(entry.name, "extension.invoke", [
-            "build",
-            [input],
-            invocation,
-          ]);
-          return assertBuildProviderOutput(entry.name, target, output);
-        },
-        streamArtifact: async (artifact, input) => {
-          if (!artifact.stream) {
-            throw new Error(
-              `Build provider ${entry.name} artifact ${artifact.path} is not stream-backed`
-            );
-          }
-          if (!this.deps.extensionTransport.streamCallTarget) {
-            throw new Error(`Build provider ${entry.name} streaming transport is unavailable`);
-          }
-          const invocation: ExtensionInvocation = {
-            requestId: randomUUID(),
-            extensionName: entry.name,
-            method: artifact.stream.method,
-            caller: {
-              callerId: "server:build-system",
-              callerKind: "server",
-            },
-          };
-          return this.deps.extensionTransport.streamCallTarget(
-            entry.name,
-            "extension.invokeStream",
-            artifact.stream.method,
-            artifact.stream.args ?? [artifact.path, input],
-            invocation
-          );
-        },
-      });
+      this.deps.registerBuildProvider(
+        createExtensionBuildProvider(
+          {
+            name: entry.name,
+            activeEv: entry.activeEv,
+            activeBuildKey: entry.activeBundleKey,
+          },
+          target,
+          this.deps.extensionTransport
+        )
+      );
     }
     if (nextTargets.size > 0) this.registeredBuildProviderTargets.set(entry.name, nextTargets);
     else this.registeredBuildProviderTargets.delete(entry.name);
@@ -3266,53 +3223,8 @@ function requireBuildSourceStateHash(
   throw new Error(`Build for ${unitName} is missing workspace source state provenance`);
 }
 
-function extensionPrimaryArtifactPath(build: {
-  dir: string;
-  artifacts: ExtensionBuildArtifactLike[];
-}): string {
-  const artifact =
-    build.artifacts.find((entry) => entry.role === "primary" && entry.platform === undefined) ??
-    build.artifacts.find((entry) => entry.role === "primary");
-  if (!artifact) {
-    throw new Error("Extension build has no primary artifact");
-  }
-  if (path.isAbsolute(artifact.path) || artifact.path.split(/[\\/]/).includes("..")) {
-    throw new Error(`Invalid extension build artifact path: ${artifact.path}`);
-  }
-  return path.join(build.dir, artifact.path);
-}
-
 function extensionRuntimeCapabilities(): string[] {
   return ["node:fs", "node:child_process", "node:net", "node:process", "userland:*"];
-}
-
-function assertBuildProviderOutput(
-  providerName: string,
-  target: BuildProviderTarget,
-  value: unknown
-): BuildProviderOutput {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`Build provider ${providerName} for ${target} returned a non-object output`);
-  }
-  const output = value as Partial<BuildProviderOutput>;
-  if (
-    !Array.isArray(output.artifacts) ||
-    output.artifacts.some(
-      (artifact) =>
-        !artifact ||
-        typeof artifact !== "object" ||
-        typeof artifact.path !== "string" ||
-        typeof artifact.role !== "string" ||
-        typeof artifact.contentType !== "string" ||
-        (typeof artifact.content !== "string" && !isBuildProviderArtifactStream(artifact.stream)) ||
-        (artifact.encoding !== undefined &&
-          artifact.encoding !== "utf8" &&
-          artifact.encoding !== "base64")
-    )
-  ) {
-    throw new Error(`Build provider ${providerName} for ${target} returned invalid artifacts`);
-  }
-  return { artifacts: output.artifacts };
 }
 
 function extensionWorkspaceStatusFallback(
@@ -3332,18 +3244,4 @@ function extensionWorkspaceStatusFallback(
     activeRuntimeDepsKey: entry.activeRuntimeDepsKey,
     lastError: entry.lastError,
   };
-}
-
-function isBuildProviderArtifactStream(
-  value: unknown
-): value is { method: string; args?: unknown[]; integrity: string } {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const stream = value as { method?: unknown; args?: unknown; integrity?: unknown };
-  return (
-    typeof stream.method === "string" &&
-    stream.method.trim().length > 0 &&
-    typeof stream.integrity === "string" &&
-    /^sha256-[0-9a-f]{64}$/.test(stream.integrity) &&
-    (stream.args === undefined || Array.isArray(stream.args))
-  );
 }

@@ -19,6 +19,33 @@ function deferred<T>() {
 }
 
 describe("prepareWorkspaceRuntimeBuilds", () => {
+  it("prepares declared web, terminal and mobile clients through the same build/export path", async () => {
+    const clients = ["web", "terminal", "react-native"].map(
+      (runtime) =>
+        ({
+          ...node(`clients/${runtime}`),
+          kind: "client",
+          manifest: { client: { runtime } },
+        }) as GraphNode
+    );
+    const build = vi.fn(async (source: string) => binding(source));
+    const publish = vi.fn(async () => undefined);
+    const result = await prepareWorkspaceRuntimeBuilds(
+      [
+        ...clients,
+        { ...node("packages/library"), kind: "package" },
+        { ...node("templates/system"), kind: "template" },
+      ],
+      build,
+      publish
+    );
+    expect(result.map(({ source }) => source)).toEqual(
+      clients.map((client) => client.relativePath)
+    );
+    expect(build.mock.calls).toEqual(clients.map((client) => [client.relativePath]));
+    expect(publish.mock.calls).toEqual(clients.map((client) => [binding(client.relativePath)]));
+  });
+
   it("admits independent builds together and publishes in completion order with stable receipts", async () => {
     const first = deferred<Binding>();
     const second = deferred<Binding>();

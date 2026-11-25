@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import fsNative from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import {
   acquirePreparedWorkspaceSources,
   type PreparedWorkspaceSourceIdentity,
@@ -12,6 +13,17 @@ import { preparedWorkspaceTemplatePath } from "./preparedWorkspaceTemplate.js";
 import { blobCasPath } from "./storage/blobCas.js";
 import { closeDerivedCacheCoordinators } from "@vibestudio/shared/derivedCache";
 
+// These exercise retained-cache reuse, not host disk-pressure eviction. Real
+// pressure pruning has its independent DerivedCache tests; runner disk usage
+// must not turn a warm fixture into an unrelated cold producer.
+beforeEach(() => {
+  const stat = fsNative.statfsSync(os.tmpdir());
+  vi.spyOn(fsNative, "statfsSync").mockReturnValue({
+    ...stat,
+    bavail: Math.ceil((30 * 1024 ** 3) / stat.bsize),
+  });
+  syncBuiltinESMExports();
+});
 const roots: string[] = [];
 const handles: Array<{ close(): Promise<void> }> = [];
 const pin = {
@@ -39,9 +51,9 @@ async function fixture() {
   vi.stubEnv("VIBESTUDIO_SHARED_DERIVED_CACHE_DIR", path.join(root, "derived"));
   return root;
 }
-async function produce(root: string) {
-  for (const role of ["base", "personal", "system"] as const) {
-    const directory = preparedWorkspaceTemplatePath(root, templates[role], "use");
+async function produce(root: string, selected: PreparedWorkspaceSourceIdentity = identity) {
+  for (const role of Object.keys(selected.templates)) {
+    const directory = preparedWorkspaceTemplatePath(root, selected.templates[role]!, "use");
     const blob = blobCasPath(path.join(directory, "blobs"), digest);
     await fs.mkdir(path.dirname(blob), { recursive: true });
     await fs.writeFile(blob, bytes);
@@ -50,9 +62,9 @@ async function produce(root: string) {
       JSON.stringify({
         format: "vibestudio-prepared-workspace/1",
         purpose: "use",
-        pin: templates[role],
-        layers: identity.layers[role],
-        installation: { sources: [{ pin: templates[role], manifest: "manifest.yml" }] },
+        pin: selected.templates[role],
+        layers: selected.layers[role],
+        installation: { sources: [{ pin: selected.templates[role], manifest: "manifest.yml" }] },
         snapshot: `v1-sha256:${"f".repeat(64)}`,
         files: [],
         repositories: [],
@@ -72,6 +84,7 @@ afterEach(async () => {
   for (const handle of handles.splice(0)) await handle.close();
   await closeDerivedCacheCoordinators();
   vi.restoreAllMocks();
+  syncBuiltinESMExports();
   vi.unstubAllEnvs();
   for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
 });
@@ -207,4 +220,31 @@ describe("immutable workspace source phase", () => {
       )
     ).toEqual([]);
   });
+});
+
+it("retains all selected optional source roots on cold publication and cache reuse", async () => {
+  await fixture();
+  const news = { ...pin, commit: "9".repeat(40) };
+  const selected = {
+    ...identity,
+    templates: { ...identity.templates, news },
+    layers: { ...identity.layers, news: [news] },
+  };
+  const producer = vi.fn((root: string) => produce(root, selected));
+  const first = await acquire(producer, selected);
+  await first.close();
+  const second = await acquire(producer, selected);
+  expect(producer).toHaveBeenCalledTimes(1);
+  const marker = JSON.parse(
+    await fs.readFile(path.join(second.root, "source-release.json"), "utf8")
+  );
+  expect(Object.keys(marker.records).sort()).toEqual(["base", "news", "personal", "system"]);
+  expect(
+    JSON.parse(
+      await fs.readFile(
+        path.join(preparedWorkspaceTemplatePath(second.root, news, "use"), "template.json"),
+        "utf8"
+      )
+    ).pin
+  ).toEqual(news);
 });

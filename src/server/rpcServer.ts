@@ -44,7 +44,6 @@ import {
   envelopeFromMessage,
   responseEnvelopeFor,
   stampEnvelopeCaller,
-  type EnvelopeRpcTransport,
   type RpcEnvelope,
   type RpcEvent,
   type RpcMessage,
@@ -64,6 +63,7 @@ import type {
 } from "@vibestudio/rpc/internal";
 import {
   createSessionServerTransport,
+  envelopeTransportFromSessionServer,
   type SessionServerTransportInternal,
 } from "./sessionServerTransport.js";
 import { SESSION_NOT_OPEN_CLOSE_CODE } from "@vibestudio/rpc/protocol/remoteSession";
@@ -320,29 +320,6 @@ function envelopeForWsDelivery(
     ...(workspaceId ? { caller: { callerId: fromId, callerKind: fromKind, workspaceId } } : {}),
     message,
   });
-}
-
-function envelopeTransportFromSessionServer(
-  transport: SessionServerTransportInternal
-): EnvelopeRpcTransport {
-  return {
-    async send(envelope) {
-      await transport.sendEnvelope(envelope);
-    },
-    onMessage(handler) {
-      return transport.onAnyMessage((sourceId, message, callerKind) => {
-        handler(
-          envelopeFromMessage({
-            selfId: "server",
-            from: sourceId,
-            target: "server",
-            message,
-            callerKind: callerKind ?? "unknown",
-          })
-        );
-      });
-    },
-  };
 }
 
 interface PendingToolCall {
@@ -1743,7 +1720,9 @@ export class RpcServer {
   }
 
   /** Register a callback for client authentication events. */
-  setOnClientAuthenticate(handler: (callerId: string, callerKind: CallerKind) => void | Promise<void>): void {
+  setOnClientAuthenticate(
+    handler: (callerId: string, callerKind: CallerKind) => void | Promise<void>
+  ): void {
     this.deps.onClientAuthenticate = handler;
   }
 
@@ -3829,7 +3808,11 @@ export class RpcServer {
       };
     }
     const httpAgentBinding = callerId === entry.callerId ? entry.agentBinding : undefined;
-    const membershipFailure = await this.workspaceMembershipFailure(callerId, callerKind, httpAgentBinding);
+    const membershipFailure = await this.workspaceMembershipFailure(
+      callerId,
+      callerKind,
+      httpAgentBinding
+    );
     if (membershipFailure) {
       return {
         ok: false,
@@ -4946,7 +4929,8 @@ export class RpcServer {
 
   private async ensureRelayTransportReady(): Promise<void> {
     if (!this.workerdUrl && this.deps.ensureWorkerdTransportReady) {
-      if (this.isShuttingDown()) throw createRelayError("Server shutting down", "SERVER_SHUTTING_DOWN");
+      if (this.isShuttingDown())
+        throw createRelayError("Server shutting down", "SERVER_SHUTTING_DOWN");
       await this.deps.ensureWorkerdTransportReady();
     }
   }
@@ -5029,7 +5013,7 @@ export class RpcServer {
       const dispatchedArgs = this.resolveOpaqueHandleArgument(args, authorization);
       // Authority acquisition can outlive a process generation. Bind transport
       // after it settles, immediately before this still-unsent invocation.
-      const {workerdUrl,workerdGatewayToken,workerdDispatchSecret} = await this.relayEndpoint();
+      const { workerdUrl, workerdGatewayToken, workerdDispatchSecret } = await this.relayEndpoint();
       const inheritedAuthorizingCaller = relayCallerScope?.authorizingCaller
         ? attributedCaller.subject
           ? {
@@ -5416,7 +5400,7 @@ export class RpcServer {
       if (!workerAdmission) throw new Error(`Worker not found: ${targetId}`);
       try {
         await this.ensureRelayTransportReady();
-      if (!this.workerdUrl) throw new Error("workerdUrl not configured");
+        if (!this.workerdUrl) throw new Error("workerdUrl not configured");
 
         const eventEnvelope = envelopeFromMessage({
           selfId: fromId,

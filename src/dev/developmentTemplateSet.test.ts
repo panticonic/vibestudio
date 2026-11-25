@@ -228,6 +228,16 @@ describe("resolveDevelopmentTemplateSet", () => {
     expect(JSON.parse(env["VIBESTUDIO_WORKSPACE_SOURCES"] ?? "null")).toEqual(
       developmentTemplateSetSources(selection)
     );
+    expect(JSON.parse(env["VIBESTUDIO_PREPARE_WORKSPACE_TEMPLATES"] ?? "null")).toEqual(
+      selection.sourcePins
+    );
+    const builtinOnly = developmentTemplateSetEnv(selection, { defaultTemplatesOnly: true });
+    expect(JSON.parse(builtinOnly["VIBESTUDIO_PREPARE_WORKSPACE_TEMPLATES"] ?? "null")).toEqual(
+      selection.pins
+    );
+    expect(builtinOnly["VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES"]).toBe(
+      env["VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES"]
+    );
     const transported = readWorkspaceSources(env);
     for (const source of transported) {
       expect(source.review?.manifestText).toBe(

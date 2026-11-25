@@ -1,5 +1,9 @@
-import { constants as fileConstants } from "node:fs";
-import { NativeCompilerProducts, compilerProductDriver } from "./nativeCompilerProducts.js";
+import {
+  NativeCompilerProducts,
+  compilerProductDriver,
+  compilerProductExecArgv,
+  readCompilerProductResult,
+} from "./nativeCompilerProducts.js";
 import { getNativeExecutionInstallation } from "@vibestudio/shared/runtimePaths";
 import { prepareNativeRuntime } from "@vibestudio/shared/nativeRuntimeResources";
 import { materializeImmutableTree } from "./buildV2/immutableTreeMaterializer.js";
@@ -19,7 +23,6 @@ import {
   writeFile,
   rm,
   mkdtemp,
-  open,
 } from "node:fs/promises";
 import path from "node:path";
 import { createRequire } from "node:module";
@@ -365,40 +368,22 @@ export async function startNativeWorkspaceRuntime(input: {
           const directory = await mkdtemp(path.join(jobs, "job-"));
           const resultPath = path.join(directory, "result.json");
           try {
-            await this.runJob({
-              bundle: request.bundle,
-              dependencies: "",
-              script: compilerProductDriver(request.input, resultPath, request.format),
-            });
-            const file = await open(
-              resultPath,
-              fileConstants.O_RDONLY | (fileConstants.O_NOFOLLOW ?? 0)
+            await this.runJob(
+              {
+                bundle: request.bundle,
+                dependencies: "",
+                script: compilerProductDriver(request.input, resultPath, request.format),
+              },
+              { execArgv: compilerProductExecArgv() }
             );
-            try {
-              const info = await file.stat();
-              if (!info.isFile() || info.size > 32 * 1024 * 1024)
-                throw new Error("Invalid or oversized native compiler product");
-              const data = Buffer.alloc(info.size);
-              let offset = 0;
-              while (offset < data.length) {
-                const part = await file.read(data, offset, data.length - offset, offset);
-                if (!part.bytesRead) break;
-                offset += part.bytesRead;
-              }
-              const extra = await file.read(Buffer.alloc(1), 0, 1, offset);
-              if (offset !== data.length || extra.bytesRead)
-                throw new Error("Native compiler product changed after completion");
-              return JSON.parse(data.toString("utf8"));
-            } finally {
-              await file.close();
-            }
+            return await readCompilerProductResult(resultPath);
           } finally {
             await rm(directory, { recursive: true, force: true });
           }
         });
         return compilerProducts.compile(input);
       },
-      async runJob(input: NativeWorkspaceJob): Promise<void> {
+      async runJob(input: NativeWorkspaceJob, options?: ProcessAdapterOptions): Promise<void> {
         const directory = path.join(runtimeRoot, "jobs", randomUUID());
         await mkdir(directory, { recursive: true });
         let failure: unknown;
@@ -412,10 +397,14 @@ export async function startNativeWorkspaceRuntime(input: {
               input.dependencies,
               path.join(directory, "node_modules")
             );
-          const child = sandbox.fork(path.join(directory, "driver.mjs"), {
-            VIBESTUDIO_EXTENSION_SMOKE: "1",
-            VIBESTUDIO_EXTENSION_SMOKE_BUNDLE: path.join(directory, "bundle.js"),
-          });
+          const child = sandbox.fork(
+            path.join(directory, "driver.mjs"),
+            {
+              VIBESTUDIO_EXTENSION_SMOKE: "1",
+              VIBESTUDIO_EXTENSION_SMOKE_BUNDLE: path.join(directory, "bundle.js"),
+            },
+            options
+          );
           await waitForNativeJob(child);
         } catch (error) {
           failure = error;

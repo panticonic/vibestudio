@@ -12,13 +12,13 @@ import {
   devInstanceReadyPath,
   devInstanceRecordPath,
   persistentInstanceRoot,
-  retainedSystemTestInstanceRoot,
   publishDevInstanceReady,
   registerDevInstance,
   resolveDevInstance,
   unregisterDevInstance,
   waitForDevInstanceReady,
 } from "./instanceRegistry.js";
+import { allocateDevelopmentInstanceStorage } from "./developmentInstanceStorage.js";
 import {
   claimFixtureLedger,
   deadProcessStart,
@@ -54,23 +54,52 @@ describe("developer instance registry", () => {
     expect(() => resolveDevInstance(repoRoot, "source")).toThrow(/Unknown Vibestudio instance/u);
   });
 
-  it("retains native evidence after owned processes and generated scratch retire", async () => {
+  it("retires the actual ephemeral instance root while retaining only requested capture bytes", async () => {
     const repoRoot = fs.mkdtempSync(path.join(tempDir, "retention-repo-"));
-    const root = retainedSystemTestInstanceRoot(repoRoot, "teacher");
-    expect(retainedSystemTestInstanceRoot(repoRoot, "teacher")).not.toBe(root);
     const owner = await Ownership.open({
-      profileDir: profileRoot(),
-      id: "retention-test",
-      lifetime: "until-stop",
+      profileDir: profileRoot(), id: "retention-test", lifetime: "until-stop",
     });
-    const scratch = await owner.scratch("generated-");
-    fs.mkdirSync(root, { recursive: true });
-    fs.writeFileSync(path.join(root, "native.sqlite"), "unfinished exchange and native receipt");
+    const storage = await allocateDevelopmentInstanceStorage({
+      ownership: owner, repoRoot, id: "teacher", disposable: true, managed: true,
+      environment: { VIBESTUDIO_SYSTEM_TEST_INSTANCE: "1", VIBESTUDIO_RETAIN_NATIVE_STORAGE: "1" },
+    });
+    fs.mkdirSync(storage.captureEvidenceRoot!, { recursive: true });
+    fs.writeFileSync(path.join(storage.captureEvidenceRoot!, "native.sqlite"), "unfinished exchange");
+    fs.writeFileSync(path.join(storage.root, "copied-workspace"), "regenerable runtime state");
     await owner.release();
-    expect(fs.existsSync(scratch)).toBe(false);
-    expect(fs.readFileSync(path.join(root, "native.sqlite"), "utf8")).toBe(
-      "unfinished exchange and native receipt"
-    );
+    expect(fs.existsSync(storage.root)).toBe(false);
+    expect(fs.readFileSync(path.join(storage.captureEvidenceRoot!, "native.sqlite"), "utf8"))
+      .toBe("unfinished exchange");
+  });
+
+  it("does not allocate retained state for ordinary managed runs or explicit retention opt-out", async () => {
+    const owner = await Ownership.open({
+      profileDir: profileRoot(), id: "no-retention-test", lifetime: "until-stop",
+    });
+    try {
+      for (const environment of [{}, { VIBESTUDIO_SYSTEM_TEST_INSTANCE: "1", VIBESTUDIO_RETAIN_NATIVE_STORAGE: "0" }]) {
+        const storage = await allocateDevelopmentInstanceStorage({
+          ownership: owner, repoRoot: tempDir, id: "ordinary", disposable: true, managed: true,
+          environment,
+        });
+        expect(storage.captureEvidenceRoot).toBeUndefined();
+        expect(fs.existsSync(persistentInstanceRoot(tempDir, "ordinary"))).toBe(false);
+      }
+    } finally { await owner.release(); }
+  });
+
+  it("keeps explicitly persistent workspace state across owner retirement", async () => {
+    const owner = await Ownership.open({
+      profileDir: profileRoot(), id: "persistent-test", lifetime: "until-stop",
+    });
+    const storage = await allocateDevelopmentInstanceStorage({
+      ownership: owner, repoRoot: tempDir, id: "persistent", disposable: false, managed: true,
+      environment: {},
+    });
+    fs.mkdirSync(storage.root, { recursive: true });
+    fs.writeFileSync(path.join(storage.root, "user-data"), "persistent");
+    await owner.release();
+    expect(fs.readFileSync(path.join(storage.root, "user-data"), "utf8")).toBe("persistent");
   });
 
   it("rejects ids that could escape the registry", () => {

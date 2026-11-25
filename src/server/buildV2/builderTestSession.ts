@@ -15,7 +15,9 @@ export async function createBuilderTestSession(input: {
   runNativeJob: RunNativeWorkspaceJob;
   workspaceId?: string;
   signal?: AbortSignal;
-  ensureBuildProvider?: (target: "react-native") => Promise<void>;
+  ensureBuildProvider?: (
+    target: "react-native"
+  ) => Promise<import("@vibestudio/shared/buildProvider").BuildProvider | void>;
   source?: BuildSourceProvider;
 }): Promise<{
   processOwner: ReturnType<typeof createBuildProcessOwner>;

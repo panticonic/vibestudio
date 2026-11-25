@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { forwardCommandInterruption } from "../../scripts/lib/live-teacher-interruption.mjs";
 import { SYSTEM_TEST_WORKSPACES } from "./cliWorkspaceSelection.js";
 import * as path from "node:path";
 import * as fs from "node:fs";
@@ -91,8 +92,7 @@ interface CliResult {
 }
 
 /**
- * One ordinary CLI process, a member of this launcher's ownership: killed at
- * once if the launcher is terminated, and retired by the launcher's reaper if
+ * One ordinary CLI process, a member of this launcher's ownership: given its canonical cancellation signal if the launcher is terminated, and retired by the launcher's reaper if
  * the launcher dies. Its group is joined before the result is returned.
  */
 async function spawnCli(
@@ -101,8 +101,10 @@ async function spawnCli(
   command: readonly string[],
   stdio: StdioOptions,
   label: string,
-  env = process.env
+  env = process.env,
+  signal?: AbortSignal
 ): Promise<CliResult> {
+  signal?.throwIfAborted();
   const owned = ownership.spawn(process.execPath, cliArgv(instanceId, command), {
     cwd: process.cwd(),
     env,
@@ -127,8 +129,14 @@ async function spawnCli(
       owned.child.once("close", (code, signal) => resolve({ code, signal }));
     }
   );
-  const [status] = await Promise.all([closed, owned.registered]);
-  await owned.join();
+  const remove = signal ? forwardCommandInterruption(signal, owned.child) : () => {};
+  let status: Awaited<typeof closed>;
+  try {
+    [status] = await Promise.all([closed, owned.registered]);
+    await owned.join();
+  } finally {
+    remove();
+  }
   if (status.signal) throw new Error(`${label} exited from signal ${status.signal}`);
   return { code: status.code ?? 1, stdout, stderr };
 }
@@ -137,7 +145,8 @@ async function runCli(
   ownership: Ownership,
   instanceId: string,
   command: readonly string[],
-  env: NodeJS.ProcessEnv
+  env: NodeJS.ProcessEnv,
+  signal: AbortSignal
 ): Promise<number> {
   return (
     await spawnCli(
@@ -146,7 +155,8 @@ async function runCli(
       ["system-test", ...command],
       "inherit",
       "system-test CLI",
-      env
+      env,
+      signal
     )
   ).code;
 }
@@ -155,22 +165,32 @@ async function runCli(
 function captureCli(
   ownership: Ownership,
   instanceId: string,
-  command: readonly string[]
+  command: readonly string[],
+  signal: AbortSignal
 ): Promise<CliResult> {
-  return spawnCli(ownership, instanceId, command, ["ignore", "pipe", "pipe"], command[0] ?? "CLI");
+  return spawnCli(
+    ownership,
+    instanceId,
+    command,
+    ["ignore", "pipe", "pipe"],
+    command[0] ?? "CLI",
+    process.env,
+    signal
+  );
 }
 
 async function prepareFreshInstance(
   ownership: Ownership,
   instanceId: string,
-  expectedWorkspaceId: string
+  expectedWorkspaceId: string,
+  signal: AbortSignal
 ): Promise<void> {
-  const prepared = await captureCli(ownership, instanceId, [
-    "system-test",
-    "doctor",
-    "--approve-startup",
-    "--json",
-  ]);
+  const prepared = await captureCli(
+    ownership,
+    instanceId,
+    ["system-test", "doctor", "--approve-startup", "--json"],
+    signal
+  );
   if (prepared.code !== 0) {
     throw new Error(
       `system-test startup preparation failed:\n${systemTestPreparationFailureDetail(
@@ -185,12 +205,13 @@ async function prepareFreshInstance(
 async function adoptSelfDevelopmentSource(
   ownership: Ownership,
   instanceId: string,
-  projects: readonly SelfDevelopmentProject[]
+  projects: readonly SelfDevelopmentProject[],
+  signal: AbortSignal
 ): Promise<void> {
   if (projects.length === 0) return;
   const adopted = await adoptSelfDevelopmentProjects({
     projects,
-    runCli: (args) => captureCli(ownership, instanceId, args),
+    runCli: (args) => captureCli(ownership, instanceId, args, signal),
   });
   for (const project of adopted) {
     console.error(
@@ -281,14 +302,16 @@ async function runCommand({
     await prepareFreshInstance(
       ownership,
       ensured.instance.id,
-      pairedWorkspaceId(ensured.instance.root)
+      pairedWorkspaceId(ensured.instance.root),
+      signal
     );
   }
   if (parsed.selfDevelopment) {
     await adoptSelfDevelopmentSource(
       ownership,
       ensured.instance.id,
-      selfDevelopmentProjects(repoRoot)
+      selfDevelopmentProjects(repoRoot),
+      signal
     );
     const session = adoptSystemTestSession(ensured.instance, "self-development");
     console.error(`[system-test] tests on this instance run under session ${session}`);
@@ -344,7 +367,7 @@ async function runCommand({
     : null;
   let commandFailure: unknown;
   try {
-    process.exitCode = await runCli(ownership, ensured.instance.id, scopedCommand, cliEnv);
+    process.exitCode = await runCli(ownership, ensured.instance.id, scopedCommand, cliEnv, signal);
   } catch (error) {
     commandFailure = error;
   }
@@ -411,15 +434,14 @@ async function main(): Promise<void> {
     lifetime: "leased",
     meta: { kind: "system-test-launcher", instance: parsed.instanceId, command: parsed.command[0] },
   });
-  // A termination request ends the command's workload at once through the
-  // idempotent release; the command's own flow then unwinds and this function
-  // exits with the signal's status once the retirement is joined.
+  // Keep the instance and device dependencies alive while the CLI performs
+  // authenticated cancellation and retains its interrupted run evidence.
+  // The command joins before ownership retirement in the normal unwind below.
   const interrupt = new AbortController();
   const interruption: { signal: NodeJS.Signals | null } = { signal: null };
   const onSignal = (signal: NodeJS.Signals): void => {
     interruption.signal ??= signal;
-    interrupt.abort(new Error(`Interrupted by ${signal}`));
-    void ownership.release().catch(() => undefined);
+    interrupt.abort({ signal, reason: `Interrupted by ${signal}` });
   };
   for (const signal of TERMINATION_SIGNALS) process.on(signal, onSignal);
   const joins: Array<{ ledgerId: string; pid: number }> = [];

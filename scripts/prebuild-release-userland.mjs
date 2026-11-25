@@ -421,6 +421,7 @@ async function withReleaseConsumerSession(
           "NO_PROXY",
           "NODE_EXTRA_CA_CERTS",
           "VIBESTUDIO_MAX_CONCURRENT_BUILDS",
+          "GOMEMLIMIT",
         ])
           if (process.env[key] !== undefined) inherited[key] = process.env[key];
         // Release coordinates come from the installed pointer; configuration,
@@ -782,8 +783,32 @@ export async function verifyPreparedReleaseUserland(
   ]);
   const workspaces = { ...pair, base };
   let verified = 0;
-  for (const kind of ["base", "system", "personal"]) {
-    const workspace = workspaces[kind];
+  const kinds = [
+    "base",
+    "system",
+    "personal",
+    ...Object.keys(manifest.templates ?? {})
+      .filter((kind) => !["base", "system", "personal"].includes(kind))
+      .sort(),
+  ];
+  for (const kind of kinds) {
+    let workspace = workspaces[kind];
+    if (!workspace) {
+      const pin = manifest.templates[kind];
+      workspace = await cli([
+        "remote",
+        "create-workspace",
+        `release-${kind}`,
+        "--operation-id",
+        `release_verification_${kind.replaceAll("-", "_")}`,
+        "--template",
+        pin.url,
+        "--template-ref",
+        pin.ref,
+        "--template-commit",
+        pin.commit,
+      ]);
+    }
     await cli(["remote", "select", workspace.name]);
     const records = manifest.builds.filter((record) => record.workspace === kind);
     if (records.length === 0) throw new Error(`Release has no prepared artifacts for ${kind}`);

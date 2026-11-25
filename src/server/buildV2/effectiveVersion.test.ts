@@ -813,34 +813,166 @@ describe("effectiveVersion", () => {
       expect(info.value).toMatch(/^[0-9a-f]{64}$/);
     });
 
-    it("preserves the installed tree digest across batched manifests, scopes, links and nesting", async () => {
+    it("covers scoped, batched, nested and aliased installed packages deterministically", async () => {
       const dir = path.join(root, "batched");
       writeRootFiles(dir, '{"name":"host"}', "lock", "ws");
-      const hash = (text: string) => createHash("sha256").update(text).digest("hex");
-      const records: string[] = [];
       const manifest = (relative: string, name: string) => {
         const folder = path.join(dir, "node_modules", relative);
         fs.mkdirSync(folder, { recursive: true });
-        const contents = JSON.stringify({ name });
-        fs.writeFileSync(path.join(folder, "package.json"), contents);
-        records.push(`package\0${relative.replaceAll(path.sep, "/")}\0${hash(contents)}\0`);
+        fs.writeFileSync(path.join(folder, "package.json"), JSON.stringify({ name }));
       };
-      // Expected records describe the original sorted depth-first encoding,
-      // including a child before its parent's following sibling.
       manifest("@scope/alpha", "scoped");
       manifest("a", "parent");
       manifest("a/node_modules/child", "nested");
       for (let i = 0; i < 35; i++) manifest(`p${String(i).padStart(2, "0")}`, `package-${i}`);
       fs.symlinkSync("a", path.join(dir, "node_modules", "z-link"), "dir");
-      records.push(
-        `package\0z-link\0${hash(JSON.stringify({ name: "parent" }))}\0link\0z-link\0a\0`
-      );
       fs.mkdirSync(path.join(dir, "node_modules", "empty"));
-      rootFingerprint = await prepareBuildRootConfig({ appRoot: dir });
-      const installed = rootFingerprint.files.find(
-        (file) => file.file === "installed-node-modules:0"
+      const first = await computeRootDependencyFingerprint(dir);
+      expect((await computeRootDependencyFingerprint(dir)).value).toBe(first.value);
+      manifest("a/node_modules/child", "changed-nested");
+      expect((await computeRootDependencyFingerprint(dir)).value).not.toBe(first.value);
+      manifest("a/node_modules/child", "nested");
+      expect((await computeRootDependencyFingerprint(dir)).value).toBe(first.value);
+      fs.writeFileSync(
+        path.join(dir, "package.json"),
+        JSON.stringify({ name: "host", dependencies: { a: "file:./node_modules/a" } })
       );
-      expect(installed?.contentHash).toBe(hash(records.join("")));
+      const sourceBaseline = await computeRootDependencyFingerprint(dir);
+      fs.writeFileSync(
+        path.join(dir, "node_modules/a/implementation.js"),
+        "export const changed=1;"
+      );
+      expect((await computeRootDependencyFingerprint(dir)).value).not.toBe(sourceBaseline.value);
+    });
+
+    const linkedGraph = (directory: string) => {
+      writeRootFiles(
+        directory,
+        JSON.stringify({
+          name: "host",
+          dependencies: { a: "file:./source-packages/a", b: "file:./source-packages/b" },
+        }),
+        "lock",
+        "ws"
+      );
+      const source = path.join(directory, "source-packages");
+      for (const [name, dependencies] of [
+        ["a", { b: "*" }],
+        ["b", { a: "*" }],
+      ] as const) {
+        const target = path.join(source, name);
+        fs.mkdirSync(path.join(target, "node_modules"), { recursive: true });
+        fs.writeFileSync(path.join(target, "package.json"), JSON.stringify({ name, dependencies }));
+        fs.writeFileSync(path.join(target, "index.js"), "export const value=1;");
+      }
+      fs.mkdirSync(path.join(directory, "node_modules"), { recursive: true });
+      fs.symlinkSync(path.join(source, "a"), path.join(directory, "node_modules/a"), "dir");
+      fs.symlinkSync(path.join(source, "b"), path.join(source, "a/node_modules/b"), "dir");
+      fs.symlinkSync(path.join(source, "a"), path.join(source, "b/node_modules/a"), "dir");
+      return source;
+    };
+    it("reuses build keys across relocated absolute package aliases and dependency cycles", async () => {
+      const left = path.join(root, "pop/private-host"),
+        right = path.join(root, "tick/different-private-host");
+      linkedGraph(left);
+      linkedGraph(right);
+      const a = await computeRootDependencyFingerprint(left),
+        b = await computeRootDependencyFingerprint(right);
+      expect(a.value).toBe(b.value);
+      expect(computeBuildKey(a, "worker/shared", "same-source", false)).toBe(
+        computeBuildKey(b, "worker/shared", "same-source", false)
+      );
+      const capture = captureRootDependencyFingerprint(a);
+      const workspace = path.join(root, "same-workspace");
+      fs.mkdirSync(workspace);
+      expect((await composeWorkspaceDependencyFingerprint(capture, right, workspace)).value).toBe(
+        (await computeRootDependencyFingerprint(right, workspace)).value
+      );
+    });
+    it("keeps linked registry wrappers platform-neutral despite generated native payload bytes", async () => {
+      const make = (name: string) => {
+        const directory = path.join(root, name);
+        writeRootFiles(directory, '{"name":"host"}', "same-registry-lock", "ws");
+        const installed = path.join(directory, "registry/esbuild");
+        fs.mkdirSync(path.join(installed, "bin"), { recursive: true });
+        fs.writeFileSync(
+          path.join(installed, "package.json"),
+          JSON.stringify({
+            name: "esbuild",
+            version: "1",
+            optionalDependencies: { "@esbuild/platform": "1" },
+          })
+        );
+        fs.writeFileSync(path.join(installed, "bin/esbuild"), name + "-native-machine-binary");
+        fs.mkdirSync(path.join(directory, "node_modules"));
+        fs.symlinkSync(installed, path.join(directory, "node_modules/esbuild"), "dir");
+        return directory;
+      };
+      expect((await computeRootDependencyFingerprint(make("arm-host"))).value).toBe(
+        (await computeRootDependencyFingerprint(make("x64-host"))).value
+      );
+    });
+    it("invalidates linked implementation edits without requiring manifest or link changes", async () => {
+      const directory = path.join(root, "source-edit");
+      const source = linkedGraph(directory);
+      const original = await computeRootDependencyFingerprint(directory);
+      fs.writeFileSync(path.join(source, "b/index.js"), "export const value=2;");
+      expect((await computeRootDependencyFingerprint(directory)).value).not.toBe(original.value);
+    });
+    it("resolves dependencies from the physical pnpm owner sibling realm", async () => {
+      const directory = path.join(root, "pnpm-sibling");
+      writeRootFiles(
+        directory,
+        JSON.stringify({ name: "host", dependencies: { a: "file:./store/a" } }),
+        "lock",
+        "ws"
+      );
+      const realm = path.join(directory, "store/a/node_modules"),
+        a = path.join(realm, "a");
+      fs.mkdirSync(a, { recursive: true });
+      fs.writeFileSync(
+        path.join(a, "package.json"),
+        JSON.stringify({ name: "a", dependencies: { b: "*" } })
+      );
+      fs.writeFileSync(path.join(a, "index.js"), "export {value} from 'b';");
+      fs.mkdirSync(path.join(directory, "node_modules"));
+      fs.symlinkSync(a, path.join(directory, "node_modules/a"), "dir");
+      for (const version of ["one", "two"]) {
+        const target = path.join(directory, "store", version);
+        fs.mkdirSync(target, { recursive: true });
+        fs.writeFileSync(path.join(target, "package.json"), JSON.stringify({ name: "b", version }));
+        fs.symlinkSync(target, path.join(directory, "node_modules", version), "dir");
+      }
+      const dependency = path.join(realm, "b");
+      fs.symlinkSync(path.join(directory, "store/one"), dependency, "dir");
+      const baseline = await computeRootDependencyFingerprint(directory);
+      fs.unlinkSync(dependency);
+      fs.symlinkSync(path.join(directory, "store/two"), dependency, "dir");
+      expect((await computeRootDependencyFingerprint(directory)).value).not.toBe(baseline.value);
+    });
+    it("tracks actual package-owned dependency selection, including unchanged range manifests", async () => {
+      const directory = path.join(root, "dependency-selection");
+      const source = linkedGraph(directory);
+      for (const version of ["one", "two"]) {
+        const dependency = path.join(source, version);
+        fs.mkdirSync(dependency);
+        fs.writeFileSync(
+          path.join(dependency, "package.json"),
+          JSON.stringify({ name: "dep", version })
+        );
+        fs.writeFileSync(path.join(dependency, "index.js"), "export const dependency=1;");
+        fs.symlinkSync(dependency, path.join(directory, "node_modules", version), "dir");
+      }
+      fs.writeFileSync(
+        path.join(source, "a/package.json"),
+        JSON.stringify({ name: "a", dependencies: { dep: "*" } })
+      );
+      const selected = path.join(source, "a/node_modules/dep");
+      fs.symlinkSync(path.join(source, "one"), selected, "dir");
+      const original = await computeRootDependencyFingerprint(directory);
+      fs.unlinkSync(selected);
+      fs.symlinkSync(path.join(source, "two"), selected, "dir");
+      expect((await computeRootDependencyFingerprint(directory)).value).not.toBe(original.value);
     });
 
     it("preserves the local tree digest across streaming files, links and nested siblings", async () => {

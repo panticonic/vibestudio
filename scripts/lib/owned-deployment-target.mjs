@@ -68,6 +68,9 @@ export async function openOwnedDeploymentTarget({ appRoot, ownership, scratchRoo
   );
   const env = {
     ...inherited,
+    // This target executes an installed release, even when its owner is a
+    // development harness. Its captured dependencies use the prepared policy.
+    NODE_ENV: "production",
     HOME: home,
     XDG_CONFIG_HOME: path.join(home, ".config"),
     XDG_CACHE_HOME: path.join(home, ".cache"),

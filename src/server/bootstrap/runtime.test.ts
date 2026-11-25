@@ -283,9 +283,9 @@ describe("workerd bootstrap policy", () => {
   });
 });
 
-it("roots native custody in the managed generation outside a deletable workspace", () => {
-  const statePath = "/owned/retained/generation/workspaces/ws/state";
+it("roots native custody outside the disposable supervisor and workspace", () => {
+  const statePath = "/owned/runtime/generation/workspaces/ws/state";
   expect(nativeCaptureRetentionRoot(statePath, "workspace", { VIBESTUDIO_RETAIN_NATIVE_STORAGE: "1" })).toBeUndefined();
   expect(nativeCaptureRetentionRoot(statePath, "workspace", { VIBESTUDIO_SYSTEM_TEST_INSTANCE: "1", VIBESTUDIO_RETAIN_NATIVE_STORAGE: "0" })).toBeUndefined();
-  expect(nativeCaptureRetentionRoot(statePath, "workspace", { VIBESTUDIO_SYSTEM_TEST_INSTANCE: "1", VIBESTUDIO_RETAIN_NATIVE_STORAGE: "1", VIBESTUDIO_INSTANCE_ROOT: "/owned/retained/generation" })).toMatch(/^\/owned\/retained\/generation\/capture-evidence\/workspaces\/[a-f0-9]{64}\/native-storage$/);
+  expect(nativeCaptureRetentionRoot(statePath, "workspace", { VIBESTUDIO_SYSTEM_TEST_INSTANCE: "1", VIBESTUDIO_RETAIN_NATIVE_STORAGE: "1", VIBESTUDIO_NATIVE_CAPTURE_EVIDENCE_ROOT: "/owned/retained/generation" })).toMatch(/^\/owned\/retained\/generation\/capture-evidence\/workspaces\/[a-f0-9]{64}\/native-storage$/);
 });

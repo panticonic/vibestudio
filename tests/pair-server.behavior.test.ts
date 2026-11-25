@@ -99,6 +99,32 @@ afterEach(() => {
 });
 
 describe("pair-server runner", () => {
+  it.each([
+    { entry: "", args: [], expected: "production" },
+    { entry: "", args: ["--dev"], expected: "development" },
+    { entry: "live", args: [], expected: "development" },
+  ])(
+    "selects $expected for entry '$entry' and args $args under a development caller",
+    async ({ entry, args, expected }) => {
+      vi.stubEnv("NODE_ENV", "development");
+      vi.stubEnv("VIBESTUDIO_SERVER_ENTRY", entry);
+      vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const child = new FakeChild();
+      await runPairServer(config, args, {
+        prepareSourceServer: () => undefined,
+        prepareWorkspaceRelease: () => ({ completed: Promise.resolve(), stop: async () => {} }),
+        developmentWorkspaceTemplateEnv: () => ({}),
+        spawnServer({ env }: { env: NodeJS.ProcessEnv }) {
+          expect(env["NODE_ENV"]).toBe(expected);
+          expect(process.env["NODE_ENV"]).toBe("development");
+          queueMicrotask(() => child.emit("exit", 0, null));
+          return child;
+        },
+        onChildExit: () => true,
+      });
+    }
+  );
+
   it("pins source pairing to the prepared generation rather than an inherited artifact root", async () => {
     vi.stubEnv("VIBESTUDIO_SERVER_ENTRY", "live");
     vi.stubEnv("VIBESTUDIO_HOST_ARTIFACT_ROOT", "/unrelated/host-generation");

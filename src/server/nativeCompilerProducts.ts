@@ -1,9 +1,86 @@
+/** Compiler children do not inherit the host V8 flags. Keep their frontend heap
+ * explicit and bounded; the ledger/cgroup still bounds the entire workspace. */
+export function compilerProductExecArgv(environment: NodeJS.ProcessEnv = process.env): string[] {
+  const value = environment["VIBESTUDIO_COMPILER_HEAP_MIB"] ?? "3072";
+  if (!/^(0|[1-9][0-9]*)$/.test(value))
+    throw new Error("VIBESTUDIO_COMPILER_HEAP_MIB must be 0 or an integer from64 to8192");
+  const mib = Number(value);
+  if (mib === 0) return [];
+  if (mib < 64 || mib > 8192)
+    throw new Error("VIBESTUDIO_COMPILER_HEAP_MIB must be 0 or an integer from64 to8192");
+  return [`--max-old-space-size=${mib}`];
+}
+
 import { createHash } from "node:crypto";
+import { constants as fileConstants } from "node:fs";
+import { open } from "node:fs/promises";
+import { constants as bufferConstants } from "node:buffer";
+
+/** Native jobs own resource limits. Cache capacity must never become a compiler
+ * correctness limit; retain only the runtime's actual decoding/allocation bounds. */
+export async function readCompilerProductResult(resultPath: string): Promise<string> {
+  const file = await open(resultPath, fileConstants.O_RDONLY | (fileConstants.O_NOFOLLOW ?? 0));
+  try {
+    const info = await file.stat({ bigint: true });
+    const limit = BigInt(
+      Math.min(bufferConstants.MAX_LENGTH, bufferConstants.MAX_STRING_LENGTH * 3)
+    );
+    if (!info.isFile() || info.size > limit) {
+      console.error(
+        JSON.stringify({
+          schema: "native.compiler-product-result/1",
+          status: "rejected",
+          bytes: String(info.size),
+          regular: info.isFile(),
+          runtimeByteLimit: String(limit),
+        })
+      );
+      throw new Error(
+        `Invalid native compiler product file: bytes=${info.size}, regular=${info.isFile()}, runtimeByteLimit=${limit}`
+      );
+    }
+    const data = Buffer.alloc(Number(info.size));
+    let offset = 0;
+    while (offset < data.length) {
+      const part = await file.read(data, offset, data.length - offset, offset);
+      if (!part.bytesRead) break;
+      offset += part.bytesRead;
+    }
+    const extra = await file.read(Buffer.alloc(1), 0, 1, offset);
+    const after = await file.stat({ bigint: true });
+    if (
+      offset !== data.length ||
+      extra.bytesRead ||
+      after.size !== info.size ||
+      after.mtimeNs !== info.mtimeNs ||
+      after.ctimeNs !== info.ctimeNs
+    )
+      throw new Error("Native compiler product changed after completion");
+    const serialized = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(data);
+    console.info(
+      JSON.stringify({
+        schema: "native.compiler-product-result/1",
+        status: "read",
+        bytes: data.length,
+        sha256: createHash("sha256").update(data).digest("hex"),
+      })
+    );
+    return serialized;
+  } finally {
+    await file.close();
+  }
+}
+
+interface CompiledProduct {
+  serialized: string;
+  initialValue: unknown;
+  claimed: boolean;
+}
 
 /** One workspace owner's cache. Only serialized frontend data crosses callers. */
 export class NativeCompilerProducts {
   private readonly values = new Map<string, string>();
-  private readonly flights = new Map<string, Promise<string>>();
+  private readonly flights = new Map<string, Promise<CompiledProduct>>();
   private tail = Promise.resolve();
   private bytes = 0;
   private closed = false;
@@ -18,7 +95,7 @@ export class NativeCompilerProducts {
       bundle: string;
       format: "cjs" | "async-cjs";
       input: unknown;
-    }) => Promise<unknown>,
+    }) => Promise<string>,
     private readonly maximumBytes = 64 * 1024 * 1024
   ) {}
   async compile(request: {
@@ -29,8 +106,6 @@ export class NativeCompilerProducts {
     if (this.closed) throw new Error("Native compiler owner retired");
     // Clone/snapshot before queue admission: later caller mutation cannot change the computation.
     const snapshot = JSON.stringify(request);
-    if (Buffer.byteLength(snapshot) > 32 * 1024 * 1024)
-      throw new Error("Native compiler request exceeds32MiB");
     const key = createHash("sha256").update(snapshot).digest("hex");
     const cache = process.env["VIBESTUDIO_CACHE_COMPILER_PRODUCTS"] !== "0";
     const prior = cache ? this.values.get(key) : undefined;
@@ -56,8 +131,11 @@ export class NativeCompilerProducts {
             queueMs: started - admitted,
           })
         );
-        const value = JSON.stringify(await this.run(JSON.parse(snapshot)));
+        const value = await this.run(JSON.parse(snapshot));
         if (typeof value !== "string") throw new Error("Native compiler returned no JSON product");
+        // Parse before admitting the serialized cache entry; malformed output
+        // must release its flight for a subsequent corrected compiler job.
+        const initialValue: unknown = JSON.parse(value);
         const size = Buffer.byteLength(value);
         console.info(
           JSON.stringify({
@@ -66,6 +144,8 @@ export class NativeCompilerProducts {
             cache: "compiled",
             compileMs: performance.now() - started,
             productBytes: size,
+            productSha256: createHash("sha256").update(value).digest("hex"),
+            retained: cache && !this.closed && size <= this.maximumBytes,
           })
         );
         if (cache && !this.closed && size <= this.maximumBytes) {
@@ -77,7 +157,7 @@ export class NativeCompilerProducts {
             this.values.delete(oldest);
           }
         }
-        return value;
+        return { serialized: value, initialValue, claimed: false };
       });
       this.tail = flight.then(
         () => undefined,
@@ -88,7 +168,14 @@ export class NativeCompilerProducts {
         void flight.finally(() => this.flights.delete(key)).catch(() => {});
       }
     }
-    return JSON.parse(await flight);
+    const product = await flight;
+    if (!product.claimed) {
+      product.claimed = true;
+      const value = product.initialValue;
+      product.initialValue = undefined;
+      return value;
+    }
+    return JSON.parse(product.serialized);
   }
 }
 

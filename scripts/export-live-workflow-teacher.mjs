@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import {observedContentKinds,observedContentNeedsReview,observedContentReviewInput} from "./lib/observed-content-admission.mjs";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -7,7 +8,7 @@ import { isDeepStrictEqual, parseArgs } from "node:util";
 import { gunzipSync } from "node:zlib";
 import { requireDevelopmentTemplateCheckouts } from "../src/dev/developmentTemplateConfig.cjs";
 import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
-import { sourceClaimKinds, sourceClaimReviewInput, sourceClaimProgramIdentity, sourceClaimReviewMatches, sourceClaimReviewPath } from "./lib/source-claim-admission.mjs";
+import { sourceClaimKinds, sourceClaimReviewInput, workspaceEditReviewInput, editorialReviewInput, coordinatedRevisionReviewInput, outcomeWorkspaceReviewInput, sourceContentReviewInput, vaultKnowledgeReviewInput, sourceClaimProgramIdentity, sourceClaimReviewMatches, sourceClaimReviewPath } from "./lib/source-claim-admission.mjs";
 
 const sharedProgram = "skills/vibestudio-workflows/runWorkflow.nl";
 const templateGoalDomains = {
@@ -584,6 +585,7 @@ const panelHealthWorkflow = {
 };
 const presentationWorkflow = {
   family: "workspace-presentation",
+  requiresReview:true,
   namespace: "vibestudio:visualize",
   group: "component-selection-and-grounding",
   validator: { template: "system-testing", path: "skills/system-testing/presentation-managed.ts" },
@@ -851,6 +853,7 @@ const gitBridgeReviewWorkflow = {
 };
 const vcsDeliveryWorkflow = {
   family: "workspace-live-semantic-vcs-delivery",
+  requiresReview:true,
   workspace: "examples",
   namespace: "vibestudio:semantic-vcs",
   group: "assigned-file-and-context-delivery",
@@ -1504,7 +1507,7 @@ export async function loadLiveTeacherCases(checkouts) {
         ...(assignment.devices ? { devices: assignment.devices } : {}),
         ...(assignment.requiresAndroidEmulator ? { requiresAndroidEmulator: true } : {}),
         ...(assignment.requiresDeploymentPackage ? { requiresDeploymentPackage: true } : {}),
-        ...(sourceClaimKinds.has(assignment.kind) ? { requiresReview: true } : {}),
+        ...((observedContentNeedsReview(assignment)||sourceClaimKinds.has(assignment.kind)||assignment.kind==="workspace-edit"||assignment.kind==="editorial-packet"||assignment.kind==="coordinated-revision"||assignment.kind==="outcome-workspace"||assignment.kind==="google-runbook"&&assignment.action==="revise"||assignment.kind==="spectrolite"&&assignment.writablePath||assignment.kind==="vaultWork"||assignment.kind==="pdfVault"&&assignment.vault.writablePath) ? { requiresReview: true } : {}),
         ...(assignment.kind === "preparedContentProject" &&
           (assignment.profile === "commit" || assignment.profile === "draft") ? { requiresReview:true } : {}),
         ...(assignment.workspaceBaseline ? { workspaceBaseline: assignment.workspaceBaseline } : {}),
@@ -2188,10 +2191,11 @@ export async function loadLiveTeacherCases(checkouts) {
       assignment: world,
     });
   }
-  for (const { id, expected } of managedPresentationWorlds) {
+  for (const { id, expected, request } of managedPresentationWorlds) {
     cases.set(`presentation-live-${id}`, {
       ...presentationWorkflow,
       caseId: id,
+      request,
       renderedIds: expected.filter((view) => Object.hasOwn(view, "labels")).map(({ id }) => id),
       interactions: expected.flatMap(({ id, interaction }) =>
         interaction ? [{ id, ...interaction }] : []
@@ -2793,7 +2797,14 @@ function presentationEvidence(execution, exercise, _scenario, workflow) {
       "The presentation must demonstrate its assigned controls in the live browser"
     );
   }
+  const reviewInput=verification.semanticReviewInput;
+  requireEvidence(workflow.requiresReview===true&&verification.semanticReviewRequired===true&&
+    isDeepStrictEqual(reviewInput?.actual,{goal:workflow.request?.goal,observations:{request:workflow.request,observation:verification.nativeContentObservation},artifacts:{},requestedReturn:exercise.report})&&
+    isDeepStrictEqual(verification.nativeContentObservation?.rendered,verification.rendered)&&
+    isDeepStrictEqual(reviewInput.expected,{goal:workflow.request?.goal,requestedReturnRequired:true})&&typeof reviewInput.rubric==="string"&&reviewInput.rubric.trim(),
+    "Presentation findings review must bind the actual request, return and native browser observation");
   return {
+    reviewInput,
     world: { context_id: fixture.contextId, panel_attempt: verification.panelAttempt },
     checks: verification.checks,
     evidence: { workspace: { fixture } },
@@ -6901,7 +6912,7 @@ function gitBridgeReviewEvidence(execution, exercise, _scenario, workflow) {
 function vcsDeliveryEvidence(execution, exercise, _scenario, workflow) {
   const fixture = execution.diagnostics.managedVcsDelivery;
   const { caseId, contextId, request, snapshot, checks } = fixture ?? {};
-  const { id, goal, path, repository, seedPath, text, commit, next, terms } = workflow.assignment;
+  const { id, goal, path, repository, seedPath, text, commit, next } = workflow.assignment;
   const changed = seedPath === path;
   const report = exercise.report;
   const file = snapshot?.file;
@@ -6982,8 +6993,7 @@ function vcsDeliveryEvidence(execution, exercise, _scenario, workflow) {
       Array.isArray(report.review.checks) &&
       report.review.checks.every((check) => typeof check === "string") &&
       (changed
-        ? terms.every((term) => report.review.effect.toLowerCase().includes(term)) &&
-          terms.some((term) => report.review.checks.join(" ").toLowerCase().includes(term))
+        ? true
         : report.review.checks.length === 0) &&
       matchesValue(chain?.inputs?.snapshot, snapshot) &&
       matchesValue(chain.output, report.chain) &&
@@ -6998,7 +7008,13 @@ function vcsDeliveryEvidence(execution, exercise, _scenario, workflow) {
       matchesValue(decision.output, report.next),
     "VCS delivery needs the nested inspection, focused verification and exact next step"
   );
+  const reviewInput=fixture.semanticReviewInput;
+  requireEvidence(workflow.requiresReview===true&&fixture.semanticReviewRequired===true&&
+    isDeepStrictEqual(reviewInput?.actual,{goal,observations:{snapshot},artifacts:{},requestedReturn:report})&&
+    isDeepStrictEqual(reviewInput.expected,{goal,requestedReturnRequired:true})&&typeof reviewInput.rubric==="string"&&reviewInput.rubric.trim(),
+    "VCS interpretation review must bind the exact observed file and actual return");
   return {
+    reviewInput,
     world: { context_id: contextId, path, repository },
     checks,
     evidence: { workspace: { fixture } },
@@ -7152,20 +7168,44 @@ export function openOutcomeGoalEvidence(execution, exercise, _scenario, workflow
   const checks = proof?.checks ?? {};
   const entry = workflow.entry;
   const attestedEntry = entry && { program: entry.program, callable: entry.callable, arguments: entry.arguments,
+    ...(entry.resultType === "void" ? {resultType:"void"} : {}),
     ...(entry.argumentJson ? { argumentJson: entry.argumentJson } : {}) };
+  const declaredVoid = entry?.resultType === "void";
+  const dimensionRequirement = proof?.outcomeDimensions?.returnedValue?.required;
+  const contractRequirement = proof?.outcomeContract?.returnedValue?.required;
+  const requirementValid = [dimensionRequirement, contractRequirement].every(value => value === undefined || typeof value === "boolean") &&
+    (dimensionRequirement === undefined || contractRequirement === undefined || dimensionRequirement === contractRequirement);
+  const explicitReturnRequirement = dimensionRequirement ?? contractRequirement;
+  const returnRequired = explicitReturnRequirement ?? !declaredVoid;
+  const actualReturnProvided = proof?.actualResultKind !== undefined || exercise.applicationResultKind !== undefined ||
+    Object.hasOwn(proof ?? {}, "actualResult") || Object.hasOwn(exercise, "applicationResult");
+  const voidWitnessProvided = proof?.actualResultKind !== undefined || exercise.applicationResultKind !== undefined ||
+    declaredVoid && (Object.hasOwn(proof ?? {}, "actualResult") || Object.hasOwn(exercise, "applicationResult"));
+  const declaredVoidEntry = declaredVoid && entry.program.endsWith(".ts") &&
+    root?.executor?.kind === "crisp" && root?.definition?.returns === "void";
+  const returnedValue = voidWitnessProvided
+    ? declaredVoidEntry && root?.outcome === "done" &&
+      proof?.actualResultKind === "void" && Object.hasOwn(proof,"actualResult") && proof.actualResult === null &&
+      exercise.applicationResultKind === "void" && exercise.applicationResult === null && matchesValue(root.output,null)
+    : proof?.actualResultKind === undefined && exercise.applicationResultKind === undefined && matchesValue(root?.output,proof?.actualResult) &&
+      (!Object.hasOwn(exercise, "applicationResult") || matchesValue(root?.output, exercise.applicationResult));
   const inputValues = entry?.arguments ?? { goal: world.goal };
   requireEvidence(
     proof?.passed === true && proof.caseId === world.id && proof.goal === world.goal &&
+      requirementValid && (!actualReturnProvided || returnedValue) &&
+      (explicitReturnRequirement !== true || returnedValue) &&
+      (!declaredVoid || declaredVoidEntry) && (!voidWitnessProvided || returnedValue) &&
       typeof proof.contextId === "string" && proof.contextId === execution.provenance?.contextId &&
       Object.keys(checks).length > 0 && Object.values(checks).every(value => value === true) &&
       isDeepStrictEqual(Object.keys(root?.inputs ?? {}).sort(), Object.keys(inputValues).sort()) &&
       Object.entries(inputValues).every(([name, value]) => matchesValue(root.inputs[name], value)) &&
       (!entry || isDeepStrictEqual(proof.entry, attestedEntry) &&
         isDeepStrictEqual(exercise.entry, attestedEntry) &&
-        root.definition?.name === entry.callable && matchesValue(root.output, proof.actualResult)),
+        root.definition?.name === entry.callable &&
+        (!entry.program.endsWith(".ts") || (root.executor?.kind === "crisp" && root.definition?.id === "ts:"+root.definition?.source+"#default")) && (!returnRequired || returnedValue)),
     "Expected independently verified outcomes bound to the actual workspace and original user goal"
   );
-  const evidence = { workspace: { proof } };
+  const evidence = { workspace: { proof, ...(declaredVoid && voidWitnessProvided ? {applicationReturn:{kind:"void",root_call_id:root.call_id,valueJson:"null",selectedResult:null}} : {}) } };
   const worldBinding = { context_id: proof.contextId, case_id: proof.caseId };
   if (world.kind === "browser") {
     const { panelId, inspections, attempts, after } = proof;
@@ -7186,10 +7226,41 @@ export function openOutcomeGoalEvidence(execution, exercise, _scenario, workflow
     requireEvidence(!proof.execution || proof.execution.receipt?.stateHash === proof.plan?.stateHash,
       "Suite execution evidence must belong to the independently observed workspace state");
   }
+  if(observedContentKinds.has(world.kind)){
+    const reviewInput=observedContentReviewInput(proof,world);
+    requireEvidence((workflow.requiresReview===true)===Boolean(reviewInput),"Domain content meaning review must match the declared requested content");
+    return {world:worldBinding,checks:{...checks},evidence,...(reviewInput?{reviewInput}:{})};
+  }
   if (sourceClaimKinds.has(world.kind)) {
     requireEvidence(workflow.requiresReview === true, "Source claim review must be declared before teacher execution");
     const reviewInput = sourceClaimReviewInput(proof, world);
     return { world: worldBinding, checks: { ...checks }, evidence, reviewInput };
+  }
+  if(world.kind==="vaultWork"){
+    requireEvidence(workflow.requiresReview===true,"Vault goal meaning review must be declared before teacher execution");
+    const reviewInput=world.expected.steps.some(step=>step.kind==="write")
+      ?sourceContentReviewInput(proof,world):vaultKnowledgeReviewInput(proof,world,proof.actualResult);
+    return {world:worldBinding,checks:{...checks},evidence,reviewInput};
+  }
+  if(world.kind==="spectrolite"&&world.writablePath||world.kind==="pdfVault"&&world.vault.writablePath){
+    requireEvidence(workflow.requiresReview===true,"Authored source content review must be declared before teacher execution");
+    return {world:worldBinding,checks:{...checks},evidence,reviewInput:sourceContentReviewInput(proof,world)};
+  }
+  if(world.kind==="outcome-workspace"){
+    requireEvidence(workflow.requiresReview===true,"Workspace outcome content review must be declared before teacher execution");
+    return {world:worldBinding,checks:{...checks},evidence,reviewInput:outcomeWorkspaceReviewInput(proof,world)};
+  }
+  if(world.kind==="coordinated-revision"){
+    requireEvidence(workflow.requiresReview===true,"Coordinated revision content review must be declared before teacher execution");
+    return {world:worldBinding,checks:{...checks},evidence,reviewInput:coordinatedRevisionReviewInput(proof,world)};
+  }
+  if(world.kind==="editorial-packet"){
+    requireEvidence(workflow.requiresReview===true,"Editorial content review must be declared before teacher execution");
+    return {world:worldBinding,checks:{...checks},evidence,reviewInput:editorialReviewInput(proof,world)};
+  }
+  if(world.kind==="workspace-edit"||world.kind==="google-runbook"&&world.action==="revise"){
+    requireEvidence(workflow.requiresReview===true,"Workspace edit content review must be declared before teacher execution");
+    return {world:worldBinding,checks:{...checks},evidence,reviewInput:workspaceEditReviewInput(proof,world)};
   }
   if (!workflow.requiresReview) return { world: worldBinding, checks, evidence };
   const project = proof.preparedContentProject;
@@ -11226,8 +11297,10 @@ export async function exportLiveTeacherWorkflow({
   const exercise = execution?.diagnostics?.natlangTeacher;
   const shared = exercise?.programPath === sharedProgram;
   requireEvidence(
-    exercise?.trainingEligible === true &&
-      !exercise.executionError &&
+    // Goal completion is established by workflow.evidence below. A later
+    // optional root failure must remain in the capture without vetoing the
+    // independently verified outcome or discarding its valid decisions.
+    exercise &&
       !exercise.captureErrors?.length &&
       (shared || (workflow.program && exercise.programPath === workflow.program)) &&
       Array.isArray(exercise.calls) &&
@@ -11244,10 +11317,11 @@ export async function exportLiveTeacherWorkflow({
   const expectedRoot = shared ? "runWorkflow" : workflow.root;
   requireEvidence(
     root?.record.definition?.name === expectedRoot &&
-      root.record.parent_call_id === null &&
-      captured.some(call => generationTurns(call).length > 0),
+      root.record.parent_call_id === null,
     `Expected the actual authored ${expectedRoot} invocation`
   );
+  requireEvidence(captured.some(call => generationTurns(call).length > 0),
+    "Teacher data requires at least one captured model generation; the authored root may have completed entirely in crisp code");
   const code = source.repositories?.natlang;
   const sourceRevisions = Object.values(source.repositories ?? {}).map(
     (revision) => revision.git_commit
@@ -11300,6 +11374,7 @@ export async function exportLiveTeacherWorkflow({
           program: workflow.entry.program,
           callable: workflow.entry.callable,
           arguments: workflow.entry.arguments,
+          ...(workflow.entry.resultType === "void" ? {resultType:"void"} : {}),
           ...(workflow.entry.argumentJson ? { argumentJson: workflow.entry.argumentJson } : {}),
         } } : {}) } }
     : {};
@@ -11327,7 +11402,16 @@ export async function exportLiveTeacherWorkflow({
     }
     const retainedReview = semanticReview !== undefined;
     if (!retainedReview) {
-      semanticReview = await review(observed.reviewInput, source.teacher);
+      try { semanticReview = await review(observed.reviewInput, source.teacher); }
+      catch(error){
+        if(error?.reviewCapture){
+          const bytes=`${JSON.stringify(error.reviewCapture,null,2)}\n`;
+          const capturedPath=`${reviewPath}.interrupted-${hash(bytes)}.json`;
+          try{await writeFile(capturedPath,bytes,{mode:0o600,flag:"wx"});}catch(writeError){if(writeError.code!=="EEXIST")throw writeError;}
+          error.reviewCapturePath=capturedPath;
+        }
+        throw error;
+      }
       requireEvidence(!claims || sourceClaimReviewMatches(semanticReview, observed.reviewInput, review.model, source.teacher, program),
         "Source claim reviewer did not bind the actual typed value and assessor program");
     }
@@ -11368,6 +11452,7 @@ export async function exportLiveTeacherWorkflow({
     run_id: source.run_id,
     world,
     status: "passed",
+    requirements: { semantic_review: workflow.requiresReview === true },
     checks: observed.checks,
     ...(workflow.interaction === "open-user-goal" ? { split } : {}),
     ...interaction,

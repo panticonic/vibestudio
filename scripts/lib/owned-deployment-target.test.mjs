@@ -1,9 +1,62 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { requireInstalledDeploymentPackage } from "./owned-deployment-target.mjs";
+import { Ownership } from "@vibestudio/shared/ownership";
+import {
+  openOwnedDeploymentTarget,
+  requireInstalledDeploymentPackage,
+} from "./owned-deployment-target.mjs";
+
+test("an installed deployment child uses production dependencies under a development owner", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "deployment-environment-"));
+  let ownership;
+  t.after(async () => {
+    try {
+      await ownership?.release();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  const appRoot = path.join(root, "installed");
+  const cli = path.join(appRoot, "scripts", "cli");
+  const scratchRoot = path.join(root, "target");
+  await mkdir(cli, { recursive: true });
+  await mkdir(scratchRoot);
+  const captured = path.join(appRoot, "child-env.json");
+  await writeFile(
+    path.join(cli, "remote-serve.mjs"),
+    `import { writeFileSync } from "node:fs";
+     writeFileSync(${JSON.stringify(captured)}, JSON.stringify(process.env));`
+  );
+  const previous = process.env.NODE_ENV;
+  process.env.NODE_ENV = "development";
+  t.after(() => {
+    if (previous === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previous;
+  });
+  ownership = await Ownership.open({ profileDir: path.join(root, "profile"), lifetime: "leased" });
+  const target = await openOwnedDeploymentTarget({
+    appRoot,
+    ownership,
+    scratchRoot,
+    signal: new AbortController().signal,
+  });
+  try {
+    // The fixture records the actual child environment and exits without a hub.
+    await assert.rejects(
+      target.start("installed-child"),
+      /never published a healthy managed workspace/
+    );
+    const env = JSON.parse(await readFile(captured, "utf8"));
+    assert.equal(env.NODE_ENV, "production");
+    assert.equal(env.VIBESTUDIO_APP_ROOT, appRoot);
+    assert.equal(process.env.NODE_ENV, "development");
+  } finally {
+    await target.close();
+  }
+});
 
 test("deployment preflight rejects an installed server whose Iroh binding cannot load", async (t) => {
   const appRoot = await mkdtemp(path.join(tmpdir(), "deployment-package-"));

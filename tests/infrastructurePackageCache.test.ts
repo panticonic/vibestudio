@@ -110,6 +110,23 @@ describe("infrastructure package cache", () => {
       .toEqual(["@vibestudio/bundle", "@vibestudio/consumer"]);
   });
 
+  it("honors the declared operation budget for custom package builders", () => {
+    vi.stubEnv("VIBESTUDIO_MAX_CONCURRENT_BUILDS", "1");
+    const cwd = fixture();
+    const plan = inspectInfrastructurePackageBuilds({ cwd });
+    const commands: string[][] = [];
+    emitInfrastructurePackages(
+      plan,
+      ["@vibestudio/base", "@vibestudio/bridge", "@vibestudio/consumer"],
+      (args: string[]) => {
+        commands.push(args);
+      }
+    );
+    expect(commands).toHaveLength(1);
+    expect(commands[0]!.slice(0, 2)).toEqual(["--workspace-concurrency", "1"]);
+    expect(commands[0]).toContain("@vibestudio/base");
+    expect(commands[0]).toContain("@vibestudio/consumer");
+  });
   it("batches compatible compiler projects and preserves custom build barriers", () => {
     const cwd = fixture();
     write(cwd, "package.json", JSON.stringify({ name: "fixture", type: "module" }));
@@ -407,4 +424,30 @@ describe("infrastructure package cache", () => {
     expect(args).not.toContain("@vibestudio/base");
     expect(buildInfoExistedWhenBuildStarted).toBe(false);
   });
+});
+
+it("invalidates verified infrastructure outputs when only a nested installed dependency changes", () => {
+  const cwd = fixture();
+  write(
+    cwd,
+    "node_modules/consumer/package.json",
+    JSON.stringify({ name: "consumer", version: "1", dependencies: { aws: "^4" } })
+  );
+  write(cwd, "node_modules/aws/package.json", JSON.stringify({ name: "aws", version: "4.11.3" }));
+  write(
+    cwd,
+    "node_modules/consumer/node_modules/aws/package.json",
+    JSON.stringify({ name: "aws", version: "4.11.3" })
+  );
+  writeInfrastructurePackageCache(inspectInfrastructurePackageBuilds({ cwd }));
+  expect(inspectInfrastructurePackageBuilds({ cwd }).dirty).toEqual([]);
+  write(
+    cwd,
+    "node_modules/consumer/node_modules/aws/package.json",
+    JSON.stringify({ name: "aws", version: "4.12.1" })
+  );
+  expect(inspectInfrastructurePackageBuilds({ cwd }).dirty.map((state) => state.name)).toEqual([
+    "@vibestudio/base",
+    "@vibestudio/consumer",
+  ]);
 });

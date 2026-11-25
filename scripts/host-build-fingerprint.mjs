@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import ignore from "ignore";
 import { readChronologBuildInput } from "./lib/chronolog-build-input.mjs";
+import { hostInstalledDependencyHash } from "./lib/host-installed-dependencies.mjs";
 import { updateHashFromFile } from "./lib/file-digest.mjs";
 
 export const HOST_BUILD_FINGERPRINT_PATH = "dist/host-build-fingerprint.json";
@@ -49,6 +50,9 @@ const INPUT_FILES = [
   "scripts/lib/ownership-reaper-assets.mjs",
   "scripts/lib/mac-app-executable.mjs",
   "scripts/lib/file-digest.mjs",
+  "scripts/lib/installed-package-graph.mjs",
+  "scripts/lib/installed-package-graph.d.mts",
+  "scripts/lib/host-installed-dependencies.mjs",
   "scripts/lib/join-child-process.mjs",
   "scripts/lib/owned-concurrency.mjs",
   "scripts/lib/owned-cleanup.mjs",
@@ -87,6 +91,7 @@ function collectTree(cwd, relativeRoot, inheritedScopes, files) {
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
     const relativePath = path.posix.join(relativeRoot, entry.name);
     const isDirectory = entry.isDirectory();
+    if (isDirectory && ["node_modules", "dist", ".git", ".cache"].includes(entry.name)) continue;
     if (ignoredBy(scopes, relativePath, isDirectory)) continue;
     if (isDirectory) {
       collectTree(cwd, relativePath, scopes, files);
@@ -109,6 +114,27 @@ function collectFiles(cwd) {
     .sort((left, right) => left.localeCompare(right));
 }
 
+function localSourceTreeHash(root) {
+  const files = new Set();
+  collectTree(root, "", [], files);
+  const hash = createHash("sha256");
+  for (const relative of [...files].sort()) {
+    if (
+      relative
+        .split("/")
+        .some((part) => ["node_modules", "dist", ".git", ".cache"].includes(part)) ||
+      relative.endsWith(".tsbuildinfo")
+    )
+      continue;
+    const absolute = path.resolve(root, relative);
+    hash.update(relative + "\0");
+    if (fs.lstatSync(absolute).isSymbolicLink()) hash.update(`link:${fs.readlinkSync(absolute)}`);
+    else updateHashFromFile(hash, absolute);
+    hash.update("\0");
+  }
+  return hash.digest("hex");
+}
+
 export function computeHostBuildFingerprint({
   cwd = process.cwd(),
   mode = process.env.NODE_ENV === "development" ? "development" : "production",
@@ -116,7 +142,16 @@ export function computeHostBuildFingerprint({
   const files = collectFiles(cwd);
 
   const hash = createHash("sha256");
-  hash.update(`mode\0${mode}\0`);
+  hash.update(
+    `host-inputs/2\0mode\0${mode}\0node\0${process.version}\0platform\0${process.platform}\0arch\0${process.arch}\0`
+  );
+  const installed = hostInstalledDependencyHash(cwd, {
+    packageDirectories: files
+      .filter((file) => path.basename(file) === "package.json")
+      .map((file) => path.dirname(path.resolve(cwd, file))),
+    tree: localSourceTreeHash,
+  });
+  hash.update(`installed\0${installed}\0`);
   const chronolog = readChronologBuildInput();
   if (chronolog) hash.update(`chronolog\0${chronolog.fingerprint}\0`);
   for (const relativePath of files) {

@@ -113,7 +113,9 @@ function loadExecutable(
   // Objects still own separate facets, SQLite storage, and lifecycle; a live
   // update selects another unit without replacing a sibling's assigned code.
   const unitKey = executableUnitKey(args.source, args.className, args.version, args.hosted);
-  return env.LOADER.get(unitKey, async (): Promise<CelldWorkerCode> => {
+  // Disposable schema admission must not retain a named executable cache unit.
+  const loaderName = args.version.endsWith(":schema-probe") ? null : unitKey;
+  return env.LOADER.get(loaderName, async (): Promise<CelldWorkerCode> => {
     const startedAt = performance.now();
     const identity = `${args.source}:${args.className}`;
     const codeResponse = await fetchLoader(

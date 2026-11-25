@@ -1238,6 +1238,9 @@ importers:
       '@jridgewell/trace-mapping':
         specifier: ^0.3.31
         version: 0.3.31
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../shared
       '@vibestudio/svelte-type-source':
         specifier: workspace:*
         version: link:../svelte-type-source

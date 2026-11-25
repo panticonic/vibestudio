@@ -1,3 +1,4 @@
+import { installedPackageGraphHash } from "../../../scripts/lib/installed-package-graph.mjs";
 import { logVerbose } from "@vibestudio/dev-log";
 /**
  * Effective Version Computer — content-tree subtree hash + bottom-up EV
@@ -507,6 +508,21 @@ class FingerprintIO {
   }
 }
 
+/** One immutable input capture shares implementation hashes across both folds. */
+class FingerprintSession {
+  readonly io = new FingerprintIO();
+  private readonly trees = new Map<string, Promise<string>>();
+  async tree(root: string): Promise<string> {
+    const physical = await this.io.run(() => fs.promises.realpath(root));
+    let hash = this.trees.get(physical);
+    if (!hash) {
+      hash = localPackageTreeHash(physical, this.io);
+      this.trees.set(physical, hash);
+    }
+    return hash;
+  }
+}
+
 async function joinFingerprintWork<T>(work: Promise<T>[]): Promise<T[]> {
   const results = await Promise.allSettled(work);
   const errors = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
@@ -528,7 +544,7 @@ async function localPackageTreeHash(packageDir: string, io: FingerprintIO): Prom
         (entry) =>
           !IGNORED_LOCAL_PACKAGE_ENTRIES.has(entry.name) && !entry.name.endsWith(".tsbuildinfo")
       )
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     const records = await joinFingerprintWork(
       entries.map(async (entry): Promise<string[]> => {
         const absolute = path.join(dir, entry.name);
@@ -564,18 +580,18 @@ async function localPackageTreeHash(packageDir: string, io: FingerprintIO): Prom
  * workspace build even when no manifest changed.
  */
 async function localPackageFingerprintInputs(
-  root: string
+  root: string,
+  session: FingerprintSession
 ): Promise<RootDependencyFingerprintFile[]> {
   const packagesDir = path.join(root, "packages");
   let directories: fs.Dirent[] = [];
   try {
     directories = (await fs.promises.readdir(packagesDir, { withFileTypes: true }))
       .filter((entry) => entry.isDirectory())
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   } catch {
     // A packaged deployment may have no host-local package workspace.
   }
-  const io = new FingerprintIO();
   const files = await joinFingerprintWork(
     directories.map(async (entry) => {
       const packageDir = path.join(packagesDir, entry.name);
@@ -588,7 +604,7 @@ async function localPackageFingerprintInputs(
         file: `packages/${entry.name}/**`,
         path: packageDir,
         present: true,
-        contentHash: await localPackageTreeHash(packageDir, io),
+        contentHash: await session.tree(packageDir),
       } satisfies RootDependencyFingerprintFile;
     })
   );
@@ -599,107 +615,17 @@ async function localPackageFingerprintInputs(
   return presentFiles;
 }
 
-/**
- * Whether a manifest declares the platforms it installs on (`os`, `cpu`, `libc`).
- * npm installs such a package on matching platforms only: the esbuild, workerd,
- * iroh and sharp binaries. Which of them an installation holds is a property of
- * the machine, not of the code being built.
- */
-function isPlatformGatedManifest(manifest: Buffer): boolean {
-  try {
-    const parsed = JSON.parse(manifest.toString("utf8")) as Record<string, unknown>;
-    return [parsed["os"], parsed["cpu"], parsed["libc"]].some(
-      (field) => (Array.isArray(field) && field.length > 0) || (typeof field === "string" && field)
-    );
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Fold the identity of every installed package that is the same on every
- * platform. Platform-gated packages are left out, so the fold, and every build
- * key derived from it, is the same on every platform for the same code; the
- * wrapper package that selects a platform binary still pins its exact version in
- * its own manifest (`optionalDependencies`), which is folded.
- */
-async function installedPackageManifestsHash(nodeModulesRoot: string): Promise<string> {
-  const records: string[] = [];
-  const visited = new Set<string>();
-
-  const visitNodeModules = async (directory: string, logicalPrefix: string): Promise<void> => {
-    const resolvedDirectory = path.resolve(directory);
-    if (visited.has(resolvedDirectory)) return;
-    visited.add(resolvedDirectory);
-    let entries: fs.Dirent[];
-    try {
-      entries = (await fs.promises.readdir(directory, { withFileTypes: true })).sort((a, b) =>
-        a.name.localeCompare(b.name)
-      );
-    } catch {
-      return;
-    }
-    const packages: Array<{ root: string; name: string; entry: fs.Dirent }> = [];
-    for (const entry of entries) {
-      if (entry.name.startsWith(".")) continue;
-      if (entry.name.startsWith("@") && entry.isDirectory()) {
-        const scopeEntries = (
-          await fs.promises.readdir(path.join(directory, entry.name), { withFileTypes: true })
-        ).sort((a, b) => a.name.localeCompare(b.name));
-        for (const scoped of scopeEntries) {
-          packages.push({
-            root: path.join(directory, entry.name, scoped.name),
-            name: `${logicalPrefix}${entry.name}/${scoped.name}`,
-            entry: scoped,
-          });
-        }
-      } else {
-        packages.push({
-          root: path.join(directory, entry.name),
-          name: `${logicalPrefix}${entry.name}`,
-          entry,
-        });
-      }
-    }
-    // Read a bounded batch concurrently, then fold it in the original sorted
-    // depth-first order. Scheduling must never change a content-addressed key.
-    // Recursing only after the batch settles bounds I/O across nested npm trees.
-    const batchSize = 16;
-    for (let offset = 0; offset < packages.length; offset += batchSize) {
-      const batch = packages.slice(offset, offset + batchSize);
-      const loaded = await Promise.all(
-        batch.map(async ({ root, name, entry }) => {
-          if (!entry.isDirectory() && !entry.isSymbolicLink()) return null;
-          let manifestHash: string;
-          try {
-            const manifest = await fs.promises.readFile(path.join(root, "package.json"));
-            if (isPlatformGatedManifest(manifest)) return null;
-            manifestHash = await fullHash(manifest);
-          } catch {
-            return null;
-          }
-          const packageRecord = `package\0${name}\0${manifestHash}\0`;
-          return entry.isSymbolicLink()
-            ? {
-                record: packageRecord + `link\0${name}\0${await fs.promises.readlink(root)}\0`,
-                nested: false,
-              }
-            : { record: packageRecord, nested: true };
-        })
-      );
-      for (let index = 0; index < batch.length; index++) {
-        const result = loaded[index];
-        if (!result) continue;
-        records.push(result.record);
-        const pkg = batch[index]!;
-        if (result.nested)
-          await visitNodeModules(path.join(pkg.root, "node_modules"), `${pkg.name}/node_modules/`);
-      }
-    }
-  };
-
-  await visitNodeModules(nodeModulesRoot, "");
-  return fullHash(Buffer.from(records.join("")));
+/** Preserve the runtime's bounded I/O and source-tree capture while sharing
+ * exact installed package ownership, topology and serialization with builds. */
+async function installedPackageManifestsHash(
+  nodeModulesRoot: string,
+  localSourceNames: ReadonlySet<string>,
+  session: FingerprintSession
+): Promise<string> {
+  return installedPackageGraphHash(nodeModulesRoot, localSourceNames, {
+    tree: (root) => session.tree(root),
+    io: session.io,
+  });
 }
 
 /**
@@ -708,15 +634,53 @@ async function installedPackageManifestsHash(nodeModulesRoot: string): Promise<s
  * the manifests and nesting of the exact package-owned dependency realm.
  */
 async function installedDependencyFingerprintInputs(
-  root: string
+  root: string,
+  session: FingerprintSession
 ): Promise<RootDependencyFingerprintFile[]> {
+  // Editable local source is distinct from registry payloads. Registry identity
+  // remains lock+manifest+resolved graph: postinstall binaries inside wrappers
+  // such as esbuild are platform products, not portable library source inputs.
+  const localSourceNames = new Set<string>();
+  const physicalRoot = getPhysicalAppPath(root, "");
+  const includeManifest = async (directory: string, ownPackage: boolean) => {
+    let manifest: Record<string, unknown>;
+    try {
+      manifest = JSON.parse(
+        await fs.promises.readFile(path.join(directory, "package.json"), "utf8")
+      );
+    } catch {
+      return;
+    } // Presence/raw bytes are already folded by the input policy.
+    if (ownPackage && typeof manifest["name"] === "string") localSourceNames.add(manifest["name"]);
+    for (const field of [
+      "dependencies",
+      "optionalDependencies",
+      "peerDependencies",
+      "devDependencies",
+    ])
+      for (const [name, specifier] of Object.entries(manifest[field] ?? {}))
+        if (typeof specifier === "string" && /^(?:file:|link:|workspace:)/.test(specifier))
+          localSourceNames.add(name);
+  };
+  await includeManifest(physicalRoot, false);
+  let packages: fs.Dirent[] = [];
+  try {
+    packages = await fs.promises.readdir(path.join(physicalRoot, "packages"), {
+      withFileTypes: true,
+    });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  for (const entry of packages)
+    if (entry.isDirectory())
+      await includeManifest(path.join(physicalRoot, "packages", entry.name), true);
   const nodeModulesRoots = getExistingAppNodeModulesRoots(root);
   return joinFingerprintWork(
     nodeModulesRoots.map(async (nodeModulesRoot, index) => ({
       file: `installed-node-modules:${index}`,
       path: nodeModulesRoot,
       present: true,
-      contentHash: await installedPackageManifestsHash(nodeModulesRoot),
+      contentHash: await installedPackageManifestsHash(nodeModulesRoot, localSourceNames, session),
     }))
   );
 }
@@ -767,8 +731,9 @@ export async function computeRootDependencyFingerprint(
   const policy = dependencyInstallationPolicy();
 
   const physicalRoot = getPhysicalAppPath(root, "");
-  const localPackagesWork = localPackageFingerprintInputs(physicalRoot);
-  const installedDependenciesWork = installedDependencyFingerprintInputs(root);
+  const session = new FingerprintSession();
+  const localPackagesWork = localPackageFingerprintInputs(physicalRoot, session);
+  const installedDependenciesWork = installedDependencyFingerprintInputs(root, session);
   await joinFingerprintWork([localPackagesWork, installedDependenciesWork]);
   const localPackages = await localPackagesWork;
   const installedDependencies = await installedDependenciesWork;
