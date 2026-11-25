@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import {preparedProjectReviewInput} from "./lib/prepared-project-admission.mjs";
 import {gadNativeReturnContracts,gadNativeReturnEvidence} from "./lib/independent-invocation-outcomes.mjs";
 import {observedContentKinds,observedContentNeedsReview,observedContentReviewInput} from "./lib/observed-content-admission.mjs";
 import { createHash } from "node:crypto";
@@ -1510,8 +1511,7 @@ export async function loadLiveTeacherCases(checkouts) {
         ...(assignment.requiresAndroidEmulator ? { requiresAndroidEmulator: true } : {}),
         ...(assignment.requiresDeploymentPackage ? { requiresDeploymentPackage: true } : {}),
         ...((observedContentNeedsReview(assignment)||sourceClaimKinds.has(assignment.kind)||assignment.kind==="workspace-edit"||assignment.kind==="editorial-packet"||assignment.kind==="coordinated-revision"||assignment.kind==="outcome-workspace"||assignment.kind==="google-runbook"&&assignment.action==="revise"||assignment.kind==="spectrolite"&&assignment.writablePath||assignment.kind==="vaultWork"||assignment.kind==="clientDiagnostics"||assignment.kind==="adventure-journey"||assignment.kind==="pdfVault"&&assignment.vault.writablePath) ? { requiresReview: true } : {}),
-        ...(assignment.kind === "preparedContentProject" &&
-          (assignment.profile === "commit" || assignment.profile === "draft") ? { requiresReview:true } : {}),
+        ...(assignment.kind === "preparedContentProject" ? { requiresReview:true } : {}),
         ...(assignment.workspaceBaseline ? { workspaceBaseline: assignment.workspaceBaseline } : {}),
         evidence: openOutcomeGoalEvidence,
       });
@@ -7232,6 +7232,10 @@ export function openOutcomeGoalEvidence(execution, exercise, _scenario, workflow
     requireEvidence(!proof.execution || proof.execution.receipt?.stateHash === proof.plan?.stateHash,
       "Suite execution evidence must belong to the independently observed workspace state");
   }
+  if(world.kind==="preparedContentProject"){
+    requireEvidence(workflow.requiresReview===true,"Private project goal meaning review must be declared");
+    return {world:worldBinding,checks:{...checks},evidence,reviewInput:preparedProjectReviewInput(proof,world)};
+  }
   if(observedContentKinds.has(world.kind)&&!(world.kind==="spectrolite"&&world.writablePath)){
     const reviewInput=observedContentReviewInput(proof,world);
     requireEvidence((workflow.requiresReview===true)===Boolean(reviewInput),"Domain content meaning review must match the declared requested content");
@@ -7276,27 +7280,8 @@ export function openOutcomeGoalEvidence(execution, exercise, _scenario, workflow
     requireEvidence(workflow.requiresReview===true,"Workspace edit content review must be declared before teacher execution");
     return {world:worldBinding,checks:{...checks},evidence,reviewInput:workspaceEditReviewInput(proof,world)};
   }
-  if (!workflow.requiresReview) return { world: worldBinding, checks, evidence };
-  const project = proof.preparedContentProject;
-  const artifact = project?.artifact;
-  const reviewInput = artifact?.semanticReviewInput;
-  requireEvidence(
-    project?.contextId === proof.contextId && project.caseId === world.id &&
-      project.sourceGroup === world.sourceGroup && artifact?.passed === true &&
-      artifact.semanticReviewRequired === true && artifact.reasons?.length === 0 &&
-      reviewInput?.actual?.contextId === proof.contextId &&
-      isDeepStrictEqual(reviewInput.actual.state, project.actual?.workingHead) &&
-      (reviewInput.actual.lifecycle ?
-        reviewInput.actual.lifecycle.requestedDisposition===project.expectedOutcome &&
-        isDeepStrictEqual(reviewInput.actual.lifecycle.baseline,{committedEvent:project.before?.committed,workingHead:project.before?.workingHead,clean:project.before?.clean,protectedMainEventId:project.before?.mainEventId}) &&
-        isDeepStrictEqual(reviewInput.actual.lifecycle.current,{committedEvent:project.actual?.committed,workingHead:project.actual?.workingHead,clean:project.actual?.clean,protectedMainEventId:project.actual?.mainEventId}) &&
-        isDeepStrictEqual(reviewInput.actual.lifecycle.delta,{committedEventChanged:project.actual?.committed?.eventId!==project.before?.committed?.eventId,workingHeadChanged:!isDeepStrictEqual(project.actual?.workingHead,project.before?.workingHead),protectedMainChanged:project.actual?.mainEventId!==project.before?.mainEventId})
-        : isDeepStrictEqual(reviewInput.actual.committedEvent, project.actual?.committed)) &&
-      Array.isArray(reviewInput.actual.documents) && reviewInput.actual.documents.length > 0 &&
-      typeof reviewInput.rubric === "string" && reviewInput.rubric.length > 0,
-    "Expected the independently read back project and its bound semantic review input"
-  );
-  return { world: worldBinding, checks: { ...checks }, evidence, reviewInput };
+  requireEvidence(!workflow.requiresReview,"Expected a registered native goal meaning review binding");
+  return {world:worldBinding,checks:{...checks},evidence};
 }
 
 function webBriefEvidence(execution, exercise, _scenario, workflow) {
