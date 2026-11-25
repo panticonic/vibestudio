@@ -9,7 +9,7 @@ function example(required=true){
 }
 test("binds each domain's actual proof independently of authored answer vocabulary",()=>{
  const {world,proof}=example();assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
- assert.equal(Object.keys(observedContentFields).length,53);
+ assert.equal(Object.keys(observedContentFields).length,56);
  for(const mutation of [p=>p.semanticReviewInput.actual.requestedReturn={reason:"Invented"},p=>p.semanticReviewInput.actual.observations.reads=[],p=>p.semanticReviewInput.actual.artifacts.artifact="Invented",p=>p.semanticReviewInput.actual.goal="Different goal",p=>p.semanticReviewRequired=false]){
   const clone=structuredClone(proof);mutation(clone);assert.throws(()=>observedContentReviewInput(clone,world));
  }
@@ -107,4 +107,31 @@ test("every newly admitted open domain binds native goal effects independently o
 test("readonly vault review cannot replace the retained writable-source scope proof",()=>{
  const world={kind:"spectrolite",goal:"Repair only the authorized section",writablePath:"owned.mdx"};
  assert.throws(()=>observedContentReviewInput({},world),/retained edit-scope/);
+});
+
+test("Personal requested findings and native effects require exact independently bound review",()=>{
+ for(const kind of ["personal-automation","personal-artifacts","personal-history"]){
+  for(const required of [true,false]){
+   const world={kind,goal:"Use actual owned sources and perform only the requested work"};
+   const [observations,artifacts]=observedContentFields[kind];
+   const proof={outcomeContract:{returnedValue:{required}},semanticReviewRequired:true,actualResult:{native:"requested-finding"}};
+   for(const field of observations)proof[field]={id:field,revision:"native-owned"};
+   const pick=keys=>Object.fromEntries(keys.map(key=>[key,proof[key]??null]));
+   proof.semanticReviewInput={actual:{goal:world.goal,observations:pick(observations),artifacts:pick(artifacts),requestedReturn:required?proof.actualResult:null},expected:{goal:world.goal,requestedReturnRequired:required},rubric:"Judge requested meaning against the actual owned evidence"};
+   assert.equal(observedContentNeedsReview(world),true);
+   assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
+   for(const alter of [p=>p.semanticReviewRequired=false,p=>p.semanticReviewInput.actual.observations[observations[0]]={revision:"invented"},p=>p.semanticReviewInput.actual.goal="Different goal",p=>p.semanticReviewInput.actual.requestedReturn={fabricated:true}]){
+    const changed=structuredClone(proof);alter(changed);assert.throws(()=>observedContentReviewInput(changed,world));
+   }
+  }
+ }
+});
+
+test("launch review binds assignment-owned companion observations and protected state",()=>{
+ const world={kind:"launch-state",goal:"Inspect both assigned panels; change only the active panel"};
+ const proof={semanticReviewRequired:true,outcomeContract:{returnedValue:{required:false}},companionReadbacks:[{panelId:"owned-companion",revision:"read-native"}],protectedCompanion:{initial:{revision:"original"},current:{revision:"original"}}};
+ const [observations,artifacts]=observedContentFields[world.kind],pick=keys=>Object.fromEntries(keys.map(key=>[key,proof[key]??null]));
+ proof.semanticReviewInput={actual:{goal:world.goal,observations:pick(observations),artifacts:pick(artifacts),requestedReturn:null},expected:{goal:world.goal,requestedReturnRequired:false},rubric:"Judge actual observations and scope"};
+ assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
+ for(const field of ["companionReadbacks","protectedCompanion"]){const changed=structuredClone(proof);changed.semanticReviewInput.actual.observations[field]=null;assert.throws(()=>observedContentReviewInput(changed,world));}
 });

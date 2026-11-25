@@ -1,6 +1,9 @@
 import {isDeepStrictEqual as equal} from "node:util";
 /** Per-domain actual native evidence; no expected answer vocabulary enters review. */
 export const observedContentFields = {
+  "personal-automation": [["initial","latest","observations","independent","attempts","requests"], []],
+  "personal-artifacts": [["libraryFirst","collectionFirst","independentLibrary","independentCollection","libraryWrites","collectionWrites","links","refreshes"], []],
+  "personal-history": [["catalogEvent","repositoryId","milestones","discovery","operations","reads"], []],
   "unit-handoff": [["nativeReviewEvidence"], []],
   gmail: [["catalog", "selected", "native", "operations", "requests", "persisted", "before", "readback", "providerObservations"], []],
   calendar: [["catalog", "attempts", "providerRequests", "windows", "readback"], ["handoffText"]],
@@ -13,7 +16,7 @@ export const observedContentFields = {
   "extension-dossier": [["assignment", "review", "candidate", "history", "decision", "effects"], ["dossierText"]],
   "installed-package": [["effects", "assignment", "observed", "plan", "repair"], []],
   "intent-discovery": [["notice", "capabilities", "evidence"], ["artifact"]],
-  "launch-state": [["index", "frames", "readback", "request", "witness", "effect"], ["artifact"]],
+  "launch-state": [["index", "frames", "readback", "request", "witness", "effect", "companionReadbacks", "protectedCompanion"], ["artifact"]],
   "panel-source-migration": [["assignment", "observed", "current", "move", "identity", "consumers", "effects"], []],
   "retained-memory": [["brief", "plan", "evidence"], ["artifact"]],
   "route-authority": [["offer", "snapshots", "authority", "choice", "readback"], ["artifact"]],
