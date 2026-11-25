@@ -9,7 +9,7 @@ function example(required=true){
 }
 test("binds each domain's actual proof independently of authored answer vocabulary",()=>{
  const {world,proof}=example();assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
- assert.equal(Object.keys(observedContentFields).length,59);
+ assert.equal(Object.keys(observedContentFields).length,60);
  for(const mutation of [p=>p.semanticReviewInput.actual.requestedReturn={reason:"Invented"},p=>p.semanticReviewInput.actual.observations.reads=[],p=>p.semanticReviewInput.actual.artifacts.artifact="Invented",p=>p.semanticReviewInput.actual.goal="Different goal",p=>p.semanticReviewRequired=false]){
   const clone=structuredClone(proof);mutation(clone);assert.throws(()=>observedContentReviewInput(clone,world));
  }
@@ -161,4 +161,15 @@ test("terminal diagnostic review binds actual source/native assertions rather th
  proof.semanticReviewInput={actual:{goal:world.goal,observations:pick(observations),artifacts:pick(artifacts),requestedReturn:proof.actualResult},expected:{goal:world.goal,requestedReturnRequired:true},rubric:"Judge the requested diagnosis from actual source and native assertions"};
  assert.equal(observedContentNeedsReview(world),true);assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
  for(const alter of [p=>p.semanticReviewRequired=false,p=>p.semanticReviewInput.actual.observations.journal=[],p=>p.semanticReviewInput.actual.observations.proof={currentRevision:"invented"},p=>p.semanticReviewInput.actual.requestedReturn={explanation:"Permission alone"}]){const changed=structuredClone(proof);alter(changed);assert.throws(()=>observedContentReviewInput(changed,world));}
+});
+
+test("program-run meaning review binds actual catalog, causal native attempts and signed bytes",()=>{
+ const world={kind:"program-run",goal:"Run the permitted sample and preserve its actual output"};
+ const proof={catalog:{initial:[],current:[]},inspections:[],attempts:[{id:"actual-native-attempt",output:null}],observations:[],signedText:null,actualResult:{status:"reviewed"},outcomeContract:{returnedValue:{required:true}},semanticReviewRequired:true};
+ const [observations,artifacts]=observedContentFields[world.kind],pick=keys=>Object.fromEntries(keys.map(key=>[key,proof[key]??null]));
+ proof.semanticReviewInput={actual:{goal:world.goal,observations:pick(observations),artifacts:pick(artifacts),requestedReturn:{status:"reviewed"}},expected:{goal:world.goal,requestedReturnRequired:true},rubric:"Judge requested native output and authorized run scope"};
+ assert.equal(observedContentNeedsReview(world),true);
+ assert.doesNotThrow(()=>observedContentReviewInput(proof,world));
+ const altered={...proof,attempts:[{id:"actual-native-attempt",output:"invented"}]};
+ assert.throws(()=>observedContentReviewInput(altered,world));
 });
