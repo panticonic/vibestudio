@@ -2,7 +2,7 @@
 import * as fs from "node:fs";
 import process from "node:process";
 import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 
 export function assertReleaseVersion(tag, packageVersion) {
   const match = /^v((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))$/u.exec(tag);
@@ -22,7 +22,7 @@ export function assertReleaseVersion(tag, packageVersion) {
 
 export function checkCommittedReleaseVersion(
   tag,
-  packagePath = new URL("../package.json", import.meta.url)
+  packagePath = new NodeURL("../package.json", import.meta.url)
 ) {
   const pkg = JSON.parse(fs.readFileSync(packagePath, "utf8"));
   if (typeof pkg.version !== "string") {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 import {
   inferEventsClientCapabilities,
@@ -315,12 +315,12 @@ describe("declared host-method capability dependencies", () => {
   it("declares the build authority needed by every shipped panel import loader", () => {
     const matrix = JSON.parse(
       fs.readFileSync(
-        new URL("../../src/server/services/__serviceAuthorityMatrix.golden.json", import.meta.url),
+        new NodeURL("../../src/server/services/__serviceAuthorityMatrix.golden.json", import.meta.url),
         "utf8"
       )
     );
     const loader = fs.readFileSync(
-      new URL("../../packages/service-schemas/src/clients/evalImportLoader.ts", import.meta.url),
+      new NodeURL("../../packages/service-schemas/src/clients/evalImportLoader.ts", import.meta.url),
       "utf8"
     );
     const required = new Set();
@@ -370,7 +370,7 @@ describe("declared host-method capability dependencies", () => {
   it("seals context-boundary authority into the workspace navigation commit", () => {
     const matrix = JSON.parse(
       fs.readFileSync(
-        new URL("../../src/server/services/__serviceAuthorityMatrix.golden.json", import.meta.url),
+        new NodeURL("../../src/server/services/__serviceAuthorityMatrix.golden.json", import.meta.url),
         "utf8"
       )
     );

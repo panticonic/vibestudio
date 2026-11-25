@@ -5,7 +5,7 @@
  */
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 import { ExtensionHost } from "@vibestudio/extension-host";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
@@ -16,7 +16,7 @@ import { createWebhookIngressService } from "./webhookIngressService.js";
 import { DevelopmentClientExecutorRegistry } from "./developmentClientExecutorService.js";
 import { createClientLaunchService } from "../clients/clientLaunchService.js";
 
-const servicesDir = fileURLToPath(new URL(".", import.meta.url));
+const servicesDir = fileURLToPath(new NodeURL(".", import.meta.url));
 const goldenPath = join(servicesDir, "__serviceAuthorityMatrix.golden.json");
 
 function inertDeps(): unknown {

@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 import plist from "plist";
 import {
   parseOptions,
@@ -108,7 +108,7 @@ test("accepts explicit installed executable outside checkout", async () => {
 });
 test("all packaged harness entry points parse with the host runtime", () => {
   for (const file of ["packaged-isolation-smoke.mjs", "lib/packaged-server-bootstrap.cjs"])
-    execFileSync(process.execPath, ["--check", fileURLToPath(new URL(file, import.meta.url))]);
+    execFileSync(process.execPath, ["--check", fileURLToPath(new NodeURL(file, import.meta.url))]);
 });
 
 test("reports the thrown error rather than the minified source that precedes it", () => {

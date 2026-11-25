@@ -11,12 +11,12 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 import { getInstalledNodeRuntime } from "@vibestudio/shared/runtimePaths";
 import { getCACertificates } from "node:tls";
 import { prepareNativeRuntime } from "@vibestudio/shared/nativeRuntimeResources";
 
-const appRoot = fileURLToPath(new URL("../../", import.meta.url));
+const appRoot = fileURLToPath(new NodeURL("../../", import.meta.url));
 const roots: string[] = [];
 afterEach(() => {
   vi.unstubAllGlobals();

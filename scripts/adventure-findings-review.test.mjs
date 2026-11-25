@@ -1,3 +1,4 @@
+import { fileURLToPath, URL as NodeURL } from "node:url";
 import {test} from "node:test";
 import assert from "node:assert/strict";
 import {adventureJourneyReviewInput} from "./lib/source-claim-admission.mjs";
@@ -33,7 +34,7 @@ test("all claimed falsehoods remain visible to independent review",()=>{const s=
 test("the real authored registry declares independent review and the actual Findings type",async()=>{
  const {default:config}=await import("../src/dev/developmentTemplateConfig.cjs");
  const {loadLiveTeacherCases}=await import("./export-live-workflow-teacher.mjs");
- const {checkouts}=config.requireDevelopmentTemplateCheckouts(new URL("..",import.meta.url).pathname);
+ const {checkouts}=config.requireDevelopmentTemplateCheckouts(fileURLToPath(new NodeURL("..",import.meta.url)));
  const worlds=[...(await loadLiveTeacherCases(checkouts)).values()].filter(row=>row.assignment?.kind==="adventure-journey");
  assert.equal(worlds.length,16);for(const world of worlds){assert.equal(world.requiresReview,true);assert.equal(world.entry.resultType,"JourneyFindings");}
 });

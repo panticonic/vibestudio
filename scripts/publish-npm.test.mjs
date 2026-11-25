@@ -1,3 +1,4 @@
+import { URL as NodeURL } from "node:url";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -159,7 +160,7 @@ void test("explicit non-latest dist-tags reconcile to the requested release", ()
 });
 
 void test("rejects a stale staged candidate before publication", () => {
-  const rootPackage = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url)));
+  const rootPackage = JSON.parse(fs.readFileSync(new NodeURL("../package.json", import.meta.url)));
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "publish-npm-staged-candidate-"));
   try {
     fs.writeFileSync(

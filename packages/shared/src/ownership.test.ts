@@ -1,3 +1,4 @@
+import { fileURLToPath, URL as NodeURL } from "node:url";
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -32,7 +33,7 @@ import {
   type Ledger,
 } from "./ownershipLedger.mjs";
 
-const OWNERSHIP_URL = new URL("./ownership.mjs", import.meta.url).href;
+const OWNERSHIP_URL = new NodeURL("./ownership.mjs", import.meta.url).href;
 // Linux only: observation here reads /proc. macOS shares the code paths, not these assertions.
 const linux = process.platform === "linux";
 
@@ -572,7 +573,7 @@ describe.skipIf(!linux)("ownership library", () => {
     const lessee = `
       const fs = require("node:fs");
       process.on("SIGTERM", () => {});
-      import(${JSON.stringify(new URL("./ownershipLease.mjs", import.meta.url).href)}).then(({ watchLease }) => {
+      import(${JSON.stringify(new NodeURL("./ownershipLease.mjs", import.meta.url).href)}).then(({ watchLease }) => {
         const signal = watchLease();
         signal.addEventListener("abort", () => {
           fs.writeFileSync(${JSON.stringify(receipt)}, "lost:" + signal.reason.code);
@@ -609,7 +610,7 @@ describe.skipIf(!linux)("ownership library", () => {
   });
 
   it("never leaves a plain-file shipment: the reaper imports only relative sibling .mjs files", () => {
-    const here = path.dirname(new URL(import.meta.url).pathname);
+    const here = path.dirname(fileURLToPath(import.meta.url));
     const graph = (entry: string): Set<string> => {
       const seen = new Set<string>();
       const visit = (name: string): void => {

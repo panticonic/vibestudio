@@ -1,4 +1,4 @@
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 import { readOfficialTemplateCatalog } from "./developmentTemplateConfig.js";
 
 /**
@@ -19,7 +19,7 @@ export function isCliWorkspaceSelection(value: unknown): value is CliWorkspaceSe
 }
 
 const { sources } = readOfficialTemplateCatalog(
-  fileURLToPath(new URL("../../templates/registry.json", import.meta.url))
+  fileURLToPath(new NodeURL("../../templates/registry.json", import.meta.url))
 );
 
 const harnessConsumers = sources.find(

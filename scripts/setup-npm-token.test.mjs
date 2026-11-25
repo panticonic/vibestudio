@@ -4,9 +4,9 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 
-const script = fileURLToPath(new URL("./setup-npm-token.mjs", import.meta.url));
+const script = fileURLToPath(new NodeURL("./setup-npm-token.mjs", import.meta.url));
 
 test("stores the publisher's preferred credential without printing it, checks the saved file, and removes it", () => {
   const directory = mkdtempSync(join(tmpdir(), "vibestudio-npm-token-test-"));
@@ -61,7 +61,7 @@ globalThis.fetch = async (url, options) => {
     assert.match(check.stdout, /authenticates as test-publisher/);
     const pnpmCheck = noSecrets(
       spawnSync("pnpm", ["setup:npm-token", "--check"], {
-        cwd: fileURLToPath(new URL("../", import.meta.url)),
+        cwd: fileURLToPath(new NodeURL("../", import.meta.url)),
         env: { ...env, NODE_OPTIONS: `--import=${preload}` },
         encoding: "utf8",
       })

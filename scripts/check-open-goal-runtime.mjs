@@ -2,10 +2,10 @@ import { createHash } from "node:crypto";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { registerHooks } from "node:module";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { URL as NodeURL, fileURLToPath, pathToFileURL } from "node:url";
 import { requireDevelopmentTemplateCheckouts } from "../src/dev/developmentTemplateConfig.cjs";
 
-const host = fileURLToPath(new URL("../", import.meta.url));
+const host = fileURLToPath(new NodeURL("../", import.meta.url));
 const { checkouts } = requireDevelopmentTemplateCheckouts(host);
 const base = checkouts.base;
 const profiles = [

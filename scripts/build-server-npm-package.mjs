@@ -34,7 +34,7 @@ import * as path from "node:path";
 import process from "node:process";
 import { createRequire } from "node:module";
 import semver from "semver";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 import { formatRpcFailure } from "@vibestudio/rpc";
 import { assertNoBundledUserlandSource } from "./packaged-userland-boundary.mjs";
 import {
@@ -55,7 +55,7 @@ import {
   darwinProcessObserverPath,
 } from "./owned-process-group-observer.mjs";
 
-const repoRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
+const repoRoot = path.resolve(fileURLToPath(new NodeURL("..", import.meta.url)));
 const outRoot = path.join(repoRoot, "dist-packages");
 const rootPkg = readJson(path.join(repoRoot, "package.json"));
 const VERSION = rootPkg.version;

@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { URL as NodeURL, pathToFileURL } from "node:url";
 import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 
@@ -44,8 +44,8 @@ export function validateDocumentEdits(documentEdits){
 export async function assessPublicClaims(input, driver, loader) {
   const actual=validatePublicClaimAssessment(input);
   const [source,types,{loadVirtualNatlang},{createNatlangRuntime},{nodePlatform},{NativeToolAgent}]=await Promise.all([
-    readFile(new URL("./reviews/assessPublicClaims.nl",import.meta.url),"utf8"),
-    readFile(new URL("./reviews/types.ts",import.meta.url),"utf8"),
+    readFile(new NodeURL("./reviews/assessPublicClaims.nl",import.meta.url),"utf8"),
+    readFile(new NodeURL("./reviews/types.ts",import.meta.url),"utf8"),
     loader("runtime/virtual-project.js"),loader("runtime/runtime.js"),loader("runtime/node.js"),loader("native/agent.js"),
   ]);
   const program=loadVirtualNatlang({"assessPublicClaims.nl":source,"types.ts":types},"assessPublicClaims.nl");

@@ -1,3 +1,4 @@
+import { URL as NodeURL } from "node:url";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import fs from "node:fs";
@@ -7,7 +8,7 @@ import { spawn } from "node:child_process";
 import { Ownership, OWNERSHIP_PARENT_ENV } from "./ownership.mjs";
 import { awaitRetirement, readLedger, requestOwnershipControl } from "./ownershipLedger.mjs";
 
-const ownershipUrl = new URL("./ownership.mjs", import.meta.url).href;
+const ownershipUrl = new NodeURL("./ownership.mjs", import.meta.url).href;
 async function observe(predicate, signal) {
   while (!predicate()) {
     signal.throwIfAborted();

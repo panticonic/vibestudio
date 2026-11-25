@@ -1,3 +1,4 @@
+import { URL as NodeURL } from "node:url";
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
@@ -6,7 +7,7 @@ import {
 } from "../scripts/build-server-npm-package.mjs";
 
 const rootPackage = JSON.parse(
-  fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")
+  fs.readFileSync(new NodeURL("../package.json", import.meta.url), "utf8")
 ) as {
   dependencies: Record<string, string>;
   devDependencies: Record<string, string>;

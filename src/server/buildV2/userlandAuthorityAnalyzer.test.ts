@@ -1,13 +1,13 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { usingTypeScriptProject } from "@vibestudio/typecheck";
 import { analyzeWorkspaceServiceCalls } from "./userlandAuthorityAnalyzer.js";
 
 const sharedMethodsPath = join(
-  fileURLToPath(new URL("../../../packages/shared/src/rpcMethods.ts", import.meta.url))
+  fileURLToPath(new NodeURL("../../../packages/shared/src/rpcMethods.ts", import.meta.url))
 )
   .replace(/\\/gu, "/")
   .replace(/\.ts$/u, ".js");

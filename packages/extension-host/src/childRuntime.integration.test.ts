@@ -2,7 +2,7 @@ import { deserializeRpcFailure } from "@vibestudio/rpc";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { prepareNativeRuntime } from "@vibestudio/shared/nativeRuntimeResources";
@@ -67,7 +67,7 @@ describe.each(modes)("extension child runtime (%s)", (mode) => {
 
   beforeAll(async () => {
     childRuntimeBundle = fs.readFileSync(
-      fileURLToPath(new URL("../dist/childRuntime.js", import.meta.url)),
+      fileURLToPath(new NodeURL("../dist/childRuntime.js", import.meta.url)),
       "utf8"
     );
   });
@@ -121,12 +121,12 @@ describe.each(modes)("extension child runtime (%s)", (mode) => {
       VIBESTUDIO_EXTENSION_STORAGE_DIR: path.join(root, "storage"),
     };
     if (mode === "native-workspace") {
-      const appRoot = fs.realpathSync.native(fileURLToPath(new URL("../../../", import.meta.url)));
+      const appRoot = fs.realpathSync.native(fileURLToPath(new NodeURL("../../../", import.meta.url)));
       const runtimeRoot = path.join(root, "runtime");
       fs.mkdirSync(runtimeRoot);
       const runtime = prepareNativeRuntime({ appRoot, runtimeRoot });
       const installedWorkspaceRuntime = fileURLToPath(
-        new URL("../../process-adapter/dist/isolation", import.meta.url)
+        new NodeURL("../../process-adapter/dist/isolation", import.meta.url)
       );
       for (const file of ["workspaceChild.js", "control.js"])
         fs.copyFileSync(path.join(installedWorkspaceRuntime, file), path.join(runtimeRoot, file));
@@ -399,12 +399,12 @@ describe.each(modes)("extension child runtime (%s)", (mode) => {
       VIBESTUDIO_EXTENSION_STORAGE_DIR: path.join(root, "storage"),
     };
     if (mode === "native-workspace") {
-      const appRoot = fs.realpathSync.native(fileURLToPath(new URL("../../../", import.meta.url)));
+      const appRoot = fs.realpathSync.native(fileURLToPath(new NodeURL("../../../", import.meta.url)));
       const runtimeRoot = path.join(root, "runtime");
       fs.mkdirSync(runtimeRoot);
       const runtime = prepareNativeRuntime({ appRoot, runtimeRoot });
       const installedWorkspaceRuntime = fileURLToPath(
-        new URL("../../process-adapter/dist/isolation", import.meta.url)
+        new NodeURL("../../process-adapter/dist/isolation", import.meta.url)
       );
       for (const file of ["workspaceChild.js", "control.js"])
         fs.copyFileSync(path.join(installedWorkspaceRuntime, file), path.join(runtimeRoot, file));

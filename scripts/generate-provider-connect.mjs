@@ -1,3 +1,4 @@
+import { URL as NodeURL } from "node:url";
 import fs from "node:fs";
 import { builtinProviders, getBuiltinModels } from "@panticonic/pi-ai/providers/all";
 
@@ -32,7 +33,7 @@ const entries = builtinProviders()
   })
   .filter((provider) => provider.audienceUrls.length);
 fs.writeFileSync(
-  new URL("../packages/shared/src/providerApiKeys.generated.ts", import.meta.url),
+  new NodeURL("../packages/shared/src/providerApiKeys.generated.ts", import.meta.url),
   "// Generated from Pi provider definitions. Regenerate with scripts/generate-provider-connect.mjs.\nexport const PROVIDER_API_KEYS = " +
     JSON.stringify(entries, null, 2) +
     " as const;\n"

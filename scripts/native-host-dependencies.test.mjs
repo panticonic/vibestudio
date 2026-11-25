@@ -12,7 +12,7 @@ import {
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import os from "node:os";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 import {
   inspectHostNativeDependencies,
   prepareNativeDependencyFiles,
@@ -164,7 +164,7 @@ test("installs Windows workerd long-path metadata beside the unchanged dependenc
     );
     const payload = Buffer.from([0x4d, 0x5a, 0x00, 0xff]);
     writeFileSync(executable, payload);
-    const manifest = readFileSync(new URL("./workerd.exe.manifest", import.meta.url), "utf8");
+    const manifest = readFileSync(new NodeURL("./workerd.exe.manifest", import.meta.url), "utf8");
     for (let run = 0; run < 2; run++) {
       prepareNativeDependencyFiles({ cwd, platform: "win32", arch: "x64" });
       assert.deepEqual(readFileSync(executable), payload);

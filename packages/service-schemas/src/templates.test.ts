@@ -1,3 +1,4 @@
+import { URL as NodeURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import {
@@ -10,7 +11,7 @@ import {
 describe("templates contract", () => {
   it("decodes the current official registry through the public service contract", () => {
     const registry = templatesMethods.registry.returns.parse(
-      JSON.parse(readFileSync(new URL("../../../templates/registry.json", import.meta.url), "utf8"))
+      JSON.parse(readFileSync(new NodeURL("../../../templates/registry.json", import.meta.url), "utf8"))
     );
     expect(registry.templates.find((entry) => entry.id === "system-testing")?.consumers).toEqual([
       "personal",

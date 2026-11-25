@@ -4,7 +4,7 @@ import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 import { resolveDevInstance } from "../../src/dev/instanceRegistry";
 import { stopRunResourceOwners } from "../setup/managedServerLease";
 
@@ -16,7 +16,7 @@ for (const phase of ["provisioning", "ready"] as const) {
     const instance = `website-lifecycle-${randomUUID().slice(0, 8)}`;
     const log = test.info().outputPath("owner.log");
     const worker = fork(
-      fileURLToPath(new URL("../setup/fixtures/managedServerWorker.ts", import.meta.url)),
+      fileURLToPath(new NodeURL("../setup/fixtures/managedServerWorker.ts", import.meta.url)),
       [instance, directory, root, log],
       {
         execArgv: ["--import", "tsx"],

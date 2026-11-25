@@ -1,3 +1,4 @@
+import { URL as NodeURL } from "node:url";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { test } from "node:test";
@@ -178,7 +179,7 @@ test("optional application receipts do not gate verified effects after a root ex
 // This is a projection of the original failed export, not a hand-authored consumer fixture.
 test("actual native-pass capture retains its declared nonvoid entry type", async()=>{
  const {readFile}=await import("node:fs/promises");
- const captured=JSON.parse(await readFile(new URL("./fixtures/observed-entry-binding.json",import.meta.url),"utf8"));
+ const captured=JSON.parse(await readFile(new NodeURL("./fixtures/observed-entry-binding.json",import.meta.url),"utf8"));
  assert.equal(captured.originalCaptureSha256,"d4ebe34d092777633c2c1da8999b59c40bd3cf8fb8ac67c193de24c21280acbd");
  assert.equal(captured.exercise.entry.resultType,"OpenProblemOutcome");
  assert.deepEqual(applicationEntryBinding(captured.workflow.entry),captured.execution.diagnostics.openGoalVerification.entry);

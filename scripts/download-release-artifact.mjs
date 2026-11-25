@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { fileURLToPath, } from "node:url";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -103,7 +104,7 @@ export async function downloadReleaseArtifact(input, ownership) {
   }
 }
 
-if (process.argv[1] === new URL(import.meta.url).pathname) {
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const [id, digest, output, runId, attempt, sourceSha] = process.argv.slice(2);
   try {
     await downloadReleaseArtifact({ id, digest, output, runId, attempt, sourceSha });

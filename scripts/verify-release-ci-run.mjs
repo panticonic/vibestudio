@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { fileURLToPath, } from "node:url";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -122,7 +123,7 @@ function ghJson(...args) {
   return JSON.parse(execFileSync("gh", ["api", ...args], { encoding: "utf8" }));
 }
 
-if (process.argv[1] === new URL(import.meta.url).pathname) {
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {
     const {
       GITHUB_REPOSITORY: repository,

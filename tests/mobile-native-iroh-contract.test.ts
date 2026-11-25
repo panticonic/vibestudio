@@ -1,16 +1,17 @@
+import { URL as NodeURL } from "node:url";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { IROH_CONCURRENT_BI_STREAM_WINDOW } from "../packages/iroh-transport/src/nodeEndpoint.js";
 
 const android = readFileSync(
-  new URL(
+  new NodeURL(
     "../hosts/android/app/src/main/java/app/vibestudio/mobile/VibestudioIrohModule.kt",
     import.meta.url
   ),
   "utf8"
 );
 const ios = readFileSync(
-  new URL("../hosts/ios/Vibestudio/VibestudioIroh.swift", import.meta.url),
+  new NodeURL("../hosts/ios/Vibestudio/VibestudioIroh.swift", import.meta.url),
   "utf8"
 );
 

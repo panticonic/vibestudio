@@ -1,3 +1,4 @@
+import { fileURLToPath, URL as NodeURL } from "node:url";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createHash } from "node:crypto";
@@ -135,7 +136,7 @@ test("bundled installed admission does not retain producer-only dependency senti
   const result = await esbuild.build({
     stdin: {
       contents: 'export { readPublishedInternalDoPrograms } from "./internal-do-programs.mjs";',
-      resolveDir: new URL(".", import.meta.url).pathname,
+      resolveDir: fileURLToPath(new NodeURL(".", import.meta.url)),
     },
     platform: "node",
     format: "cjs",

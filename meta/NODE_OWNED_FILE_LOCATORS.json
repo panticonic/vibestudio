@@ -1,0 +1,1879 @@
+{
+  "schema": "vibestudio.node-owned-url-locator-inventory/1",
+  "baseline": "57e7ca00b3d230db63e01e73bcc219cc02dbbc1e",
+  "rows": [
+    {
+      "path": "hosts/desktop/main/services/serviceAuthorityMatrix.test.ts",
+      "line": 7,
+      "expression": "new URL(\".\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\".\", import.meta.url))",
+      "nodeImports": [
+        "node:fs",
+        "node:path",
+        "node:url"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "packages/extension-host/src/childRuntime.integration.test.ts",
+      "line": 70,
+      "expression": "new URL(\"../dist/childRuntime.js\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"../dist/childRuntime.js\", import.meta.url))",
+      "nodeImports": [
+        "node:fs",
+        "node:os",
+        "node:path",
+        "node:url",
+        "node:crypto",
+        "node:sqlite",
+        "node:sqlite",
+        "node:fs",
+        "node:path"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "packages/extension-host/src/childRuntime.integration.test.ts",
+      "line": 124,
+      "expression": "new URL(\"../../../\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"../../../\", import.meta.url))",
+      "nodeImports": [
+        "node:fs",
+        "node:os",
+        "node:path",
+        "node:url",
+        "node:crypto",
+        "node:sqlite",
+        "node:sqlite",
+        "node:fs",
+        "node:path"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "packages/extension-host/src/childRuntime.integration.test.ts",
+      "line": 129,
+      "expression": "new URL(\"../../process-adapter/dist/isolation\", import.meta.url)",
+      "consumer": "fileURLToPath(\n        new URL(\"../../process-adapter/dist/isolation\", import.meta.url)\n      )",
+      "nodeImports": [
+        "node:fs",
+        "node:os",
+        "node:path",
+        "node:url",
+        "node:crypto",
+        "node:sqlite",
+        "node:sqlite",
+        "node:fs",
+        "node:path"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "packages/extension-host/src/childRuntime.integration.test.ts",
+      "line": 402,
+      "expression": "new URL(\"../../../\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"../../../\", import.meta.url))",
+      "nodeImports": [
+        "node:fs",
+        "node:os",
+        "node:path",
+        "node:url",
+        "node:crypto",
+        "node:sqlite",
+        "node:sqlite",
+        "node:fs",
+        "node:path"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "packages/extension-host/src/childRuntime.integration.test.ts",
+      "line": 407,
+      "expression": "new URL(\"../../process-adapter/dist/isolation\", import.meta.url)",
+      "consumer": "fileURLToPath(\n        new URL(\"../../process-adapter/dist/isolation\", import.meta.url)\n      )",
+      "nodeImports": [
+        "node:fs",
+        "node:os",
+        "node:path",
+        "node:url",
+        "node:crypto",
+        "node:sqlite",
+        "node:sqlite",
+        "node:fs",
+        "node:path"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "packages/extension-host/src/processManager.test.ts",
+      "line": 27,
+      "expression": "new URL(\"./processManager.ts\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"./processManager.ts\", import.meta.url))",
+      "nodeImports": [
+        "node:path",
+        "node:events",
+        "node:child_process",
+        "node:url"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "packages/mobile-iroh/src/nativeEntries.test.ts",
+      "line": 9,
+      "expression": "new URL(\".\", import.meta.url)",
+      "consumer": "roots = [\n  new URL(\".\", import.meta.url).pathname,\n  new URL(\"../../rn-client-api/src/\", import.meta.url).pathname,\n]",
+      "nodeImports": [
+        "node:fs",
+        "node:path"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "packages/mobile-iroh/src/nativeEntries.test.ts",
+      "line": 10,
+      "expression": "new URL(\"../../rn-client-api/src/\", import.meta.url)",
+      "consumer": "roots = [\n  new URL(\".\", import.meta.url).pathname,\n  new URL(\"../../rn-client-api/src/\", import.meta.url).pathname,\n]",
+      "nodeImports": [
+        "node:fs",
+        "node:path"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "packages/process-adapter/src/isolation/workspace.integration.test.ts",
+      "line": 76,
+      "expression": "new URL(\"../../../../\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"../../../../\", import.meta.url))",
+      "nodeImports": [
+        "node:fs/promises",
+        "node:path",
+        "node:os",
+        "node:net",
+        "node:url",
+        "node:module"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "packages/process-adapter/src/isolation/workspace.integration.test.ts",
+      "line": 81,
+      "expression": "new URL(\"../../dist/isolation\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"../../dist/isolation\", import.meta.url))",
+      "nodeImports": [
+        "node:fs/promises",
+        "node:path",
+        "node:os",
+        "node:net",
+        "node:url",
+        "node:module"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "packages/process-adapter/src/isolation/workspace.integration.test.ts",
+      "line": 201,
+      "expression": "new URL(\n                  `../../../../dist/mxc/${platform}-${process.arch}/${platform === \"darwin\" ? \"mxc-exec-mac\" : \"lxc-exec\"}`,\n                  import.meta.url\n                )",
+      "consumer": "fileURLToPath(\n                new URL(\n                  `../../../../dist/mxc/${platform}-${process.arch}/${platform === \"darwin\" ? \"mxc-exec-mac\" : \"lxc-exec\"}`,\n                  import.meta.url\n                )\n              )",
+      "nodeImports": [
+        "node:fs/promises",
+        "node:path",
+        "node:os",
+        "node:net",
+        "node:url",
+        "node:module"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "packages/process-adapter/src/isolation/workspace.integration.test.ts",
+      "line": 316,
+      "expression": "new URL(\"../../dist/isolation\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"../../dist/isolation\", import.meta.url))",
+      "nodeImports": [
+        "node:fs/promises",
+        "node:path",
+        "node:os",
+        "node:net",
+        "node:url",
+        "node:module"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "packages/process-adapter/src/isolation/workspace.integration.test.ts",
+      "line": 330,
+      "expression": "new URL(\n                  `../../../../dist/mxc/${platform}-${process.arch}/${platform === \"darwin\" ? \"mxc-exec-mac\" : \"lxc-exec\"}`,\n                  import.meta.url\n                )",
+      "consumer": "fileURLToPath(\n                new URL(\n                  `../../../../dist/mxc/${platform}-${process.arch}/${platform === \"darwin\" ? \"mxc-exec-mac\" : \"lxc-exec\"}`,\n                  import.meta.url\n                )\n              )",
+      "nodeImports": [
+        "node:fs/promises",
+        "node:path",
+        "node:os",
+        "node:net",
+        "node:url",
+        "node:module"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "packages/process-adapter/src/isolation/workspace.integration.test.ts",
+      "line": 345,
+      "expression": "new URL(\"../../../../\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"../../../../\", import.meta.url))",
+      "nodeImports": [
+        "node:fs/promises",
+        "node:path",
+        "node:os",
+        "node:net",
+        "node:url",
+        "node:module"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "packages/process-adapter/src/isolation/workspace.lifecycle.integration.test.ts",
+      "line": 76,
+      "expression": "new URL(\"../../../../\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"../../../../\", import.meta.url))",
+      "nodeImports": [
+        "node:child_process",
+        "node:fs/promises",
+        "node:os",
+        "node:path",
+        "node:url"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "packages/process-adapter/src/isolation/workspace.lifecycle.integration.test.ts",
+      "line": 80,
+      "expression": "new URL(\"../../dist/isolation/\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"../../dist/isolation/\", import.meta.url))",
+      "nodeImports": [
+        "node:child_process",
+        "node:fs/promises",
+        "node:os",
+        "node:path",
+        "node:url"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "packages/process-adapter/src/isolation/workspace.lifecycle.integration.test.ts",
+      "line": 115,
+      "expression": "new URL(\n                `../../../../dist/mxc/${platform}-${process.arch}/${platform === \"darwin\" ? \"mxc-exec-mac\" : \"lxc-exec\"}`,\n                import.meta.url\n              )",
+      "consumer": "fileURLToPath(\n              new URL(\n                `../../../../dist/mxc/${platform}-${process.arch}/${platform === \"darwin\" ? \"mxc-exec-mac\" : \"lxc-exec\"}`,\n                import.meta.url\n              )\n            )",
+      "nodeImports": [
+        "node:child_process",
+        "node:fs/promises",
+        "node:os",
+        "node:path",
+        "node:url"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "packages/service-schemas/src/templates.test.ts",
+      "line": 13,
+      "expression": "new URL(\"../../../templates/registry.json\", import.meta.url)",
+      "consumer": "readFileSync(new URL(\"../../../templates/registry.json\", import.meta.url), \"utf8\")",
+      "nodeImports": [
+        "node:fs"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "packages/shared/src/npmInstaller.integration.test.ts",
+      "line": 53,
+      "expression": "new URL(\"../../../\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"../../../\", import.meta.url))",
+      "nodeImports": [
+        "node:fs/promises",
+        "node:os",
+        "node:path",
+        "node:url"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "packages/shared/src/npmInstaller.test.ts",
+      "line": 418,
+      "expression": "new URL(\"../../../\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"../../../\", import.meta.url))",
+      "nodeImports": [
+        "node:fs",
+        "node:os",
+        "node:path",
+        "node:module",
+        "node:url"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "packages/shared/src/ownership-parent.test.mjs",
+      "line": 10,
+      "expression": "new URL(\"./ownership.mjs\", import.meta.url)",
+      "consumer": "ownershipUrl = new URL(\"./ownership.mjs\", import.meta.url).href",
+      "nodeImports": [
+        "node:assert/strict",
+        "node:test",
+        "node:fs",
+        "node:os",
+        "node:path",
+        "node:child_process",
+        "node:fs",
+        "node:fs",
+        "node:fs",
+        "node:child_process"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "packages/shared/src/ownership.mjs",
+      "line": 44,
+      "expression": "new URL(\"./reaper.mjs\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"./reaper.mjs\", import.meta.url))",
+      "nodeImports": [
+        "node:child_process",
+        "node:fs",
+        "node:path",
+        "node:crypto",
+        "node:url"
+      ],
+      "test": false,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "packages/shared/src/ownership.test.ts",
+      "line": 35,
+      "expression": "new URL(\"./ownership.mjs\", import.meta.url)",
+      "consumer": "OWNERSHIP_URL = new URL(\"./ownership.mjs\", import.meta.url).href",
+      "nodeImports": [
+        "node:child_process",
+        "node:fs",
+        "node:os",
+        "node:path"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "packages/shared/src/ownership.test.ts",
+      "line": 575,
+      "expression": "new URL(\"./ownershipLease.mjs\", import.meta.url)",
+      "consumer": "JSON.stringify(new URL(\"./ownershipLease.mjs\", import.meta.url).href)",
+      "nodeImports": [
+        "node:child_process",
+        "node:fs",
+        "node:os",
+        "node:path"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "packages/shared/src/ownership.test.ts",
+      "line": 612,
+      "expression": "new URL(import.meta.url)",
+      "consumer": "path.dirname(new URL(import.meta.url).pathname)",
+      "nodeImports": [
+        "node:child_process",
+        "node:fs",
+        "node:os",
+        "node:path"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "packages/svelte-type-source/src/index.test.ts",
+      "line": 14,
+      "expression": "new URL(\"./index.ts\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"./index.ts\", import.meta.url))",
+      "nodeImports": [
+        "node:child_process",
+        "node:fs/promises",
+        "node:os",
+        "node:path",
+        "node:util",
+        "node:url",
+        "node:module",
+        "node:url",
+        "node:path"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/adventure-findings-review.test.mjs",
+      "line": 36,
+      "expression": "new URL(\"..\",import.meta.url)",
+      "consumer": "config.requireDevelopmentTemplateCheckouts(new URL(\"..\",import.meta.url).pathname)",
+      "nodeImports": [
+        "node:test",
+        "node:assert/strict"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/branded-electron.mjs",
+      "line": 15,
+      "expression": "new URL(\"..\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"..\", import.meta.url))",
+      "nodeImports": [
+        "node:child_process",
+        "node:crypto",
+        "node:fs",
+        "node:module",
+        "node:os",
+        "node:path",
+        "node:process",
+        "node:url"
+      ],
+      "test": false,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/branded-electron.test.mjs",
+      "line": 14,
+      "expression": "new URL(\"./branded-electron.mjs\", import.meta.url)",
+      "consumer": "fs.copyFileSync(\n        new URL(\"./branded-electron.mjs\", import.meta.url),\n        path.join(root, \"scripts\", \"branded-electron.mjs\")\n      )",
+      "nodeImports": [
+        "node:test",
+        "node:assert/strict",
+        "node:fs",
+        "node:os",
+        "node:path",
+        "node:child_process"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/build-server-npm-package.mjs",
+      "line": 58,
+      "expression": "new URL(\"..\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"..\", import.meta.url))",
+      "nodeImports": [
+        "node:child_process",
+        "node:fs",
+        "node:path",
+        "node:process",
+        "node:module",
+        "node:url"
+      ],
+      "test": false,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/check-build-artifacts.mjs",
+      "line": 22,
+      "expression": "new URL(\"..\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"..\", import.meta.url))",
+      "nodeImports": [
+        "node:child_process",
+        "node:fs",
+        "node:path",
+        "node:url",
+        "node:module",
+        "node:module"
+      ],
+      "test": false,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/check-open-goal-runtime.mjs",
+      "line": 8,
+      "expression": "new URL(\"../\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"../\", import.meta.url))",
+      "nodeImports": [
+        "node:crypto",
+        "node:fs/promises",
+        "node:module",
+        "node:path",
+        "node:url"
+      ],
+      "test": false,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/check-release-version.mjs",
+      "line": 25,
+      "expression": "new URL(\"../package.json\", import.meta.url)",
+      "nodeImports": [
+        "node:fs",
+        "node:process",
+        "node:child_process",
+        "node:url"
+      ],
+      "test": false,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/collect-live-workflow-teacher.mjs",
+      "line": 90,
+      "expression": "new URL(\"../\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"../\", import.meta.url))",
+      "nodeImports": [
+        "node:child_process",
+        "node:crypto",
+        "node:fs",
+        "node:path",
+        "node:url",
+        "node:module",
+        "node:util"
+      ],
+      "test": false,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/collect-live-workflow-teacher.test.mjs",
+      "line": 23,
+      "expression": "new URL(\"../node_modules\", import.meta.url)",
+      "consumer": "symlink(\n      new URL(\"../node_modules\", import.meta.url).pathname,\n      path.join(root, \"node_modules\")\n    )",
+      "nodeImports": [
+        "node:assert/strict",
+        "node:child_process",
+        "node:events",
+        "node:crypto",
+        "node:fs/promises",
+        "node:os",
+        "node:path",
+        "node:test",
+        "node:fs/promises",
+        "node:path",
+        "node:fs",
+        "node:path"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/collect-live-workflow-teacher.test.mjs",
+      "line": 27,
+      "expression": "new URL(\"collect-live-workflow-teacher.mjs\", import.meta.url)",
+      "consumer": "copyFile(\n      new URL(\"collect-live-workflow-teacher.mjs\", import.meta.url),\n      path.join(root, \"scripts/collect-live-workflow-teacher.mjs\")\n    )",
+      "nodeImports": [
+        "node:assert/strict",
+        "node:child_process",
+        "node:events",
+        "node:crypto",
+        "node:fs/promises",
+        "node:os",
+        "node:path",
+        "node:test",
+        "node:fs/promises",
+        "node:path",
+        "node:fs",
+        "node:path"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/collect-live-workflow-teacher.test.mjs",
+      "line": 31,
+      "expression": "new URL(\"review-live-workflow-teacher.mjs\", import.meta.url)",
+      "consumer": "copyFile(\n      new URL(\"review-live-workflow-teacher.mjs\", import.meta.url),\n      path.join(root, \"scripts/review-live-workflow-teacher.mjs\")\n    )",
+      "nodeImports": [
+        "node:assert/strict",
+        "node:child_process",
+        "node:events",
+        "node:crypto",
+        "node:fs/promises",
+        "node:os",
+        "node:path",
+        "node:test",
+        "node:fs/promises",
+        "node:path",
+        "node:fs",
+        "node:path"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/collect-live-workflow-teacher.test.mjs",
+      "line": 36,
+      "expression": "new URL(\"lib/live-teacher-groups.mjs\", import.meta.url)",
+      "consumer": "copyFile(\n      new URL(\"lib/live-teacher-groups.mjs\", import.meta.url),\n      path.join(root, \"scripts/lib/live-teacher-groups.mjs\")\n    )",
+      "nodeImports": [
+        "node:assert/strict",
+        "node:child_process",
+        "node:events",
+        "node:crypto",
+        "node:fs/promises",
+        "node:os",
+        "node:path",
+        "node:test",
+        "node:fs/promises",
+        "node:path",
+        "node:fs",
+        "node:path"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/collect-live-workflow-teacher.test.mjs",
+      "line": 40,
+      "expression": "new URL(\"lib/live-teacher-budget.mjs\", import.meta.url)",
+      "consumer": "copyFile(\n      new URL(\"lib/live-teacher-budget.mjs\", import.meta.url),\n      path.join(root, \"scripts/lib/live-teacher-budget.mjs\")\n    )",
+      "nodeImports": [
+        "node:assert/strict",
+        "node:child_process",
+        "node:events",
+        "node:crypto",
+        "node:fs/promises",
+        "node:os",
+        "node:path",
+        "node:test",
+        "node:fs/promises",
+        "node:path",
+        "node:fs",
+        "node:path"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/collect-live-workflow-teacher.test.mjs",
+      "line": 44,
+      "expression": "new URL(\"lib/live-teacher-retention.mjs\", import.meta.url)",
+      "consumer": "copyFile(\n      new URL(\"lib/live-teacher-retention.mjs\", import.meta.url),\n      path.join(root, \"scripts/lib/live-teacher-retention.mjs\")\n    )",
+      "nodeImports": [
+        "node:assert/strict",
+        "node:child_process",
+        "node:events",
+        "node:crypto",
+        "node:fs/promises",
+        "node:os",
+        "node:path",
+        "node:test",
+        "node:fs/promises",
+        "node:path",
+        "node:fs",
+        "node:path"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/collect-live-workflow-teacher.test.mjs",
+      "line": 48,
+      "expression": "new URL(\"lib/live-teacher-interruption.mjs\", import.meta.url)",
+      "consumer": "copyFile(\n      new URL(\"lib/live-teacher-interruption.mjs\", import.meta.url),\n      path.join(root, \"scripts/lib/live-teacher-interruption.mjs\")\n    )",
+      "nodeImports": [
+        "node:assert/strict",
+        "node:child_process",
+        "node:events",
+        "node:crypto",
+        "node:fs/promises",
+        "node:os",
+        "node:path",
+        "node:test",
+        "node:fs/promises",
+        "node:path",
+        "node:fs",
+        "node:path"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/download-release-artifact.mjs",
+      "line": 106,
+      "expression": "new URL(import.meta.url)",
+      "nodeImports": [
+        "node:child_process",
+        "node:crypto",
+        "node:fs",
+        "node:path"
+      ],
+      "test": false,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/export-live-workflow-teacher.mjs",
+      "line": 11492,
+      "expression": "new URL(\"./lib/independent-invocation-outcomes.mjs\",import.meta.url)",
+      "consumer": "readFile(new URL(\"./lib/independent-invocation-outcomes.mjs\",import.meta.url))",
+      "nodeImports": [
+        "node:crypto",
+        "node:fs/promises",
+        "node:path",
+        "node:url",
+        "node:util",
+        "node:zlib"
+      ],
+      "test": false,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/export-live-workflow-teacher.mjs",
+      "line": 11572,
+      "expression": "new URL(\"../\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"../\", import.meta.url))",
+      "nodeImports": [
+        "node:crypto",
+        "node:fs/promises",
+        "node:path",
+        "node:url",
+        "node:util",
+        "node:zlib"
+      ],
+      "test": false,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/generate-connect-grammar.mjs",
+      "line": 7,
+      "expression": "new URL(\"..\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"..\", import.meta.url))",
+      "nodeImports": [
+        "node:fs/promises",
+        "node:path",
+        "node:process",
+        "node:url"
+      ],
+      "test": false,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/generate-provider-connect.mjs",
+      "line": 35,
+      "expression": "new URL(\"../packages/shared/src/providerApiKeys.generated.ts\", import.meta.url)",
+      "consumer": "fs.writeFileSync(\n  new URL(\"../packages/shared/src/providerApiKeys.generated.ts\", import.meta.url),\n  \"// Generated from Pi provider definitions. Regenerate with scripts/generate-provider-connect.mjs.\\nexport const PROVIDER_API_KEYS = \" +\n",
+      "nodeImports": [
+        "node:fs"
+      ],
+      "test": false,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/generate-runtime-client-methods.mjs",
+      "line": 4,
+      "expression": "new URL(\n  \"../packages/service-schemas/src/clients/generated/runtimeClientMethods.ts\",\n  import.meta.url\n)",
+      "consumer": "outputUrl = new URL(\n  \"../packages/service-schemas/src/clients/generated/runtimeClientMethods.ts\",\n  import.meta.url\n)",
+      "nodeImports": [
+        "node:fs/promises",
+        "node:url"
+      ],
+      "test": false,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/generate-runtime-client-methods.mjs",
+      "line": 88,
+      "expression": "new URL(relativeModule, import.meta.url)",
+      "consumer": "import(new URL(relativeModule, import.meta.url).href)",
+      "nodeImports": [
+        "node:fs/promises",
+        "node:url"
+      ],
+      "test": false,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/lib/internal-do-programs.test.mjs",
+      "line": 138,
+      "expression": "new URL(\".\", import.meta.url)",
+      "consumer": "esbuild.build({\n    stdin: {\n      contents: 'export { readPublishedInternalDoPrograms } from \"./internal-do-programs.mjs\";',\n      resolveDir: new URL(\".\", import.meta.url).pathname,\n    },\n    platform: \"node\",\n    format: \"cjs\",\n    bund",
+      "nodeImports": [
+        "node:assert/strict",
+        "node:test",
+        "node:crypto"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/lib/npm-auth.test.mjs",
+      "line": 109,
+      "expression": "new URL(\"../npm.mjs\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"../npm.mjs\", import.meta.url))",
+      "nodeImports": [
+        "node:assert/strict",
+        "node:child_process",
+        "node:fs",
+        "node:os",
+        "node:path",
+        "node:url",
+        "node:test",
+        "node:module",
+        "node:child_process",
+        "node:fs"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/lib/npm-auth.test.mjs",
+      "line": 126,
+      "expression": "new URL(\"../publish-npm.mjs\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"../publish-npm.mjs\", import.meta.url))",
+      "nodeImports": [
+        "node:assert/strict",
+        "node:child_process",
+        "node:fs",
+        "node:os",
+        "node:path",
+        "node:url",
+        "node:test",
+        "node:module",
+        "node:child_process",
+        "node:fs"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/lib/ownership-reaper-assets.mjs",
+      "line": 17,
+      "expression": "new URL(\"../../packages/shared/src/\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"../../packages/shared/src/\", import.meta.url))",
+      "nodeImports": [
+        "node:fs",
+        "node:path",
+        "node:url"
+      ],
+      "test": false,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/lib/pending-operation-lifecycle.test.mjs",
+      "line": 7,
+      "expression": "new URL(\"./pending-operation-lifecycle.mjs\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"./pending-operation-lifecycle.mjs\", import.meta.url))",
+      "nodeImports": [
+        "node:test",
+        "node:assert/strict",
+        "node:child_process",
+        "node:url",
+        "node:path"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/lib/source-claim-admission.mjs",
+      "line": 209,
+      "expression": "new URL(\"../reviews/assessPublicClaims.nl\", import.meta.url)",
+      "consumer": "readFile(new URL(\"../reviews/assessPublicClaims.nl\", import.meta.url), \"utf8\")",
+      "nodeImports": [
+        "node:crypto",
+        "node:fs/promises",
+        "node:util"
+      ],
+      "test": false,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/lib/source-claim-admission.mjs",
+      "line": 210,
+      "expression": "new URL(\"../reviews/types.ts\", import.meta.url)",
+      "consumer": "readFile(new URL(\"../reviews/types.ts\", import.meta.url), \"utf8\")",
+      "nodeImports": [
+        "node:crypto",
+        "node:fs/promises",
+        "node:util"
+      ],
+      "test": false,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/lib/unit-authority-inference.test.mjs",
+      "line": 318,
+      "expression": "new URL(\"../../src/server/services/__serviceAuthorityMatrix.golden.json\", import.meta.url)",
+      "consumer": "fs.readFileSync(\n        new URL(\"../../src/server/services/__serviceAuthorityMatrix.golden.json\", import.meta.url),\n        \"utf8\"\n      )",
+      "nodeImports": [
+        "node:assert/strict",
+        "node:fs",
+        "node:path",
+        "node:url",
+        "node:test"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/lib/unit-authority-inference.test.mjs",
+      "line": 323,
+      "expression": "new URL(\"../../packages/service-schemas/src/clients/evalImportLoader.ts\", import.meta.url)",
+      "consumer": "fs.readFileSync(\n      new URL(\"../../packages/service-schemas/src/clients/evalImportLoader.ts\", import.meta.url),\n      \"utf8\"\n    )",
+      "nodeImports": [
+        "node:assert/strict",
+        "node:fs",
+        "node:path",
+        "node:url",
+        "node:test"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/lib/unit-authority-inference.test.mjs",
+      "line": 373,
+      "expression": "new URL(\"../../src/server/services/__serviceAuthorityMatrix.golden.json\", import.meta.url)",
+      "consumer": "fs.readFileSync(\n        new URL(\"../../src/server/services/__serviceAuthorityMatrix.golden.json\", import.meta.url),\n        \"utf8\"\n      )",
+      "nodeImports": [
+        "node:assert/strict",
+        "node:fs",
+        "node:path",
+        "node:url",
+        "node:test"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/native-host-dependencies.test.mjs",
+      "line": 167,
+      "expression": "new URL(\"./workerd.exe.manifest\", import.meta.url)",
+      "consumer": "readFileSync(new URL(\"./workerd.exe.manifest\", import.meta.url), \"utf8\")",
+      "nodeImports": [
+        "node:test",
+        "node:assert/strict",
+        "node:fs",
+        "node:child_process",
+        "node:path",
+        "node:os",
+        "node:url"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/native-isolation-artifacts.mjs",
+      "line": 7,
+      "expression": "new URL(\"../native/isolation/targets.json\", import.meta.url)",
+      "consumer": "readFileSync(new URL(\"../native/isolation/targets.json\", import.meta.url), \"utf8\")",
+      "nodeImports": [
+        "node:crypto",
+        "node:fs",
+        "node:path"
+      ],
+      "test": false,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/node-runtime-artifacts.mjs",
+      "line": 25,
+      "expression": "new URL(\"../\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"../\", import.meta.url))",
+      "nodeImports": [
+        "node:crypto",
+        "node:fs",
+        "node:fs/promises",
+        "node:path",
+        "node:child_process",
+        "node:util",
+        "node:stream",
+        "node:stream/promises",
+        "node:url"
+      ],
+      "test": false,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/node-runtime-artifacts.mjs",
+      "line": 27,
+      "expression": "new URL(\"../native/node/distribution.json\", import.meta.url)",
+      "consumer": "readFile(new URL(\"../native/node/distribution.json\", import.meta.url), \"utf8\")",
+      "nodeImports": [
+        "node:crypto",
+        "node:fs",
+        "node:fs/promises",
+        "node:path",
+        "node:child_process",
+        "node:util",
+        "node:stream",
+        "node:stream/promises",
+        "node:url"
+      ],
+      "test": false,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/node-runtime-artifacts.mjs",
+      "line": 31,
+      "expression": "new URL(\"../.nvmrc\", import.meta.url)",
+      "consumer": "readFile(new URL(\"../.nvmrc\", import.meta.url), \"utf8\")",
+      "nodeImports": [
+        "node:crypto",
+        "node:fs",
+        "node:fs/promises",
+        "node:path",
+        "node:child_process",
+        "node:util",
+        "node:stream",
+        "node:stream/promises",
+        "node:url"
+      ],
+      "test": false,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/node-runtime-artifacts.test.mjs",
+      "line": 39,
+      "expression": "new URL(\"../.nvmrc\", import.meta.url)",
+      "consumer": "readFile(new URL(\"../.nvmrc\", import.meta.url), \"utf8\")",
+      "nodeImports": [
+        "node:assert/strict",
+        "node:test",
+        "node:crypto",
+        "node:fs/promises",
+        "node:os",
+        "node:path",
+        "node:child_process",
+        "node:util"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/owned-process-group-observer.mjs",
+      "line": 17,
+      "expression": "new URL(\"../native/owned-process-group/darwin.c\", import.meta.url)",
+      "consumer": "fileURLToPath(\n  new URL(\"../native/owned-process-group/darwin.c\", import.meta.url)\n)",
+      "nodeImports": [
+        "node:crypto",
+        "node:fs",
+        "node:child_process",
+        "node:path",
+        "node:url"
+      ],
+      "test": false,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/package-desktop.test.mjs",
+      "line": 62,
+      "expression": "new URL(\"../electron-builder.yml\", import.meta.url)",
+      "consumer": "fs.readFileSync(new URL(\"../electron-builder.yml\", import.meta.url), \"utf8\")",
+      "nodeImports": [
+        "node:test",
+        "node:assert/strict",
+        "node:fs",
+        "node:os",
+        "node:path",
+        "node:child_process"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/package-desktop.test.mjs",
+      "line": 388,
+      "expression": "new URL(\"./package-desktop.mjs\", import.meta.url)",
+      "consumer": "moduleUrl = new URL(\"./package-desktop.mjs\", import.meta.url).href",
+      "nodeImports": [
+        "node:test",
+        "node:assert/strict",
+        "node:fs",
+        "node:os",
+        "node:path",
+        "node:child_process"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/packaged-isolation-smoke.test.mjs",
+      "line": 111,
+      "expression": "new URL(file, import.meta.url)",
+      "consumer": "fileURLToPath(new URL(file, import.meta.url))",
+      "nodeImports": [
+        "node:test",
+        "node:assert/strict",
+        "node:fs/promises",
+        "node:os",
+        "node:path",
+        "node:child_process",
+        "node:url"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/prepare-darwin-process-observers.mjs",
+      "line": 14,
+      "expression": "new URL(\"..\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"..\", import.meta.url))",
+      "nodeImports": [
+        "node:path",
+        "node:url"
+      ],
+      "test": false,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/publish-npm.mjs",
+      "line": 29,
+      "expression": "new URL(\"..\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"..\", import.meta.url))",
+      "nodeImports": [
+        "node:child_process",
+        "node:crypto",
+        "node:fs",
+        "node:path",
+        "node:process",
+        "node:stream",
+        "node:timers/promises",
+        "node:url",
+        "node:zlib"
+      ],
+      "test": false,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/publish-npm.test.mjs",
+      "line": 162,
+      "expression": "new URL(\"../package.json\", import.meta.url)",
+      "consumer": "fs.readFileSync(new URL(\"../package.json\", import.meta.url))",
+      "nodeImports": [
+        "node:assert/strict",
+        "node:fs",
+        "node:os",
+        "node:path",
+        "node:stream",
+        "node:test",
+        "node:zlib"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/release-ci-gate.mjs",
+      "line": 65,
+      "expression": "new URL(import.meta.url)",
+      "nodeImports": [
+        "node:fs"
+      ],
+      "test": false,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/review-live-workflow-teacher.mjs",
+      "line": 47,
+      "expression": "new URL(\"./reviews/assessPublicClaims.nl\",import.meta.url)",
+      "consumer": "readFile(new URL(\"./reviews/assessPublicClaims.nl\",import.meta.url),\"utf8\")",
+      "nodeImports": [
+        "node:os",
+        "node:path",
+        "node:url",
+        "node:fs/promises",
+        "node:crypto"
+      ],
+      "test": false,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/review-live-workflow-teacher.mjs",
+      "line": 48,
+      "expression": "new URL(\"./reviews/types.ts\",import.meta.url)",
+      "consumer": "readFile(new URL(\"./reviews/types.ts\",import.meta.url),\"utf8\")",
+      "nodeImports": [
+        "node:os",
+        "node:path",
+        "node:url",
+        "node:fs/promises",
+        "node:crypto"
+      ],
+      "test": false,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/semantic-live-teacher.test.mjs",
+      "line": 181,
+      "expression": "new URL(\"./fixtures/observed-entry-binding.json\",import.meta.url)",
+      "consumer": "readFile(new URL(\"./fixtures/observed-entry-binding.json\",import.meta.url),\"utf8\")",
+      "nodeImports": [
+        "node:assert/strict",
+        "node:crypto",
+        "node:test"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/setup-npm-token.test.mjs",
+      "line": 9,
+      "expression": "new URL(\"./setup-npm-token.mjs\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"./setup-npm-token.mjs\", import.meta.url))",
+      "nodeImports": [
+        "node:assert/strict",
+        "node:child_process",
+        "node:fs",
+        "node:os",
+        "node:path",
+        "node:test",
+        "node:url",
+        "node:assert/strict"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/setup-npm-token.test.mjs",
+      "line": 64,
+      "expression": "new URL(\"../\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"../\", import.meta.url))",
+      "nodeImports": [
+        "node:assert/strict",
+        "node:child_process",
+        "node:fs",
+        "node:os",
+        "node:path",
+        "node:test",
+        "node:url",
+        "node:assert/strict"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/source-server-prerequisites.test.mjs",
+      "line": 14,
+      "expression": "new URL(\"../build.mjs\", import.meta.url)",
+      "consumer": "fs.readFileSync(new URL(\"../build.mjs\", import.meta.url), \"utf8\")",
+      "nodeImports": [
+        "node:assert/strict",
+        "node:fs",
+        "node:os",
+        "node:path",
+        "node:module",
+        "node:test"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/verify-release-ci-run.mjs",
+      "line": 125,
+      "expression": "new URL(import.meta.url)",
+      "nodeImports": [
+        "node:child_process",
+        "node:fs",
+        "node:path"
+      ],
+      "test": false,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/vibestudio-cli-shim.mjs",
+      "line": 15,
+      "expression": "new URL(\"..\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"..\", import.meta.url))",
+      "nodeImports": [
+        "node:child_process",
+        "node:path",
+        "node:process",
+        "node:url"
+      ],
+      "test": false,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/vibestudio-server-shim.mjs",
+      "line": 11,
+      "expression": "new URL(\"..\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"..\", import.meta.url))",
+      "nodeImports": [
+        "node:child_process",
+        "node:path",
+        "node:process",
+        "node:url"
+      ],
+      "test": false,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "scripts/workerd-windows-metadata.mjs",
+      "line": 24,
+      "expression": "new URL(\"./workerd.exe.manifest\", import.meta.url)",
+      "consumer": "copyFileSync(new URL(\"./workerd.exe.manifest\", import.meta.url), `${executable}.manifest`)",
+      "nodeImports": [
+        "node:fs",
+        "node:module",
+        "node:path"
+      ],
+      "test": false,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "src/dev/cliWorkspaceSelection.ts",
+      "line": 22,
+      "expression": "new URL(\"../../templates/registry.json\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"../../templates/registry.json\", import.meta.url))",
+      "nodeImports": [
+        "node:url"
+      ],
+      "test": false,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "src/dev/devInstanceSupervisor.test.ts",
+      "line": 14,
+      "expression": "new URL(\"../../packages/shared/src/ownership.mjs\", import.meta.url)",
+      "consumer": "OWNERSHIP_URL = new URL(\"../../packages/shared/src/ownership.mjs\", import.meta.url).href",
+      "nodeImports": [
+        "node:fs",
+        "node:os",
+        "node:path",
+        "node:module",
+        "node:child_process",
+        "node:fs",
+        "node:child_process",
+        "node:fs",
+        "node:fs"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "src/dev/devInstanceSupervisor.test.ts",
+      "line": 15,
+      "expression": "new URL(\"./devInstanceSupervisor.ts\", import.meta.url)",
+      "consumer": "SUPERVISOR_URL = new URL(\"./devInstanceSupervisor.ts\", import.meta.url).href",
+      "nodeImports": [
+        "node:fs",
+        "node:os",
+        "node:path",
+        "node:module",
+        "node:child_process",
+        "node:fs",
+        "node:child_process",
+        "node:fs",
+        "node:fs"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "src/dev/systemTestInstance.test.ts",
+      "line": 35,
+      "expression": "new URL(\"../../packages/shared/src/ownership.mjs\", import.meta.url)",
+      "consumer": "OWNERSHIP_URL = new URL(\"../../packages/shared/src/ownership.mjs\", import.meta.url).href",
+      "nodeImports": [
+        "node:fs",
+        "node:os",
+        "node:path",
+        "node:child_process",
+        "node:module",
+        "node:fs",
+        "node:path",
+        "node:path"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "src/dev/systemTestInstance.test.ts",
+      "line": 36,
+      "expression": "new URL(\"./systemTestInstance.ts\", import.meta.url)",
+      "consumer": "SYSTEM_TEST_INSTANCE_URL = new URL(\"./systemTestInstance.ts\", import.meta.url).href",
+      "nodeImports": [
+        "node:fs",
+        "node:os",
+        "node:path",
+        "node:child_process",
+        "node:module",
+        "node:fs",
+        "node:path",
+        "node:path"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "src/dev/systemTestInstance.test.ts",
+      "line": 37,
+      "expression": "new URL(\"./instanceRegistry.ts\", import.meta.url)",
+      "consumer": "REGISTRY_URL = new URL(\"./instanceRegistry.ts\", import.meta.url).href",
+      "nodeImports": [
+        "node:fs",
+        "node:os",
+        "node:path",
+        "node:child_process",
+        "node:module",
+        "node:fs",
+        "node:path",
+        "node:path"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "src/server/buildV2/authorityFold.userland.test.ts",
+      "line": 66,
+      "expression": "new URL(\"../../../packages/shared/src/rpcMethods.ts\", import.meta.url)",
+      "consumer": "fileURLToPath(\n  new URL(\"../../../packages/shared/src/rpcMethods.ts\", import.meta.url)\n)",
+      "nodeImports": [
+        "node:fs",
+        "node:os",
+        "node:path",
+        "node:url"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "src/server/buildV2/dependencyContentStore.test.ts",
+      "line": 242,
+      "expression": "new URL(\"./dependencyContentStore.ts\", import.meta.url)",
+      "consumer": "moduleUrl = new URL(\"./dependencyContentStore.ts\", import.meta.url).href",
+      "nodeImports": [
+        "node:crypto",
+        "node:fs",
+        "node:os",
+        "node:path",
+        "node:child_process",
+        "node:sqlite"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "src/server/buildV2/userlandAuthorityAnalyzer.test.ts",
+      "line": 10,
+      "expression": "new URL(\"../../../packages/shared/src/rpcMethods.ts\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"../../../packages/shared/src/rpcMethods.ts\", import.meta.url))",
+      "nodeImports": [
+        "node:fs",
+        "node:os",
+        "node:path",
+        "node:url"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "src/server/hubServer.test.ts",
+      "line": 630,
+      "expression": "new URL(\"../../packages/shared/src/ownership.mjs\", import.meta.url)",
+      "consumer": "ownershipModule = new URL(\"../../packages/shared/src/ownership.mjs\", import.meta.url)\n        .href",
+      "nodeImports": [
+        "node:fs",
+        "node:http",
+        "node:net",
+        "node:os",
+        "node:path",
+        "node:events",
+        "node:child_process",
+        "node:sqlite"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "src/server/hubServiceAuthorityMatrix.test.ts",
+      "line": 7,
+      "expression": "new URL(\"./__hubServiceAuthorityMatrix.golden.json\", import.meta.url)",
+      "consumer": "fileURLToPath(\n  new URL(\"./__hubServiceAuthorityMatrix.golden.json\", import.meta.url)\n)",
+      "nodeImports": [
+        "node:fs",
+        "node:url"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "src/server/nativeNetwork.integration.test.ts",
+      "line": 84,
+      "expression": "new URL(\"../../\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"../../\", import.meta.url))",
+      "nodeImports": [
+        "node:child_process",
+        "node:http",
+        "node:events",
+        "node:fs",
+        "node:os",
+        "node:path",
+        "node:url"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "src/server/nativeRuntimeResources.test.ts",
+      "line": 19,
+      "expression": "new URL(\"../../\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"../../\", import.meta.url))",
+      "nodeImports": [
+        "node:child_process",
+        "node:fs",
+        "node:os",
+        "node:path",
+        "node:url",
+        "node:tls"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "src/server/nativeWorkspaceCleanup.integration.test.ts",
+      "line": 20,
+      "expression": "new URL(\"../../\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"../../\", import.meta.url))",
+      "nodeImports": [
+        "node:child_process",
+        "node:events",
+        "node:fs",
+        "node:os",
+        "node:path",
+        "node:url"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "src/server/rpcServer.test.ts",
+      "line": 7289,
+      "expression": "new URL(\"../../packages/extension-host/dist/childRuntime.js\", import.meta.url)",
+      "consumer": "fileURLToPath(\n      new URL(\"../../packages/extension-host/dist/childRuntime.js\", import.meta.url)\n    )",
+      "nodeImports": [
+        "node:events",
+        "node:http",
+        "node:fs",
+        "node:os",
+        "node:path",
+        "node:url",
+        "node:http",
+        "node:stream"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "src/server/services/catalog/blobArgumentNames.test.ts",
+      "line": 17,
+      "expression": "new URL(\"../blobstoreService.ts\",import.meta.url)",
+      "consumer": "readFileSync(new URL(\"../blobstoreService.ts\",import.meta.url),\"utf8\")",
+      "nodeImports": [
+        "node:fs"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "src/server/services/serviceAuthorityMatrix.test.ts",
+      "line": 19,
+      "expression": "new URL(\".\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\".\", import.meta.url))",
+      "nodeImports": [
+        "node:fs",
+        "node:path",
+        "node:url"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "src/server/services/tierTable.test.ts",
+      "line": 18,
+      "expression": "new URL(relative, import.meta.url)",
+      "consumer": "fileURLToPath(new URL(relative, import.meta.url))",
+      "nodeImports": [
+        "node:fs",
+        "node:url"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "tests/desktop-launch-args.test.ts",
+      "line": 37,
+      "expression": "new URL(\"../package.json\", import.meta.url)",
+      "consumer": "fs.readFileSync(new URL(\"../package.json\", import.meta.url), \"utf8\")",
+      "nodeImports": [
+        "node:fs"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "tests/e2e/support/channelRpcReadBundle.ts",
+      "line": 9,
+      "expression": "new URL(\"./channelRpcReads.ts\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"./channelRpcReads.ts\", import.meta.url))",
+      "nodeImports": [
+        "node:url"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "tests/iroh-electron-native.e2e.test.ts",
+      "line": 13,
+      "expression": "new URL(\"./fixtures/iroh-electron-native.cjs\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"./fixtures/iroh-electron-native.cjs\", import.meta.url))",
+      "nodeImports": [
+        "node:fs",
+        "node:os",
+        "node:path",
+        "node:module",
+        "node:url"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "tests/live-e2e/managedServerLifecycle.spec.ts",
+      "line": 19,
+      "expression": "new URL(\"../setup/fixtures/managedServerWorker.ts\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"../setup/fixtures/managedServerWorker.ts\", import.meta.url))",
+      "nodeImports": [
+        "node:child_process",
+        "node:events",
+        "node:fs",
+        "node:path",
+        "node:crypto",
+        "node:url"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "tests/mobile-native-asset-store.test.ts",
+      "line": 10,
+      "expression": "new URL(`${androidDir}VibestudioPanelHostModule.kt`, import.meta.url)",
+      "consumer": "readFileSync(\n  new URL(`${androidDir}VibestudioPanelHostModule.kt`, import.meta.url),\n  \"utf8\"\n)",
+      "nodeImports": [
+        "node:fs",
+        "node:path"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "tests/mobile-native-asset-store.test.ts",
+      "line": 14,
+      "expression": "new URL(`${androidDir}PanelAssetStore.kt`, import.meta.url)",
+      "consumer": "readFileSync(\n  new URL(`${androidDir}PanelAssetStore.kt`, import.meta.url),\n  \"utf8\"\n)",
+      "nodeImports": [
+        "node:fs",
+        "node:path"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "tests/mobile-native-asset-store.test.ts",
+      "line": 19,
+      "expression": "new URL(\"../hosts/ios/Vibestudio/VibestudioPanelHost.mm\", import.meta.url)",
+      "consumer": "readFileSync(\n  new URL(\"../hosts/ios/Vibestudio/VibestudioPanelHost.mm\", import.meta.url),\n  \"utf8\"\n)",
+      "nodeImports": [
+        "node:fs",
+        "node:path"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "tests/mobile-native-asset-store.test.ts",
+      "line": 23,
+      "expression": "new URL(\"../patches/react-native-tcp-socket.patch\", import.meta.url)",
+      "consumer": "readFileSync(\n  new URL(\"../patches/react-native-tcp-socket.patch\", import.meta.url),\n  \"utf8\"\n)",
+      "nodeImports": [
+        "node:fs",
+        "node:path"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "tests/mobile-native-iroh-contract.test.ts",
+      "line": 6,
+      "expression": "new URL(\n    \"../hosts/android/app/src/main/java/app/vibestudio/mobile/VibestudioIrohModule.kt\",\n    import.meta.url\n  )",
+      "consumer": "readFileSync(\n  new URL(\n    \"../hosts/android/app/src/main/java/app/vibestudio/mobile/VibestudioIrohModule.kt\",\n    import.meta.url\n  ),\n  \"utf8\"\n)",
+      "nodeImports": [
+        "node:fs"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "tests/mobile-native-iroh-contract.test.ts",
+      "line": 13,
+      "expression": "new URL(\"../hosts/ios/Vibestudio/VibestudioIroh.swift\", import.meta.url)",
+      "consumer": "readFileSync(\n  new URL(\"../hosts/ios/Vibestudio/VibestudioIroh.swift\", import.meta.url),\n  \"utf8\"\n)",
+      "nodeImports": [
+        "node:fs"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "tests/npmPackageDependencies.test.ts",
+      "line": 9,
+      "expression": "new URL(\"../package.json\", import.meta.url)",
+      "consumer": "fs.readFileSync(new URL(\"../package.json\", import.meta.url), \"utf8\")",
+      "nodeImports": [
+        "node:fs"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "tests/setup/managedServerLease.ts",
+      "line": 39,
+      "expression": "new URL(\"./managedServerOwner.mjs\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"./managedServerOwner.mjs\", import.meta.url))",
+      "nodeImports": [
+        "node:fs",
+        "node:url"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    },
+    {
+      "path": "tests/setup/runE2eRootPreparation.ts",
+      "line": 13,
+      "expression": "new URL(\"./e2eRootPreparation.ts\", import.meta.url)",
+      "consumer": "fileURLToPath(new URL(\"./e2eRootPreparation.ts\", import.meta.url))",
+      "nodeImports": [
+        "node:url"
+      ],
+      "test": true,
+      "status": "fixed-node-file-or-process-locator",
+      "reason": "Module-local locator consumed by Node fs/path/import/spawn or Node test fixture; explicit node:url constructor preserves file provenance under browser-aware transforms."
+    }
+  ],
+  "changedFiles": 76
+}

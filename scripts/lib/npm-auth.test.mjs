@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 import test from "node:test";
 import { createNpmAuth, npmTokenFilePath, readNpmAuthToken } from "./npm-auth.mjs";
 
@@ -106,7 +106,7 @@ syncBuiltinESMExports();\n`
     const env = { ...process.env, VIBESTUDIO_NPM_TOKEN_FILE: file, AUTH_RECORD: record };
     delete env.NODE_AUTH_TOKEN;
     delete env.NPM_TOKEN;
-    const runner = fileURLToPath(new URL("../npm.mjs", import.meta.url));
+    const runner = fileURLToPath(new NodeURL("../npm.mjs", import.meta.url));
     const result = spawnSync(process.execPath, ["--import", preload, runner, "whoami"], {
       env,
       encoding: "utf8",
@@ -123,7 +123,7 @@ syncBuiltinESMExports();\n`
 
     // The publisher now performs public build/smoke preflight before asking for
     // a credential. Failure there must not expose the saved token or stale login.
-    const publisher = fileURLToPath(new URL("../publish-npm.mjs", import.meta.url));
+    const publisher = fileURLToPath(new NodeURL("../publish-npm.mjs", import.meta.url));
     const rejected = spawnSync(process.execPath, ["--import", preload, publisher], {
       env: { ...env, NPM_CONFIG_USERCONFIG: join(directory, "stale-npmrc") },
       encoding: "utf8",

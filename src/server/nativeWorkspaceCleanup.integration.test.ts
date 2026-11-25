@@ -14,10 +14,10 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 import { nativeWorkspaceCleanup } from "@vibestudio/shared/nativeWorkspaceCleanup";
 
-const appRoot = realpathSync(fileURLToPath(new URL("../../", import.meta.url)));
+const appRoot = realpathSync(fileURLToPath(new NodeURL("../../", import.meta.url)));
 const directories: string[] = [];
 const attackers: ChildProcess[] = [];
 afterEach(async () => {

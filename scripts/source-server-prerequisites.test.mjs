@@ -1,3 +1,4 @@
+import { URL as NodeURL } from "node:url";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import os from "node:os";
@@ -11,7 +12,7 @@ import {
 } from "./server-runtime-artifacts.mjs";
 import { copySqlJsRuntimeAsset } from "./lib/sql-js-runtime-asset.mjs";
 
-const buildSource = fs.readFileSync(new URL("../build.mjs", import.meta.url), "utf8");
+const buildSource = fs.readFileSync(new NodeURL("../build.mjs", import.meta.url), "utf8");
 const buildAst = parse(buildSource, { sourceType: "module" });
 
 function functionCalls(name) {

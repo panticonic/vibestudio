@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TypeCheckService } from "@vibestudio/typecheck";
 import { HOST_AUTHORITY_METHODS } from "@vibestudio/shared/authority/hostAuthorityCatalog.generated";
@@ -63,7 +63,7 @@ function programForFiles(files: Record<string, string>) {
 }
 
 const rpcFactoryPath = fileURLToPath(
-  new URL("../../../packages/shared/src/rpcMethods.ts", import.meta.url)
+  new NodeURL("../../../packages/shared/src/rpcMethods.ts", import.meta.url)
 )
   .replace(/\\/gu, "/")
   .replace(/\.ts$/u, ".js");

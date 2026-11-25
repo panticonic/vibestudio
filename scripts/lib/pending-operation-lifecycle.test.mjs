@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { URL as NodeURL, fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 
-const helperPath = fileURLToPath(new URL("./pending-operation-lifecycle.mjs", import.meta.url));
+const helperPath = fileURLToPath(new NodeURL("./pending-operation-lifecycle.mjs", import.meta.url));
 
 test("a pending promise cannot let the CLI exit successfully after the event loop drains", () => {
   const source = `import { failIfOperationOutlivesEventLoop } from ${JSON.stringify(

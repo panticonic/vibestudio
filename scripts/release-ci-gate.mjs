@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { fileURLToPath, } from "node:url";
 import fs from "node:fs";
 
 export const requiredResults = [
@@ -62,7 +63,7 @@ export function validateQualityInputs(qualityInputs, sourceSha) {
   return templates;
 }
 
-if (process.argv[1] === new URL(import.meta.url).pathname) {
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {
     const needs = JSON.parse(process.env.NEEDS_JSON ?? "null");
     const enabled = {

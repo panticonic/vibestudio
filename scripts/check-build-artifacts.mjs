@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { assertInternalDoProgramsPublication } from "./lib/internal-do-programs.mjs";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { URL as NodeURL, fileURLToPath, pathToFileURL } from "node:url";
 import {
   applicationSourceMaps,
   CJS_IMPORT_META_BANNER,
@@ -19,7 +19,7 @@ import {
   nodeRuntimeTargetName,
 } from "./node-runtime-artifacts.mjs";
 
-const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+const repoRoot = fileURLToPath(new NodeURL("..", import.meta.url));
 
 const contracts = [
   {

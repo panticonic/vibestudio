@@ -1,3 +1,4 @@
+import { URL as NodeURL } from "node:url";
 import {expect,it} from "vitest";
 import {readFileSync} from "node:fs";
 import {blobstoreMethods} from "@vibestudio/service-schemas/blobstore";
@@ -14,7 +15,7 @@ it("publishes actual blob handler argument names through the canonical role-filt
 it("keeps every blob wire tuple's names in exact native handler order, including optional arguments",()=>{
  // Source of truth is the actual positional native handler contract, not guessed
  // names for JSON schema positions. No storage or network operation is executed.
- const source=readFileSync(new URL("../blobstoreService.ts",import.meta.url),"utf8");
+ const source=readFileSync(new NodeURL("../blobstoreService.ts",import.meta.url),"utf8");
  for(const [name,method] of Object.entries(blobstoreMethods)){
   const match=source.match(new RegExp("\\b"+name+": (?:async )?\\([^,]+, \\[([^\\]]*)\\]\\) =>"));
   expect(match,`native handler ${name}`).not.toBeNull();

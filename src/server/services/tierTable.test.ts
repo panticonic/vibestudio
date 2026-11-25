@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { HOST_AUTHORITY_METHODS } from "@vibestudio/shared/authority/hostAuthorityCatalog.generated";
 import { isKernelResidency } from "@vibestudio/shared/serviceAuthority";
@@ -15,7 +15,7 @@ type Matrix = Record<string, { methods: Record<string, { tier?: MatrixTier }> }>
 
 function readMatrix(relative: string): Matrix {
   return JSON.parse(
-    readFileSync(fileURLToPath(new URL(relative, import.meta.url)), "utf8")
+    readFileSync(fileURLToPath(new NodeURL(relative, import.meta.url)), "utf8")
   ) as Matrix;
 }
 

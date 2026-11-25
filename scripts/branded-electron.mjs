@@ -5,14 +5,14 @@ import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 
 const APP_NAME = "Vibestudio";
 const APP_BUNDLE_IDENTIFIER = "app.vibestudio.app.dev";
 const CACHE_VERSION = 4;
 
 const require = createRequire(import.meta.url);
-const repoRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
+const repoRoot = path.resolve(fileURLToPath(new NodeURL("..", import.meta.url)));
 
 /**
  * Resolve the Electron executable, branded as "Vibestudio" on macOS.

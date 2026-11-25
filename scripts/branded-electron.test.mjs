@@ -1,3 +1,4 @@
+import { URL as NodeURL } from "node:url";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -11,7 +12,7 @@ for (const scenario of ["development", "installed", "sign-failure", "verify-fail
     try {
       fs.mkdirSync(path.join(root, "scripts"));
       fs.copyFileSync(
-        new URL("./branded-electron.mjs", import.meta.url),
+        new NodeURL("./branded-electron.mjs", import.meta.url),
         path.join(root, "scripts", "branded-electron.mjs")
       );
       const moduleRoot = path.join(root, "node_modules", "electron");
