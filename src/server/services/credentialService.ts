@@ -959,6 +959,19 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       throw new Error("Requested model target does not match the active native model task");
     }
 
+    const testRoute =
+      ctx.caller.testPolicy?.kind === "case" ? ctx.caller.testPolicy.case.agent : undefined;
+    const requestedModel = `${params.providerId}:${params.modelId}`;
+    if (
+      testRoute &&
+      requestedModel !== testRoute.model &&
+      (testRoute.fallback === "disabled" || requestedModel !== testRoute.fallback.model)
+    ) {
+      throw new Error(
+        `Model ${requestedModel} is outside this system test's configured model route`
+      );
+    }
+
     const endpointIsTemplated = params.endpoint !== null && /\{[^}]+\}/u.test(params.endpoint);
     const candidate =
       params.endpoint && !endpointIsTemplated

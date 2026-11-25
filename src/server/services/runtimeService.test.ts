@@ -564,7 +564,7 @@ describe("runtimeService system-test agent execution policy", () => {
     );
   });
 
-  it("preserves an explicit model selected by a test-owned Pi child", async () => {
+  it("pins a delegated DO child to the Luna run despite an explicit Sol configuration", async () => {
     const prepareDurableObject = vi.fn(async () => ({
       targetId: "target:child-agent",
       effectiveVersion: "ev-agent",
@@ -578,7 +578,7 @@ describe("runtimeService system-test agent execution policy", () => {
       null,
       null,
       null,
-      systemTestCasePolicy()
+      systemTestCasePolicy("openai-codex:gpt-6-luna")
     );
 
     await internal.createEntity(
@@ -589,7 +589,7 @@ describe("runtimeService system-test agent execution policy", () => {
         agentChannelId: "task-explicit-model",
         stateArgs: {
           agentConfig: {
-            model: "openai-codex:gpt-5.3-codex-spark",
+            model: "openai-codex:gpt-6-sol",
             thinkingLevel: "minimal",
             approvalLevel: 0,
           },
@@ -601,7 +601,7 @@ describe("runtimeService system-test agent execution policy", () => {
       expect.objectContaining({
         stateArgs: {
           agentConfig: {
-            model: "openai-codex:gpt-5.3-codex-spark",
+            model: "openai-codex:gpt-6-luna",
             thinkingLevel: "minimal",
             approvalLevel: 2,
           },
@@ -3878,11 +3878,20 @@ describe("runtimeService.cloneContext", () => {
           ? { incarnation: `storage:${input.key}`, generation: 1 }
           : null,
     });
-    const native = (await service.handler({ caller: serverCaller }, "createEntity", [{
-      kind: "do", execution: { surface: "code", source: "workers/native-execution" },
-      className: "NativeExecutionDO", key: "native", contextId: "ctx-native-clone",
-    }])) as {id:string};
-    expect(instance.entityResolve(native.id)?.agentBinding).toEqual({entityId:native.id,channelId:native.id,contextId:"ctx-native-clone"});
+    const native = (await service.handler({ caller: serverCaller }, "createEntity", [
+      {
+        kind: "do",
+        execution: { surface: "code", source: "workers/native-execution" },
+        className: "NativeExecutionDO",
+        key: "native",
+        contextId: "ctx-native-clone",
+      },
+    ])) as { id: string };
+    expect(instance.entityResolve(native.id)?.agentBinding).toEqual({
+      entityId: native.id,
+      channelId: native.id,
+      contextId: "ctx-native-clone",
+    });
     const ordinary = (await service.handler({ caller: serverCaller }, "createEntity", [
       {
         kind: "do",

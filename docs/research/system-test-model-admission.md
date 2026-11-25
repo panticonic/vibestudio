@@ -1,0 +1,66 @@
+# System-test model admission
+
+Inventory before edits, Host 6e4664ae5, frozen V28 selection (2026-11-25).
+No provider calls, network probes, or frozen-source edits.
+
+- SST runner.ts492-510 derives case primary/fallback from the run model; explicit
+  model disables fallback. runner.ts638-674 installs that route in authenticated
+  case policy, and 2914-2950 seeds ordinary Pi agent creation with it.
+- Host liveExecutionCaller.ts122-151 refines authenticated execution/context
+  policy. agentExecutionSessionRegistry.ts62-110 retains the exact case route.
+- runtimeService.ts464-505 seeds new agent configurations but previously preserved
+  an explicit child model from DO callers. Base agent-worker-base.ts1470-1535
+  supports those deliberate delegation overrides; ordinary delegation inherits
+  the current model/fallback. This is a concrete fixed-run-policy escape.
+- Base catalog.ts23-26 default is gpt-6.1-sol; profile defaults must not replace a
+  test run's configured model. Native product-model-policy.ts128-181 retains the
+  original configured model/fallback for generation; it is not a campaign-wide
+  allowlist and cannot validate arbitrary helper choices.
+- Base ModelGatewayDO.ts181-199 resolves explicit refs or model roles independently.
+  packages/natlang/src/models.ts132-136 overrides only the executor role, leaving
+  named/frontmatter models intact. runTurn.ts (ModelGatewayDO.ts330-361) invokes
+  completeNativeModelHelper with the selected model.
+- Pi generation and one-shot helper tasks both use the protected model provider
+  and authenticated credentials.resolveNativeModel. Host credentialService.ts938
+  verifies active native invocation and exact target, then admits credentials.
+  It previously had no check against the caller's case primary/fallback route.
+  This is the shared final admission boundary for existing actors, delegated
+  actors and gateway helper calls, independent of configuration inheritance.
+- Base agent-vessel.ts4470 completeNativeModel accepts a selected model, but no
+  production caller of that protected helper exists in Base/System/Personal/
+  Examples. No separate automatic title/summary model selection was found there;
+  authored NL summaries use their configured runtime, and ordinary Pi generation
+  uses the conversation configuration. This is static coverage, not live proof.
+- Credential RPC model targets are native-operation bound and errors retain
+  causes. Generic egress authorization validates credentials/endpoint authority;
+  it does not parse arbitrary HTTP bodies to infer a model. This repair belongs
+  at actual native model admission, not a payload-inspecting network shim.
+- Standalone Core Node/browser/local-model engines do not receive authenticated
+  Host case policy. The campaign's hosted native request route above does. Model
+  listing/scoring catalog fixtures that only inspect identities do not generate
+  Sol requests and are not rewritten. Separate deployed fixtures only inherit
+  this constraint when their authenticated caller carries the case policy;
+  unrelated servers/profile actors are outside this run's authority.
+
+Repair: case policy primary/explicit fallback is authoritative at native model
+credential preparation; a disabled fallback admits only the primary. New agents,
+including delegated DO children, receive case primary. Normal sessions without a
+case policy keep ordinary choices. No new model-route flag or parallel policy.
+
+Boundary details: ModelGateway resolves roles/aliases to the catalog entry before
+nativeModel(entry) and native-model-provider.ts246-260 submits its provider/id.
+The Host constraint compares that actual native target, not an authored alias.
+Local model-under-test requests use localModelRuntime.prepareNativeModel
+(native-model-provider.ts220-243); host-owned deterministic inference is a
+model-free branch (170-187). Neither is a Sol cloud-generation path, so those
+product capability boundaries are preserved rather than globally rewriting them.
+
+Verification: actual two-file component suite passed all 169 tests (154 runtime
+and 15 native-credential tests), including authenticated generation/helper Sol
+refusal, profile-default Sol refusal before credential lookup, configured Luna,
+exact declared fallback, unrestricted ordinary sessions, and delegated DO child
+creation under Luna. Final unit `vibe-system-test-model-admission-20261125b`
+used LOW 1.5 GiB/reserve 7.5 GiB, heap 768 MiB, observed peak 534.9 MiB,
+17.27 seconds. Scoped syntax lint (typed mode disabled), formatting and diff
+checks passed. Full project type checks and live hosted execution were not run;
+no paid/model/network calls were made.
