@@ -24,6 +24,7 @@ export interface StoredSystemTestRun {
   /** Native state survives managed process retirement until evidence archival. */
   stateDir?: string;
   config: {
+    nativeReference?: true;
     names: string[];
     category?: string;
     all: boolean;

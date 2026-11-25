@@ -98,8 +98,8 @@ function makeSystemTestRunnerCaller(scope: SessionScope, targetId: string): Syst
   const call = (method: { name: string }, args: unknown[]) =>
     scope.client.callTarget(targetId, method.name, args);
   return {
-    doctor: async (model) =>
-      systemTestDoctorResultSchema.parse(await call(systemTestRunnerRpcMethods.doctor, [model])),
+    doctor: async (model, options) =>
+      systemTestDoctorResultSchema.parse(await call(systemTestRunnerRpcMethods.doctor, options ? [model,options] : [model])),
     listSystemTests: async (category) =>
       systemTestDescriptorSchema
         .array()
@@ -723,7 +723,9 @@ async function run(inv: ParsedInvocation): Promise<number> {
     if (thinkingLevel !== undefined && !isSystemTestThinkingLevel(thinkingLevel)) {
       throw new UsageError("--thinking-level must be minimal, low, medium, high, xhigh, or max");
     }
+    if(inv.flags["native-reference"]===true&&typeof inv.flags["model"]==="string")throw new UsageError("--native-reference and --model are mutually exclusive");
     const config: StoredSystemTestRun["config"] = {
+      ...(inv.flags["native-reference"]===true?{nativeReference:true as const}:{}),
       names,
       ...(category ? { category } : {}),
       all,
@@ -1388,15 +1390,21 @@ async function cancel(inv: ParsedInvocation): Promise<number> {
   }
 }
 
+export function systemTestDoctorArguments(flags: ParsedInvocation["flags"]): [string | undefined, {nativeReference:true}?] {
+  const nativeReference=flags["native-reference"]===true;
+  const model=typeof flags["model"]==="string"?flags["model"]:undefined;
+  if(nativeReference&&model!==undefined)throw new Error("doctor --native-reference and --model are mutually exclusive");
+  return nativeReference?[undefined,{nativeReference:true}]:[model];
+}
+
 async function doctor(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
+    const doctorArgs=systemTestDoctorArguments(inv.flags);
     const scope = await resolveSystemTestScope(inv);
     const result = await withIsolatedSystemTestRunner(scope, async (runner) => {
       const readDoctor = (): Promise<SystemTestDoctorResult> =>
-        makeSystemTestRunnerCaller(scope, runner.targetId).doctor(
-          typeof inv.flags["model"] === "string" ? inv.flags["model"] : undefined
-        );
+        makeSystemTestRunnerCaller(scope, runner.targetId).doctor(...doctorArgs);
       let prepared: Awaited<ReturnType<typeof settleSystemTestStartup>> | null = null;
       if (inv.flags["approve-startup"] === true) {
         const approvals = await startupApprovalPort(scope);
@@ -1689,6 +1697,7 @@ function safeName(value: string): string {
 }
 
 const RUN_FLAGS = [
+  {name:"native-reference",takesValue:false,description:"Admit only source-declared model-free fixture references"},
   { name: "name", takesValue: true, multiple: true, description: "Exact test name (repeatable)" },
   { name: "category", takesValue: true, description: "Select one test category" },
   { name: "all", takesValue: false, description: "Run the complete catalog" },
@@ -1734,9 +1743,10 @@ export const systemTestCommands: CliCommand[] = [
     group: "system-test",
     name: "doctor",
     summary: "Check catalog, build, agent worker, and model readiness",
-    usage: "vibestudio system-test doctor [--session NAME] [--model REF] [--approve-startup]",
+    usage: "vibestudio system-test doctor [--session NAME] [--model REF | --native-reference] [--approve-startup]",
     flags: [
       { name: "model", takesValue: true, description: "Require this model ref to be usable" },
+      { name: "native-reference", takesValue: false, description: "Check native fixture readiness without provider availability" },
       {
         name: "approve-startup",
         takesValue: false,

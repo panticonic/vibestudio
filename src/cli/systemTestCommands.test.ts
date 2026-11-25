@@ -13,6 +13,7 @@ import {
 } from "./systemTestStore.js";
 import {
   type SystemTestRunnerCaller,
+  systemTestDoctorArguments,
   isRetryableSystemTestStatusReadFailure,
   isManagedCodexSessionApproval,
   settleSystemTestDoctor,
@@ -667,4 +668,10 @@ describe("system-test failure evidence retention", () => {
     expect(calls).toEqual([]);
     expect(fs.existsSync(path.join(run.artifactDir, "failure-evidence"))).toBe(false);
   });
+});
+
+it("native-reference doctor forwards explicit mode and refuses a simultaneous model",()=>{
+ expect(systemTestDoctorArguments({"native-reference":true})).toEqual([undefined,{nativeReference:true}]);
+ expect(systemTestDoctorArguments({model:"TEST:model"})).toEqual(["TEST:model"]);
+ expect(()=>systemTestDoctorArguments({"native-reference":true,model:"TEST:model"})).toThrow("mutually exclusive");
 });
