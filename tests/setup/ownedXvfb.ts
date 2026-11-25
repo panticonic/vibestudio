@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
+import type { Ownership } from "@vibestudio/shared/ownership";
 import fs from "node:fs";
 import path from "node:path";
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, type ChildProcess } from "node:child_process";
 import { E2E_ARTIFACT_ROOT_ENV } from "./e2eRun.js";
 
 export const E2E_OWNED_X11_ENV = "VIBESTUDIO_E2E_OWNED_X11";
@@ -81,18 +82,10 @@ function waitForDisplayNumber(child: ChildProcess, timeoutMs: number): Promise<s
   });
 }
 
-async function waitForExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
-  if (child.exitCode !== null || child.signalCode !== null) return true;
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(false), timeoutMs);
-    child.once("exit", () => {
-      clearTimeout(timer);
-      resolve(true);
-    });
-  });
-}
-
-export async function startOwnedXvfb(runTempRoot: string): Promise<OwnedXvfbSession | null> {
+export async function startOwnedXvfb(
+  runTempRoot: string,
+  ownership: Ownership
+): Promise<OwnedXvfbSession | null> {
   if (process.platform !== "linux") return null;
   if (process.env[E2E_USE_HOST_DISPLAY_ENV] === "1") {
     if (!process.env["DISPLAY"] && !process.env["WAYLAND_DISPLAY"]) {
@@ -119,7 +112,7 @@ export async function startOwnedXvfb(runTempRoot: string): Promise<OwnedXvfbSess
   });
 
   const stderr: Buffer[] = [];
-  const child = spawn(
+  const owned = ownership.spawn(
     "Xvfb",
     [
       "-displayfd",
@@ -135,8 +128,10 @@ export async function startOwnedXvfb(runTempRoot: string): Promise<OwnedXvfbSess
       "-auth",
       xauthorityPath,
     ],
-    { stdio: ["ignore", "ignore", "pipe", "pipe"] }
+    { stdio: ["ignore", "ignore", "pipe", "pipe"], kill: "graceful", label: "e2e-xvfb" }
   );
+  const { child } = owned;
+  await owned.registered;
   child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
 
   try {
@@ -179,13 +174,7 @@ export async function startOwnedXvfb(runTempRoot: string): Promise<OwnedXvfbSess
       stop: async () => {
         if (stopped) return;
         stopped = true;
-        child.kill("SIGTERM");
-        if (!(await waitForExit(child, 5_000))) {
-          child.kill("SIGKILL");
-          if (!(await waitForExit(child, 3_000))) {
-            throw new Error(`Owned Xvfb process ${child.pid} did not exit`);
-          }
-        }
+        await owned.retire();
         writeManifest({
           display,
           pid: child.pid,
@@ -200,8 +189,7 @@ export async function startOwnedXvfb(runTempRoot: string): Promise<OwnedXvfbSess
       },
     };
   } catch (error) {
-    child.kill("SIGKILL");
-    await waitForExit(child, 3_000);
+    await owned.retire("immediate");
     const details = Buffer.concat(stderr).toString("utf8").trim();
     throw new Error(
       `Failed to start the owned Xvfb display: ${error instanceof Error ? error.message : String(error)}${details ? `\n${details}` : ""}`

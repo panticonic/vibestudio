@@ -7,13 +7,16 @@ type CleanupLedgerEvent =
   | "path-registered"
   | "path-released"
   | "run-cleanup-started"
-  | "run-cleanup-complete";
+  | "run-cleanup-complete"
+  | "unreleased-fixtures";
 
 interface CleanupLedgerEntry {
   event: CleanupLedgerEvent;
   timestamp: string;
   path?: string;
   coordinatorPid?: number;
+  pendingCount?: number;
+  sample?: string[];
 }
 
 function appendCleanupLedger(entry: CleanupLedgerEntry): void {
@@ -77,38 +80,54 @@ export function releaseRunCleanupPath(candidate: string): boolean {
   return true;
 }
 
-export function cleanupRunTempRoot(
+/** Fixture events are diagnostics, not a reason to preserve a dead worker's profile.
+ * The supplied canonical owner joins all dependent resources before removing bytes. */
+export async function cleanupRunTempRoot(
   runTempRoot: string,
-  removeRoot: (root: string) => void = (root) => fs.rmSync(root, { recursive: true, force: true })
-): void {
-  const resolvedRoot = path.resolve(runTempRoot);
-  const ledgerPath = process.env[E2E_CLEANUP_LEDGER_ENV];
-  if (ledgerPath && fs.existsSync(ledgerPath)) {
+  retire: () => Promise<void>
+): Promise<void> {
+  const resolvedRoot = path.resolve(runTempRoot),
+    errors: unknown[] = [];
+  try {
+    const ledgerPath = process.env[E2E_CLEANUP_LEDGER_ENV];
     const pending = new Set<string>();
-    for (const line of fs.readFileSync(ledgerPath, "utf8").split("\n")) {
-      if (!line.trim()) continue;
-      const entry = JSON.parse(line) as CleanupLedgerEntry;
-      if (entry.event !== "path-registered" && entry.event !== "path-released") continue;
-      if (!entry.path) throw new Error("E2E cleanup ledger contains a path event without a path");
-      const ownedPath = assertRunOwnedPath(entry.path, resolvedRoot);
-      if (entry.event === "path-registered") pending.add(ownedPath);
-      else pending.delete(ownedPath);
+    if (ledgerPath && fs.existsSync(ledgerPath)) {
+      for (const line of fs.readFileSync(ledgerPath, "utf8").split("\n")) {
+        if (!line.trim()) continue;
+        const entry = JSON.parse(line) as CleanupLedgerEntry;
+        if (entry.event !== "path-registered" && entry.event !== "path-released") continue;
+        if (!entry.path) throw new Error("E2E cleanup ledger contains a path event without a path");
+        const ownedPath = assertRunOwnedPath(entry.path, resolvedRoot);
+        if (entry.event === "path-registered") pending.add(ownedPath);
+        else pending.delete(ownedPath);
+      }
     }
-    if (pending.size) {
-      throw new Error(
-        `E2E fixture cleanup did not finish; preserving run state at ${resolvedRoot}. Unreleased fixtures: ${[...pending].join(", ")}`
-      );
-    }
+    if (pending.size)
+      appendCleanupLedger({
+        event: "unreleased-fixtures",
+        timestamp: new Date().toISOString(),
+        path: resolvedRoot,
+        pendingCount: pending.size,
+        sample: [...pending].slice(0, 20),
+      });
+    appendCleanupLedger({
+      event: "run-cleanup-started",
+      timestamp: new Date().toISOString(),
+      path: resolvedRoot,
+    });
+  } catch (error) {
+    errors.push(error);
   }
-  appendCleanupLedger({
-    event: "run-cleanup-started",
-    timestamp: new Date().toISOString(),
-    path: resolvedRoot,
-  });
-  removeRoot(resolvedRoot);
-  appendCleanupLedger({
-    event: "run-cleanup-complete",
-    timestamp: new Date().toISOString(),
-    path: resolvedRoot,
-  });
+  try {
+    await retire();
+    appendCleanupLedger({
+      event: "run-cleanup-complete",
+      timestamp: new Date().toISOString(),
+      path: resolvedRoot,
+    });
+  } catch (error) {
+    errors.push(error);
+  }
+  if (errors.length === 1) throw errors[0];
+  if (errors.length) throw new AggregateError(errors, "E2E cleanup failed");
 }

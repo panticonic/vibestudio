@@ -34,6 +34,12 @@ export interface LedgerPath {
   kind: "scratch" | "path";
   label?: string;
 }
+export interface OwnershipReference {
+  dir: string;
+  id: string;
+  token: string;
+  terminateOwner?: true;
+}
 export interface Ledger {
   version: 1;
   id: string;
@@ -45,6 +51,12 @@ export interface Ledger {
   owner: ProcessStart;
   reaper: ProcessStart;
   groups: LedgerGroup[];
+  /** Exact child claims admitted before their owners can publish resources. */
+  children?: OwnershipReference[];
+  controlPort?: number;
+  ownerJoined?: boolean;
+  /** Explicit test-worker process transfer; never set for a same-process child. */
+  terminateOwnerOnParent?: true;
   /** Removed in reverse order. */
   paths: LedgerPath[];
   /** Caller-defined JSON (e.g. an instance's registry record). */
@@ -180,3 +192,9 @@ export interface LedgerRss {
 }
 /** Summed RSS of the registered groups' live members (inspect/list). Never throws. */
 export function summarizeLedger(ledger: Ledger): LedgerRss;
+
+export function parseOwnershipReference(value: unknown): OwnershipReference;
+export function requestOwnershipControl(
+  reference: OwnershipReference,
+  request: Record<string, unknown>
+): Promise<Record<string, unknown>>;
