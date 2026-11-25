@@ -65,6 +65,7 @@ import { operationSubstanceForAuthority } from "./approvals.js";
 import type {
   AcquisitionInfo,
   AuthorityPreflightLeaf,
+  AuthorityFailureInfo,
   AuthorityPreflightResult,
   CompiledAuthorityPlanLeaf,
   InvocationSnapshot,
@@ -2108,9 +2109,10 @@ export class ServiceDispatcher {
         capability,resourceKey,tier:reviewedTier,irreversible:receiverPolicy.irreversible,
       });
       if (policyDecision?.decision === "deny") {
-        const failure = {reasonCode:"user-denied" as const,
+        const failure: AuthorityFailureInfo = {reasonCode:"user-denied",
           reason:`Resident test policy ${policyDecision.ruleId} denies ${capability} for ${resourceKey}`,
-          capability,resourceKey};
+          capability,resourceKey,remediation:{kind:"respect-denial",
+            message:"Respect the resident test policy and choose an operation it permits."}};
         this.observeAuthority(resolved.context,"authority-decided",{
           capability,resourceKey,tier:reviewedTier,decision:"test-policy-denied",snapshotDigest,
         });

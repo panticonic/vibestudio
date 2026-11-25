@@ -1,3 +1,8 @@
+import {
+  systemTestDoctorResultSchema,
+  type SystemTestDoctorResult,
+} from "@vibestudio/service-schemas/systemTestRunner";
+
 type DoctorCheck = {
   name?: unknown;
   ok?: unknown;
@@ -53,11 +58,17 @@ export function systemTestPreparationFailureDetail(output: string, diagnostics: 
 export function assertSystemTestPreparationResult(
   output: string,
   expectedWorkspaceId: string
-): void {
+): SystemTestDoctorResult & Record<string, unknown> {
   const result = lastJsonRecord(output);
   if (!result || result["ok"] !== true) {
     throw new Error("system-test startup preparation returned no successful doctor result");
   }
+  const validated = systemTestDoctorResultSchema.parse({
+    ok: result["ok"],
+    checks: result["checks"],
+  });
+  if (validated.checks.some((check) => !check.ok))
+    throw new Error("managed workspace preparation has failed readiness checks");
   const server = checks(result).find((check) => check.name === "server");
   const data =
     server?.data && typeof server.data === "object" && !Array.isArray(server.data)
@@ -80,4 +91,45 @@ export function assertSystemTestPreparationResult(
   if (reviewStatus !== "resolved" && reviewStatus !== "not-required") {
     throw new Error("managed workspace preparation has no completed creation-review receipt");
   }
+  return { ...result, ...validated };
+}
+
+/** A requested doctor can establish the barrier itself unless later work
+ * changes what that same doctor must inspect (source adoption or devices). */
+export function canUseRequestedStartupDoctor(options: {
+  created: boolean;
+  command: readonly string[];
+  selfDevelopment: boolean;
+  devices: readonly unknown[];
+  recheck: boolean;
+}): boolean {
+  return (
+    options.created &&
+    options.command[0] === "doctor" &&
+    !options.selfDevelopment &&
+    options.devices.length === 0 &&
+    !options.recheck
+  );
+}
+
+/** Startup checks must inspect the same explicitly requested model. */
+export function startupDoctorCommand(command: readonly string[]): string[] {
+  if (command[0] === "doctor") {
+    const result = command.filter((arg) => arg !== "--json");
+    if (!result.includes("--approve-startup")) result.push("--approve-startup");
+    result.push("--json");
+    return result;
+  }
+  const result = ["doctor", "--approve-startup", "--json"];
+  for (let i = 1; i < command.length && command[i] !== "--"; i++) {
+    const arg = command[i];
+    if (arg === undefined) continue;
+    if (arg === "--model") {
+      const model = command[++i];
+      if (!model || model.startsWith("--")) throw new Error("--model requires a value");
+      result.push("--model", model);
+    } else if (arg.startsWith("--model=")) result.push(arg);
+    else if (arg === "--native-reference") result.push(arg);
+  }
+  return result;
 }

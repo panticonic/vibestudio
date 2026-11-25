@@ -121,10 +121,10 @@ function setup(input: {
 describe("evaluated-run authority ceiling", () => {
   it.each(["model.use", "credential.use", "internal-model-runtime.use"])("denies explicit native-reference %s despite a preexisting grant", async capability => {
     const {dispatcher,context,handler,request}=setup({mode:"adaptive",approvals:"prompt",granted:true,testPolicy:true,testDecision:"deny",capability});
-    await expect(dispatcher.dispatch(context,"manifestTest","write",[])).rejects.toMatchObject({code:"ETESTPOLICYDENIED"});
+    await expect(dispatcher.dispatch(context,"manifestTest","write",[])).rejects.toMatchObject({code:"ETESTPOLICYDENIED",errorData:{authorityFailure:{remediation:{kind:"respect-denial"}}}});
     expect(handler).not.toHaveBeenCalled();expect(request).not.toHaveBeenCalled();
     const preflight=await dispatcher.preflightAuthority(context,"manifestTest","write",[]);
-    expect(preflight.leaves).toEqual(expect.arrayContaining([expect.objectContaining({status:"denied"})]));
+    expect(preflight.leaves).toEqual(expect.arrayContaining([expect.objectContaining({status:"denied",failure:expect.objectContaining({remediation:expect.objectContaining({kind:"respect-denial"})})})]));
   });
   it("returns typed writable-session recovery for a read-only eval", async () => {
     const { dispatcher, context, handler } = setup({
