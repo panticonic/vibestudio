@@ -1563,7 +1563,7 @@ describe("EgressProxy", () => {
     }
   });
 
-  it("gates attributed raw workerd HTTP egress through capability approval", async () => {
+  it("rejects attributed raw workerd loopback HTTP before capability approval", async () => {
     const approvalQueue = createApprovalQueueMock("version");
     const authority = rawEgressAuthority(approvalQueue);
     const auditLog = new MemoryAuditLog();
@@ -1597,19 +1597,8 @@ describe("EgressProxy", () => {
 
       expect(res.status).toBe(403);
       expect(upstreamRequests).toBe(0);
-      expect(approvalQueue.request).toHaveBeenCalledWith(
-        expect.objectContaining({
-          kind: "capability",
-          capability: "network.response.read",
-          callerId: "worker:test",
-          repoPath: "/repo",
-          resource: {
-            type: "url-origin",
-            label: "Website",
-            value: `http://127.0.0.1:${targetPort}`,
-          },
-        })
-      );
+      // An ordinary capability approval cannot authorize a loopback endpoint.
+      expect(approvalQueue.request).not.toHaveBeenCalled();
       expect(auditLog.entries[0]).toMatchObject({
         callerId: "worker:test",
         workerId: "/repo",
@@ -1702,7 +1691,7 @@ describe("EgressProxy", () => {
     }
   });
 
-  it("reuses raw workerd egress approvals by origin", async () => {
+  it("does not prompt for repeated raw workerd loopback egress", async () => {
     const approvalQueue = createApprovalQueueMock("version");
     const authority = rawEgressAuthority(approvalQueue);
     let targetPort = 0;
@@ -1735,7 +1724,7 @@ describe("EgressProxy", () => {
         expect(res.status).toBe(403);
       }
       expect(upstreamRequests).toBe(0);
-      expect(approvalQueue.request).toHaveBeenCalledTimes(1);
+      expect(approvalQueue.request).not.toHaveBeenCalled();
     } finally {
       await proxy.stop();
       await new Promise<void>((resolve) => target.close(() => resolve()));
@@ -4047,6 +4036,124 @@ describe("EgressProxy credential actor attribution", () => {
         accessToken: "bob-token",
         agentExchange: exchange,
       });
+    }
+  });
+});
+
+describe("protected HTTP preconnect retry ownership", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  const preconnect = () =>
+    new TypeError("fetch failed", {
+      cause: new AggregateError([
+        Object.assign(new Error("connect timeout"), { code: "ETIMEDOUT", syscall: "connect" }),
+        Object.assign(new Error("unreachable"), { code: "ENETUNREACH", syscall: "connect" }),
+      ]),
+    });
+  const request = () => ({
+    caller: workerCaller("worker:test"),
+    credentialId: "cred-1",
+    url: "https://api.example.test/v1/stream",
+    method: "POST",
+    body: "actual payload",
+  });
+  it("retries before the provider head with no duplicate frames and records its actual retry", async () => {
+    const audit = new MemoryAuditLog(),
+      proxy = createProxy(createCredential(), audit);
+    const fetch = vi
+      .fn()
+      .mockRejectedValueOnce(preconnect())
+      .mockResolvedValueOnce(new Response("actual response"));
+    vi.stubGlobal("fetch", fetch);
+    const frames: string[] = [];
+    try {
+      const result = await proxy.forwardProxyFetchStream(request(), (frame) => {
+        frames.push(frame.kind);
+      });
+      expect(result.status).toBe(200);
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(frames).toEqual(["head", "chunk", "end"]);
+      expect(audit.entries[0]).toMatchObject({ retries: 1 });
+    } finally {
+      await proxy.stop();
+    }
+  });
+  it("does not multiply retries after both provider connection attempts fail", async () => {
+    const audit = new MemoryAuditLog(),
+      proxy = createProxy(createCredential(), audit),
+      error = preconnect();
+    const fetch = vi.fn().mockRejectedValue(error);
+    vi.stubGlobal("fetch", fetch);
+    const frames: string[] = [];
+    try {
+      await expect(
+        proxy.forwardProxyFetchStream(request(), (frame) => {
+          frames.push(frame.kind);
+        })
+      ).rejects.toThrow("fetch failed");
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(frames).toEqual([]);
+      expect(audit.entries[0]).toMatchObject({ retries: 1 });
+    } finally {
+      await proxy.stop();
+    }
+  });
+  it("does not treat a buffered POST as an idempotency contract", async () => {
+    const proxy = createProxy(createCredential());
+    const fetch = vi.fn().mockResolvedValue(new Response("server failed", { status: 500 }));
+    vi.stubGlobal("fetch", fetch);
+    try {
+      expect((await proxy.forwardProxyFetch(request())).status).toBe(500);
+      expect(fetch).toHaveBeenCalledOnce();
+    } finally {
+      await proxy.stop();
+    }
+  });
+  it("does not replay a buffered POST after an ambiguous write/read failure", async () => {
+    const proxy = createProxy(createCredential()),
+      error = new TypeError("fetch failed", {
+        cause: Object.assign(new Error("socket reset"), { code: "ECONNRESET", syscall: "read" }),
+      });
+    const fetch = vi.fn().mockRejectedValue(error);
+    vi.stubGlobal("fetch", fetch);
+    try {
+      await expect(proxy.forwardProxyFetch(request())).rejects.toThrow("fetch failed");
+      expect(fetch).toHaveBeenCalledOnce();
+    } finally {
+      await proxy.stop();
+    }
+  });
+  it("bounds buffered POST connection failures to two attempts", async () => {
+    const audit = new MemoryAuditLog(),
+      proxy = createProxy(createCredential(), audit),
+      error = preconnect();
+    const fetch = vi.fn().mockRejectedValue(error);
+    vi.stubGlobal("fetch", fetch);
+    try {
+      await expect(proxy.forwardProxyFetch(request())).rejects.toThrow("fetch failed");
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(audit.entries[0]).toMatchObject({ retries: 1 });
+    } finally {
+      await proxy.stop();
+    }
+  });
+  it("leaves idempotent GET retries with the outer owner instead of nesting them", async () => {
+    const audit = new MemoryAuditLog(),
+      proxy = createProxy(createCredential(), audit);
+    const fetch = vi
+      .fn()
+      .mockRejectedValueOnce(preconnect())
+      .mockResolvedValueOnce(new Response("ok"));
+    vi.stubGlobal("fetch", fetch);
+    try {
+      await proxy.forwardProxyFetch({ ...request(), method: "GET", body: undefined });
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(fetch.mock.calls[0]![1].dispatcher).not.toBe(fetch.mock.calls[1]![1].dispatcher);
+      expect(audit.entries[0]).toMatchObject({ retries: 1 });
+    } finally {
+      await proxy.stop();
     }
   });
 });

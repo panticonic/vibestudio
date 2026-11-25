@@ -12,7 +12,7 @@ import type {
 } from "node:http";
 import type { Duplex } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { Agent, type Dispatcher } from "undici";
+import { Agent } from "undici";
 
 import type { AuditLog } from "@vibestudio/credential-client/audit";
 import type {
@@ -68,7 +68,10 @@ import { connect as netConnect, isIP } from "node:net";
 import type { ResolvedCodeIdentity } from "./principalIdentity.js";
 import { testPolicyAllowsGatedInvocation } from "./authorityRuntime.js";
 import { resolveCredentialByLabel } from "./credentialSelection.js";
-import { bridgeDuplexSockets, consumeSocketErrorsUntilClose } from "@vibestudio/shared/socketBridge";
+import {
+  bridgeDuplexSockets,
+  consumeSocketErrorsUntilClose,
+} from "@vibestudio/shared/socketBridge";
 import { CDP_INTERNAL_GRANT_HEADER } from "@vibestudio/shared/cdpGrants";
 import {
   RpcBoundaryError,
@@ -653,7 +656,8 @@ export class EgressProxy {
       credential: credentialSelection(params.credentialId),
       credentialUse,
       initialBytesOut: bytesOut,
-      replaySafe: true,
+      // Buffered bytes do not grant semantic replay safety to a POST.
+      replaySafe: false,
       execute: async (targetUrl, headers, _authorization, transport) => {
         const response = await requestHostHttp({
           url: targetUrl,
@@ -661,6 +665,8 @@ export class EgressProxy {
           headers: headers as HeadersInit,
           body: body ? Buffer.from(body) : undefined,
           dispatcher: transport.dispatcher,
+          retryPreconnect: !shouldRetryRequest(params.method),
+          onPreconnectRetry: transport.onPreconnectRetry,
           signal: transport.signal,
         });
         const redirect = isRedirectStatus(response.status) && response.headers.has("location");
@@ -771,22 +777,23 @@ export class EgressProxy {
       credential: credentialSelection(params.credentialId),
       credentialUse: "fetch",
       initialBytesOut: bytesOut,
-      // Retries are unsafe once the head frame has been emitted (the
-      // caller has already seen a partial response). Disable retries
-      // entirely for the streaming path to keep the contract simple.
+      // Never replay a response after emitting its head/body. The shared
+      // primitive may retry proven preconnect failures before any response,
+      // only when the request body itself is replayable.
       replaySafe: false,
       maxRetries: 0,
       execute: async (targetUrl, headers, authorization, transport) => {
-        const upstream = await fetch(targetUrl.toString(), {
+        const upstream = await requestHostHttp({
+          url: targetUrl,
           method: params.method,
           headers: headers as HeadersInit,
           body: body as BodyInit | undefined,
           signal: abortSignal ? AbortSignal.any([abortSignal, transport.signal]) : transport.signal,
-          redirect: "manual",
           // undici requires half-duplex to be declared for stream bodies.
-          ...(bodyIsStream ? { duplex: "half" } : {}),
+          ...(bodyIsStream ? { duplex: "half" as const } : {}),
           dispatcher: transport.dispatcher,
-        } as RequestInit & { dispatcher: Dispatcher });
+          onPreconnectRetry: transport.onPreconnectRetry,
+        });
 
         await this.deps.recordExternalIngestion?.(
           params.caller,
@@ -925,6 +932,8 @@ export class EgressProxy {
           headers: headers as HeadersInit,
           body: body ? Buffer.from(body) : undefined,
           dispatcher: transport.dispatcher,
+          retryPreconnect: !shouldRetryRequest(params.method),
+          onPreconnectRetry: transport.onPreconnectRetry,
           signal: transport.signal,
         });
         if (isRedirectStatus(response.status)) {
@@ -1226,6 +1235,7 @@ export class EgressProxy {
         destination: NetworkDestination;
         dispatcher: Agent;
         signal: AbortSignal;
+        onPreconnectRetry: () => void;
         hold(socket: Duplex | ServerResponse): void;
       }
     ) => Promise<RequestExecutionResult<T>>;
@@ -1344,6 +1354,9 @@ export class EgressProxy {
             destination,
             dispatcher,
             signal,
+            onPreconnectRetry: () => {
+              retries += 1;
+            },
             hold: operation.hold,
           });
           statusCode = result.statusCode;
@@ -1444,7 +1457,9 @@ export class EgressProxy {
         ts: startedAt,
         workerId: authorization?.attribution
           ? attributionWorkerId(authorization.attribution)
-          : (attemptedHostAttribution?.workerId ?? "unknown"),
+          : (attemptedHostAttribution?.workerId ??
+            params.authority.caller.code?.repoPath ??
+            "unknown"),
         callerId:
           authorization?.attribution?.callerId ??
           attemptedHostAttribution?.callerId ??
