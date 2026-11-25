@@ -44,11 +44,11 @@ export function readNpmAuthToken({ env = process.env, savedOnly = false } = {}) 
   return { source: file, value };
 }
 
-/** One operation owns its isolated npm config until all child commands have joined. */
+/** Reuse one non-secret registry configuration; credentials remain per-operation environment values. */
 export function createNpmAuth({ env = process.env, required = false } = {}) {
   const token = readNpmAuthToken({ env });
   if (required && !token) throw new Error("npm requires a saved token. Run pnpm setup:npm-token.");
-  let directory;
+  let config;
   let closed = false;
   return {
     token,
@@ -59,26 +59,35 @@ export function createNpmAuth({ env = process.env, required = false } = {}) {
     environment() {
       if (closed) throw new Error("npm authentication operation is closed.");
       if (!token) return { ...env };
-      if (!directory) {
-        directory = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-npm-auth-"));
-        fs.writeFileSync(
-          path.join(directory, ".npmrc"),
-          "registry=https://registry.npmjs.org/\n//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}\n",
-          { mode: 0o600 }
-        );
+      if (!config) {
+        // This contains only an environment placeholder, never a credential.
+        // It is useful across invocations, unlike a fresh leaked /tmp tree.
+        const directory = path.join(path.dirname(npmTokenFilePath(env)), "npm");
+        fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+        config = path.join(directory, "registry-env.npmrc");
+        const contents =
+          "registry=https://registry.npmjs.org/\n//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}\n";
+        try {
+          fs.writeFileSync(config, contents, { mode: 0o600, flag: "wx" });
+        } catch (error) {
+          if (error.code !== "EEXIST") throw error;
+        }
+        if (fs.readFileSync(config, "utf8") !== contents)
+          throw new Error(
+            "The npm environment registry configuration was changed; refusing to overwrite it."
+          );
       }
       return {
         ...env,
         NODE_AUTH_TOKEN: token.value,
         NPM_CONFIG_REGISTRY: "https://registry.npmjs.org/",
         npm_config_registry: "https://registry.npmjs.org/",
-        NPM_CONFIG_USERCONFIG: path.join(directory, ".npmrc"),
-        npm_config_userconfig: path.join(directory, ".npmrc"),
+        NPM_CONFIG_USERCONFIG: config,
+        npm_config_userconfig: config,
       };
     },
     close() {
-      if (directory) fs.rmSync(directory, { recursive: true, force: true });
-      directory = undefined;
+      config = undefined;
       closed = true;
     },
   };

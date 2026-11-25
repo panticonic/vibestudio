@@ -25,7 +25,7 @@ export default defineConfig(async (): Promise<UserConfig> => {
     "./src/dev/developmentTemplateComposition.ts",
     import.meta.url
   )) as typeof import("./src/dev/developmentTemplateComposition.js");
-  const composition = composeDevelopmentTemplateCheckouts(
+  const composition = await composeDevelopmentTemplateCheckouts(
     selected.sources
       .filter(({ id }) => id === "base" || id === template)
       .map(({ id, url }) => ({ checkout: selected.checkouts[id]!, url }))

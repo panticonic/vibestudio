@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -48,15 +47,15 @@ if (workspaceArgumentIndex < 0) {
   const base = selected.sources.find(({ id }) => id === "base")!;
   for (const source of sources) {
     const name = source.id;
-    const composition = composeDevelopmentTemplateCheckouts(
+    const composition = await composeDevelopmentTemplateCheckouts(
       (name === "base" ? [base] : [base, source]).map(({ id, url }) => ({
         checkout: checkouts[id]!,
         url,
       }))
     );
     await runWithOwnedCleanup(
-      () =>
-        execFileSync(
+      async () => {
+        const owned = composition.ownership.spawn(
           process.execPath,
           [
             "--import",
@@ -67,8 +66,22 @@ if (workspaceArgumentIndex < 0) {
             ...(name === "base" ? ["--host-integration"] : []),
             ...(packageRelease ? ["--package-release", path.resolve(packageRelease)] : []),
           ],
-          { cwd: appRoot, stdio: "inherit" }
-        ),
+          { cwd: appRoot, stdio: "inherit", kill: "graceful", label: `typecheck:${name}` }
+        );
+        await runWithOwnedCleanup(
+          () =>
+            new Promise<void>((resolve, reject) => {
+              owned.child.once("error", reject);
+              owned.child.once("exit", (code, signal) =>
+                code === 0
+                  ? resolve()
+                  : reject(new Error(`Userland typecheck ${name} exited with ${code ?? signal}`))
+              );
+            }),
+          () => owned.join(),
+          `Userland typecheck process retirement failed for ${name}`
+        );
+      },
       () => composition.release(),
       `Userland typecheck cleanup failed for ${name}`
     );

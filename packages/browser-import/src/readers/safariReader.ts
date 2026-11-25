@@ -18,7 +18,7 @@ import type {
 } from "../types.js";
 import { BrowserDataError } from "../errors.js";
 import { macTimestampToMs } from "../normalize/history.js";
-import { copyDatabaseToTemp, cleanupTempCopy } from "../import/fileCopier.js";
+import { copyDatabaseToTemp, type TempCopy } from "../import/fileCopier.js";
 
 // ---- Binary cookies parser ----
 
@@ -316,10 +316,10 @@ export class SafariReader implements BrowserDataReader {
       return [];
     }
 
-    let tempPath: string | undefined;
+    let tempPath: TempCopy | undefined;
     try {
       tempPath = await copyDatabaseToTemp(dbPath);
-      const db = await openReadonlySqlite(tempPath);
+      const db = await openReadonlySqlite(tempPath.path);
 
       try {
         const rows = db
@@ -384,7 +384,7 @@ export class SafariReader implements BrowserDataReader {
       }
       throw err;
     } finally {
-      if (tempPath) cleanupTempCopy(tempPath);
+      if (tempPath) await tempPath.release();
     }
   }
 
@@ -497,10 +497,10 @@ export class SafariReader implements BrowserDataReader {
       return [];
     }
 
-    let tempPath: string | undefined;
+    let tempPath: TempCopy | undefined;
     try {
       tempPath = await copyDatabaseToTemp(dbPath);
-      const db = await openReadonlySqlite(tempPath);
+      const db = await openReadonlySqlite(tempPath.path);
 
       try {
         // PerSitePreferences.db has a `preference_values` table with
@@ -557,7 +557,7 @@ export class SafariReader implements BrowserDataReader {
       }
       throw err;
     } finally {
-      if (tempPath) cleanupTempCopy(tempPath);
+      if (tempPath) await tempPath.release();
     }
   }
 

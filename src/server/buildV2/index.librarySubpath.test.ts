@@ -373,7 +373,7 @@ describe("BuildSystemV2 library package subpaths", () => {
   it.each([
     ["/semantic-outcome-contract","worker"], ["/semantic-outcome-contract","panel"], ["","worker"],
   ] as const)("builds the real system-testing package%s (%s)", async (subpath,target) => {
-    const composition=composeDevelopmentTemplateCheckouts(["base","system","system-testing"].map(name=>({checkout:exactTemplateRoots[name]!,url:`fixture://${name}`})));
+    const composition=await composeDevelopmentTemplateCheckouts(["base","system","system-testing"].map(name=>({checkout:exactTemplateRoots[name]!,url:`fixture://${name}`})));
     try {
       buildSystem=await initBuildSystemV2(composition.root,fakeWorkspaceSource(()=>composition.root),buildRoots(composition.root));
       const result=await buildSystem.getBuild("@workspace-skills/system-testing"+subpath,undefined,{library:true,libraryTarget:target});
@@ -387,7 +387,7 @@ describe("BuildSystemV2 library package subpaths", () => {
         expect(assess({passed:true,checks:{observed:true}}).passed).toBe(true);
         expect(assess({passed:false,checks:{observed:false}}).passed).toBe(false);
       }
-    } finally {await buildSystem?.shutdown();buildSystem=null;composition.release();}
+    } finally {await buildSystem?.shutdown();buildSystem=null;await composition.release();}
   });
 
   it("builds a requested package wildcard export subpath", async () => {

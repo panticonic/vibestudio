@@ -69,7 +69,7 @@ export default defineConfig(async (): Promise<UserConfig> => {
   if (!testSourceRoot) {
     throw new Error(`Unknown VIBESTUDIO_USERLAND_TEMPLATE ${JSON.stringify(template)}`);
   }
-  const composition = composeDevelopmentTemplateCheckouts(
+  const composition = await composeDevelopmentTemplateCheckouts(
     (template === "base"
       ? selected.sources.filter(({ id }) => id === "base")
       : selected.sources.filter(({ id }) => id === "base" || id === template)

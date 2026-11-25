@@ -64,7 +64,7 @@ const repoRoot = path.resolve(__dirname, "..", "..");
  * *libraries* they import are ordinary userland units, and their npm
  * dependencies have to be resolvable or the RN runner cannot load them at all.
  */
-function userlandDependencyModules(selectedTemplates) {
+async function userlandDependencyModules(selectedTemplates) {
   const { register } = require(require.resolve("tsx/cjs/api", { paths: [repoRoot] }));
   const unregister = register();
   try {
@@ -74,22 +74,39 @@ function userlandDependencyModules(selectedTemplates) {
     const { composeDevelopmentTemplateCheckouts } = require(
       path.join(repoRoot, "src/dev/developmentTemplateComposition.ts")
     );
-    const composition = composeDevelopmentTemplateCheckouts(
+    const composition = await composeDevelopmentTemplateCheckouts(
       selectedTemplates.sources
         .filter(({ id }) => id === "base" || id === "system")
         .map(({ id, url }) => ({ checkout: selectedTemplates.checkouts[id], url }))
     );
-    return prepareUserlandDependencyProjection({
-      appRoot: repoRoot,
-      workspaceRoot: composition.root,
-      includeDevelopmentDependencies: true,
-    }).then((projection) => ({
-      ...projection,
-      release() {
-        projection.release();
-        composition.release();
-      },
-    }));
+    try {
+      const projection = await prepareUserlandDependencyProjection({
+        appRoot: repoRoot,
+        workspaceRoot: composition.root,
+        includeDevelopmentDependencies: true,
+      });
+      return {
+        ...projection,
+        async release() {
+          try {
+            await projection.release();
+          } finally {
+            await composition.release();
+          }
+        },
+      };
+    } catch (error) {
+      try {
+        await composition.release();
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          "React Native projection and retirement failed",
+          { cause: error }
+        );
+      }
+      throw error;
+    }
   } finally {
     unregister();
   }
@@ -113,9 +130,10 @@ module.exports = (async () => {
   // The projection is a lease on the content-addressed cache, recorded durably.
   // Holding it for the run is the point; keeping it after the run would pin the
   // entry against pruning forever.
-  process.on("exit", () => projection.release());
+  globalThis[Symbol.for("vibestudio.react-native.projection")] = projection;
   return {
     preset: "react-native",
+    globalTeardown: path.join(__dirname, "jest.globalTeardown.cjs"),
     // rootDir stays in the host so the preset, its transforms, and every bare
     // module name still resolve against the host install. Only test discovery
     // points at userland.

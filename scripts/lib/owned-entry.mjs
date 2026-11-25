@@ -1,4 +1,4 @@
-import { statSync } from "node:fs";
+import { statSync, mkdirSync, mkdtempSync } from "node:fs";
 import { constants as osConstants } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,6 +43,9 @@ function stopRequested(signal) {
  * - `scratchRoot`: a reaper-owned private directory under the profile
  *   (disk-backed, never `/tmp`) when `scratchPrefix` is given.
  *
+ * `keepScratch` (or VIBESTUDIO_KEEP_SCRATCH=1) explicitly retains scratch
+ * under profile/kept-scratch after all owned processes retire.
+ *
  * With `appRoot`, `VIBESTUDIO_APP_ROOT` is set to it for this process and its
  * children. Without it, an already-set `VIBESTUDIO_APP_ROOT` stands, and
  * otherwise the application these scripts belong to is the root.
@@ -55,7 +58,12 @@ function stopRequested(signal) {
  */
 export async function ownedEntry(
   main,
-  { appRoot, scratchPrefix, profileDir = getProfileDataPath() } = {}
+  {
+    appRoot,
+    scratchPrefix,
+    profileDir = getProfileDataPath(),
+    keepScratch = process.env.VIBESTUDIO_KEEP_SCRATCH === "1",
+  } = {}
 ) {
   if (appRoot !== undefined) {
     if (
@@ -96,7 +104,16 @@ export async function ownedEntry(
       if (source.aborted) lost(source.reason);
       else source.addEventListener("abort", () => lost(source.reason), { once: true });
     }
-    const scratchRoot = scratchPrefix ? await ownership.scratch(scratchPrefix) : undefined;
+    let scratchRoot;
+    if (scratchPrefix) {
+      if (keepScratch) {
+        const parent = path.join(profileDir, "kept-scratch");
+        mkdirSync(parent, { recursive: true, mode: 0o700 });
+        scratchRoot = mkdtempSync(
+          path.join(parent, scratchPrefix.replace(/[^A-Za-z0-9._-]/gu, "_"))
+        );
+      } else scratchRoot = await ownership.scratch(scratchPrefix);
+    }
     controller.signal.throwIfAborted();
     result = await main({ signal: controller.signal, ownership, scratchRoot });
   } catch (error) {

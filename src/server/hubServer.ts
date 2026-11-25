@@ -12,7 +12,6 @@ import { deserializeRpcFailure, workspaceRpcDestination } from "@vibestudio/rpc"
 import { nativeWorkspaceCleanup } from "@vibestudio/shared/nativeWorkspaceCleanup";
 import * as fs from "node:fs";
 import * as http from "node:http";
-import * as os from "node:os";
 import * as path from "node:path";
 import type { ChildProcess } from "node:child_process";
 import { Ownership, sweep, type OwnedProcess } from "@vibestudio/shared/ownership";
@@ -3134,7 +3133,7 @@ async function startWorkspaceRuntime(
     if (error) throw new Error(error);
   }
   if (!launchSet.serverEntry) throw new Error("Workspace child launch set has no server entry");
-  const readyDir = fs.mkdtempSync(path.join(os.tmpdir(), `vibestudio-workspace-${workspaceName}-`));
+  const readyDir = await state.ownership.scratch(`vibestudio-workspace-${workspaceName}-`);
   const readyFile = path.join(readyDir, "ready.json");
   const publicUrl = workspaceEndpointUrl(state, workspaceName);
   const childArgs = buildWorkspaceChildArgs({
