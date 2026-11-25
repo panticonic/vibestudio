@@ -15,7 +15,12 @@
 import type * as esbuild from "esbuild";
 import * as fs from "node:fs";
 import * as path from "path";
-import { RpcBoundaryError } from "@vibestudio/rpc";
+import {
+  RpcBoundaryError,
+  errorDataProperty,
+  operationalErrorMetadata,
+  type OperationalErrorMetadata,
+} from "@vibestudio/rpc";
 import type {
   AgentDiagnosticRepairWire,
   WorkspaceTestPlan,
@@ -62,6 +67,7 @@ export interface BuildDiagnostic {
   message: string;
   /** Preserve the producer's diagnostic identity instead of parsing prose. */
   compilerCode?: number;
+  operationalError?: OperationalErrorMetadata;
   lineText?: string;
   suggestion?: string;
   repair?: AgentDiagnosticRepair;
@@ -226,34 +232,62 @@ export function workspaceDiagnosticPath(
 }
 
 /** Map a single esbuild Message → BuildDiagnostic. */
+function arrayDataItems(value: unknown): unknown[] {
+  if (!Array.isArray(value)) return [];
+  try {
+    return Object.keys(value)
+      .filter((key) => /^(?:0|[1-9]\d*)$/u.test(key))
+      .map((key) => errorDataProperty(value, key))
+      .filter((item) => item !== undefined);
+  } catch {
+    return [];
+  }
+}
+
 function esbuildMessageToDiagnostic(
   msg: esbuild.Message,
   severity: "error" | "warning",
   contextOrWorkspaceRoot?: string | DiagnosticPathContext
 ): BuildDiagnostic {
-  const loc = msg.location;
+  const text = errorDataProperty(msg, "text");
+  const operational = operationalErrorMetadata(errorDataProperty(msg, "detail"));
+  const infrastructure =
+    typeof text !== "string" ||
+    Boolean(
+      operational.code ||
+      operational.errno !== undefined ||
+      operational.syscall ||
+      operational.cause ||
+      operational.errors
+    );
+  const loc = errorDataProperty(msg, "location");
+  const field = (key: string) => errorDataProperty(loc, key);
+  const file = typeof field("file") === "string" ? (field("file") as string) : "";
+  const namespace = typeof field("namespace") === "string" ? (field("namespace") as string) : "";
   const namespacedFile =
-    loc?.namespace && loc.file.startsWith(`${loc.namespace}:`)
-      ? loc.file.slice(loc.namespace.length + 1)
-      : (loc?.file ?? "");
+    namespace && file.startsWith(`${namespace}:`) ? file.slice(namespace.length + 1) : file;
+  const suggested = field("suggestion");
   const suggestion =
-    loc?.suggestion && loc.suggestion.length > 0
-      ? loc.suggestion
-      : (msg.notes ?? [])
-          .map((n) => n.text)
-          .filter(Boolean)
+    typeof suggested === "string" && suggested.length
+      ? suggested
+      : arrayDataItems(errorDataProperty(msg, "notes"))
+          .map((note) => errorDataProperty(note, "text"))
+          .filter((text): text is string => typeof text === "string" && Boolean(text))
           .join("; ") || undefined;
+  const line = typeof field("line") === "number" ? (field("line") as number) : 0;
+  const column = typeof field("column") === "number" ? (field("column") as number) : 0;
+  const length = field("length"),
+    lineText = field("lineText");
   return {
-    source: "esbuild",
+    source: infrastructure ? "infrastructure" : "esbuild",
+    ...(infrastructure ? { operationalError: operational } : {}),
     severity,
     file: workspaceDiagnosticPath(namespacedFile, contextOrWorkspaceRoot),
-    // esbuild line is 1-based; column is 0-based byte offset on the line.
-    line: loc?.line ?? 0,
-    column: loc?.column ?? 0,
-    endColumn:
-      loc && typeof loc.length === "number" && loc.length > 0 ? loc.column + loc.length : undefined,
-    message: msg.text,
-    lineText: loc?.lineText || undefined,
+    line,
+    column,
+    endColumn: typeof length === "number" && length > 0 ? column + length : undefined,
+    message: typeof text === "string" ? text : "Build diagnostic unavailable",
+    lineText: typeof lineText === "string" && lineText ? lineText : undefined,
     suggestion,
   };
 }
@@ -262,7 +296,7 @@ function esbuildMessageToDiagnostic(
  * Extract structured diagnostics from an unknown error thrown by an esbuild
  * build. Recognizes esbuild's `BuildFailure` (with `.errors`/`.warnings`),
  * our own `BuildDiagnosticsError`, and falls back to a single synthetic
- * diagnostic carrying `error.message`.
+ * infrastructure diagnostic carrying safe operational identity and the original data message.
  */
 export function diagnosticsFromError(
   error: unknown,
@@ -275,24 +309,34 @@ export function diagnosticsFromError(
     }));
   }
 
-  const failure = error as Partial<esbuild.BuildFailure> | undefined;
+  const errors = errorDataProperty(error, "errors");
+  const warnings = errorDataProperty(error, "warnings");
   const out: BuildDiagnostic[] = [];
-  if (failure && Array.isArray(failure.errors)) {
-    for (const msg of failure.errors) {
-      out.push(esbuildMessageToDiagnostic(msg, "error", contextOrWorkspaceRoot));
+  if (Array.isArray(errors)) {
+    for (const msg of arrayDataItems(errors)) {
+      out.push(esbuildMessageToDiagnostic(msg as esbuild.Message, "error", contextOrWorkspaceRoot));
     }
   }
-  if (failure && Array.isArray(failure.warnings)) {
-    for (const msg of failure.warnings) {
-      out.push(esbuildMessageToDiagnostic(msg, "warning", contextOrWorkspaceRoot));
+  if (Array.isArray(warnings)) {
+    for (const msg of arrayDataItems(warnings)) {
+      out.push(
+        esbuildMessageToDiagnostic(msg as esbuild.Message, "warning", contextOrWorkspaceRoot)
+      );
     }
   }
   if (out.length > 0) return out;
 
-  const message = error instanceof Error ? error.message : String(error);
+  const observedMessage = errorDataProperty(error, "message");
+  const message =
+    typeof observedMessage === "string"
+      ? observedMessage
+      : error === null || (typeof error !== "object" && typeof error !== "function")
+        ? String(error)
+        : "Build operation failed";
   return [
     {
-      source: "esbuild",
+      source: "infrastructure",
+      operationalError: operationalErrorMetadata(error),
       severity: "error",
       file: "",
       line: 0,
