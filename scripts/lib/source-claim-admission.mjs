@@ -77,6 +77,23 @@ export function outcomeWorkspaceReviewInput(proof,world){
   return input;
 }
 
+/** Bind a requested vault answer to captured output and actor-visible native facts. */
+export function vaultKnowledgeReviewInput(proof,world,applicationResult){
+  const input=proof.semanticReviewInput;
+  const observations=proof.actorObservations;
+  requireFact(world.kind==="vaultWork"&&!world.expected.steps.some(step=>step.kind==="write")&&
+    proof.semanticReviewRequired===true&&input?.actual?.goal===world.goal&&
+    equal(input.expected,{goal:world.goal})&&
+    typeof applicationResult?.answer==="string"&&applicationResult.answer.trim()&&
+    input.actual.requestedAnswer===applicationResult.answer&&
+    observations&&Array.isArray(observations.views)&&Array.isArray(observations.receipts)&&
+    equal(input.actual,{goal:world.goal,observations:{views:observations.views,receipts:observations.receipts,events:proof.events,journal:proof.journal,
+      final:proof.final,handoff:proof.handoff},requestedAnswer:applicationResult.answer})&&
+    typeof input.rubric==="string"&&input.rubric.trim(),
+    "Vault answer review differs from the captured requested answer or actor-visible native observations");
+  return input;
+}
+
 export function sourceContentReviewInput(proof,world){
   const nested=world.kind==="pdfVault"?proof.proof?.vault:proof;
   const input=nested?.semanticReviewInput,evidence=nested?.sourceContentEvidence;
@@ -86,6 +103,9 @@ export function sourceContentReviewInput(proof,world){
     paths.length>0&&paths.every(path=>typeof path==="string"&&path)&&equal(input.expected.editablePaths,paths)&&
     evidence&&equal(input.actual,{goal:world.goal,...evidence})&&typeof input.rubric==="string"&&input.rubric.trim(),
     "Source content review differs from actual native documents, current readback or authorized paths");
+  if(world.kind==="vaultWork")requireFact(equal(evidence.events,proof.events)&&equal(evidence.journal,proof.journal)&&
+    equal(evidence.navigationHops,proof.hops)&&equal(evidence.handoff,proof.handoff),
+    "Vault source review differs from actual actor navigation, chronology or handoff");
   if(world.kind!=="pdfVault")return input;
   requireFact(proof.proof?.handoff?.status==="bound"&&proof.proof.handoff.source,
     "PDF-backed source review requires its exact independently verified PDF handoff");

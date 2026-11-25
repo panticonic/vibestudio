@@ -15,6 +15,15 @@ function sample(kind="research") {
  sources:[{url,title:"Examples",sha256:hash(text),text,...(kind==="assigned-public-brief"?{requested:url}:{})}]}};
  const proof={semanticReviewRequired:true,semanticReviewInput:input,actualResult:value,fetched:[{url,digest:hash(text),page:{url,digest:hash(text),title:"Examples"}}]};
  if(kind==="assigned-public-brief")proof.assignedPublicBrief={shared:{cache:[{digest:hash(text),requested:url,visible:text}],reads:[{page:proof.fetched[0].page}]}};
+ if(kind.endsWith("-and-edit")){
+  const original="Example domains need registration.",retained="Example domains need no registration.";
+  world.edit={destination:"note.md",source:"approval.md",files:{"note.md":original,"approval.md":text},concurrentAddition:""};
+  proof.document={contents:{"note.md":retained},reads:[{path:"note.md",version:hash(retained)}]};
+  value.revision={status:"edited",path:"note.md",version:hash(retained)};
+  input.actual.documentEdits=[{path:"note.md",originalText:original,originalSha256:hash(original),retainedText:retained,
+   retainedSha256:hash(retained),editableOriginal:original,actualReplacement:retained,protectedPrefix:"",protectedSuffix:"",
+   concurrentAddition:"",authority:{path:"approval.md",text,sha256:hash(text)}}];
+ }
  return{world,proof,input};
 }
 test("bind actual multi-domain and assigned application results without a generic report",()=>{
@@ -23,6 +32,10 @@ test("bind actual multi-domain and assigned application results without a generi
 });
 test("do not let a different answer or citation obtain review for the original trace",()=>{
  for(const field of ["answer","citations"]){const s=sample();s.input.actual[field]=field==="answer"?JSON.stringify({status:"answered",statements:[]}):[];assert.throws(()=>sourceClaimReviewInput(s.proof,s.world),/actual application result/);}
+});
+test("research edits require their independently retained document scope",()=>{
+ const s=sample("research-and-edit");delete s.proof.document;
+ assert.throws(()=>sourceClaimReviewInput(s.proof,s.world),/actual retained bytes/);
 });
 test("self-consistent fabricated source bytes cannot replace the independently read page",()=>{
  const s=sample();s.input.actual.sources[0].text="Some unrelated source text";s.input.actual.sources[0].sha256=hash(s.input.actual.sources[0].text);s.input.actual.citations=[];s.proof.actualResult.statements=[];s.input.actual.answer=JSON.stringify(s.proof.actualResult);

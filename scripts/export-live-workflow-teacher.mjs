@@ -8,7 +8,7 @@ import { isDeepStrictEqual, parseArgs } from "node:util";
 import { gunzipSync } from "node:zlib";
 import { requireDevelopmentTemplateCheckouts } from "../src/dev/developmentTemplateConfig.cjs";
 import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
-import { sourceClaimKinds, sourceClaimReviewInput, workspaceEditReviewInput, editorialReviewInput, coordinatedRevisionReviewInput, outcomeWorkspaceReviewInput, sourceContentReviewInput, sourceClaimProgramIdentity, sourceClaimReviewMatches, sourceClaimReviewPath } from "./lib/source-claim-admission.mjs";
+import { sourceClaimKinds, sourceClaimReviewInput, workspaceEditReviewInput, editorialReviewInput, coordinatedRevisionReviewInput, outcomeWorkspaceReviewInput, sourceContentReviewInput, vaultKnowledgeReviewInput, sourceClaimProgramIdentity, sourceClaimReviewMatches, sourceClaimReviewPath } from "./lib/source-claim-admission.mjs";
 
 const sharedProgram = "skills/vibestudio-workflows/runWorkflow.nl";
 const templateGoalDomains = {
@@ -1507,7 +1507,7 @@ export async function loadLiveTeacherCases(checkouts) {
         ...(assignment.devices ? { devices: assignment.devices } : {}),
         ...(assignment.requiresAndroidEmulator ? { requiresAndroidEmulator: true } : {}),
         ...(assignment.requiresDeploymentPackage ? { requiresDeploymentPackage: true } : {}),
-        ...((observedContentNeedsReview(assignment)||sourceClaimKinds.has(assignment.kind)||assignment.kind==="workspace-edit"||assignment.kind==="editorial-packet"||assignment.kind==="coordinated-revision"||assignment.kind==="outcome-workspace"||assignment.kind==="google-runbook"&&assignment.action==="revise"||assignment.kind==="spectrolite"&&assignment.writablePath||assignment.kind==="vaultWork"&&assignment.expected.steps.some(step=>step.kind==="write")||assignment.kind==="pdfVault"&&assignment.vault.writablePath) ? { requiresReview: true } : {}),
+        ...((observedContentNeedsReview(assignment)||sourceClaimKinds.has(assignment.kind)||assignment.kind==="workspace-edit"||assignment.kind==="editorial-packet"||assignment.kind==="coordinated-revision"||assignment.kind==="outcome-workspace"||assignment.kind==="google-runbook"&&assignment.action==="revise"||assignment.kind==="spectrolite"&&assignment.writablePath||assignment.kind==="vaultWork"||assignment.kind==="pdfVault"&&assignment.vault.writablePath) ? { requiresReview: true } : {}),
         ...(assignment.kind === "preparedContentProject" &&
           (assignment.profile === "commit" || assignment.profile === "draft") ? { requiresReview:true } : {}),
         ...(assignment.workspaceBaseline ? { workspaceBaseline: assignment.workspaceBaseline } : {}),
@@ -7236,7 +7236,13 @@ export function openOutcomeGoalEvidence(execution, exercise, _scenario, workflow
     const reviewInput = sourceClaimReviewInput(proof, world);
     return { world: worldBinding, checks: { ...checks }, evidence, reviewInput };
   }
-  if(world.kind==="spectrolite"&&world.writablePath||world.kind==="vaultWork"&&world.expected.steps.some(step=>step.kind==="write")||world.kind==="pdfVault"&&world.vault.writablePath){
+  if(world.kind==="vaultWork"){
+    requireEvidence(workflow.requiresReview===true,"Vault goal meaning review must be declared before teacher execution");
+    const reviewInput=world.expected.steps.some(step=>step.kind==="write")
+      ?sourceContentReviewInput(proof,world):vaultKnowledgeReviewInput(proof,world,proof.actualResult);
+    return {world:worldBinding,checks:{...checks},evidence,reviewInput};
+  }
+  if(world.kind==="spectrolite"&&world.writablePath||world.kind==="pdfVault"&&world.vault.writablePath){
     requireEvidence(workflow.requiresReview===true,"Authored source content review must be declared before teacher execution");
     return {world:worldBinding,checks:{...checks},evidence,reviewInput:sourceContentReviewInput(proof,world)};
   }
