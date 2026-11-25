@@ -14,6 +14,7 @@
 // it ships as plain files. The exact list is `OWNERSHIP_REAPER_FILES` in
 // ownershipFiles.mjs; ownership.test.ts fails if the import graph drifts from it.
 import fs from "node:fs";
+import net from "node:net";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import {
@@ -25,6 +26,8 @@ import {
 } from "./ownedProcessIdentity.mjs";
 import {
   claimLedger,
+  parseOwnershipReference,
+  requestOwnershipControl,
   ledgerDirOf,
   ledgerFile,
   readLedger,
@@ -53,6 +56,9 @@ const serialize = (error) => ({
 });
 const flatten = (error) => (error instanceof AggregateError ? error.errors : [error]);
 
+let control;
+let finishing;
+const externalReleases = new Set();
 let ledger;
 let file;
 let dir;
@@ -107,12 +113,40 @@ function retireEverything() {
   return retiring;
 }
 
-async function finish(outcome, rid) {
-  if (rid !== undefined) {
-    await send({ t: "released", rid, ok: outcome.ok, failures: outcome.failures });
+async function finish(outcome, rid, ownerFailures = []) {
+  finishing ??= (async () => {
+    control?.close();
+    await Promise.all(
+      [...externalReleases].map(
+        (socket) =>
+          new Promise((resolve) => {
+            if (socket.destroyed) return resolve();
+            const value = {
+              ok: outcome.ok && ownerFailures.length === 0,
+              resourcesRetired: outcome.ok,
+              failures: [...ownerFailures, ...outcome.failures],
+            };
+            socket.end(JSON.stringify({ ok: true, value }) + "\n", resolve);
+          })
+      )
+    );
+    if (rid !== undefined)
+      await send({ t: "released", rid, ok: outcome.ok, failures: outcome.failures });
+    if (process.connected) process.disconnect();
+    process.exit(outcome.ok ? 0 : 1);
+  })();
+  return finishing;
+}
+
+async function requestOwnerClosure() {
+  revoked = true;
+  if (ledger.ownerJoined || ledger.terminateOwnerOnParent) {
+    await finish(await retireEverything());
+  } else {
+    // The owner must stop admission and join its in-process scope before its
+    // reaper may retire resources. IPC loss proves the owner itself is gone.
+    await send({ t: "parent-release" });
   }
-  if (process.connected) process.disconnect();
-  process.exit(outcome.ok ? 0 : 1);
 }
 
 function register(message) {
@@ -154,10 +188,14 @@ function register(message) {
 
 function scratch(message) {
   const prefix = String(message.prefix).replace(/[^A-Za-z0-9._-]/gu, "_");
-  const target = path.join(
-    scratchDirOf(config.profileDir),
-    `${prefix}${randomBytes(6).toString("hex")}`
-  );
+  if (
+    message.directory !== undefined &&
+    (typeof message.directory !== "string" || !path.isAbsolute(message.directory))
+  )
+    throw new Error("Scratch directory must be absolute");
+  const base = message.directory ?? scratchDirOf(config.profileDir);
+  fs.mkdirSync(base, { recursive: true, mode: 0o700 });
+  const target = path.join(base, `${prefix}${randomBytes(6).toString("hex")}`);
   // Recorded before it exists: a death in between leaves a removal of nothing.
   ledger.paths.push({ path: target, kind: "scratch" });
   persist();
@@ -167,6 +205,31 @@ function scratch(message) {
 
 async function handle(message) {
   switch (message.t) {
+    case "close-admission":
+      revoked = true;
+      return {};
+    case "activate":
+      ledger.ownerJoined = false;
+      persist();
+      return {};
+    case "child": {
+      const child = parseOwnershipReference(message.child);
+      if (child.dir === dir && child.id === ledger.id)
+        throw new Error("Ownership cannot depend on itself");
+      const actual = readLedger(child.dir, child.id);
+      if (!actual || actual.token !== child.token)
+        throw new Error("Child ownership identity does not match its claim");
+      ledger.children ??= [];
+      if (
+        !ledger.children.some(
+          (entry) => entry.dir === child.dir && entry.id === child.id && entry.token === child.token
+        )
+      ) {
+        ledger.children.push(child);
+        persist();
+      }
+      return {};
+    }
     case "register":
       return register(message);
     case "scratch":
@@ -210,11 +273,20 @@ async function handle(message) {
 async function onMessage(message) {
   if (!message || typeof message.rid !== "number") return;
   if (message.t === "release") {
-    await finish(await retireEverything(), message.rid);
+    ledger.ownerJoined = true;
+    // Retirement must neither recreate removed app data nor overwrite a
+    // successor claim that deliberately reused this id.
+    if (readLedger(dir, ledger.id)?.token === ledger.token) persist();
+    await finish(await retireEverything(), message.rid, message.ownerFailures ?? []);
     return;
   }
   try {
-    if (retiring && message.t !== "escalate") {
+    if (
+      (retiring || revoked) &&
+      message.t !== "escalate" &&
+      message.t !== "retire" &&
+      message.t !== "close-admission"
+    ) {
       throw new Error("Ownership is already being retired");
     }
     const value = await handle(message);
@@ -238,7 +310,7 @@ async function main() {
   for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) {
     process.on(signal, () => {
       revoked = true;
-      if (claimed) void retireEverything().then((outcome) => finish(outcome));
+      if (claimed) void requestOwnerClosure();
       else process.exit(2);
     });
   }
@@ -256,6 +328,7 @@ async function main() {
     reaper: captureProcessStart(process.pid),
     groups: [],
     paths: [],
+    ownerJoined: true,
     meta: config.meta ?? {},
   };
   const claim = await claimLedger(dir, ledger);
@@ -264,6 +337,71 @@ async function main() {
     process.exit(3);
   }
   claimed = true;
+  control = net.createServer((socket) => {
+    socket.setEncoding("utf8");
+    let text = "",
+      received = false;
+    socket.on("error", () => {});
+    socket.on("data", async (chunk) => {
+      if (received) return;
+      text += chunk.toString("utf8");
+      if (Buffer.byteLength(text) > 64 * 1024) {
+        received = true;
+        socket.destroy();
+        return;
+      }
+      if (!text.includes("\n")) return;
+      received = true;
+      try {
+        const message = JSON.parse(text.slice(0, text.indexOf("\n")));
+        if (message.token !== ledger.token)
+          throw new Error("Ownership control token does not match");
+        if (message.t === "release") {
+          externalReleases.add(socket);
+          socket.once("close", () => externalReleases.delete(socket));
+          await requestOwnerClosure();
+          return;
+        }
+        if (retiring || revoked) throw new Error("Ownership is already being retired");
+        if (message.t !== "child") throw new Error("Unsupported external ownership request");
+        const value = await handle(message);
+        socket.end(JSON.stringify({ ok: true, value }) + "\n");
+      } catch (error) {
+        socket.end(JSON.stringify({ ok: false, failure: serialize(error) }) + "\n");
+      }
+    });
+  });
+  await new Promise((resolve, reject) => {
+    control.once("error", reject);
+    control.listen(0, "127.0.0.1", resolve);
+  });
+  ledger.controlPort = control.address().port;
+  persist();
+  if (config.parent) {
+    try {
+      const parent = parseOwnershipReference(config.parent);
+      const parentLedger = readLedger(parent.dir, parent.id);
+      if (!parentLedger || parentLedger.token !== parent.token)
+        throw new Error("Ownership parent is no longer active");
+      if (
+        parent.terminateOwner &&
+        (parentLedger.owner.pid !== ledger.owner.pid ||
+          parentLedger.owner.startCoordinate !== ledger.owner.startCoordinate ||
+          parentLedger.owner.bootId !== ledger.owner.bootId)
+      ) {
+        ledger.terminateOwnerOnParent = true;
+        persist();
+      }
+      await requestOwnershipControl(config.parent, {
+        t: "child",
+        child: { dir, id: ledger.id, token: ledger.token },
+      });
+    } catch (error) {
+      await retireEverything();
+      control.close();
+      throw error;
+    }
+  }
   if (revoked) {
     await finish(await retireEverything());
     return;
@@ -274,5 +412,11 @@ async function main() {
 
 main().catch(async (error) => {
   await send({ t: "claim-error", failure: serialize(error) });
+  if (claimed) {
+    ledger.ownerJoined = true;
+    if (readLedger(dir, ledger.id)?.token === ledger.token) persist();
+    await retireEverything();
+    control?.close();
+  }
   process.exit(claimed ? 70 : 4);
 });

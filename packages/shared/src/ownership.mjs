@@ -18,6 +18,7 @@ import {
 import {
   ledgerDirOf,
   readLedger,
+  parseOwnershipReference,
   retireLedger,
   scratchDirOf,
   validateLedgerId,
@@ -173,6 +174,8 @@ export class OwnedScope {
   }
 }
 
+export const OWNERSHIP_PARENT_ENV = "VIBESTUDIO_OWNERSHIP_PARENT";
+
 export class Ownership {
   #child;
   #owner;
@@ -187,6 +190,9 @@ export class Ownership {
   #lost = null;
   #released = false;
   #releasing = null;
+  #closingAdmission = false;
+  #retiringResources = false;
+  #lossRecovery = null;
 
   /** @private use `Ownership.open` */
   constructor(options, id, child, exited, token) {
@@ -220,6 +226,13 @@ export class Ownership {
       lifetime: options.lifetime,
       owner: captureProcessStart(process.pid),
       meta: options.meta ?? {},
+      parent:
+        options.parent === null
+          ? null
+          : (options.parent ??
+            (process.env[OWNERSHIP_PARENT_ENV]
+              ? parseOwnershipReference(JSON.parse(process.env[OWNERSHIP_PARENT_ENV]))
+              : null)),
     };
     const reaperPath = options.reaperPath ?? defaultReaperPath();
     if (!fs.existsSync(reaperPath)) {
@@ -260,11 +273,24 @@ export class Ownership {
     }
     const ownership = new Ownership(options, id, child, exited, first.token);
     ownership.#attach();
+    try {
+      await ownership.#request({ t: "activate" });
+    } catch (error) {
+      await ownership.release().catch(() => {});
+      throw error;
+    }
     return ownership;
   }
 
   #attach() {
     this.#child.on("message", (message) => {
+      if (message?.t === "parent-release") {
+        const reason = ownershipError(`Ownership ${this.id} was retired by its parent`);
+        const closing = this.release();
+        this.#abort.abort(reason);
+        void closing.catch(() => {});
+        return;
+      }
       if (!message || typeof message.rid !== "number") return;
       const pending = this.#pending.get(message.rid);
       if (!pending) return;
@@ -276,10 +302,11 @@ export class Ownership {
     // `disconnect` follows every message the reaper sent, so a reply to a
     // release is never mistaken for a death.
     this.#child.once("disconnect", () => {
-      void this.#exited.then(
+      this.#lossRecovery = this.#exited.then(
         (status) => this.#reaperGone(status),
         (error) => this.#reaperGone({ code: null, signal: null }, error)
       );
+      void this.#lossRecovery.catch(() => {});
     });
   }
 
@@ -288,12 +315,26 @@ export class Ownership {
     // The lease is gone with its holder. Retire in-process from the ledger the
     // dead reaper left, plus any group it never acknowledged.
     const failures = [];
+    this.#closingAdmission = true;
+    this.#lost ??= ownershipError(
+      `Ownership reaper for ${this.id} exited before release (code ${status.code}, signal ${status.signal})`,
+      { reaperStatus: status, ...(spawnError ? { cause: spawnError } : {}) }
+    );
+    this.#abort.abort(this.#lost);
+    for (const pending of this.#pending.values()) pending.reject(this.#lost);
+    this.#pending.clear();
+    try {
+      await this.scope.close();
+    } catch (error) {
+      failures.push(...flatten(error));
+    }
     try {
       const ledger = readLedger(this.ledgerDir, this.id);
       const known = new Map((ledger?.groups ?? []).map((group) => [group.key, group]));
       for (const [key, group] of this.#groups) if (!known.has(key)) known.set(key, group);
       if (ledger && ledger.token === this.#token) {
-        await retireLedger({ ...ledger, groups: [...known.values()] }, { dir: this.ledgerDir });
+        const joined = { ...ledger, ownerJoined: true, groups: [...known.values()] };
+        await retireLedger(joined, { dir: this.ledgerDir });
       } else {
         for (const group of known.values()) {
           if (group.identity && !group.outlives) {
@@ -323,7 +364,7 @@ export class Ownership {
 
   #assertUsable() {
     if (this.#lost) throw this.#lost;
-    if (this.#releasing) throw ownershipError(`Ownership ${this.id} is released`);
+    if (this.#closingAdmission) throw ownershipError(`Ownership ${this.id} is released`);
   }
 
   #request(message) {
@@ -528,8 +569,9 @@ export class Ownership {
 
     const retireVia = async (mode) => {
       await registered;
-      // Once release has begun the reaper retires every group itself.
-      if (key !== null && !this.#releasing) {
+      // Scope cleanups may explicitly retire groups before scope work joins.
+      // Only the later resource-retirement phase owns group closure itself.
+      if (key !== null && !this.#retiringResources) {
         await this.#request({ t: "retire", key, ...(mode ? { mode } : {}) });
         this.#groups.delete(key);
       }
@@ -547,9 +589,13 @@ export class Ownership {
     };
   }
 
-  async scratch(prefix) {
+  get reference() {
+    return { dir: this.ledgerDir, id: this.id, token: this.#token };
+  }
+
+  async scratch(prefix, options = {}) {
     this.#assertUsable();
-    return (await this.#request({ t: "scratch", prefix })).path;
+    return (await this.#request({ t: "scratch", prefix, directory: options.directory })).path;
   }
 
   async own(target, label) {
@@ -574,21 +620,35 @@ export class Ownership {
   }
 
   release() {
+    this.#closingAdmission = true;
     this.#releasing ??= (async () => {
       const failures = [];
+      try {
+        await this.#request({ t: "close-admission" });
+      } catch (error) {
+        failures.push(error);
+      }
       try {
         await this.scope.close();
       } catch (error) {
         failures.push(...flatten(error));
       }
       try {
-        const reply = await this.#request({ t: "release" });
+        this.#retiringResources = true;
+        const reply = await this.#request({
+          t: "release",
+          ownerFailures: failures.map((error) => ({
+            message: error.message ?? String(error),
+            ...(error.code ? { code: error.code } : {}),
+          })),
+        });
         this.#released = true;
         failures.push(...reply.failures.map(revive));
       } catch (error) {
         failures.push(error);
       }
       await this.#exited.catch(() => undefined);
+      await this.#lossRecovery?.catch((error) => failures.push(error));
       await Promise.all(this.#children);
       if (failures.length)
         throw aggregate(failures, `Ownership ${this.id} did not release cleanly`);

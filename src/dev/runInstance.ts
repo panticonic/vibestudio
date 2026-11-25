@@ -754,6 +754,8 @@ async function main(): Promise<void> {
     profileDir,
     id: ledgerId,
     lifetime: parsed.lifetime,
+    // A deliberately detached instance transfers custody beyond its launcher.
+    parent: parsed.lifetime === "until-stop" ? null : undefined,
     meta: {
       kind: "dev-instance",
       instanceId: id,

@@ -10,7 +10,10 @@ const [instance, directory] = process.argv.slice(2);
 if (!instance || !directory || !process.send)
   throw new Error("Managed server owner requires an IPC lease");
 const profileDir = getProfileDataPath();
-const ownership = await Ownership.open({ profileDir, lifetime: "leased" });
+// The outer managed-server-owner process group holds this lease. Its graceful
+// stop joins the canonical until-stop instance before this body can exit; a
+// sibling run-owner release must not bypass that ordered shutdown.
+const ownership = await Ownership.open({ profileDir, lifetime: "leased", parent: null });
 // The coordinator allocated this directory; it is removed after every group retires.
 await ownership.own(directory, "managed-server-directory");
 

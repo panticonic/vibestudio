@@ -4,7 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import YAML from "yaml";
-import { inspectWorkspaceSources } from "../../src/workspaceTemplateSource.js";
+import type { WorkspaceSourceInspection } from "../../src/workspaceTemplateSource.js";
+import { runE2eRootPreparation } from "./runE2eRootPreparation.js";
 import { deriveE2eRootTemplate } from "./e2eRootTemplate.js";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import {
@@ -83,13 +84,13 @@ it("derives explicit Personal and ordinary project roots from canonical template
       { stdio: "ignore" }
     );
   }
-  const [base, personal, system] = await inspectWorkspaceSources({
-    sources: ["base", "personal", "system"].map((role) => ({
-      checkout: sourceRoots[role]!,
-      url: `git+https://example.test/${role}.git`,
-    })),
-    checkpointRoot: path.join(root, "checkpoints"),
-  });
+  const [base, personal, system] = await runE2eRootPreparation<WorkspaceSourceInspection[]>(
+    "inspect",
+    {
+      checkouts: ["base", "personal", "system"].map((role) => sourceRoots[role]!),
+      checkpointRoot: path.join(root, "checkpoints"),
+    }
+  );
   if (!base || !personal || !system) throw new Error("Template fixture inspection failed");
   const derived = await deriveE2eRootTemplate({
     base: {
@@ -154,10 +155,29 @@ it("derives explicit Personal and ordinary project roots from canonical template
       expect(config.initPanels[0].source).toBe("panels/base");
     },
   });
+  const failure = new Error("original source customization failure");
+  const rejected = await deriveE2eRootTemplate({
+    base: {
+      ...system,
+      materializedSource: system.checkout,
+      defaultTemplates: { base: base.pin, system: system.pin, personal: personal.pin },
+      sources: [base, personal, system],
+    },
+    workRoot: path.join(root, "rejected-case"),
+    configureSource: () => {
+      throw failure;
+    },
+  }).catch((error) => error);
+  const errors = (error: unknown): unknown[] =>
+    error instanceof AggregateError ? error.errors.flatMap(errors) : [error];
+  expect(errors(rejected)).toContain(failure);
+
   expect(projectDerived.pin).not.toEqual(system.pin);
   expect(projectDerived.pin.url).not.toBe(derived.pin.url);
   expect(projectDerived.defaultTemplates.base).toEqual(base.pin);
   expect(
     projectDerived.sources.find((source) => source.pin.url === projectDerived.pin.url)
-  ).toEqual(expect.objectContaining({ pin: projectDerived.pin, checkout: projectDerived.checkout }));
+  ).toEqual(
+    expect.objectContaining({ pin: projectDerived.pin, checkout: projectDerived.checkout })
+  );
 });

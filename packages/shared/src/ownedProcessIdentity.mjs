@@ -333,6 +333,15 @@ function observeProcessStart(start) {
     throw error;
   }
 }
+/** Signal only the exact recorded process, without taking authority over its group. */
+export function signalProcessStart(start, signal) {
+  if (observeProcessStart(start) !== "live") return;
+  try {
+    process.kill(start.pid, signal);
+  } catch (error) {
+    if (error.code !== "ESRCH") throw error;
+  }
+}
 /** Resident set size in KiB, or null when the process is gone or unreadable. */
 function readRssKb(pid) {
   if (process.platform === "linux") {
