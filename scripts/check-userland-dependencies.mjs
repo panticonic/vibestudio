@@ -302,7 +302,7 @@ export async function collectTemplateImportManifestFindings(appRoot) {
   }
   const appNodeModules = [path.join(path.resolve(appRoot), "node_modules")];
   for (const compositionSpec of compositions) {
-    const composition = composeDevelopmentTemplateCheckouts(
+    const composition = await composeDevelopmentTemplateCheckouts(
       compositionSpec.sources.map((source) => ({
         checkout: configured.checkouts[source.id],
         url: source.url,

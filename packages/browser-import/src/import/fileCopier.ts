@@ -1,106 +1,67 @@
-import * as fs from "fs";
-import * as path from "path";
-import * as os from "os";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { getProfileDataPath } from "@vibestudio/env-paths";
+import { Ownership, OwnedScope } from "@vibestudio/shared/ownership";
 import { BrowserDataError } from "../errors.js";
 
-/**
- * Atomically copy a SQLite database (and its WAL/SHM files) to a temp directory.
- *
- * This avoids locking issues when the source browser is running. The copy is
- * not a snapshot — it's a best-effort copy of the files at a point in time.
- * SQLite's WAL recovery will handle any minor inconsistencies on open.
- *
- * @returns Path to the copied database file in the temp directory
- */
-export async function copyDatabaseToTemp(dbPath: string): Promise<string> {
-  if (!fs.existsSync(dbPath)) {
-    throw new BrowserDataError("PROFILE_NOT_FOUND", `Database not found: ${dbPath}`);
-  }
-
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-browser-import-"));
-  const dbName = path.basename(dbPath);
-  const destPath = path.join(tmpDir, dbName);
-
-  try {
-    // Copy main DB file
-    fs.copyFileSync(dbPath, destPath);
-
-    // Copy WAL file if it exists
-    const walPath = dbPath + "-wal";
-    if (fs.existsSync(walPath)) {
-      fs.copyFileSync(walPath, path.join(tmpDir, dbName + "-wal"));
-    }
-
-    // Copy SHM file if it exists
-    const shmPath = dbPath + "-shm";
-    if (fs.existsSync(shmPath)) {
-      fs.copyFileSync(shmPath, path.join(tmpDir, dbName + "-shm"));
-    }
-  } catch (err: unknown) {
-    const error = err as NodeJS.ErrnoException;
-    // Clean up temp dir on failure
-    try {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    } catch {
-      // Ignore cleanup errors
-    }
-
-    if (error.code === "EBUSY" || error.code === "EACCES" || error.code === "EPERM") {
-      throw new BrowserDataError(
-        "DB_LOCKED",
-        `Database is locked (browser may be running): ${dbPath}`,
-        error.code
-      );
-    }
-    throw new BrowserDataError(
-      "PERMISSION_DENIED",
-      `Failed to copy database: ${dbPath}`,
-      error.message
-    );
-  }
-
-  return destPath;
+/** Exact owned resource; callers cannot retire an arbitrary path by prefix. */
+export interface TempCopy {
+  path: string;
+  release(): Promise<void>;
 }
 
-/**
- * Copy a non-database file to a temp directory.
- */
-export async function copyFileToTemp(filePath: string): Promise<string> {
-  if (!fs.existsSync(filePath)) {
-    throw new BrowserDataError("PROFILE_NOT_FOUND", `File not found: ${filePath}`);
-  }
-
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-browser-import-"));
-  const destPath = path.join(tmpDir, path.basename(filePath));
-
+async function copyToTemp(source: string, database: boolean): Promise<TempCopy> {
+  if (!fs.existsSync(source))
+    throw new BrowserDataError("PROFILE_NOT_FOUND", `File not found: ${source}`);
+  const ownership = await Ownership.open({
+    profileDir: getProfileDataPath(),
+    lifetime: "leased",
+    meta: { role: "browser-import-copy" },
+  });
   try {
-    fs.copyFileSync(filePath, destPath);
-  } catch (err: unknown) {
-    const error = err as NodeJS.ErrnoException;
+    const directory = await ownership.scratch("vibestudio-browser-import-");
+    const destination = path.join(directory, path.basename(source));
+    fs.copyFileSync(source, destination);
+    if (database)
+      for (const suffix of ["-wal", "-shm"]) {
+        if (fs.existsSync(source + suffix)) fs.copyFileSync(source + suffix, destination + suffix);
+      }
+    return { path: destination, release: () => ownership.release() };
+  } catch (error) {
     try {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    } catch {
-      // Ignore cleanup errors
+      await ownership.release();
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], "Browser copy and retirement failed", {
+        cause: error,
+      });
     }
-    if (error.code === "EPERM" || error.code === "EACCES") {
-      throw new BrowserDataError("TCC_ACCESS_DENIED", `Permission denied: ${filePath}`, error.code);
+    const cause = error as NodeJS.ErrnoException;
+    if (["EBUSY", "EACCES", "EPERM"].includes(cause.code ?? "")) {
+      throw new BrowserDataError(
+        database ? "DB_LOCKED" : "TCC_ACCESS_DENIED",
+        `Cannot copy browser file: ${source}`,
+        cause.code
+      );
     }
     throw error;
   }
-
-  return destPath;
 }
 
-/**
- * Clean up a temp directory created by copyDatabaseToTemp or copyFileToTemp.
- */
-export function cleanupTempCopy(tempFilePath: string): void {
-  try {
-    const dir = path.dirname(tempFilePath);
-    if (dir.includes("vibestudio-browser-import-")) {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  } catch {
-    // Best-effort cleanup
-  }
+/** SQLite WAL/SHM recovery runs against an isolated owned copy, never the live profile. */
+export function copyDatabaseToTemp(source: string): Promise<TempCopy> {
+  return copyToTemp(source, true);
+}
+export function copyFileToTemp(source: string): Promise<TempCopy> {
+  return copyToTemp(source, false);
+}
+
+/** Join both cleanups even if closing SQLite fails; preserve every failure. */
+export async function releaseTempDatabase(
+  database: { close(): void },
+  copy: TempCopy
+): Promise<void> {
+  const cleanup = new OwnedScope();
+  cleanup.defer(() => copy.release());
+  cleanup.defer(() => database.close());
+  await cleanup.close();
 }

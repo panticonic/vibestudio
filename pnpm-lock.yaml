@@ -710,6 +710,12 @@ importers:
       '@vibestudio/browser-data':
         specifier: workspace:*
         version: link:../browser-data
+      '@vibestudio/env-paths':
+        specifier: workspace:*
+        version: link:../env-paths
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../shared
       bplist-parser:
         specifier: ^0.3.2
         version: 0.3.2

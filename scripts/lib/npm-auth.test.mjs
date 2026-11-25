@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { createNpmAuth, npmTokenFilePath, readNpmAuthToken } from "./npm-auth.mjs";
 
-test("saved token owns an isolated npm config, overrides stale login config, and retires it", () => {
+test("saved token reuses a non-secret registry config and overrides stale login config", () => {
   const directory = mkdtempSync(join(tmpdir(), "npm-auth-test-"));
   let auth;
   try {
@@ -41,7 +41,10 @@ test("saved token owns an isolated npm config, overrides stale login config, and
       "[redacted] twice [redacted]"
     );
     auth.close();
-    assert.equal(existsSync(dirname(configured.NPM_CONFIG_USERCONFIG)), false);
+    assert.equal(existsSync(configured.NPM_CONFIG_USERCONFIG), true);
+    const another = createNpmAuth({ env, required: true });
+    assert.equal(another.environment().NPM_CONFIG_USERCONFIG, configured.NPM_CONFIG_USERCONFIG);
+    another.close();
     assert.throws(() => auth.environment(), /closed/);
     auth.close();
   } finally {
@@ -78,7 +81,7 @@ test("CI overrides remain explicit while saved-only checks always read the confi
   }
 });
 
-test("canonical npm runner uses saved credentials, redacts failures, and joins config cleanup", () => {
+test("canonical npm runner authenticates while publisher preflight receives no credentials", () => {
   const directory = mkdtempSync(join(tmpdir(), "npm-auth-runner-test-"));
   try {
     const file = join(directory, "token");
@@ -91,6 +94,10 @@ test("canonical npm runner uses saved credentials, redacts failures, and joins c
 import childProcess from 'node:child_process';
 import { writeFileSync, readFileSync } from 'node:fs';
 childProcess.spawnSync = (command, args, options) => {
+  if (!options.env?.NPM_CONFIG_USERCONFIG) {
+    writeFileSync(process.env.AUTH_RECORD, JSON.stringify({command,args,authenticated:!!options.env?.NODE_AUTH_TOKEN}));
+    return {status:1,stdout:'',stderr:'public preflight failed'};
+  }
   writeFileSync(process.env.AUTH_RECORD, JSON.stringify({ command, args, config: options.env.NPM_CONFIG_USERCONFIG, contents: readFileSync(options.env.NPM_CONFIG_USERCONFIG, 'utf8'), correctToken: options.env.NODE_AUTH_TOKEN === 'saved_runner_secret' }));
   return { status: 1, stdout: 'saved_runner_secret', stderr: 'saved_runner_secret' };
 };
@@ -112,10 +119,10 @@ syncBuiltinESMExports();\n`
     assert.equal(observed.command, "npm");
     assert.deepEqual(observed.args, ["whoami"]);
     assert.doesNotMatch(observed.contents, /saved_runner_secret/);
-    assert.equal(existsSync(dirname(observed.config)), false);
+    assert.equal(existsSync(observed.config), true);
 
-    // The production server publisher must resolve the same saved credential,
-    // even when an old npm login exists, and retire it after whoami rejects it.
+    // The publisher now performs public build/smoke preflight before asking for
+    // a credential. Failure there must not expose the saved token or stale login.
     const publisher = fileURLToPath(new URL("../publish-npm.mjs", import.meta.url));
     const rejected = spawnSync(process.execPath, ["--import", preload, publisher], {
       env: { ...env, NPM_CONFIG_USERCONFIG: join(directory, "stale-npmrc") },
@@ -123,11 +130,10 @@ syncBuiltinESMExports();\n`
     });
     assert.equal(rejected.status, 1);
     assert.doesNotMatch(rejected.stdout + rejected.stderr, /saved_runner_secret/);
-    assert.match(rejected.stderr, /did not authenticate/);
+    assert.match(rejected.stderr, /pnpm build/);
     const publisherObserved = JSON.parse(readFileSync(record, "utf8"));
-    assert.equal(publisherObserved.correctToken, true);
-    assert.deepEqual(publisherObserved.args, ["whoami"]);
-    assert.equal(existsSync(dirname(publisherObserved.config)), false);
+    assert.equal(publisherObserved.authenticated, false);
+    assert.deepEqual(publisherObserved.args, ["build"]);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

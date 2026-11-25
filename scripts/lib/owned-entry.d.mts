@@ -10,7 +10,7 @@ export interface OwnedEntryContext {
 
 export function ownedEntry<T>(
   main: (context: OwnedEntryContext) => Promise<T> | T,
-  options?: { appRoot?: string; scratchPrefix?: string; profileDir?: string }
+  options?: { appRoot?: string; scratchPrefix?: string; profileDir?: string; keepScratch?: boolean }
 ): Promise<T | undefined>;
 
 export function retireOnAbort(

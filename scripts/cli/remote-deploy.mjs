@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import os from "node:os";
+import { randomUUID } from "node:crypto";
+import { runWithOwnedCleanup } from "../lib/owned-cleanup.mjs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -319,8 +321,14 @@ esac`;
 /** Managed deployments promise a routed project as well as a ready hub. */
 export function managedServerArgs(port, readyFile) {
   return [
-    "remote", "serve", "--port", String(port),
-    "--bootstrap-workspace", "default", "--ready-file", readyFile,
+    "remote",
+    "serve",
+    "--port",
+    String(port),
+    "--bootstrap-workspace",
+    "default",
+    "--ready-file",
+    readyFile,
   ];
 }
 
@@ -371,15 +379,24 @@ npm install -g ${shellQuote(options.artifact)}
         hooks
       );
     } else {
-      const remoteArtifact = `/tmp/vibestudio-${Date.now()}.tgz`;
-      await (hooks.run ?? run)("scp", [options.artifact, `${options.target}:${remoteArtifact}`]);
-      await targetShell(
-        options.target,
-        `set -e
+      const remoteArtifact = `/tmp/vibestudio-${randomUUID()}.tgz`;
+      await runWithOwnedCleanup(
+        async () => {
+          await (hooks.run ?? run)("scp", [
+            options.artifact,
+            `${options.target}:${remoteArtifact}`,
+          ]);
+          await targetShell(
+            options.target,
+            `set -e
+trap ${shellQuote(`rm -f ${shellQuote(remoteArtifact)}`)} EXIT HUP INT TERM
 npm install -g ${shellQuote(remoteArtifact)}
-rm -f ${shellQuote(remoteArtifact)}
 `,
-        hooks
+            hooks
+          );
+        },
+        () => targetShell(options.target, `rm -f ${shellQuote(remoteArtifact)}`, hooks),
+        "Remote package install and uploaded archive cleanup failed"
       );
     }
     console.log(`✓ Installed artifact        ${path.basename(options.artifact)}`);
