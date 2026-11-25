@@ -335,8 +335,10 @@ export function diagnosticsFromError(
         : "Build operation failed";
   return [
     {
-      source: "infrastructure",
-      operationalError: operationalErrorMetadata(error),
+      source: error instanceof BuildRequestError ? "schema" : "infrastructure",
+      ...(error instanceof BuildRequestError
+        ? {}
+        : { operationalError: operationalErrorMetadata(error) }),
       severity: "error",
       file: "",
       line: 0,

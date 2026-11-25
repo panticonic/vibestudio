@@ -1461,7 +1461,6 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       .then(async () => {
         await this.initialize();
         await this.unitHost.whenDeclarationsStaged();
-        await this.unitHost.whenApplied(node.name);
         const declared = this.lastDeclared.find(
           (item) => normalizeRepoPath(item.source) === normalizeRepoPath(node.relativePath)
         );
@@ -1473,6 +1472,7 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         if ((await this.unitHost.requestReview(node, declared)) === "reviewing") {
           return "approval-required" as const;
         }
+        await this.unitHost.ensureApplied(node, declared);
         const entry = this.findRegistryEntry(node.name);
         if (
           !entry ||

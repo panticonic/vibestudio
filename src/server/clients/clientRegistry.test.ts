@@ -1578,6 +1578,27 @@ describe("ClientHost releases", () => {
     expect(buildSystem.getStoredBuild).toHaveBeenCalledTimes(1);
   });
 
+  it("retries an already settled failed declaration on a later explicit launch without editing source", async () => {
+    const { host, graphNode, buildSystem } = await makeHarness();
+    const declared = [{ source: WEB_SOURCE, ref: "main" }];
+    host.setDeclared(declared);
+    host.acceptPreapprovedTrust((await host.reviewDeclared()).identityKeys);
+    const built = await buildSystem.getStoredBuild(graphNode.name, "main");
+    const failure = Object.assign(new Error("watch unavailable"), { code: "EMFILE" });
+    buildSystem.getStoredBuild.mockClear();
+    buildSystem.getStoredBuild.mockRejectedValueOnce(failure).mockResolvedValue(built);
+    await host.reconcileDeclared(declared, { waitFor: "staged" });
+    await host.whenSettled();
+    expect(host.registry.get(graphNode.name)).toMatchObject({
+      status: "error",
+      lastError: failure.message,
+    });
+    expect(buildSystem.getStoredBuild).toHaveBeenCalledOnce();
+    await expect(host.ensureActivated(graphNode.name)).resolves.toBe("ready");
+    expect(buildSystem.getStoredBuild).toHaveBeenCalledTimes(2);
+    await host.shutdown();
+  });
+
   it("propagates the original preparation failure to every activation caller", async () => {
     const { host, graphNode, buildSystem } = await makeHarness();
     host.setDeclared([{ source: WEB_SOURCE, ref: "main" }]);

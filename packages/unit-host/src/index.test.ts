@@ -650,7 +650,7 @@ describe("UnitHost", () => {
       active?: boolean;
       isSeedTrusted?: (node: TestNode) => boolean;
       extraNode?: TestNode;
-      applyTrusted?: (node: TestNode) => Promise<void>;
+      applyTrusted?: (node: TestNode, decl: TestDecl) => Promise<void>;
       approvalCoordinator?: UnitApprovalCoordinator<TestApproval>;
       isAdmitted?: (repoPath: string, effectiveVersion: string) => boolean;
       decision?: "accepted" | "deny";
@@ -735,9 +735,9 @@ describe("UnitHost", () => {
           source: { kind: "workspace-repo", repo: n.relativePath, ref: decl.ref },
           status: building ? "building" : "pending-approval",
         }),
-      applyTrusted: async (n) => {
+      applyTrusted: async (n, d) => {
         applied.push(n.name);
-        await opts.applyTrusted?.(n);
+        await opts.applyTrusted?.(n, d);
       },
       removeUndeclared: async (candidate) => {
         removed.push(candidate.name);
@@ -1602,5 +1602,103 @@ describe("UnitHost", () => {
     expect(removed).toEqual([]);
     expect(registry.get("@workspace-extensions/a")).toMatchObject({ status: "running" });
     expect(registry.get("@workspace-extensions/b")).toMatchObject({ status: "running" });
+  });
+  it("keeps a failed application observable but gives a later exact authorized request a fresh attempt", async () => {
+    const failure = Object.assign(new Error("watch unavailable"), { code: "EMFILE" });
+    const apply = vi.fn().mockRejectedValueOnce(failure).mockResolvedValue(undefined);
+    const { host, node } = makeHarness({ applyTrusted: () => apply() });
+    const decl = { source: node.relativePath, ref: "main" };
+    host.acceptPreapprovedTrust((await host.approvalForDeclarations([decl])).identityKeys);
+    await expect(host.ensureApplied(node, decl)).rejects.toBe(failure);
+    await expect(host.whenApplied(node.name)).rejects.toBe(failure);
+    expect(apply).toHaveBeenCalledOnce();
+    await host.ensureApplied(node, decl);
+    await host.whenApplied(node.name);
+    expect(apply).toHaveBeenCalledTimes(2);
+  });
+  it("coalesces pending requests and preserves their original failure without automatic retry", async () => {
+    let reject!: (error: unknown) => void;
+    const work = new Promise<void>((_done, failed) => {
+      reject = failed;
+    });
+    const apply = vi.fn(() => work),
+      { host, node } = makeHarness({ applyTrusted: apply });
+    const decl = { source: node.relativePath, ref: "main" };
+    host.acceptPreapprovedTrust((await host.approvalForDeclarations([decl])).identityKeys);
+    const first = host.ensureApplied(node, decl),
+      second = host.ensureApplied(node, decl);
+    const failure = new Error("owner stopped");
+    const a = expect(first).rejects.toBe(failure),
+      b = expect(second).rejects.toBe(failure);
+    await vi.waitFor(() => expect(apply).toHaveBeenCalledOnce());
+    reject(failure);
+    await Promise.all([a, b]);
+    await host.whenSettled();
+    expect(apply).toHaveBeenCalledOnce();
+  });
+  it("joins explicit application work before its owner settles", async () => {
+    let finish!: () => void;
+    const work = new Promise<void>((done) => {
+      finish = done;
+    });
+    const apply = vi.fn(() => work),
+      { host, node } = makeHarness({ applyTrusted: apply });
+    const decl = { source: node.relativePath, ref: "main" };
+    host.acceptPreapprovedTrust((await host.approvalForDeclarations([decl])).identityKeys);
+    const request = host.ensureApplied(node, decl);
+    await vi.waitFor(() => expect(apply).toHaveBeenCalledOnce());
+    let joined = false;
+    const owner = host.whenSettled().then(() => {
+      joined = true;
+    });
+    await Promise.resolve();
+    expect(joined).toBe(false);
+    finish();
+    await Promise.all([request, owner]);
+    expect(joined).toBe(true);
+  });
+  it("does not use the fresh request path to bypass exact declaration approval", async () => {
+    const { host, node, applied } = makeHarness();
+    await expect(
+      host.ensureApplied(node, { source: node.relativePath, ref: "main" })
+    ).rejects.toThrow("requires review");
+    expect(applied).toEqual([]);
+  });
+
+  it("does not let exact preapproval bypass missing authority admission", async () => {
+    const { host, node, applied } = makeHarness({ isAdmitted: () => false });
+    const decl = { source: node.relativePath, ref: "main" };
+    host.acceptPreapprovedTrust((await host.approvalForDeclarations([decl])).identityKeys);
+    await expect(host.ensureApplied(node, decl)).rejects.toThrow("requires review");
+    expect(applied).toEqual([]);
+  });
+
+  it("joins the old declaration owner before applying a different exact declaration", async () => {
+    let reject!: (error: unknown) => void;
+    const firstWork = new Promise<void>((_done, failed) => {
+      reject = failed;
+    });
+    const refs: string[] = [];
+    const { host, node } = makeHarness({
+      applyTrusted: async (_node, decl) => {
+        refs.push(decl.ref);
+        if (decl.ref === "old") await firstWork;
+      },
+    });
+    const old = { source: node.relativePath, ref: "old" },
+      next = { source: node.relativePath, ref: "next" };
+    host.acceptPreapprovedTrust((await host.approvalForDeclarations([old, next])).identityKeys);
+    const first = host.ensureApplied(node, old),
+      failure = new Error("Old application failed");
+    const failed = expect(first).rejects.toBe(failure);
+    await vi.waitFor(() => expect(refs).toEqual(["old"]));
+    const second = host.ensureApplied(node, next);
+    await Promise.resolve();
+    expect(refs).toEqual(["old"]);
+    reject(failure);
+    await failed;
+    await second;
+    await host.whenSettled();
+    expect(refs).toEqual(["old", "next"]);
   });
 });
