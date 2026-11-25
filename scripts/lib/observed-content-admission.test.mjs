@@ -9,7 +9,7 @@ function example(required=true){
 }
 test("binds each domain's actual proof independently of authored answer vocabulary",()=>{
  const {world,proof}=example();assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
- assert.equal(Object.keys(observedContentFields).length,57);
+ assert.equal(Object.keys(observedContentFields).length,58);
  for(const mutation of [p=>p.semanticReviewInput.actual.requestedReturn={reason:"Invented"},p=>p.semanticReviewInput.actual.observations.reads=[],p=>p.semanticReviewInput.actual.artifacts.artifact="Invented",p=>p.semanticReviewInput.actual.goal="Different goal",p=>p.semanticReviewRequired=false]){
   const clone=structuredClone(proof);mutation(clone);assert.throws(()=>observedContentReviewInput(clone,world));
  }
@@ -143,4 +143,13 @@ test("owned operations review binds native custody and actual retained bytes wit
  proof.semanticReviewInput={actual:{goal:world.goal,observations:pick(observations),artifacts:pick(artifacts),requestedReturn:proof.actualResult},expected:{goal:world.goal,requestedReturnRequired:true},rubric:"Judge the actual goal against current native facts"};
  assert.equal(observedContentNeedsReview(world),true);assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
  for(const alter of [p=>p.semanticReviewRequired=false,p=>p.semanticReviewInput.actual.observations.audit={retiredIds:[]},p=>p.semanticReviewInput.actual.artifacts.dossierReadback="Invented",p=>p.semanticReviewInput.actual.requestedReturn={reason:"Invented"}]){const changed=structuredClone(proof);alter(changed);assert.throws(()=>observedContentReviewInput(changed,world));}
+});
+
+test("local inventory review binds actual native capabilities and requested findings, not the private expected answer",()=>{
+ const world={kind:"live-local-inventory",goal:"Which retained local option can read the repository and retain the prior conversation?"};
+ const proof={semanticReviewRequired:true,outcomeContract:{returnedValue:{required:true}},docket:{preferences:[{ref:"local:actual"}]},inventoryReadback:{request:{needsTools:true,requiresPriorConversation:true},rows:[{ref:"local:actual",row:{state:"ready",toolsCapable:true,contextWindow:64000}}],inspected:["local:actual"]},actualResult:{reason:"Actual supports file tools and a fork handoff"}};
+ const [observations,artifacts]=observedContentFields[world.kind],pick=keys=>Object.fromEntries(keys.map(key=>[key,proof[key]??null]));
+ proof.semanticReviewInput={actual:{goal:world.goal,observations:pick(observations),artifacts:pick(artifacts),requestedReturn:proof.actualResult},expected:{goal:world.goal,requestedReturnRequired:true},rubric:"Judge the requested finding against native capabilities and original goal"};
+ assert.equal(observedContentNeedsReview(world),true);assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
+ for(const alter of [p=>p.semanticReviewRequired=false,p=>p.semanticReviewInput.actual.observations.inventoryReadback.rows=[],p=>p.semanticReviewInput.actual.requestedReturn={reason:"Invented"}]){const changed=structuredClone(proof);alter(changed);assert.throws(()=>observedContentReviewInput(changed,world));}
 });
