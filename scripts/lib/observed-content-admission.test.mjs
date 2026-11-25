@@ -9,7 +9,7 @@ function example(required=true){
 }
 test("binds each domain's actual proof independently of authored answer vocabulary",()=>{
  const {world,proof}=example();assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
- assert.equal(Object.keys(observedContentFields).length,52);
+ assert.equal(Object.keys(observedContentFields).length,53);
  for(const mutation of [p=>p.semanticReviewInput.actual.requestedReturn={reason:"Invented"},p=>p.semanticReviewInput.actual.observations.reads=[],p=>p.semanticReviewInput.actual.artifacts.artifact="Invented",p=>p.semanticReviewInput.actual.goal="Different goal",p=>p.semanticReviewRequired=false]){
   const clone=structuredClone(proof);mutation(clone);assert.throws(()=>observedContentReviewInput(clone,world));
  }
@@ -85,7 +85,7 @@ test("migration effect review remains mandatory without making incidental return
  proof.semanticReviewRequired=false;assert.throws(()=>observedContentReviewInput(proof,world));
 });
 test("every newly admitted open domain binds native goal effects independently of optional receipts",()=>{
- const kinds=["agent-capability","bridge-delivery","deployed-interface","extension-dossier","installed-package","intent-discovery","launch-state","panel-source-migration","retained-memory","route-authority","system-release","testkit-closeout","webhook-admission","workspace-claims","workspace-config","workspace-share","gadDurableQuestion","examplesAdoption","system-diagnostics","news","spectrolite","gmail","calendar","google-handoff"];
+ const kinds=["agent-capability","bridge-delivery","deployed-interface","extension-dossier","installed-package","intent-discovery","launch-state","panel-source-migration","retained-memory","route-authority","system-release","testkit-closeout","webhook-admission","workspace-claims","workspace-config","workspace-share","gadDurableQuestion","examplesAdoption","system-diagnostics","news","spectrolite","gmail","calendar","google-handoff","unit-handoff"];
  for(const kind of kinds){
   const world={kind,goal:"Perform only the requested owned operation; do not invent a report requirement."};
   const [observations,artifacts]=observedContentFields[kind];
