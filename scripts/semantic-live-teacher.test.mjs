@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { test } from "node:test";
-import { openOutcomeGoalEvidence } from "./export-live-workflow-teacher.mjs";
+import { openOutcomeGoalEvidence, reassessObservedReturnPresence, applicationEntryBinding } from "./export-live-workflow-teacher.mjs";
 import {editorialReviewInput,coordinatedRevisionReviewInput,outcomeWorkspaceReviewInput,sourceContentReviewInput}from "./lib/source-claim-admission.mjs";
 
 const reference = value => {
@@ -15,7 +15,7 @@ function applicationFixture() {
   const entry = { program: "skills/documents/reconcileHours.nl", callable: "reconcileHours",
     arguments: { goal, approval: { opens: "09:30" } }, resultType: "RevisionReceipt" };
   const result = { revision: "observed-working-head" };
-  const binding = { program: entry.program, callable: entry.callable, arguments: entry.arguments };
+  const binding = { program: entry.program, callable: entry.callable, arguments: entry.arguments, resultType: entry.resultType };
   const execution = { provenance: { contextId: "owned" }, diagnostics: {
     openGoalVerification: { passed: true, contextId: "owned", caseId: "hours", goal,
       entry: binding, actualResult: result, checks: { storedRequestedHours: true, preservedOtherCopy: true } },
@@ -173,4 +173,41 @@ test("optional application receipts do not gate verified effects after a root ex
  delete provided.exercise.applicationResult;
  provided.exercise.calls[0].record.output=reference({revision:"unobserved"});
  assert.throws(()=>openOutcomeGoalEvidence(provided.execution,provided.exercise,"hours",provided.workflow));
+});
+
+// This is a projection of the original failed export, not a hand-authored consumer fixture.
+test("actual native-pass capture retains its declared nonvoid entry type", async()=>{
+ const {readFile}=await import("node:fs/promises");
+ const captured=JSON.parse(await readFile(new URL("./fixtures/observed-entry-binding.json",import.meta.url),"utf8"));
+ assert.equal(captured.originalCaptureSha256,"d4ebe34d092777633c2c1da8999b59c40bd3cf8fb8ac67c193de24c21280acbd");
+ assert.equal(captured.exercise.entry.resultType,"OpenProblemOutcome");
+ assert.deepEqual(applicationEntryBinding(captured.workflow.entry),captured.execution.diagnostics.openGoalVerification.entry);
+ assert.deepEqual(applicationEntryBinding(captured.workflow.entry),captured.exercise.entry);
+ assert.equal(openOutcomeGoalEvidence(captured.execution,captured.exercise,"actual",captured.workflow).checks,captured.execution.diagnostics.openGoalVerification.checks);
+ for(const target of ["proof","capture"]){
+  const changed=structuredClone(captured);
+  (target==="proof"?changed.execution.diagnostics.openGoalVerification.entry:changed.exercise.entry).resultType="UnobservedReturn";
+  assert.throws(()=>openOutcomeGoalEvidence(changed.execution,changed.exercise,"actual",changed.workflow));
+ }
+});
+
+test("legacy absent-return reassessment preserves all checks and refuses genuine null or requested results",()=>{
+ const original=()=>{const f=applicationFixture(),p=f.execution.diagnostics.openGoalVerification;
+ p.actualResult=null;p.outcomeDimensions={returnedValue:{required:false}};p.outcomeContract={returnedValue:{required:false}};
+ f.exercise.report=null;f.exercise.calls[0].record.outcome="error";delete f.exercise.calls[0].record.output;
+ f.execution.diagnostics.natlangTeacher=f.exercise;return f;};
+ const f=original(),before=structuredClone(f.execution);
+ const derived=reassessObservedReturnPresence(f.execution);
+ assert.equal(Object.hasOwn(f.execution.diagnostics.openGoalVerification,"actualResult"),false);
+ assert.equal(derived.originalProof.actualResult,null);assert.equal(derived.originalProofSha256.length,64);
+ assert.deepEqual(f.execution.diagnostics.openGoalVerification.checks,before.diagnostics.openGoalVerification.checks);
+ assert.deepEqual(f.exercise,before.diagnostics.natlangTeacher);
+ assert.equal(openOutcomeGoalEvidence(f.execution,f.exercise,"hours",f.workflow).checks.storedRequestedHours,true);
+ for(const change of [f=>{f.exercise.applicationResult=null;},f=>{f.exercise.applicationResultKind="void";},
+ f=>{f.execution.diagnostics.openGoalVerification.outcomeDimensions.returnedValue.required=true;},
+ f=>{f.execution.diagnostics.openGoalVerification.outcomeContract.returnedValue.required=true;},
+ f=>{f.execution.diagnostics.openGoalVerification.checks.storedRequestedHours=false;},
+ f=>{f.exercise.calls[0].record.output=reference(null);},f=>{f.exercise.calls[0].record.outcome="done";}]){
+  const f=original();change(f);assert.throws(()=>reassessObservedReturnPresence(f.execution));
+ }
 });

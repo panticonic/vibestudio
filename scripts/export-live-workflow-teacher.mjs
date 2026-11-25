@@ -7161,15 +7161,19 @@ function researchHandoffEvidence(execution, exercise, scenario, workflow) {
   return { world: { context_id: contextId, case_id: caseId }, checks, evidence: { workspace: { fixture } } };
 }
 
+export function applicationEntryBinding(entry) {
+  return entry && {program:entry.program,callable:entry.callable,arguments:entry.arguments,
+    ...(entry.resultType!==undefined?{resultType:entry.resultType}:{}),
+    ...(entry.argumentJson?{argumentJson:entry.argumentJson}:{})};
+}
+
 export function openOutcomeGoalEvidence(execution, exercise, _scenario, workflow) {
   const proof = execution.diagnostics.openGoalVerification;
   const world = workflow.assignment;
   const root = exercise.calls.find(({ callId }) => callId === exercise.rootCallIds[0])?.record;
   const checks = proof?.checks ?? {};
   const entry = workflow.entry;
-  const attestedEntry = entry && { program: entry.program, callable: entry.callable, arguments: entry.arguments,
-    ...(entry.resultType === "void" ? {resultType:"void"} : {}),
-    ...(entry.argumentJson ? { argumentJson: entry.argumentJson } : {}) };
+  const attestedEntry = applicationEntryBinding(entry);
   const declaredVoid = entry?.resultType === "void";
   const dimensionRequirement = proof?.outcomeDimensions?.returnedValue?.required;
   const contractRequirement = proof?.outcomeContract?.returnedValue?.required;
@@ -11239,6 +11243,30 @@ function contentProjectEvidence(execution, exercise) {
   };
 }
 
+// Historical producer repair: re-derive only return presence from the preserved capture.
+// This cannot change outcome checks, requested-return obligations or observed values.
+export function reassessObservedReturnPresence(execution) {
+  const proof=execution?.diagnostics?.openGoalVerification;
+  const teacher=execution?.diagnostics?.natlangTeacher;
+  const root=teacher?.calls?.find(call=>call.callId===teacher.rootCallIds?.[0])?.record;
+  requireEvidence(proof?.passed===true && Object.keys(proof.checks??{}).length>0 &&
+    Object.values(proof.checks).every(value=>value===true) &&
+    proof.outcomeDimensions?.returnedValue?.required===false &&
+    proof.outcomeContract?.returnedValue?.required!==true &&
+    Object.hasOwn(proof,"actualResult") && proof.actualResult===null &&
+    proof.actualResultKind===undefined && teacher &&
+    !Object.hasOwn(teacher,"applicationResult") && teacher.applicationResultKind===undefined &&
+    teacher.report===null && root?.outcome==="error" && !root.output,
+    "Expected a successful effects-only proof with the legacy absent-return null sentinel");
+  const original=structuredClone(proof);
+  const corrected={...proof};delete corrected.actualResult;
+  execution.diagnostics.openGoalVerification=corrected;
+  return {kind:"observed-return-presence",originalProof:original,
+    originalProofSha256:hash(JSON.stringify(original)),
+    correctedProofSha256:hash(JSON.stringify(corrected)),
+    observedReturnPresent:false,checksAndOutcomeUnchanged:true};
+}
+
 export async function exportLiveTeacherWorkflow({
   trajectory,
   pins,
@@ -11247,6 +11275,7 @@ export async function exportLiveTeacherWorkflow({
   split,
   review,
   recheckPdfVaultHold = false,
+  recheckObservedReturnPresence = false,
   cases = originalCases,
   loadCases,
 }) {
@@ -11298,6 +11327,12 @@ export async function exportLiveTeacherWorkflow({
       (Array.isArray(execution.toolFailures) && execution.toolFailures.every(failure => failure?.expected === true)),
     "The actual case contains an unexpected tool failure"
   );
+  if(recheckObservedReturnPresence){
+    requireEvidence(!outcomeRecheck,"Outcome reassessments cannot be combined");
+    outcomeRecheck={...reassessObservedReturnPresence(execution),
+      originalCaptureSha256:hash(await readFile(trajectory)),
+      exporterSha256:hash(await readFile(fileURLToPath(import.meta.url)))};
+  }
   const exercise = execution?.diagnostics?.natlangTeacher;
   const shared = exercise?.programPath === sharedProgram;
   requireEvidence(
@@ -11374,13 +11409,7 @@ export async function exportLiveTeacherWorkflow({
   if (outcomeRecheck) observed.evidence.workspace.outcomeRecheck = outcomeRecheck;
   const interaction = workflow.interaction === "open-user-goal"
     ? { interaction: { kind: workflow.interaction, goal: workflow.assignment.goal, program: workflow.program,
-        ...(workflow.entry ? { entry: {
-          program: workflow.entry.program,
-          callable: workflow.entry.callable,
-          arguments: workflow.entry.arguments,
-          ...(workflow.entry.resultType === "void" ? {resultType:"void"} : {}),
-          ...(workflow.entry.argumentJson ? { argumentJson: workflow.entry.argumentJson } : {}),
-        } } : {}) } }
+        ...(workflow.entry ? {entry:applicationEntryBinding(workflow.entry)} : {}) } }
     : {};
   const world = {
     instance: source.instance,
@@ -11498,6 +11527,7 @@ if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === imp
       out: { type: "string" },
       split: { type: "string" },
       "recheck-pdf-vault-hold": { type: "boolean" },
+      "recheck-observed-return-presence": { type: "boolean" },
       "review-model": { type: "string" },
     },
   });
@@ -11507,6 +11537,7 @@ if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === imp
   const manifest = await exportLiveTeacherWorkflow({
     ...values,
     recheckPdfVaultHold: values["recheck-pdf-vault-hold"],
+    recheckObservedReturnPresence: values["recheck-observed-return-presence"],
     review: workflowReviewer(values["review-model"]),
     loadCases: () =>
       loadLiveTeacherCases(
