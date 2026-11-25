@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import {gadNativeReturnContracts,gadNativeReturnEvidence} from "./lib/independent-invocation-outcomes.mjs";
 import {observedContentKinds,observedContentNeedsReview,observedContentReviewInput} from "./lib/observed-content-admission.mjs";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -1503,6 +1504,7 @@ export async function loadLiveTeacherCases(checkouts) {
           "browser", "suite",
         ].includes(assignment.kind) ? `-${assignment.kind}` : ""}-managed.ts` }),
         assignment,
+        ...(assignment.kind === "gadDurableQuestion" ? {partialEvidence:gadNativeReturnEvidence,nativeReturnContracts:await gadNativeReturnContracts(checkouts.base)} : {}),
         ...(graph ? { verifiesKnowledgeGraph: graph } : {}),
         ...(assignment.devices ? { devices: assignment.devices } : {}),
         ...(assignment.requiresAndroidEmulator ? { requiresAndroidEmulator: true } : {}),
@@ -11278,6 +11280,7 @@ export async function exportLiveTeacherWorkflow({
   out,
   split,
   review,
+  salvageFailedInvocations = process.env.VIBESTUDIO_NATIVE_PARTIAL_SALVAGE !== "0",
   recheckPdfVaultHold = false,
   recheckObservedReturnPresence = false,
   cases = originalCases,
@@ -11296,6 +11299,7 @@ export async function exportLiveTeacherWorkflow({
     (source.workspace ?? "system") === (workflow.workspace ?? "system"),
     "The live teacher source pin must name the case's assigned workspace"
   );
+  const partial = salvageFailedInvocations && result?.passed === false && typeof workflow.partialEvidence === "function" && !recheckPdfVaultHold && !recheckObservedReturnPresence;
   let outcomeRecheck;
   if (recheckPdfVaultHold) {
     const original = execution?.diagnostics?.openGoalVerification;
@@ -11324,10 +11328,10 @@ export async function exportLiveTeacherWorkflow({
       checks: { ...original.checks, verifiedHandoff: true },
     };
   } else {
-    requireEvidence(result?.passed === true && !execution?.error, "The actual system test must pass");
+    requireEvidence(partial || result?.passed === true && !execution?.error, "The actual system test must pass or provide independently certified native invocations");
   }
   requireEvidence(
-    execution?.toolFailures === undefined ||
+    partial || execution?.toolFailures === undefined ||
       (Array.isArray(execution.toolFailures) && execution.toolFailures.every(failure => failure?.expected === true)),
     "The actual case contains an unexpected tool failure"
   );
@@ -11409,7 +11413,8 @@ export async function exportLiveTeacherWorkflow({
     source.workspace_baseline_commit === workflow.workspaceBaseline,
     "Workspace baseline differs from the authored instance pin"
   );
-  const observed = workflow.evidence(execution, exercise, test.name, workflow);
+  const observed = partial ? workflow.partialEvidence(execution, exercise, workflow) : workflow.evidence(execution, exercise, test.name, workflow);
+  requireEvidence(observed && (!partial || observed.invocations?.length),"Failed outcome has no independently certified training scope");
   if (outcomeRecheck) observed.evidence.workspace.outcomeRecheck = outcomeRecheck;
   const interaction = workflow.interaction === "open-user-goal"
     ? { interaction: { kind: workflow.interaction, goal: workflow.assignment.goal, program: workflow.program,
@@ -11421,7 +11426,7 @@ export async function exportLiveTeacherWorkflow({
     ...(workflow.workspaceBaseline ? { workspace_baseline_commit: workflow.workspaceBaseline } : {}),
     ...observed.world,
   };
-  if (workflow.requiresReview) {
+  if (!partial && workflow.requiresReview) {
     requireEvidence(
       typeof review === "function",
       "An independent content reviewer must be configured"
@@ -11480,6 +11485,22 @@ export async function exportLiveTeacherWorkflow({
   for (const [kind, data] of Object.entries(observed.evidence)) {
     evidence.push({ kind, ...(await bind(`${kind}.json`, { ...data, pins: source })) });
   }
+  let trainingScope;
+  if(partial){
+    const originalPacket=await bind("original-trajectory.json.gz",await readFile(trajectory));
+    const originalOutcome=await bind("original-outcome.json",result);
+    const assessor=await bind("independent-invocation-assessor.mjs",await readFile(new URL("./lib/independent-invocation-outcomes.mjs",import.meta.url)));
+    const invocations=[];
+    for(const [index,invocation] of observed.invocations.entries()){
+      const source=invocation.certificate.checker;
+      const bytes=await readFile(source.path);
+      requireEvidence(hash(bytes)===source.sha256,"Closed invocation contract source changed during export");
+      const checker=await bind(`invocation-contract-${index}.nl`,bytes);
+      const certificate=await bind(`invocation-certificate-${index}.json`,{...invocation.certificate,checker,originalPacket});
+      invocations.push({call_id:invocation.call_id,checks:invocation.checks,evidence:[{kind:"workspace",...certificate}],certificate});
+    }
+    trainingScope={schema:"natlang.training-scope/2",original_outcome:originalOutcome,assessor,invocations};
+  }
   const calls = [];
   for (const [index, call] of captured.entries())
     calls.push(await bind(`call-${index}.json`, call));
@@ -11488,7 +11509,8 @@ export async function exportLiveTeacherWorkflow({
     task_id: taskId,
     run_id: source.run_id,
     world,
-    status: "passed",
+    status: partial ? "partial" : "passed",
+    ...(trainingScope?{training_scope:trainingScope}:{}),
     requirements: { semantic_review: workflow.requiresReview === true },
     checks: observed.checks,
     ...(workflow.interaction === "open-user-goal" ? { split } : {}),
@@ -11530,6 +11552,7 @@ if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === imp
       validator: { type: "string" },
       out: { type: "string" },
       split: { type: "string" },
+      "no-partial-salvage": { type: "boolean" },
       "recheck-pdf-vault-hold": { type: "boolean" },
       "recheck-observed-return-presence": { type: "boolean" },
       "review-model": { type: "string" },
@@ -11540,6 +11563,7 @@ if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === imp
   }
   const manifest = await exportLiveTeacherWorkflow({
     ...values,
+    salvageFailedInvocations: !values["no-partial-salvage"] && process.env.VIBESTUDIO_NATIVE_PARTIAL_SALVAGE !== "0",
     recheckPdfVaultHold: values["recheck-pdf-vault-hold"],
     recheckObservedReturnPresence: values["recheck-observed-return-presence"],
     review: workflowReviewer(values["review-model"]),
