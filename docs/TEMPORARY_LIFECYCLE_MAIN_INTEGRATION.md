@@ -13,3 +13,12 @@ Inventory before conflict resolution:
 - Disposable instance state is separate from explicit capture bytes. Current Celld storage capture remains intact; evidence root separation is not a storage-format conversion.
 
 Main integration is not qualification of the V27 authored corpus against the newer Celld/Dolt templates. Those template commits are not descendants of the frozen V27 variants. Do not deploy this host with the old template codebase or silently regenerate/replace task goals. A coherent corpus/template migration remains separate work.
+
+Validation on the integrated modern source:
+
+- 21 Node ownership, compiler-policy and host-fingerprint checks passed (1.77 s, 88 MiB).
+- 34 selected modern RuntimeManager/Celld retirement/capture/sealed-bearer, cache and test-root checks passed (14.48 s, 310.1 MiB).
+- All 47 instance registry/environment/product-launch/capture-evidence mode checks passed (6.63 s, 269.9 MiB).
+- Syntax of149 changed source files, all40 package import declarations and scoped syntax lint passed (6.38 s, 373.1 MiB). This excludes full semantic typechecking and any real Celld/modern-template/corpus deployment.
+
+An initial minimal test config omitted Vitest globals and could not load RuntimeManager tests; the corrected run above passed. One initial composition SIGKILL observation timed out; targeted automatic-only replay and the corrected combined suite passed, but that first timeout has no established cause. The regression now checks exact failed-reaper receipts while observing automatic cleanup; canonical active recovery runs only during teardown and cannot manufacture success. Full Electron/native-manager kill windows remain unqualified, as recorded in test-temporary-lifecycle.md.

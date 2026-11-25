@@ -4,6 +4,13 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
+import {
+  readLedger,
+  readResult,
+  ledgerLiveness,
+  failureError,
+  awaitRetirement,
+} from "@vibestudio/shared/ownershipLedger";
 import { pathToFileURL } from "node:url";
 import { parseTemplateManifestContent } from "@vibestudio/workspace/templateManifest";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
@@ -114,7 +121,7 @@ it.skipIf(process.platform !== "linux")(
     const composition=await composeDevelopmentTemplateCheckouts([{checkout:${JSON.stringify(base)},url:"fixture://base"}],{profileDir:${JSON.stringify(profile)},keep:false});
     const work=composition.ownership.spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{kill:"immediate",stdio:"ignore",label:"compiler-fixture"});
     await work.registered;
-    console.log(JSON.stringify({root:composition.root,pid:work.child.pid}));
+    console.log(JSON.stringify({root:composition.root,pid:work.child.pid,reference:composition.ownership.reference}));
     setInterval(()=>{},1000);
   `,
       ],
@@ -129,7 +136,11 @@ it.skipIf(process.platform !== "linux")(
       errors += chunk;
     });
     const done = new Promise<void>((resolve) => owner.once("close", () => resolve()));
-    const ready = await new Promise<{ root: string; pid: number }>((resolve, reject) => {
+    const ready = await new Promise<{
+      root: string;
+      pid: number;
+      reference: { dir: string; id: string; token: string };
+    }>((resolve, reject) => {
       owner.stdout!.on("data", () => {
         const row = output.split("\n").find((row) => row.startsWith("{"));
         if (row) resolve(JSON.parse(row));
@@ -138,12 +149,28 @@ it.skipIf(process.platform !== "linux")(
         reject(new Error(`Composition owner exited ${code}: ${errors}`))
       );
     });
+    // Recovery is teardown only: it must never manufacture the automatic
+    // reaper proof asserted below. It also joins a failed fixture's compiler.
+    releases.push(() =>
+      awaitRetirement(ready.reference.dir, ready.reference.id, { token: ready.reference.token })
+    );
     try {
       expect(fs.existsSync(ready.root)).toBe(true);
       owner.kill("SIGKILL");
       await done;
       // Kernel observation is bounded by this conventional test's deadline.
-      while (fs.existsSync(ready.root)) await new Promise((resolve) => setTimeout(resolve, 20));
+      while (fs.existsSync(ready.root)) {
+        const ledger = readLedger(ready.reference.dir, ready.reference.id);
+        if (ledger && ledgerLiveness(ledger) !== "live") {
+          const result = readResult(ready.reference.dir, ready.reference.id);
+          throw result
+            ? failureError(result)
+            : new Error(
+                "Composition reaper exited without retiring its source: " + JSON.stringify(ledger)
+              );
+        }
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
       let running = false;
       try {
         const stat = fs.readFileSync(`/proc/${ready.pid}/stat`, "utf8");

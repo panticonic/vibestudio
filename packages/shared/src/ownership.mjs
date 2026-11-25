@@ -178,7 +178,6 @@ export const OWNERSHIP_PARENT_ENV = "VIBESTUDIO_OWNERSHIP_PARENT";
 
 export class Ownership {
   #child;
-  #owner;
   #exited;
   #token;
   #nextRid = 1;
