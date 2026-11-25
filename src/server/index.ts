@@ -1,3 +1,4 @@
+import { readNativeReferenceOnly } from "../../scripts/lib/native-reference-mode.mjs";
 import { closeDerivedCacheCoordinators } from "@vibestudio/shared/derivedCache";
 import { drainDependencyContentMaintenance } from "./buildV2/dependencyContentMaintenance.js";
 import { drainExternalDependencyPruning } from "./buildV2/externalDeps.js";
@@ -362,7 +363,7 @@ async function main() {
     await import("@vibestudio/shared/centralAuth");
   const { TokenManager } = await import("@vibestudio/shared/tokenManager");
   const { ServiceDispatcher } = await import("@vibestudio/shared/serviceDispatcher");
-  const dispatcher = new ServiceDispatcher();
+  const dispatcher = new ServiceDispatcher({ nativeReferenceOnly: readNativeReferenceOnly() });
   const { EventService } = await import("@vibestudio/shared/eventsService");
   const { createWorkspaceEventsService } = await import("./services/eventsService.js");
   const { getExistingAppNodeModulesRoots } = await import("@vibestudio/shared/runtimePaths");

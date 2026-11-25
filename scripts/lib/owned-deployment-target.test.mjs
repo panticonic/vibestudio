@@ -9,7 +9,7 @@ import {
   requireInstalledDeploymentPackage,
 } from "./owned-deployment-target.mjs";
 
-test("an installed deployment child uses production dependencies under a development owner", async (t) => {
+for(const nativeReference of [false,true])test(`an installed deployment child preserves owner policy and production dependencies (native=${nativeReference})`, async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), "deployment-environment-"));
   let ownership;
   t.after(async () => {
@@ -27,7 +27,7 @@ test("an installed deployment child uses production dependencies under a develop
   const captured = path.join(appRoot, "child-env.json");
   await writeFile(
     path.join(appRoot, "package.json"),
-    JSON.stringify({ name: "@panticonic/vibestudio-server", vibestudioHostedModelRouteVersion: 1 })
+    JSON.stringify({ name: "@panticonic/vibestudio-server", vibestudioHostedModelRouteVersion: 1, vibestudioNativeReferenceModeVersion: 1 })
   );
   await writeFile(
     path.join(cli, "remote-serve.mjs"),
@@ -50,6 +50,7 @@ test("an installed deployment child uses production dependencies under a develop
     appRoot,
     ownership,
     scratchRoot,
+    nativeReference,
     signal: new AbortController().signal,
   });
   try {
@@ -61,6 +62,7 @@ test("an installed deployment child uses production dependencies under a develop
     const env = JSON.parse(await readFile(captured, "utf8"));
     assert.equal(env.NODE_ENV, "production");
     assert.equal(env.VIBESTUDIO_HOSTED_MODEL_ROUTE, route);
+    assert.equal(env.VIBESTUDIO_NATIVE_REFERENCE_ONLY,nativeReference?"1":undefined);
     assert.equal(env.VIBESTUDIO_APP_ROOT, appRoot);
     assert.equal(process.env.NODE_ENV, "development");
   } finally {
@@ -116,4 +118,12 @@ test("an older installed target is refused before resource allocation when it ca
     /cannot enforce VIBESTUDIO_HOSTED_MODEL_ROUTE/
   );
   await assert.rejects(readFile(path.join(root, "never-created", "home")), { code: "ENOENT" });
+});
+
+test("native deployment refuses an old package before creating any target state",async t=>{
+ const root=await mkdtemp(path.join(tmpdir(),"TEST-native-package-admission-"));t.after(()=>rm(root,{recursive:true,force:true}));
+ await writeFile(path.join(root,"package.json"),JSON.stringify({name:"@panticonic/vibestudio-server",vibestudioHostedModelRouteVersion:1}));
+ await assert.rejects(requireInstalledDeploymentPackage(root,{nativeReference:true}),/cannot enforce native-reference/);
+ await assert.rejects(openOwnedDeploymentTarget({appRoot:root,nativeReference:true,scratchRoot:path.join(root,"unallocated"),signal:new AbortController().signal}),/cannot enforce native-reference/);
+ await assert.rejects(readFile(path.join(root,"unallocated","home")),{code:"ENOENT"});
 });

@@ -328,6 +328,7 @@ export async function stageServer(nativeArtifacts, { extensionHostPublishRoot })
     name: PUBLIC_SERVER_PACKAGE_NAME,
     version: VERSION,
     vibestudioHostedModelRouteVersion: 1,
+    vibestudioNativeReferenceModeVersion: 1,
     description:
       "Vibestudio headless server (build, git, channels, AI, agents) over WebSocket RPC.",
     type: "module",

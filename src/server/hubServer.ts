@@ -1,3 +1,4 @@
+import { readNativeReferenceOnly } from "../../scripts/lib/native-reference-mode.mjs";
 import { appCompatibilityError } from "@vibestudio/workspace-contracts/appCompatibility";
 import type { HostKind } from "@vibestudio/workspace-contracts/clients";
 import { parseWorkspaceAppCompatibilityEnvelope } from "@vibestudio/workspace/configParser";
@@ -2551,7 +2552,7 @@ async function startHubControlTransport(
 ): Promise<HubControlTransport> {
   const reachRoot = path.join(configDir, "server-auth", "iroh");
 
-  const dispatcher = new ServiceDispatcher();
+  const dispatcher = new ServiceDispatcher({ nativeReferenceOnly: readNativeReferenceOnly() });
   const { CapabilityGrantStore } = await import("./services/capabilityGrantStore.js");
   const grantStore = new CapabilityGrantStore({
     statePath: path.join(configDir, "hub-control-state"),

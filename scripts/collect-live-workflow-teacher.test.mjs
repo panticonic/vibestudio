@@ -4,6 +4,7 @@ import { once } from "node:events";
 import { createHash } from "node:crypto";
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile, symlink } from "node:fs/promises";
 import os from "node:os";
+import {watch,existsSync} from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 
@@ -31,6 +32,9 @@ test(
       new URL("review-live-workflow-teacher.mjs", import.meta.url),
       path.join(root, "scripts/review-live-workflow-teacher.mjs")
     );
+    await mkdir(path.join(root, "packages/shared/src"),{recursive:true});
+    for(const file of ["ownedProcessIdentity.mjs","darwinProcessObserver.mjs"])
+      await copyFile(new URL("../packages/shared/src/"+file,import.meta.url),path.join(root,"packages/shared/src",file));
     await mkdir(path.join(root, "scripts/lib"));
     await copyFile(new URL("lib/native-reference-tail.mjs",import.meta.url),path.join(root,"scripts/lib/native-reference-tail.mjs"));
     await copyFile(
@@ -89,7 +93,7 @@ test(
         resultType: 'DeliveryReceipt', arguments: { goal: 'Send a café update.\\n"Use the new time."' } },
     });
     if(process.env.VIBE_TEST_NATIVE_REFERENCE)liveTeacherCases.set('open-goal-native-reference',{
-      ...liveTeacherCases.get('passing'),interaction:'open-user-goal',assignment:{goal:'TEST-only check the native note'}
+      ...liveTeacherCases.get('passing'),interaction:'open-user-goal',assignment:{goal:'TEST-only check the native note'},entry:{program:'skills/test/reference.nl',callable:'reference',resultType:'string',arguments:{goal:'TEST-only check the native note'}}
     });
     export async function loadLiveTeacherCases() { return liveTeacherCases; }
     export function workflowSourceGroups(workflow) { return [workflow.group]; }
@@ -518,6 +522,38 @@ exit 0
     const nativeProof=JSON.parse(await readFile(path.join(referencesRoot,referenceDirs[0],'reference-results.json'),'utf8'));
     assert.equal(nativeProof.results[0].status,'passed');assert.equal(nativeProof.teacherRegistryWrites,false);
     await assert.rejects(readFile(path.join(nativeOut,'cases/open-goal-native-reference/verified/manifest.json')),{code:'ENOENT'});
+
+    const onlyOut=path.join(root,'native-only-capture');
+    const onlyBefore=(await readFile(path.join(root,'commands.jsonl'),'utf8')).trim().split('\n').length;
+    const only=spawnSync(process.execPath,['scripts/collect-live-workflow-teacher.mjs','--native-reference-only','--native-reference-state',path.join(root,'native-only-state'),'--out',onlyOut],{cwd:root,env:{...process.env,VIBE_TEST_NATIVE_REFERENCE:'1',PATH:path.join(root,'bin')+path.delimiter+process.env.PATH},encoding:'utf8'});
+    assert.equal(only.status,0,only.stderr);
+    const onlyCommands=(await readFile(path.join(root,'commands.jsonl'),'utf8')).trim().split('\n').map(JSON.parse).slice(onlyBefore);
+    assert.equal(onlyCommands.filter(row=>row.command==='run').length,1);
+    assert.equal(onlyCommands[0].command,'doctor');assert.ok(onlyCommands[0].args.includes('--native-reference'));
+    assert.ok(onlyCommands.every(row=>!row.args?.includes('--model')));
+    const onlySource=JSON.parse(await readFile(path.join(onlyOut,'source.json'),'utf8'));assert.equal(onlySource.teacher,null);assert.equal(onlySource.collectionRole,'native-reference-only');
+    const onlyCoverage=JSON.parse(await readFile(path.join(onlyOut,'native-reference-only/coverage.json'),'utf8'));assert.equal(onlyCoverage.planned,1);assert.equal(onlyCoverage.attempted,1);assert.equal(onlyCoverage.sweepCompleted,true);
+
+    const completionOut=path.join(root,'completion-tail-capture'),control=path.join(root,'completion-control');
+    const completionBefore=(await readFile(path.join(root,'commands.jsonl'),'utf8')).trim().split('\n').length;
+    let decision;
+    const watcher=watch(root,async()=>{
+      if(decision||!existsSync(control+'.ready.json'))return;
+      decision=true;
+      const request=await readFile(control+'.ready.json');
+      await writeFile(control+'.decision.json',JSON.stringify({schema:JSON.parse(request).schema,requestSha256:createHash('sha256').update(request).digest('hex'),decision:'drain-native'}));
+    });
+    const completion=spawn(process.execPath,['scripts/collect-live-workflow-teacher.mjs','--assignments','--case','passing','--native-reference-tail','0','--native-reference-state',path.join(root,'completion-state'),'--native-reference-completion-control',control,'--out',completionOut],{cwd:root,env:{...process.env,VIBE_TEST_NATIVE_REFERENCE:'1',PATH:path.join(root,'bin')+path.delimiter+process.env.PATH},stdio:['ignore','pipe','pipe']});
+    let completionError='';completion.stderr.on('data',chunk=>completionError+=chunk);
+    completion.stdout.resume();
+    try { const [status]=await once(completion,'exit');assert.equal(status,0,completionError); }
+    finally {watcher.close();}
+    assert.equal(decision,true);
+    const completionCommands=(await readFile(path.join(root,'commands.jsonl'),'utf8')).trim().split('\n').map(JSON.parse).slice(completionBefore);
+    assert.equal(completionCommands.filter(row=>row.command==='run').length,2);
+    assert.equal(new Set(completionCommands.map(row=>row.instance)).size,1);
+    assert.equal(completionCommands.at(-1).command,'stop');
+    const completionCoverage=JSON.parse(await readFile(path.join(completionOut,'native-reference-only/coverage.json'),'utf8'));assert.equal(completionCoverage.sweepCompleted,true);
 
     const preflight = spawnSync(
       process.execPath,

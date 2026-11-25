@@ -261,6 +261,16 @@ const deploymentPackageProblem = (scenarios.some(
     })()
   : null;
 
+let nativeDeploymentPackageAvailable = false;
+let nativeDeploymentPackageProblem = null;
+if ((nativeReferenceLimit > 0 || nativeOnly || values["native-reference-completion-control"]) && process.env.VIBESTUDIO_MANAGED_DEPLOYMENT_PACKAGE?.trim()) {
+  try {
+    const {requireInstalledDeploymentPackage}=await import("./lib/owned-deployment-target.mjs");
+    await requireInstalledDeploymentPackage(path.resolve(host,process.env.VIBESTUDIO_MANAGED_DEPLOYMENT_PACKAGE.trim()),{nativeReference:true});
+    nativeDeploymentPackageAvailable=true;
+  } catch(error) {nativeDeploymentPackageProblem=String(error);}
+}
+
 function unavailableCase(catalog, scenario) {
   const test = catalog.get(scenario);
   if (!test) return "missing system-test descriptor";
@@ -582,7 +592,7 @@ try {
               stateRoot:path.resolve(values["native-reference-state"]??path.join(path.dirname(out),"native-reference-qualification")),
               limit:drainNative?nativeDrainBatchSize:nativeReferenceLimit,systemTest,signal:interruption.signal,
               assertPins:()=>{if(JSON.stringify(pinSources())!==JSON.stringify(pinned))throw new Error("Source pins changed during native reference tail");},
-              deploymentPackageAvailable:Boolean(process.env.VIBESTUDIO_MANAGED_DEPLOYMENT_PACKAGE?.trim()) && deploymentPackageProblem === null});
+              deploymentPackageAvailable:nativeDeploymentPackageAvailable});
             console.log(JSON.stringify({nativeReferenceOnly:true,instance,references:references.length,passed:references.filter(row=>row.status==="passed").length,draining:drainNative}));
           } while(drainNative&&references.length&&!interruption.signal.aborted);
         } catch(error) {
@@ -620,7 +630,9 @@ try {
     const folder=path.join(out,"native-reference-only");mkdirSync(folder,{recursive:true,mode:0o700});
     const summary=summarizeNativeReferences({workflows:nativeReferenceWorkflows,pinned,
       stateRoot:path.resolve(values["native-reference-state"]??path.join(path.dirname(out),"native-reference-qualification"))});
-    writeFileSync(path.join(folder,"coverage.json"),JSON.stringify({...summary,interrupted:interruption.signal.aborted},null,2)+"\n",{flag:"wx",mode:0o600});
+    writeFileSync(path.join(folder,"coverage.json"),JSON.stringify({...summary,interrupted:interruption.signal.aborted,
+      unavailablePrerequisites:nativeDeploymentPackageAvailable?[]:[{kind:"native-reference-installed-package",reason:nativeDeploymentPackageProblem??"No native-reference-capable installed package was supplied",
+        affectedNames:[...nativeReferenceWorkflows].filter(([,world])=>world.requiresDeploymentPackage).map(([name])=>"open-goal-oracle-"+name.slice("open-goal-".length))}]},null,2)+"\n",{flag:"wx",mode:0o600});
   }
   if (failures.length)
     throw new AggregateError(failures, `${failures.length} live teacher operation(s) failed`);

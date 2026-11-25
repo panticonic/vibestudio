@@ -1,0 +1,85 @@
+{
+  "schema": "vibestudio.native-reference-owned-continuation-inventory/1",
+  "sourceFront": "57e7ca00b3d230db63e01e73bcc219cc02dbbc1e; frozen Source41 unchanged",
+  "owner": "existing collector managed instance and canonical system-test CLI; sequential after paid suite/export joins",
+  "components": [
+    {
+      "paths": [
+        "scripts/collect-live-workflow-teacher.mjs",
+        "scripts/lib/native-reference-tail.mjs"
+      ],
+      "change": "Default bounded reference tail, source-bound final paid-owner handshake, complete bounded drain and native-only resume; separate raw/coverage never teacher export"
+    },
+    {
+      "paths": [
+        "scripts/neuralese_data/vibestudio_campaign.py",
+        "scripts/vibestudio/managed_checkpoint.py"
+      ],
+      "change": "Existing parent checkpoint owner decides actual paid queue completion on_tick; no second active runtime or inferred approval; native-only archival excluded from training snapshots"
+    },
+    {
+      "paths": [
+        "packages/shared/src/serviceDispatcher.ts"
+      ],
+      "change": "Immutable process-owner no-inference ceiling denies model.use/internal-model-runtime.use before existing grants; exact non-model grants preserved"
+    },
+    {
+      "paths": [
+        "src/server/index.ts",
+        "src/server/hubServer.ts",
+        "scripts/lib/native-reference-mode.mjs"
+      ],
+      "change": "Both Node server boot paths read strict owner mode once into dispatcher. Workerd model/gateway/local engines cross these same native model capability facets"
+    },
+    {
+      "paths": [
+        "src/server/services/credentialService.ts:1851-1877",
+        "src/server/services/localModelRuntimeService.ts:93-104"
+      ],
+      "unchanged": "Actual provider/local preparation declares model.use facets. The canonical dispatcher, rather than a new provider path, enforces the ceiling"
+    },
+    {
+      "paths": [
+        "src/dev/runSystemTest.ts",
+        "src/dev/deviceExecutors.ts",
+        "src/dev/terminalDevice/layout.ts",
+        "scripts/lib/owned-deployment-target.mjs"
+      ],
+      "change": "Explicit native-reference command owner carries immutable mode into owned device/new Hub. Layout preserves mode. Target validates new ABI before allocation, preserves hard hosted-model route and production NODE_ENV"
+    },
+    {
+      "paths": [
+        "scripts/build-server-npm-package.mjs"
+      ],
+      "change": "Only newly built guarded server advertises vibestudioNativeReferenceModeVersion=1"
+    },
+    {
+      "paths": [
+        "Python NativeIR/load_episode",
+        "Node materializer/SFT",
+        "teacher registry"
+      ],
+      "unchanged": "Native-reference-only packets are archived separately and excluded from teacher snapshots/export; no new native training admission"
+    }
+  ],
+  "currentInstalledPackage": {
+    "source": "34de902729bed33243054ef942d209cead42f271",
+    "hostedModelRouteVersion": 1,
+    "zeroInferenceVersion": null,
+    "hardLunaCustody": "checked independently: c045 ancestor; actual owned process route Luna/fallback:null; not a paid-route bypass",
+    "nativeAdmission": "eight nested deployment references remain unchecked until a guarded package is installed; old package unchanged"
+  },
+  "checked": [
+    "7 tail controls incl forged/missing model proof, cancelled raw prefix, independent bounded inspect retention",
+    "Actual Node child environment mode/production/Luna custody; old package refused before allocation",
+    "17 shared dispatcher/device controls incl preexisting grants with no resident case policy and non-model credential preservation",
+    "13 Node mode/target/tail controls",
+    "Actual TEST-only collector paid\u2192same-instance final drain and native-only mode controls passed before latest ceiling additions"
+  ],
+  "unchecked": [
+    "Real newly built installed server Hub/no-inference RPC integration",
+    "Actual remaining/full2327 reference execution; prior1536 unchecked remains unclaimed",
+    "Noncanonical direct native-reference invocation without explicit owner --native-reference does not establish nested process-mode propagation; canonical tail always uses explicit flag",
+    "Fixture Eval activation/CPU timing for historical Regency/Grimoire errors is unavailable; CLI lifetime timestamps are not a substitute"
+  ]
+}

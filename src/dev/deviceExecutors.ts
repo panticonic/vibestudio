@@ -64,6 +64,7 @@ export async function attachDeviceDrivers(input: {
   repoRoot: string;
   instanceId: string;
   kinds: readonly DeviceKind[];
+  nativeReference?: boolean;
   specs?: Record<DeviceKind, DeviceExecutorSpec>;
   log?: (line: string) => void;
 }): Promise<AttachedDeviceDrivers> {
@@ -87,7 +88,7 @@ export async function attachDeviceDrivers(input: {
       [path.join(input.repoRoot, spec.script), "--instance", input.instanceId],
       {
         cwd: input.repoRoot,
-        env: process.env,
+        env: {...process.env,...(input.nativeReference ? {VIBESTUDIO_NATIVE_REFERENCE_ONLY:"1"} : {})},
         stdio: ["ignore", "pipe", "pipe"],
         kill: "immediate",
         label: `${kind}-device`,

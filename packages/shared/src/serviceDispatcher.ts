@@ -854,6 +854,11 @@ export type ServiceFailureObserver = (failure: {
  * Service dispatcher — all services registered via registerService().
  */
 export class ServiceDispatcher {
+  #nativeReferenceOnly: boolean;
+  constructor(options: { nativeReferenceOnly?: boolean } = {}) {
+    this.#nativeReferenceOnly = options.nativeReferenceOnly === true;
+  }
+
   private handlers = new Map<string, ServiceHandler>();
   private definitions = new Map<string, ServiceDefinition>();
   private retiredServices = new Map<string, unknown>();
@@ -2108,17 +2113,21 @@ export class ServiceDispatcher {
       const policyDecision = testPolicyDecision(resolved.context.testPolicy, {
         capability,resourceKey,tier:reviewedTier,irreversible:receiverPolicy.irreversible,
       });
-      if (policyDecision?.decision === "deny") {
+      const nativeReferenceDenied = this.#nativeReferenceOnly &&
+        (capability === "model.use" || capability === "internal-model-runtime.use");
+      if (nativeReferenceDenied || policyDecision?.decision === "deny") {
         const failure: AuthorityFailureInfo = {reasonCode:"user-denied",
-          reason:`Resident test policy ${policyDecision.ruleId} denies ${capability} for ${resourceKey}`,
+          reason: nativeReferenceDenied
+            ? `The native-reference process owner prohibits ${capability} for ${resourceKey}`
+            : `Resident test policy ${policyDecision!.ruleId} denies ${capability} for ${resourceKey}`,
           capability,resourceKey,remediation:{kind:"respect-denial",
-            message:"Respect the resident test policy and choose an operation it permits."}};
+            message:nativeReferenceDenied?"Keep this owned native-reference process model-free and choose a non-inference operation.":"Respect the resident test policy and choose an operation it permits."}};
         this.observeAuthority(resolved.context,"authority-decided",{
-          capability,resourceKey,tier:reviewedTier,decision:"test-policy-denied",snapshotDigest,
+          capability,resourceKey,tier:reviewedTier,decision:nativeReferenceDenied?"native-reference-denied":"test-policy-denied",snapshotDigest,
         });
         if (preflight) return {origin:resolved.context.authorizingOrigin.kind,
           leaf:{capability,resourceKey,status:"denied",tier:reviewedTier,failure}};
-        throw new ServiceAccessError(service,method,failure.reason,"ETESTPOLICYDENIED",{
+        throw new ServiceAccessError(service,method,failure.reason,nativeReferenceDenied?"ENATIVEREFERENCEONLY":"ETESTPOLICYDENIED",{
           denied:true,authorityFailure:failure,
         });
       }

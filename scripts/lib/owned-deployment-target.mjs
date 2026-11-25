@@ -1,3 +1,4 @@
+import { readNativeReferenceOnly } from "./native-reference-mode.mjs";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createServer } from "node:net";
@@ -32,7 +33,15 @@ async function requireHostedModelRouteSupport(appRoot) {
   }
 }
 
-export async function requireInstalledDeploymentPackage(appRoot) {
+async function requireNativeReferenceSupport(appRoot, nativeReference) {
+  if (!nativeReference && !readNativeReferenceOnly()) return;
+  const manifest = JSON.parse(await readFile(path.join(appRoot, "package.json"), "utf8"));
+  if (manifest.vibestudioNativeReferenceModeVersion !== 1)
+    throw new Error("The installed server cannot enforce native-reference no-inference mode; install a capable release before allocation");
+}
+
+export async function requireInstalledDeploymentPackage(appRoot, {nativeReference = false} = {}) {
+  await requireNativeReferenceSupport(appRoot, nativeReference);
   try {
     const manifest = JSON.parse(await readFile(path.join(appRoot, "package.json"), "utf8"));
     assert.equal(manifest.name, "@panticonic/vibestudio-server");
@@ -66,7 +75,9 @@ export async function requireInstalledDeploymentPackage(appRoot) {
   }
 }
 
-export async function openOwnedDeploymentTarget({ appRoot, ownership, scratchRoot, signal }) {
+export async function openOwnedDeploymentTarget({ appRoot, ownership, scratchRoot, signal, nativeReference = false }) {
+  const nativeReferenceOnly = nativeReference || readNativeReferenceOnly();
+  await requireNativeReferenceSupport(appRoot, nativeReferenceOnly);
   await requireHostedModelRouteSupport(appRoot);
   const home = path.join(scratchRoot, "home");
   const instance = path.join(scratchRoot, "instance");
@@ -87,6 +98,7 @@ export async function openOwnedDeploymentTarget({ appRoot, ownership, scratchRoo
     // This target executes an installed release, even when its owner is a
     // development harness. Its captured dependencies use the prepared policy.
     NODE_ENV: "production",
+    ...(nativeReferenceOnly ? {VIBESTUDIO_NATIVE_REFERENCE_ONLY:"1"} : {}),
     HOME: home,
     XDG_CONFIG_HOME: path.join(home, ".config"),
     XDG_CACHE_HOME: path.join(home, ".cache"),

@@ -15,6 +15,7 @@ function setup(input: {
   testPolicy?: boolean;
   testDecision?: "once" | "deny";
   capability?: string;
+  nativeReferenceOnly?: boolean;
 }) {
   const capability = input.capability ?? "workspace.file.write";
   const resourceKey = "context:one/file.txt";
@@ -64,7 +65,7 @@ function setup(input: {
     { userId: "one", handle: "one" },
     session
   );
-  const dispatcher = new ServiceDispatcher();
+  const dispatcher = new ServiceDispatcher({nativeReferenceOnly:input.nativeReferenceOnly});
   let granted = input.granted;
   dispatcher.setAuthorityResolver(({ caller: resolvedCaller }) => {
     const resolved = testAuthority(resolvedCaller, capability, resourceKey);
@@ -119,6 +120,18 @@ function setup(input: {
 }
 
 describe("evaluated-run authority ceiling", () => {
+  it.each(["model.use", "internal-model-runtime.use"])("process ceiling denies %s without a resident case policy, including existing grants", async capability => {
+    const {dispatcher,context,handler,request}=setup({mode:"adaptive",approvals:"prompt",granted:true,capability,nativeReferenceOnly:true});
+    await expect(dispatcher.dispatch(context,"manifestTest","write",[])).rejects.toMatchObject({code:"ENATIVEREFERENCEONLY",errorData:{authorityFailure:{remediation:{kind:"respect-denial"}}}});
+    const preflight=await dispatcher.preflightAuthority(context,"manifestTest","write",[]);
+    expect(preflight.leaves[0]?.status).toBe("denied");
+    expect(handler).not.toHaveBeenCalled();expect(request).not.toHaveBeenCalled();
+  });
+  it("process ceiling preserves exact non-model credential grants",async()=>{
+    const {dispatcher,context,handler}=setup({mode:"adaptive",approvals:"prompt",granted:true,capability:"credential.use",nativeReferenceOnly:true});
+    await dispatcher.dispatch(context,"manifestTest","write",[]);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
   it.each(["model.use", "credential.use", "internal-model-runtime.use"])("denies explicit native-reference %s despite a preexisting grant", async capability => {
     const {dispatcher,context,handler,request}=setup({mode:"adaptive",approvals:"prompt",granted:true,testPolicy:true,testDecision:"deny",capability});
     await expect(dispatcher.dispatch(context,"manifestTest","write",[])).rejects.toMatchObject({code:"ETESTPOLICYDENIED",errorData:{authorityFailure:{remediation:{kind:"respect-denial"}}}});

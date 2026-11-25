@@ -135,3 +135,12 @@ describe("attachDeviceDrivers", () => {
     await expect(attached.stop()).rejects.toThrow(/ended on its own \(7\)/u);
   });
 });
+
+it("propagates native-reference ownership only into its owned device process",async()=>{
+  const before=process.env["VIBESTUDIO_NATIVE_REFERENCE_ONLY"];
+  const file=path.join(root,"native-mode.json");
+  const spec={script:script("native-mode.mjs",`import fs from 'node:fs';fs.writeFileSync(${JSON.stringify(file)},JSON.stringify({native:process.env.VIBESTUDIO_NATIVE_REFERENCE_ONLY}));process.on('SIGTERM',()=>process.exit(0));console.log('terminal ready');setInterval(()=>{},1<<30);`),ready:/terminal ready/u};
+  const attached=await attachDeviceDrivers({ownership,repoRoot:root,instanceId:"native-test",kinds:["terminal"],specs:{terminal:spec,desktop:spec},nativeReference:true});
+  try {expect(JSON.parse(fs.readFileSync(file,"utf8"))).toEqual({native:"1"});expect(process.env["VIBESTUDIO_NATIVE_REFERENCE_ONLY"]).toBe(before);}
+  finally {await attached.stop();}
+});

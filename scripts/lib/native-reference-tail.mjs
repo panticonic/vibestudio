@@ -120,7 +120,9 @@ export async function waitForNativeContinuation({control,out,pinned,signal,owner
  const source=path.join(out,'source.json'),sourceBytes=readFileSync(source);
  const request={schema:'vibestudio.native-reference-continuation/1',nonce:randomUUID(),capture:out,sourceSha256:hash(sourceBytes),repositories:pinned.repositories};
  const bytes=JSON.stringify(request)+'\n',requestPath=control+'.ready.json';
- writeFileSync(requestPath,bytes,{flag:'wx',mode:0o600});
+ assert.ok(!existsSync(requestPath),'Native continuation request already belongs to an owner');
+ const temporary=requestPath+'.'+randomUUID()+'.tmp';
+ writeFileSync(temporary,bytes,{flag:'wx',mode:0o600});renameSync(temporary,requestPath);
  const requestSha256=hash(bytes);
  while(!signal.aborted) {
   if(!ownerAlive(ownerIdentity))return false;

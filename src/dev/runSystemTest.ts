@@ -395,6 +395,7 @@ async function runCommand({
         repoRoot,
         instanceId: ensured.instance.id,
         kinds: parsed.devices,
+        nativeReference: scopedCommand.includes("--native-reference"),
       })
     : null;
   let commandFailure: unknown;
