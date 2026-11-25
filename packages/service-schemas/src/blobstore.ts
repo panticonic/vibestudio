@@ -215,6 +215,7 @@ export const DiffTreesResultSchema = z
 
 export const blobstoreMethods = defineServiceMethods({
   has: {
+    argumentNames: ["hash"],
     website: {
       kind: "eligible",
       rationale: "Content access requires the website’s ordinary scoped disclosure consent.",
@@ -240,6 +241,7 @@ export const blobstoreMethods = defineServiceMethods({
     ],
   },
   stat: {
+    argumentNames: ["hash"],
     website: {
       kind: "eligible",
       rationale: "Content access requires the website’s ordinary scoped disclosure consent.",
@@ -259,6 +261,7 @@ export const blobstoreMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   putText: {
+    argumentNames: ["text"],
     website: {
       kind: "eligible",
       rationale: "Content access requires the website’s ordinary scoped disclosure consent.",
@@ -280,6 +283,7 @@ export const blobstoreMethods = defineServiceMethods({
     examples: [{ args: ["hello world"] }],
   },
   getText: {
+    argumentNames: ["hash"],
     website: {
       kind: "eligible",
       rationale: "Content access requires the website’s ordinary scoped disclosure consent.",
@@ -299,6 +303,7 @@ export const blobstoreMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   getRange: {
+    argumentNames: ["hash", "start", "end"],
     website: {
       kind: "eligible",
       rationale: "Content access requires the website’s ordinary scoped disclosure consent.",
@@ -319,6 +324,7 @@ export const blobstoreMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   getRangeBytes: {
+    argumentNames: ["hash", "start", "end"],
     website: {
       kind: "eligible",
       rationale: "Content access requires the website’s ordinary scoped disclosure consent.",
@@ -339,6 +345,7 @@ export const blobstoreMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   grep: {
+    argumentNames: ["hash", "query", "options"],
     website: {
       kind: "eligible",
       rationale: "Content access requires the website’s ordinary scoped disclosure consent.",
@@ -378,6 +385,7 @@ export const blobstoreMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   putBase64: {
+    argumentNames: ["content"],
     website: {
       kind: "eligible",
       rationale: "Content access requires the website’s ordinary scoped disclosure consent.",
@@ -399,6 +407,7 @@ export const blobstoreMethods = defineServiceMethods({
     examples: [{ args: ["iVBORw0KGgo="] }],
   },
   putRetained: {
+    argumentNames: ["input"],
     website: {
       kind: "closed",
       reason:
@@ -419,6 +428,7 @@ export const blobstoreMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   retain: {
+    argumentNames: ["input"],
     website: {
       kind: "closed",
       reason:
@@ -439,6 +449,7 @@ export const blobstoreMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   releaseRetention: {
+    argumentNames: ["input"],
     website: {
       kind: "closed",
       reason:
@@ -459,6 +470,7 @@ export const blobstoreMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   getBase64: {
+    argumentNames: ["hash"],
     website: {
       kind: "eligible",
       rationale: "Content access requires the website’s ordinary scoped disclosure consent.",
@@ -478,6 +490,7 @@ export const blobstoreMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   putTree: {
+    argumentNames: ["entries", "options"],
     website: {
       kind: "eligible",
       rationale: "Content access requires the website’s ordinary scoped disclosure consent.",
@@ -499,6 +512,7 @@ export const blobstoreMethods = defineServiceMethods({
     examples: [{ args: [[], { root: true }] }],
   },
   getTree: {
+    argumentNames: ["hash"],
     website: {
       kind: "eligible",
       rationale: "Content access requires the website’s ordinary scoped disclosure consent.",
@@ -519,6 +533,7 @@ export const blobstoreMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   listTree: {
+    argumentNames: ["hash", "options"],
     website: {
       kind: "eligible",
       rationale: "Content access requires the website’s ordinary scoped disclosure consent.",
@@ -539,6 +554,7 @@ export const blobstoreMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   readFileAtTree: {
+    argumentNames: ["hash", "filePath"],
     website: {
       kind: "eligible",
       rationale: "Content access requires the website’s ordinary scoped disclosure consent.",
@@ -559,6 +575,7 @@ export const blobstoreMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   diffTrees: {
+    argumentNames: ["leftHash", "rightHash"],
     website: {
       kind: "eligible",
       rationale: "Content access requires the website’s ordinary scoped disclosure consent.",
@@ -579,6 +596,7 @@ export const blobstoreMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   materializeTree: {
+    argumentNames: ["hash", "outDir", "options"],
     website: {
       kind: "closed",
       reason:
@@ -615,6 +633,7 @@ export const blobstoreMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   delete: {
+    argumentNames: ["hash"],
     website: {
       kind: "closed",
       reason:
@@ -646,6 +665,7 @@ export const blobstoreMethods = defineServiceMethods({
     access: ADMIN_DESTRUCTIVE_ACCESS,
   },
   list: {
+    argumentNames: ["options"],
     website: {
       kind: "closed",
       reason:
