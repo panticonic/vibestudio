@@ -76,9 +76,9 @@ export async function acquireSchemaProbeEvidence(
   return runWithOwnedCleanup(
     async () => {
       lease = cacheOwner.acquire(root, key);
-      const activeCoordinator = (coordinator = new SharedBuildCoordinator(root, 3));
       const cached = await read();
       if (cached) return cached;
+      const activeCoordinator = (coordinator = new SharedBuildCoordinator(root, 3));
       const outcome = await activeCoordinator.run(
         key,
         new BuildPriorityOwner("interactive"),

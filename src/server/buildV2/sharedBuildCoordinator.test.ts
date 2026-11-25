@@ -3,7 +3,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { once } from "node:events";
-import { afterEach, describe, expect, it } from "vitest";
+import fsSync from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+import { DatabaseSync } from "node:sqlite";
+import { SharedBuildCoordinator } from "./sharedBuildCoordinator.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { deserializeRpcFailure } from "@vibestudio/rpc";
 
 interface Message {
@@ -190,4 +194,21 @@ describe("cross-process build ownership", () => {
     b.send("release", "queued");
     await b.read("complete", "queued");
   });
+});
+
+it("retires the SQLite connection when watcher admission fails, preserving the original error", () => {
+  const failure = Object.assign(new Error("watch admission exhausted"), { code: "EMFILE" });
+  const close = vi.spyOn(DatabaseSync.prototype, "close");
+  const watch = vi.spyOn(fsSync, "watch").mockImplementation(() => {
+    throw failure;
+  });
+  syncBuiltinESMExports();
+  try {
+    expect(() => new SharedBuildCoordinator(root(), 3)).toThrow(failure);
+    expect(close).toHaveBeenCalledTimes(1);
+  } finally {
+    watch.mockRestore();
+    close.mockRestore();
+    syncBuiltinESMExports();
+  }
 });

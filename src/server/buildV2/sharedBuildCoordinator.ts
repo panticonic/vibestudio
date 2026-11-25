@@ -45,35 +45,56 @@ export class SharedBuildCoordinator {
     this.notification = path.join(directory, "build-coordinator.changed");
     fs.closeSync(fs.openSync(this.notification, "a", 0o600));
     this.db = new DatabaseSync(path.join(directory, "build-coordinator.db"));
-    this.db.exec(`
-      PRAGMA busy_timeout = 5000;
-      PRAGMA journal_mode = WAL;
-      CREATE TABLE IF NOT EXISTS flights (
-        key TEXT PRIMARY KEY, id TEXT UNIQUE NOT NULL, owner TEXT NOT NULL,
-        state TEXT NOT NULL, failure TEXT
-      ) STRICT;
-      CREATE TABLE IF NOT EXISTS requests (
-        id TEXT PRIMARY KEY, flight TEXT NOT NULL, owner TEXT NOT NULL, priority INTEGER NOT NULL
-      ) STRICT;
-      CREATE INDEX IF NOT EXISTS request_flight ON requests(flight);
-      CREATE TABLE IF NOT EXISTS slots (
-        sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL,
-        owner TEXT NOT NULL, priority INTEGER NOT NULL, running INTEGER NOT NULL,
-        capacity INTEGER NOT NULL
-      ) STRICT;
-    `);
-    this.watcher = fs.watch(directory, (_event, filename) => {
-      if (filename?.toString() === "build-coordinator.changed") this.changed();
-    });
-    this.watcher.on("error", (error) => {
-      this.observationFailure = error;
-      this.changed();
-    });
-    // Filesystem notifications carry ordinary progress. This observation is
-    // solely for authoritative process death, including a killed producer
-    // that cannot write its terminal receipt. No duration declares failure.
-    this.observationTimer = setInterval(() => this.changed(), 1000);
-    this.observationTimer.unref();
+    let watcher: fs.FSWatcher | undefined;
+    try {
+      this.db.exec(`
+        PRAGMA busy_timeout = 5000;
+        PRAGMA journal_mode = WAL;
+        CREATE TABLE IF NOT EXISTS flights (
+          key TEXT PRIMARY KEY, id TEXT UNIQUE NOT NULL, owner TEXT NOT NULL,
+          state TEXT NOT NULL, failure TEXT
+        ) STRICT;
+        CREATE TABLE IF NOT EXISTS requests (
+          id TEXT PRIMARY KEY, flight TEXT NOT NULL, owner TEXT NOT NULL, priority INTEGER NOT NULL
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS request_flight ON requests(flight);
+        CREATE TABLE IF NOT EXISTS slots (
+          sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL,
+          owner TEXT NOT NULL, priority INTEGER NOT NULL, running INTEGER NOT NULL,
+          capacity INTEGER NOT NULL
+        ) STRICT;
+      `);
+      this.watcher = watcher = fs.watch(directory, (_event, filename) => {
+        if (filename?.toString() === "build-coordinator.changed") this.changed();
+      });
+      this.watcher.on("error", (error) => {
+        this.observationFailure = error;
+        this.changed();
+      });
+      // Filesystem notifications carry ordinary progress. This observation is
+      // solely for authoritative process death, including a killed producer
+      // that cannot write its terminal receipt. No duration declares failure.
+      this.observationTimer = setInterval(() => this.changed(), 1000);
+      this.observationTimer.unref();
+    } catch (error) {
+      const failures: unknown[] = [error];
+      try {
+        watcher?.close();
+      } catch (failure) {
+        failures.push(failure);
+      }
+      try {
+        this.db.close();
+      } catch (failure) {
+        failures.push(failure);
+      }
+      if (failures.length > 1)
+        throw new AggregateError(
+          failures,
+          "Shared build coordinator initialization and retirement failed"
+        );
+      throw error;
+    }
   }
 
   async run<T>(

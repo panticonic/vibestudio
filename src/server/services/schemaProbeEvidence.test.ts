@@ -1,4 +1,6 @@
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -61,6 +63,28 @@ describe("immutable schema probe evidence", () => {
     return { output, publication };
   };
 
+  it("reads exact warm evidence without requesting a watcher even when watcher admission is exhausted", async () => {
+    await acquire(async () => descriptor);
+    const failure = Object.assign(new Error("watch admission exhausted"), { code: "EMFILE" });
+    const watch = vi.spyOn(fsSync, "watch").mockImplementation(() => {
+      throw failure;
+    });
+    syncBuiltinESMExports();
+    try {
+      const probe = vi.fn(async () => descriptor);
+      await expect(acquire(probe)).resolves.toEqual(descriptor);
+      expect(watch).not.toHaveBeenCalled();
+      expect(probe).not.toHaveBeenCalled();
+      await expect(acquire(probe, { ...identity, artifactDigest: "b".repeat(64) })).rejects.toBe(
+        failure
+      );
+      expect(probe).not.toHaveBeenCalled();
+    } finally {
+      watch.mockRestore();
+      syncBuiltinESMExports();
+    }
+  });
+
   it("snapshots only advertised receipts while an owned publication is held", async () => {
     const rename = fs.rename.bind(fs);
     let release!: () => void;
@@ -100,7 +124,11 @@ describe("immutable schema probe evidence", () => {
     await acquire(async () => descriptor);
     await fs.mkdir(path.join(cacheRoot(), ".trash"));
     const staged = await stage();
-    try { await staged.publication.publish(); } finally { await staged.publication.close(); }
+    try {
+      await staged.publication.publish();
+    } finally {
+      await staged.publication.close();
+    }
   });
 
   it("rejects a symlink substituted for the cache retirement directory", async () => {
