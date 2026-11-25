@@ -1,3 +1,4 @@
+import net from "node:net";
 // Durable ownership state and its retirement. Plain Node JS: the reaper runs
 // this without a TypeScript loader.
 import fs from "node:fs";
@@ -12,6 +13,7 @@ import {
   parseOwnedProcessIdentity,
   readRssKb,
   signalOwnedProcessIdentity,
+  signalProcessStart,
 } from "./ownedProcessIdentity.mjs";
 import { removeSealedTree } from "./removeSealedTree.mjs";
 
@@ -65,6 +67,102 @@ function parseProcessStart(value, what) {
   }
   return { pid: value.pid, startCoordinate: value.startCoordinate, bootId: value.bootId };
 }
+/** Exact authority for one child claim; no profile-wide discovery. */
+export function parseOwnershipReference(value) {
+  if (
+    !isRecord(value) ||
+    typeof value.dir !== "string" ||
+    !path.isAbsolute(value.dir) ||
+    typeof value.token !== "string" ||
+    !/^[a-f0-9]{32}$/u.test(value.token)
+  )
+    throw ownershipError("Ownership parent/child reference is invalid");
+  return {
+    dir: value.dir,
+    id: validateLedgerId(value.id),
+    token: value.token,
+    ...(value.terminateOwner === true ? { terminateOwner: true } : {}),
+  };
+}
+
+/** Authenticated loopback control of the existing reaper; completion is protocol-bound. */
+export async function requestOwnershipControl(reference, request) {
+  const ref = parseOwnershipReference(reference);
+  const ledger = readLedger(ref.dir, ref.id);
+  if (!ledger || ledger.token !== ref.token)
+    throw ownershipError("Ownership claim is no longer active");
+  if (!Number.isSafeInteger(ledger.controlPort))
+    throw ownershipError("Ownership claim has no control endpoint");
+  return await new Promise((resolve, reject) => {
+    const socket = net.createConnection({ host: "127.0.0.1", port: ledger.controlPort });
+    socket.setEncoding("utf8");
+    let text = "",
+      settled = false;
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      if (error) reject(error);
+      else resolve(value);
+    };
+    socket.once("connect", () =>
+      socket.write(JSON.stringify({ token: ref.token, ...request }) + "\n")
+    );
+    socket.on("data", (chunk) => {
+      text += chunk.toString("utf8");
+      if (Buffer.byteLength(text) > 1024 * 1024)
+        return finish(ownershipError("Ownership control reply exceeds protocol limit"));
+      if (!text.includes("\n")) return;
+      try {
+        const reply = JSON.parse(text.slice(0, text.indexOf("\n")));
+        if (!reply.ok)
+          throw Object.assign(
+            new Error(reply.failure?.message ?? "Ownership control failed"),
+            reply.failure
+          );
+        finish(null, reply.value);
+      } catch (error) {
+        finish(error);
+      }
+    });
+    socket.once("error", (error) => finish(error));
+    socket.once("end", () => finish(ownershipError("Ownership control closed before its reply")));
+  });
+}
+
+async function retireChildOwnership(reference) {
+  const ref = parseOwnershipReference(reference),
+    ledger = readLedger(ref.dir, ref.id);
+  if (!ledger || ledger.token !== ref.token) return;
+  if (ledgerLiveness(ledger) === "live") {
+    let outcome;
+    try {
+      outcome = await requestOwnershipControl(ref, { t: "release" });
+    } catch (error) {
+      // A concurrent normal release can close the endpoint after removing its
+      // exact claim. A live or failed claim never becomes success by absence of a reply.
+      const current = readLedger(ref.dir, ref.id);
+      if (current?.token === ref.token && ledgerLiveness(current) === "live") throw error;
+      if (current?.token === ref.token)
+        await awaitRetirement(ref.dir, ref.id, { token: ref.token });
+      return;
+    }
+    if (!outcome.ok) {
+      const errors = outcome.failures.map((failure) =>
+        Object.assign(new Error(failure.message), failure)
+      );
+      if (outcome.resourcesRetired === true) {
+        await awaitRetirement(ref.dir, ref.id, { token: ref.token });
+        return { failures: errors };
+      }
+      throw Object.assign(new AggregateError(errors, "Child ownership did not retire"), {
+        code: "EOWNERSHIP",
+      });
+    }
+  }
+  await awaitRetirement(ref.dir, ref.id, { token: ref.token });
+}
+
 export function parseLedger(value) {
   if (!isRecord(value) || value.version !== 1) throw ownershipError("Ownership ledger is invalid");
   validateLedgerId(value.id);
@@ -77,6 +175,15 @@ export function parseLedger(value) {
   if (!Array.isArray(value.groups) || !Array.isArray(value.paths) || !isRecord(value.meta)) {
     throw ownershipError("Ownership ledger is incomplete");
   }
+  if (value.children !== undefined && !Array.isArray(value.children))
+    throw ownershipError("Ownership children are invalid");
+  if (
+    value.controlPort !== undefined &&
+    (!Number.isSafeInteger(value.controlPort) || value.controlPort < 1 || value.controlPort > 65535)
+  )
+    throw ownershipError("Ownership control endpoint is invalid");
+  if (value.ownerJoined !== undefined && typeof value.ownerJoined !== "boolean")
+    throw ownershipError("Ownership work-join state is invalid");
   const groups = value.groups.map((group) => {
     if (!isRecord(group) || typeof group.key !== "string" || !Number.isSafeInteger(group.pid)) {
       throw ownershipError("Ownership ledger group is invalid");
@@ -120,6 +227,12 @@ export function parseLedger(value) {
     reaper: parseProcessStart(value.reaper, "reaper"),
     groups,
     paths,
+    ...(value.children === undefined
+      ? {}
+      : { children: value.children.map(parseOwnershipReference) }),
+    ...(value.controlPort === undefined ? {} : { controlPort: value.controlPort }),
+    ...(value.ownerJoined === undefined ? {} : { ownerJoined: value.ownerJoined }),
+    ...(value.terminateOwnerOnParent === true ? { terminateOwnerOnParent: true } : {}),
     meta: value.meta,
   };
 }
@@ -384,7 +497,25 @@ export async function retireLedger(ledger, options) {
   const resultPath = resultFileOfLedgerFile(file);
   const foreignBoot = ledger.bootId !== bootId();
   const failures = [];
-  const remaining = { groups: [...ledger.groups], paths: [...ledger.paths] };
+  if (!foreignBoot && ledger.ownerJoined === false) {
+    // A test worker explicitly transferred its whole process lifetime. Other
+    // owners close cooperatively; never kill a same-process nested scope.
+    if (ledger.terminateOwnerOnParent) signalProcessStart(ledger.owner, "SIGKILL");
+    while (observeProcessStart(ledger.owner) === "live") {
+      const current = readLedger(options.dir, ledger.id);
+      if (!current || current.token !== ledger.token) return;
+      if (current.ownerJoined === true) break;
+      await observeAgain();
+    }
+  }
+  const remaining = {
+    groups: [...ledger.groups],
+    paths: [...ledger.paths],
+    children: [...(ledger.children ?? [])],
+  };
+  // Start child closure alongside group closure: a graceful group can itself
+  // be awaiting a child owner. Every dependency joins before any path removal.
+  const children = Promise.allSettled(remaining.children.map(retireChildOwnership));
   const retire =
     options.retireGroup ??
     ((group) => retireGroup(group, options.escalated ? { escalated: options.escalated } : {}));
@@ -411,6 +542,16 @@ export async function retireLedger(ledger, options) {
     // PIDs recorded before a reboot name nothing; signal nothing.
     remaining.groups = [];
   }
+  const childOutcomes = await children;
+  childOutcomes.forEach((outcome, index) => {
+    if (outcome.status === "fulfilled") {
+      remaining.children = remaining.children.filter((child) => child !== ledger.children[index]);
+      failures.push(...(outcome.value?.failures ?? []));
+    } else {
+      groupsFailed = true;
+      failures.push(outcome.reason);
+    }
+  });
   // Scratch and owned paths are removed only once every group is proven gone.
   // A path may be in use by any registered group (the ledger does not record
   // which workload uses which path), so a group that could not be retired
@@ -438,7 +579,12 @@ export async function retireLedger(ledger, options) {
   // sweep or `stop` retries and surfaces it.
   try {
     if (ownsFile(file, ledger)) {
-      writeLedger(file, { ...ledger, groups: remaining.groups, paths: remaining.paths });
+      writeLedger(file, {
+        ...ledger,
+        groups: remaining.groups,
+        paths: remaining.paths,
+        ...(ledger.children ? { children: remaining.children } : {}),
+      });
     }
     const result = { id: ledger.id, failures: flat.map(serializeFailure) };
     const temp = `${resultPath}.tmp-${process.pid}`;

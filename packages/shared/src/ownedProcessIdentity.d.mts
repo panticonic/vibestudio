@@ -79,3 +79,5 @@ export function setOomScoreAdj(
   pid: number,
   score: number
 ): { ok: true } | { ok: false; error: string };
+
+export function signalProcessStart(start: ProcessStart, signal: NodeJS.Signals): void;

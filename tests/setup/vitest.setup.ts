@@ -1,7 +1,12 @@
+import { afterAll } from "vitest";
+import { ownTestWorker, releaseTestWorker } from "./ownedTestWorker.js";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readCurrentHostBuildGeneration } from "../../scripts/host-build-generations.mjs";
 import { TEST_TEMP_ROOT_ENV } from "./vitestTempRoot.js";
+
+await ownTestWorker();
+afterAll(releaseTestWorker);
 
 // Workers inherit the run-owned temporary root from the global setup that
 // created it, so every fixture this file's tests build lands inside the one

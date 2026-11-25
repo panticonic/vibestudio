@@ -6,6 +6,7 @@ import { createRequire } from "node:module";
 import { launchManagedServerOwner } from "./managedServerLease";
 import { readCurrentHostBuildGeneration } from "../../scripts/host-build-generations.mjs";
 import { getProfileDataPath } from "@vibestudio/env-paths";
+import { ownTestWorker } from "./ownedTestWorker.js";
 import { ownDesktop, type OwnedDesktop } from "./ownedDesktop";
 import type { TestApp } from "./electronSetup";
 
@@ -17,6 +18,7 @@ const require = createRequire(import.meta.url);
 export async function launchManagedServerApp(
   environment: Record<string, string> = {}
 ): Promise<TestApp> {
+  await ownTestWorker();
   const root = process.env["VIBESTUDIO_E2E_TEMP_ROOT"];
   if (!root) throw new Error("Managed desktop tests require the E2E run owner");
   const instance = `website-live-${randomUUID().slice(0, 8)}`;

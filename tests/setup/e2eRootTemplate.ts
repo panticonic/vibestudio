@@ -14,6 +14,7 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { runE2eRootPreparation } from "./runE2eRootPreparation.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { sha256Hex } from "@vibestudio/content-addressing";
@@ -76,6 +77,14 @@ const hashOnlySink = {
  * clone owns a synthetic commit, so the developer's branch is never touched.
  */
 export async function prepareE2eRootTemplate(input: {
+  projectRoot: string;
+  runTempRoot: string;
+}): Promise<E2eRootTemplate> {
+  return runE2eRootPreparation("prepare", input);
+}
+
+/** Executed only by the owned preparation entry, including its Git descendants. */
+export async function prepareE2eRootTemplateInProcess(input: {
   projectRoot: string;
   runTempRoot: string;
 }): Promise<E2eRootTemplate> {
@@ -204,6 +213,17 @@ export async function deriveE2eRootTemplate(input: {
   configureSource: (sourceRoot: string) => void;
   template?: keyof DefaultWorkspaceTemplates;
 }): Promise<E2eRootTemplate> {
+  const { configureSource, ...request } = input;
+  return runE2eRootPreparation("derive", request, configureSource);
+}
+
+/** Executed only by the owned preparation entry; callback remains in its caller. */
+export async function deriveE2eRootTemplateInProcess(input: {
+  base: E2eRootTemplate;
+  workRoot: string;
+  configureSource: (sourceRoot: string) => void | Promise<void>;
+  template?: keyof DefaultWorkspaceTemplates;
+}): Promise<E2eRootTemplate> {
   const selectedPin = input.template
     ? input.base.defaultTemplates[input.template]
     : input.base.defaultTemplates.base;
@@ -217,7 +237,7 @@ export async function deriveE2eRootTemplate(input: {
     stdio: ["ignore", "pipe", "pipe"],
   });
   git(checkout, ["checkout", "-B", "vibestudio-e2e-case", selectedPin.commit]);
-  input.configureSource(checkout);
+  await input.configureSource(checkout);
   regenerateRootRuntimeManifest(checkout);
   const manifest = parseTemplateManifestContent(
     fs.readFileSync(path.join(checkout, "meta", "vibestudio.yml"), "utf8"),

@@ -29,28 +29,55 @@ describe("E2E cleanup ledger", () => {
     expect(releaseRunCleanupPath("/tmp/run/case-a")).toBe(true);
   });
 
-  it("performs one recursive run-root deletion in the final cleanup phase", () => {
-    const removeRoot = vi.fn();
-    cleanupRunTempRoot("/tmp/run", removeRoot);
-    expect(removeRoot).toHaveBeenCalledOnce();
-    expect(removeRoot).toHaveBeenCalledWith("/tmp/run");
+  it("joins canonical run retirement in the final cleanup phase", async () => {
+    const retire = vi.fn(async () => {});
+    await cleanupRunTempRoot("/tmp/run", retire);
+    expect(retire).toHaveBeenCalledOnce();
   });
 
-  it("preserves state when a worker exits without releasing its fixture", () => {
+  it("records an unreleased fixture without preserving its dead worker's whole profile", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-cleanup-ledger-"));
     roots.push(root);
     process.env[E2E_TEMP_ROOT_ENV] = root;
-    process.env[E2E_CLEANUP_LEDGER_ENV] = path.join(root, "ledger.jsonl");
-    const fixture = path.join(root, "case-a");
-    registerRunCleanupPath(fixture);
-    const removeRoot = vi.fn();
-    expect(() => cleanupRunTempRoot(root, removeRoot)).toThrow("Unreleased fixtures");
-    expect(removeRoot).not.toHaveBeenCalled();
-    releaseRunCleanupPath(fixture);
-    cleanupRunTempRoot(root, removeRoot);
-    expect(removeRoot).toHaveBeenCalledExactlyOnceWith(root);
-    registerRunCleanupPath(fixture);
-    expect(() => cleanupRunTempRoot(root, removeRoot)).toThrow("Unreleased fixtures");
-    expect(removeRoot).toHaveBeenCalledTimes(1);
+    process.env[E2E_CLEANUP_LEDGER_ENV] = path.join(
+      os.tmpdir(),
+      `cleanup-${path.basename(root)}.jsonl`
+    );
+    roots.push(process.env[E2E_CLEANUP_LEDGER_ENV]!);
+    registerRunCleanupPath(path.join(root, "case-a"));
+    const retire = vi.fn(async () => fs.rmSync(root, { recursive: true, force: true }));
+    await cleanupRunTempRoot(root, retire);
+    expect(retire).toHaveBeenCalledOnce();
+    expect(fs.existsSync(root)).toBe(false);
+    const events = fs
+      .readFileSync(process.env[E2E_CLEANUP_LEDGER_ENV]!, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(events.find((event) => event.event === "unreleased-fixtures")).toMatchObject({
+      pendingCount: 1,
+      sample: [path.join(root, "case-a")],
+    });
+    expect(events.at(-1).event).toBe("run-cleanup-complete");
+  });
+
+  it("still retires resources when diagnostic ledger writing fails", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-cleanup-ledger-"));
+    roots.push(root);
+    const impossible = path.join(root, "not-a-directory");
+    fs.writeFileSync(impossible, "file");
+    process.env[E2E_CLEANUP_LEDGER_ENV] = path.join(impossible, "ledger");
+    const retire = vi.fn(async () => {});
+    await expect(cleanupRunTempRoot(root, retire)).rejects.toThrow();
+    expect(retire).toHaveBeenCalledOnce();
+  });
+
+  it("retains an original retirement failure rather than reporting cleanup complete", async () => {
+    const error = new Error("resource still live");
+    await expect(
+      cleanupRunTempRoot("/tmp/run", async () => {
+        throw error;
+      })
+    ).rejects.toBe(error);
   });
 });

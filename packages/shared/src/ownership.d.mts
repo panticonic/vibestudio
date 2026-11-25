@@ -1,11 +1,25 @@
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import type { OwnedProcessIdentity } from "./ownedProcessIdentity.mjs";
-import type { KillMode, Ledger, OwnershipError, OwnershipLifetime } from "./ownershipLedger.mjs";
+import type {
+  KillMode,
+  Ledger,
+  OwnershipError,
+  OwnershipLifetime,
+  OwnershipReference,
+} from "./ownershipLedger.mjs";
 
-export type { KillMode, Ledger, OwnershipLifetime } from "./ownershipLedger.mjs";
+export type {
+  KillMode,
+  Ledger,
+  OwnershipLifetime,
+  OwnershipReference,
+} from "./ownershipLedger.mjs";
 export { watchLease } from "./ownershipLease.mjs";
 
+export const OWNERSHIP_PARENT_ENV: "VIBESTUDIO_OWNERSHIP_PARENT";
 export interface OwnershipOptions {
+  /** Join this exact parent's lifetime; null explicitly ignores inherited parent custody. */
+  parent?: OwnershipReference | null;
   /** Profile directory; ownership state lives in `<profileDir>/ownership`. */
   profileDir: string;
   /** Claim name (default: a fresh unique id). An id held by a live ledger rejects with `OwnershipClaimedError`. */
@@ -111,6 +125,7 @@ export class OwnershipClaimedError extends Error {
 }
 
 export class Ownership {
+  readonly reference: OwnershipReference;
   /**
    * Start this owner's reaper (plain node, own process group), claim the id,
    * and resolve once the ledger is durable. Nothing may be started before this.
@@ -150,7 +165,7 @@ export class Ownership {
    */
   adopt(child: ChildProcess, options: OwnedAdoptOptions): OwnedProcess;
   /** Reaper-created directory under `<profile>/ownership/scratch`; removed at retirement. */
-  scratch(prefix: string): Promise<string>;
+  scratch(prefix: string, options?: { directory?: string }): Promise<string>;
   /** Record an absolute path to remove at retirement (after scratch/groups, reverse order). */
   own(path: string, label?: string): Promise<void>;
   /** Merge JSON into the ledger's `meta`. */

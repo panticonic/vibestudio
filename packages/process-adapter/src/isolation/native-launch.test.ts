@@ -21,7 +21,11 @@ const input: NativeLaunchInput = {
   network: "allow",
 };
 it("compiles Windows directly with literal argv and only explicitly provisioned environment", () => {
-  const launch = compileNativeLaunch(input, { TOKEN: "owner-secret", USERPROFILE: "C:\\owner" });
+  const launch = compileNativeLaunch(input, {
+    TOKEN: "owner-secret",
+    USERPROFILE: "C:\\owner",
+    VIBESTUDIO_OWNERSHIP_PARENT: "host-only-custody-token",
+  });
   expect(launch).toEqual({
     command: input.argv[0],
     args: input.argv.slice(1),

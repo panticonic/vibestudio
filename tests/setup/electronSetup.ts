@@ -15,17 +15,15 @@ import {
 } from "@playwright/test";
 import * as path from "path";
 import * as fs from "fs";
-import * as os from "os";
 import * as crypto from "crypto";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
+import { ownTestWorker } from "./ownedTestWorker.js";
 import { ownDesktop, type OwnedDesktop } from "./ownedDesktop.js";
 import { prepareE2eLaunchSources } from "./e2eLaunchSources.js";
 import { readCurrentHostBuildGeneration } from "../../scripts/host-build-generations.mjs";
-import {
-  canonicalTemplateUrlFromCheckout,
-  inspectWorkspaceSources,
-} from "../../src/workspaceTemplateSource.js";
+import type { WorkspaceSourceInspection } from "../../src/workspaceTemplateSource.js";
+import { runE2eRootPreparation } from "./runE2eRootPreparation.js";
 import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
 import type { PanelLifecycleResult } from "@vibestudio/shared/types";
@@ -244,13 +242,13 @@ export async function createManagedTestWorkspace(
     workspaceKind?: "personal" | "system" | "project";
   } = {}
 ): Promise<string> {
+  await ownTestWorker();
   const runRootTemplate = requireE2eRootTemplate();
   const workspaceKind = options.workspaceKind ?? "personal";
   const privateRole = workspaceKind === "project" ? undefined : workspaceKind;
   const runTempRoot = process.env[E2E_TEMP_ROOT_ENV];
-  const testRoot = fs.mkdtempSync(
-    runTempRoot ? path.join(runTempRoot, "case-") : path.join(os.tmpdir(), "vibestudio-e2e-")
-  );
+  if (!runTempRoot) throw new Error("Managed E2E workspaces require the run-owned temporary root");
+  const testRoot = fs.mkdtempSync(path.join(runTempRoot, "case-"));
   let registered = false;
   try {
     registered = registerRunCleanupPath(testRoot);
@@ -397,11 +395,8 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
   if (options.templateCheckouts?.length) {
     if (options.templateCheckouts.length > 1)
       throw new Error("A desktop launch can review only one template checkout");
-    const templates = await inspectWorkspaceSources({
-      sources: options.templateCheckouts.map((checkout) => ({
-        checkout,
-        url: canonicalTemplateUrlFromCheckout(checkout),
-      })),
+    const templates = await runE2eRootPreparation<WorkspaceSourceInspection[]>("inspect", {
+      checkouts: options.templateCheckouts,
       checkpointRoot: path.join(workspaceInfo.testRoot, "selected-templates"),
     });
     const sources = JSON.parse(
@@ -477,16 +472,25 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
   const cleanup = (): Promise<void> => {
     cleanupPromise ??= (async () => {
       let ledgerFailure: Error | undefined;
-      await playwrightTest.info().attach(`electron-output-${workspaceInfo.workspaceName}.log`, {
-        body: output.join(""),
-        contentType: "text/plain",
-      });
-      const hubLogPath = path.join(getCentralDataDirFromEnv(workspaceInfo.env), "logs", "hub.log");
-      if (fs.existsSync(hubLogPath)) {
-        await playwrightTest.info().attach(`hub-output-${workspaceInfo.workspaceName}.log`, {
-          body: fs.readFileSync(hubLogPath),
+      const cleanupErrors: unknown[] = [];
+      try {
+        await playwrightTest.info().attach(`electron-output-${workspaceInfo.workspaceName}.log`, {
+          body: output.join("").slice(-20_000),
           contentType: "text/plain",
         });
+        const hubLogPath = path.join(
+          getCentralDataDirFromEnv(workspaceInfo.env),
+          "logs",
+          "hub.log"
+        );
+        if (fs.existsSync(hubLogPath)) {
+          await playwrightTest.info().attach(`hub-output-${workspaceInfo.workspaceName}.log`, {
+            body: readLogTail(hubLogPath),
+            contentType: "text/plain",
+          });
+        }
+      } catch (error) {
+        cleanupErrors.push(error);
       }
       if (testApiReady) {
         try {
@@ -530,7 +534,7 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
         }
       }
 
-      const cleanupErrors: unknown[] = ledgerFailure ? [ledgerFailure] : [];
+      if (ledgerFailure) cleanupErrors.push(ledgerFailure);
       try {
         await desktop.close();
       } catch (error) {
@@ -546,7 +550,7 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
 
       if (ownsWorkspace) {
         try {
-          await removeManagedTestWorkspaceWithRetry(workspacePath);
+          removeManagedTestWorkspace(workspacePath);
         } catch (error) {
           cleanupErrors.push(error);
         }
@@ -586,7 +590,7 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
       owner.name
     );
   } catch (error) {
-    const electronDetails = output.join("").trim();
+    const electronDetails = output.join("").slice(-20_000).trim();
     const hubDetails = readLogTail(
       path.join(getCentralDataDirFromEnv(workspaceInfo.env), "logs", "hub.log")
     );
@@ -790,28 +794,18 @@ export async function approvePendingWorkspaceCreationReview(
 }
 
 function readLogTail(logFile: string, maxCharacters = 20_000): string {
+  let fd: number | undefined;
   try {
-    const content = fs.readFileSync(logFile, "utf8");
-    return content.slice(-maxCharacters).trim();
+    fd = fs.openSync(logFile, "r");
+    const bytes = Math.min(fs.fstatSync(fd).size, maxCharacters * 4);
+    const buffer = Buffer.alloc(bytes);
+    fs.readSync(fd, buffer, 0, bytes, fs.fstatSync(fd).size - bytes);
+    return buffer.toString("utf8").slice(-maxCharacters).trim();
   } catch {
     return "";
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
   }
-}
-
-async function removeManagedTestWorkspaceWithRetry(workspaceDir: string): Promise<void> {
-  let lastError: unknown = null;
-  for (const delayMs of [0, 100, 250, 500, 1000]) {
-    if (delayMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
-    }
-    try {
-      removeManagedTestWorkspace(workspaceDir);
-      return;
-    } catch (error) {
-      lastError = error;
-    }
-  }
-  throw lastError;
 }
 
 async function waitForTestApiReady(
