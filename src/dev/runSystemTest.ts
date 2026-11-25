@@ -34,6 +34,7 @@ import {
   systemTestPreparationFailureDetail,
   canUseRequestedStartupDoctor,
   startupDoctorCommand,
+  isNativeReferenceCommand,
 } from "./systemTestPreparation.js";
 import { attachDeviceDrivers } from "./deviceExecutors.js";
 import { seedIntegrationReadinessFixture } from "./systemTestIntegrationFixture.js";
@@ -395,7 +396,7 @@ async function runCommand({
         repoRoot,
         instanceId: ensured.instance.id,
         kinds: parsed.devices,
-        nativeReference: scopedCommand.includes("--native-reference"),
+        nativeReference: isNativeReferenceCommand(scopedCommand),
       })
     : null;
   let commandFailure: unknown;

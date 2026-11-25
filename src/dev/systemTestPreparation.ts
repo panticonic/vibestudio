@@ -112,6 +112,12 @@ export function canUseRequestedStartupDoctor(options: {
   );
 }
 
+/** The explicit owner mode is parsed before any device subprocess is attached. */
+export function isNativeReferenceCommand(command: readonly string[]): boolean {
+  const end = command.indexOf("--");
+  return command.slice(0, end < 0 ? command.length : end).some(arg => /^--native-reference(?:=(?:true|1))?$/.test(arg));
+}
+
 /** Startup checks must inspect the same explicitly requested model. */
 export function startupDoctorCommand(command: readonly string[]): string[] {
   if (command[0] === "doctor") {
@@ -129,7 +135,7 @@ export function startupDoctorCommand(command: readonly string[]): string[] {
       if (!model || model.startsWith("--")) throw new Error("--model requires a value");
       result.push("--model", model);
     } else if (arg.startsWith("--model=")) result.push(arg);
-    else if (arg === "--native-reference") result.push(arg);
+    else if (arg === "--native-reference" || arg.startsWith("--native-reference=")) result.push(arg);
   }
   return result;
 }

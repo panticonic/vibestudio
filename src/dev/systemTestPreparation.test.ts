@@ -147,3 +147,12 @@ describe("managed system-test startup preparation output", () => {
     ).toThrow("failed readiness checks");
   });
 });
+
+it("recognizes only explicit enabled native owner mode, including boolean equals syntax",async()=>{
+  const {isNativeReferenceCommand,startupDoctorCommand}=await import("./systemTestPreparation.js");
+  for(const flag of ["--native-reference","--native-reference=true","--native-reference=1"]){
+    expect(isNativeReferenceCommand(["run","oracle",flag])).toBe(true);
+    expect(startupDoctorCommand(["run","oracle",flag])).toContain(flag);
+  }
+  for(const args of [["run","oracle"],["run","oracle","--native-reference=false"],["run","oracle","--native-reference=0"],["run","oracle","--","--native-reference"]])expect(isNativeReferenceCommand(args)).toBe(false);
+});

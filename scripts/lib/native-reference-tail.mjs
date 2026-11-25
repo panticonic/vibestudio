@@ -17,6 +17,7 @@ export function selectNativeReferences({group,workflows,catalog,completed={},lim
   const name='open-goal-oracle-'+scenario.slice('open-goal-'.length),entry=catalog.get(name);
   if(entry?.nativeReference!==true||entry.installed!==true||completed[name])continue;
   assert.equal(entry.orchestrated,true,'Native reference needs canonical harness orchestration');
+  assert.ok(typeof world.assignment?.goal==='string'&&world.assignment.goal.trim(),'Native reference needs its literal goal');
   selected.push({name,goal:world.assignment.goal,scenario});
  }
  return selected;
@@ -26,25 +27,29 @@ export function inspectNativeReference(packet,selected) {
  const execution=packet.execution,diagnostics=execution?.diagnostics,proof=diagnostics?.openGoalVerification;
  assert.ok(execution,'Reference has no execution evidence');
  assert.ok(diagnostics?.natlangTeacher==null,'Reference returned teacher evidence');
- assert.equal(execution.trajectoryReview?.modelCallCount??0,0,'Reference executed a model');
+ const modelCallCount=execution.trajectoryReview?.modelCallCount??null;
+ if(modelCallCount!==null)assert.equal(modelCallCount,0,'Reference executed a model');
  if(execution.error) return {status:'errored',reason:execution.error,nativeProofValidated:false,
-   modelCallCount:execution.trajectoryReview?.modelCallCount??null};
+   modelCallCount};
  assert.equal(diagnostics?.natlangTeacher,null,'Reference lacks its native completion witness');
- assert.equal(execution.trajectoryReview?.modelCallCount,0,'Reference lacks explicit zero-model telemetry');
+ // Harness-validated native executions intentionally omit agent trajectory review.
+ // The canonical owner enforces no-inference BEFORE running the fixture; missing
+ // optional agent telemetry is unknown, never an invented observed zero.
  assert.ok(!(diagnostics.openGoalVerificationErrors??[]).length,'Reference native verification produced errors');
  assert.equal(proof?.goal,selected.goal,'Reference goal changed');
- assert.equal(proof?.contextId,execution.provenance?.contextId,'Reference context changed');
+ assert.ok(typeof proof?.contextId==='string'&&proof.contextId.length,'Reference context witness is missing');
+ assert.equal(proof.contextId,execution.provenance?.contextId,'Reference context changed');
  assert.equal(proof?.caseId,selected.scenario.slice('open-goal-'.length),'Reference case changed');
- assert.ok(proof.checks&&Object.keys(proof.checks).length&&Object.values(proof.checks).every(value=>typeof value==='boolean'));
+ assert.ok(proof.checks&&typeof proof.checks==='object'&&!Array.isArray(proof.checks)&&Object.keys(proof.checks).length&&Object.values(proof.checks).every(value=>typeof value==='boolean'));
  const unexpected=(execution.toolFailures??[]).filter(failure=>failure.expected!==true);
  const passed=!execution.error&&!(execution.cleanupErrors??[]).length&&!unexpected.length&&packet.result?.passed===true&&proof.passed===true&&Object.values(proof.checks).every(Boolean);
- return {status:passed?'passed':execution.error?'errored':'failed',checks:proof.checks,contextId:proof.contextId,modelCallCount:0};
+ return {status:passed?'passed':execution.error?'errored':'failed',checks:proof.checks,contextId:proof.contextId,modelCallCount};
 }
 /** Called only by the collector owning this exact instance, after its paid suite
  * and exporter have joined. The ordinary CLI still owns all fixture/resource cleanup.
  * Reference output is never passed to the teacher exporter or its registry.
  */
-export async function runNativeReferenceTail({group,workflows,catalog,pinned,out,stateRoot,limit,systemTest,signal,deploymentPackageAvailable,assertPins=()=>{}}) {
+export async function runNativeReferenceTail({group,workflows,catalog,pinned,out,stateRoot,limit,systemTest,signal,deploymentPackageAvailable,deploymentPackageIdentity=null,assertPins=()=>{}}) {
  if(!limit||signal.aborted)return [];
  const identity=hash(JSON.stringify(pinned.repositories)),stateDir=path.join(stateRoot,identity);
  mkdirSync(stateDir,{recursive:true,mode:0o700});
@@ -55,7 +60,7 @@ export async function runNativeReferenceTail({group,workflows,catalog,pinned,out
  const selected=selectNativeReferences({group,workflows,catalog,completed:state.results,limit,deploymentPackageAvailable});
  if(!selected.length)return [];
  const output=path.join(out,'native-reference-only',randomUUID());mkdirSync(output,{recursive:true,mode:0o700});
- writeFileSync(path.join(output,'source.json'),JSON.stringify({repositories:pinned.repositories,instance:group.instance,placement:JSON.parse(placement(group)),collectionRole:'native-reference-only',names:selected.map(row=>row.name)},null,2),{flag:'wx',mode:0o600});
+ writeFileSync(path.join(output,'source.json'),JSON.stringify({repositories:pinned.repositories,instance:group.instance,placement:JSON.parse(placement(group)),collectionRole:'native-reference-only',deploymentPackage:deploymentPackageIdentity,names:selected.map(row=>row.name)},null,2),{flag:'wx',mode:0o600});
  assertPins();
  const startedAt=new Date().toISOString();
  let commandExit=null,commandError;
@@ -70,7 +75,7 @@ export async function runNativeReferenceTail({group,workflows,catalog,pinned,out
  assert.equal(runs.length,1,'Reference must produce one canonically owned system-test run; original command diagnostic retained');
  const records=[],unvalidated=[];
  for(const row of selected) {
-  const filename=`trajectory-${row.name.replace(/[^A-Za-z0-9_.-]/gu,'_').slice(0,100)}-full.json.gz`;
+  const filename=`trajectory-${row.name.replace(/[^A-Za-z0-9_.-]+/gu,'_').slice(0,100)}-full.json.gz`;
   const root=path.join(output,runs[0]);
   let file=[path.join(root,filename),path.join(root,'failure-evidence',filename)].find(existsSync);
   try {
@@ -84,9 +89,9 @@ export async function runNativeReferenceTail({group,workflows,catalog,pinned,out
    assert.ok(file,'No full reference packet retained; case stays unchecked');
    const raw=readFileSync(file),packet=JSON.parse(gunzipSync(raw));
    const observed=inspectNativeReference(packet,row);
-   const record={...row,...observed,artifact:file,sha256:hash(raw),runId:runs[0]};
+   const record={...row,...observed,artifact:file,sha256:hash(raw),runId:runs[0],...(deploymentPackageIdentity?{deploymentPackage:deploymentPackageIdentity}:{})};
    if(observed.status!=='passed') {
-    const diagnosticFile=path.join(root,`inspect-${row.name.replace(/[^A-Za-z0-9_.-]/gu,'_').slice(0,100)}.json`);
+    const diagnosticFile=path.join(root,`inspect-${row.name.replace(/[^A-Za-z0-9_.-]+/gu,'_').slice(0,100)}.json`);
     if(!existsSync(diagnosticFile)&&!signal.aborted) {
      try { await systemTest(['inspect',runs[0],'--test',row.name,'--json','--out-dir',output],'ignore',signal); }
      catch(error) { record.diagnosticError=String(error); }

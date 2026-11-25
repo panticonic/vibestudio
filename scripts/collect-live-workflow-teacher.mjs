@@ -263,10 +263,19 @@ const deploymentPackageProblem = (scenarios.some(
 
 let nativeDeploymentPackageAvailable = false;
 let nativeDeploymentPackageProblem = null;
+let nativeDeploymentPackageIdentity = null;
+const readNativeDeploymentPackageIdentity = () => {
+  const root = process.env.VIBESTUDIO_MANAGED_DEPLOYMENT_PACKAGE?.trim();
+  if (!root) return null;
+  const app = path.resolve(host, root);
+  const digest = file => createHash("sha256").update(readFileSync(path.join(app,file))).digest("hex");
+  return {app,manifestSha256:digest("package.json"),serverSha256:digest("dist/server.mjs"),hostFingerprintSha256:digest("dist/host-build-fingerprint.json")};
+};
 if ((nativeReferenceLimit > 0 || nativeOnly || values["native-reference-completion-control"]) && process.env.VIBESTUDIO_MANAGED_DEPLOYMENT_PACKAGE?.trim()) {
   try {
     const {requireInstalledDeploymentPackage}=await import("./lib/owned-deployment-target.mjs");
     await requireInstalledDeploymentPackage(path.resolve(host,process.env.VIBESTUDIO_MANAGED_DEPLOYMENT_PACKAGE.trim()),{nativeReference:true});
+    nativeDeploymentPackageIdentity=readNativeDeploymentPackageIdentity();
     nativeDeploymentPackageAvailable=true;
   } catch(error) {nativeDeploymentPackageProblem=String(error);}
 }
@@ -591,8 +600,9 @@ try {
             references=await runNativeReferenceTail({group,workflows:nativeReferenceWorkflows,catalog:referenceCatalog,pinned,out,
               stateRoot:path.resolve(values["native-reference-state"]??path.join(path.dirname(out),"native-reference-qualification")),
               limit:drainNative?nativeDrainBatchSize:nativeReferenceLimit,systemTest,signal:interruption.signal,
-              assertPins:()=>{if(JSON.stringify(pinSources())!==JSON.stringify(pinned))throw new Error("Source pins changed during native reference tail");},
-              deploymentPackageAvailable:nativeDeploymentPackageAvailable});
+              assertPins:()=>{if(JSON.stringify(pinSources())!==JSON.stringify(pinned))throw new Error("Source pins changed during native reference tail");
+                if(nativeDeploymentPackageAvailable&&JSON.stringify(readNativeDeploymentPackageIdentity())!==JSON.stringify(nativeDeploymentPackageIdentity))throw new Error("Installed native-reference package changed during its owned qualification");},
+              deploymentPackageAvailable:nativeDeploymentPackageAvailable,deploymentPackageIdentity:nativeDeploymentPackageIdentity});
             console.log(JSON.stringify({nativeReferenceOnly:true,instance,references:references.length,passed:references.filter(row=>row.status==="passed").length,draining:drainNative}));
           } while(drainNative&&references.length&&!interruption.signal.aborted);
         } catch(error) {
