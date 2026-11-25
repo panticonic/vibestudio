@@ -71,3 +71,39 @@ test('native errors retain their actual failure without inventing a proof or zer
  assert.deepEqual(inspectNativeReference(value,selected),{status:'errored',reason:value.execution.error,nativeProofValidated:false,modelCallCount:null});
  value.execution.trajectoryReview={modelCallCount:1};assert.throws(()=>inspectNativeReference(value,selected));
 });
+
+test('cancelled aggregate preserves a completed raw prefix and keeps missing cases unchecked',async t=>{
+ const root=mkdtempSync(path.join(tmpdir(),'TEST-native-cancel-prefix-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
+ const out=path.join(root,'capture');mkdirSync(out);const stateRoot=path.join(root,'state'),runId='st_'+'b'.repeat(32),abort=new AbortController();
+ const pinned={repositories:{TEST:{git_commit:'b'.repeat(40),dirty:false}}};
+ const extra='open-goal-still-queued',extraName='open-goal-oracle-still-queued';
+ const allWorkflows=new Map([...workflows,[extra,{...world,assignment:{goal:'TEST-only queued'}}]]);
+ const allCatalog=new Map([...catalog,[extraName,{name:extraName,nativeReference:true,installed:true,orchestrated:true}]]);
+ const calls=[];
+ await assert.rejects(runNativeReferenceTail({group,workflows:allWorkflows,catalog:allCatalog,pinned,out,stateRoot,limit:2,signal:abort.signal,systemTest:async args=>{
+  calls.push(args);assert.equal(args[0],'run');
+  const directory=args[args.indexOf('--out-dir')+1],retained=path.join(directory,runId,'failure-evidence');mkdirSync(retained,{recursive:true});
+  writeFileSync(path.join(retained,`trajectory-${name}-full.json.gz`),gzipSync(JSON.stringify(packet())));
+  abort.abort(new Error('TEST-only canonical cancellation'));return 1;
+ }}),/verified prefix was preserved/);
+ assert.equal(calls.length,1,'Never issue new retrieval after cancellation');
+ const {summarizeNativeReferences}=await import('./native-reference-tail.mjs');
+ const coverage=summarizeNativeReferences({workflows:allWorkflows,pinned,stateRoot});
+ assert.equal(coverage.attempted,1);assert.equal(coverage.passed,1);assert.equal(coverage.unchecked,1);assert.equal(coverage.sweepCompleted,false);
+ assert.deepEqual(coverage.uncheckedNames,[extraName]);
+});
+
+test('native failure retains canonical bounded inspect and honest CLI phase timestamps',async t=>{
+ const root=mkdtempSync(path.join(tmpdir(),'TEST-native-failure-inspect-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
+ const out=path.join(root,'capture');mkdirSync(out);const stateRoot=path.join(root,'state'),runId='st_'+'c'.repeat(32),calls=[];
+ const rows=await runNativeReferenceTail({group,workflows,catalog,pinned:{repositories:{TEST:{git_commit:'c'.repeat(40)}}},out,stateRoot,limit:1,signal:new AbortController().signal,systemTest:async args=>{
+  calls.push(args);const directory=args[args.indexOf('--out-dir')+1],run=path.join(directory,runId);mkdirSync(run,{recursive:true});
+  if(args[0]==='trajectory')writeFileSync(path.join(run,`trajectory-${name}-full.json.gz`),gzipSync(JSON.stringify({test:{name},result:{passed:false},execution:{error:'TEST finite native eval deadline',diagnostics:{}}})));
+  if(args[0]==='inspect'){assert.deepEqual(args.slice(0,4),['inspect',runId,'--test',name]);writeFileSync(path.join(run,`inspect-${name}.json`),JSON.stringify({failure:{phase:'orchestration',error:{message:'TEST finite native eval deadline'}}}));}
+  return args[0]==='run'?1:0;
+ }});
+ assert.equal(rows[0].status,'errored');assert.equal(rows[0].nativeProofValidated,false);assert.equal(rows[0].modelCallCount,null);
+ assert.ok(rows[0].failureDiagnostic.sha256);assert.equal(calls.length,3);
+ const diagnostic=JSON.parse(readFileSync(path.join(path.dirname(path.dirname(rows[0].artifact)),'run-diagnostic.json')));
+ assert.equal(diagnostic.commandExit,1);assert.equal(diagnostic.phaseTimingAvailable,false);
+});
