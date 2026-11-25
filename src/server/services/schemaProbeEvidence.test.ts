@@ -75,10 +75,13 @@ describe("immutable schema probe evidence", () => {
       await expect(acquire(probe)).resolves.toEqual(descriptor);
       expect(watch).not.toHaveBeenCalled();
       expect(probe).not.toHaveBeenCalled();
-      await expect(acquire(probe, { ...identity, artifactDigest: "b".repeat(64) })).rejects.toBe(
-        failure
-      );
-      expect(probe).not.toHaveBeenCalled();
+      // A genuine cold interactive probe with a free compiler permit also has
+      // no cross-process wait, so an unrelated watch quota cannot block it.
+      await expect(
+        acquire(probe, { ...identity, artifactDigest: "b".repeat(64) })
+      ).resolves.toEqual(descriptor);
+      expect(probe).toHaveBeenCalledTimes(1);
+      expect(watch).not.toHaveBeenCalled();
     } finally {
       watch.mockRestore();
       syncBuiltinESMExports();

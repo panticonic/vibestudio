@@ -1,6 +1,27 @@
 import {isDeepStrictEqual as equal} from "node:util";
 /** Per-domain actual native evidence; no expected answer vocabulary enters review. */
 export const observedContentFields = {
+  news: [["initial", "latest", "observations", "reads", "attempts", "concurrentReceipt"], []],
+  spectrolite: [["observations", "hops", "receipts", "final"], []],
+  "agent-capability": [["effects", "assignment", "evidence", "decision", "continuation"], []],
+  "bridge-delivery": [["index", "scope", "operations", "bridgeRead", "fileReads", "commit"], ["artifact"]],
+  "deployed-interface": [["effects", "survey", "observation", "architecture", "decision"], ["handoffText"]],
+  "extension-dossier": [["assignment", "review", "candidate", "history", "decision", "effects"], ["dossierText"]],
+  "installed-package": [["effects", "assignment", "observed", "plan", "repair"], []],
+  "intent-discovery": [["notice", "capabilities", "evidence"], ["artifact"]],
+  "launch-state": [["index", "frames", "readback", "request", "witness", "effect"], ["artifact"]],
+  "panel-source-migration": [["assignment", "observed", "current", "move", "identity", "consumers", "effects"], []],
+  "retained-memory": [["brief", "plan", "evidence"], ["artifact"]],
+  "route-authority": [["offer", "snapshots", "authority", "choice", "readback"], ["artifact"]],
+  "system-release": [["assignment", "runs", "cases", "effects"], ["handoffText"]],
+  "testkit-closeout": [["pair", "actual", "readReceipts", "staged", "rejectedForeign"], ["artifact"]],
+  "webhook-admission": [["assignment", "evidence", "binding", "effects"], ["handoffText"]],
+  "workspace-claims": [["index", "packet", "choice", "evidence", "support", "test", "authority", "guideRevision"], ["artifact"]],
+  "workspace-config": [["brief", "lens", "evidence"], ["artifact"]],
+  "workspace-share": [["assignment", "observation", "decision", "effects"], ["handoffText"]],
+  "gadDurableQuestion": [["diagnostics"], []],
+  "examplesAdoption": [["card", "installed", "composition", "gate", "journal"], ["noteText"]],
+  "system-diagnostics": [["catalog", "windows"], ["handoffReadback"]],
   templateMigration: [
     ["journal", "observations", "readIds", "nativePrepared", "protectedMain"],
     ["handoff", "receiptText"]
@@ -295,20 +316,17 @@ export const observedContentFields = {
 };
 export const observedContentKinds = new Set(Object.keys(observedContentFields));
 export function observedContentNeedsReview(world){
- if(!observedContentKinds.has(world.kind))return false;
- if(world.kind==="unit-rollout")return !world.expected.repair&&!world.expected.release;
- if(world.kind==="owned-task")return !world.expected.update&&!world.expected.handoff;
- if(world.kind==="scheduled-recovery")return !world.expected.effect&&!world.expected.handoff;
- if(world.kind==="local-delivery")return !world.expected.send;
- return true;
+ // Open user goals need meaning review of native effects even without a requested return.
+ return observedContentKinds.has(world.kind);
 }
 export function observedContentReviewInput(proof,world){
+ if(world.kind==="spectrolite"&&world.writablePath)throw Error("Writable source content requires its retained edit-scope review");
  const fields=observedContentFields[world.kind],input=proof.semanticReviewInput;
  const pick=keys=>Object.fromEntries(keys.map(key=>[key,proof[key]??null]));
  const required=proof.outcomeContract?.returnedValue?.required;
- if(!fields||typeof required!=="boolean"||proof.semanticReviewRequired!==(required||fields[1].length>0)||
+ if(!fields||typeof required!=="boolean"||proof.semanticReviewRequired!==true||
     !equal(input?.actual,{goal:world.goal,observations:pick(fields[0]),artifacts:pick(fields[1]),requestedReturn:required?proof.actualResult??null:null})||
     !equal(input.expected,{goal:world.goal,requestedReturnRequired:required})||typeof input.rubric!=="string"||!input.rubric.trim())
    throw Error("Content meaning review must bind the requested return, actual native observations and retained bytes");
- return proof.semanticReviewRequired?input:null;
+ return input;
 }

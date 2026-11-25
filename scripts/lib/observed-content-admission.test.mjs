@@ -9,7 +9,7 @@ function example(required=true){
 }
 test("binds each domain's actual proof independently of authored answer vocabulary",()=>{
  const {world,proof}=example();assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
- assert.equal(Object.keys(observedContentFields).length,28);
+ assert.equal(Object.keys(observedContentFields).length,49);
  for(const mutation of [p=>p.semanticReviewInput.actual.requestedReturn={reason:"Invented"},p=>p.semanticReviewInput.actual.observations.reads=[],p=>p.semanticReviewInput.actual.artifacts.artifact="Invented",p=>p.semanticReviewInput.actual.goal="Different goal",p=>p.semanticReviewRequired=false]){
   const clone=structuredClone(proof);mutation(clone);assert.throws(()=>observedContentReviewInput(clone,world));
  }
@@ -19,12 +19,14 @@ test("excludes wrong optional returns while preserving exact retained artifact r
  assert.equal(observedContentReviewInput(proof,world).actual.requestedReturn,null);
  proof.semanticReviewInput.actual.artifacts.artifact="Replacement";assert.throws(()=>observedContentReviewInput(proof,world));
 });
-test("native-only effects exclude incidental prose without waiving a required domain answer",()=>{
+test("native-only goal meaning review excludes incidental prose without waiving requested answers",()=>{
  const world={kind:"owned-task",goal:"Mark this card done",expected:{update:"done"}};
- const fields=observedContentFields[world.kind],proof={outcomeContract:{returnedValue:{required:false}},semanticReviewRequired:false};
+ const fields=observedContentFields[world.kind],proof={outcomeContract:{returnedValue:{required:false}},semanticReviewRequired:true};
  const pick=keys=>Object.fromEntries(keys.map(key=>[key,null]));
  proof.semanticReviewInput={actual:{goal:world.goal,observations:pick(fields[0]),artifacts:{},requestedReturn:null},expected:{goal:world.goal,requestedReturnRequired:false},rubric:"Native effect is authoritative"};
- assert.equal(observedContentReviewInput(proof,world),null);
+ assert.equal(observedContentNeedsReview(world),true);
+ assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
+ assert.equal(proof.semanticReviewInput.actual.requestedReturn,null);
  proof.outcomeContract.returnedValue.required=true;assert.throws(()=>observedContentReviewInput(proof,world));
 });
 
@@ -81,4 +83,28 @@ test("migration effect review remains mandatory without making incidental return
   expected:{goal:world.goal,requestedReturnRequired:false},rubric:"Judge the requested native preparation from the actual owned evidence."};
  assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
  proof.semanticReviewRequired=false;assert.throws(()=>observedContentReviewInput(proof,world));
+});
+test("every newly admitted open domain binds native goal effects independently of optional receipts",()=>{
+ const kinds=["agent-capability","bridge-delivery","deployed-interface","extension-dossier","installed-package","intent-discovery","launch-state","panel-source-migration","retained-memory","route-authority","system-release","testkit-closeout","webhook-admission","workspace-claims","workspace-config","workspace-share","gadDurableQuestion","examplesAdoption","system-diagnostics","news","spectrolite"];
+ for(const kind of kinds){
+  const world={kind,goal:"Perform only the requested owned operation; do not invent a report requirement."};
+  const [observations,artifacts]=observedContentFields[kind];
+  const proof={outcomeContract:{returnedValue:{required:false}},semanticReviewRequired:true,actualResult:{unrequested:"incidental"}};
+  for(const field of observations)proof[field]={source:"actual-owned-native",field};
+  for(const field of artifacts)proof[field]="Actual native retained bytes";
+  const pick=keys=>Object.fromEntries(keys.map(key=>[key,proof[key]??null]));
+  proof.semanticReviewInput={actual:{goal:world.goal,observations:pick(observations),artifacts:pick(artifacts),requestedReturn:null},expected:{goal:world.goal,requestedReturnRequired:false},rubric:"Judge actual requested effects and retained bytes; do not require an unrequested return."};
+  assert.equal(observedContentNeedsReview(world),true,kind);
+  assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput,kind);
+  assert.equal(proof.semanticReviewInput.actual.requestedReturn,null,kind);
+  const changed=JSON.parse(JSON.stringify(proof));changed.semanticReviewInput.actual.observations[observations[0]]={source:"foreign"};
+  assert.throws(()=>observedContentReviewInput(changed,world),undefined,kind);
+  const missing=structuredClone(proof);missing.semanticReviewRequired=false;assert.throws(()=>observedContentReviewInput(missing,world),undefined,kind);
+ }
+ assert.equal(observedContentNeedsReview({kind:"unregistered-function-contract"}),false);
+});
+
+test("readonly vault review cannot replace the retained writable-source scope proof",()=>{
+ const world={kind:"spectrolite",goal:"Repair only the authorized section",writablePath:"owned.mdx"};
+ assert.throws(()=>observedContentReviewInput({},world),/retained edit-scope/);
 });

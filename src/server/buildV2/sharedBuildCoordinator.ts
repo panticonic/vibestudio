@@ -29,9 +29,10 @@ export class SharedBuildCoordinator {
   private readonly db: DatabaseSync;
   private readonly owner = `${process.pid}:${randomUUID()}:${cacheProcessIdentity(process.pid) ?? ""}`;
   private readonly notification: string;
-  private readonly watcher: fs.FSWatcher;
+  private watcher: fs.FSWatcher | undefined;
   private readonly observers = new Set<() => void>();
-  private readonly observationTimer: ReturnType<typeof setInterval>;
+  private readonly priorityObservers = new Set<() => void>();
+  private observationTimer: ReturnType<typeof setInterval> | undefined;
   private closed = false;
   private refresh: ReturnType<typeof setImmediate> | undefined;
   private observationFailure: unknown;
@@ -45,7 +46,6 @@ export class SharedBuildCoordinator {
     this.notification = path.join(directory, "build-coordinator.changed");
     fs.closeSync(fs.openSync(this.notification, "a", 0o600));
     this.db = new DatabaseSync(path.join(directory, "build-coordinator.db"));
-    let watcher: fs.FSWatcher | undefined;
     try {
       this.db.exec(`
         PRAGMA busy_timeout = 5000;
@@ -64,25 +64,8 @@ export class SharedBuildCoordinator {
           capacity INTEGER NOT NULL
         ) STRICT;
       `);
-      this.watcher = watcher = fs.watch(directory, (_event, filename) => {
-        if (filename?.toString() === "build-coordinator.changed") this.changed();
-      });
-      this.watcher.on("error", (error) => {
-        this.observationFailure = error;
-        this.changed();
-      });
-      // Filesystem notifications carry ordinary progress. This observation is
-      // solely for authoritative process death, including a killed producer
-      // that cannot write its terminal receipt. No duration declares failure.
-      this.observationTimer = setInterval(() => this.changed(), 1000);
-      this.observationTimer.unref();
     } catch (error) {
       const failures: unknown[] = [error];
-      try {
-        watcher?.close();
-      } catch (failure) {
-        failures.push(failure);
-      }
       try {
         this.db.close();
       } catch (failure) {
@@ -161,7 +144,10 @@ export class SharedBuildCoordinator {
             demand === 0 ? "interactive" : demand === 1 ? "background" : "speculative"
           );
         };
-        this.observers.add(adoptDemand);
+        // Priority demand is inspected on local queue changes and while a
+        // real waiter observes this coordinator. A producer doing its own work
+        // needs no filesystem observer merely to remain promotable.
+        this.priorityObservers.add(adoptDemand);
         try {
           adoptDemand();
           const value = await produce(compilerPriority);
@@ -179,7 +165,7 @@ export class SharedBuildCoordinator {
             "Shared compilation and failure settlement failed"
           );
         } finally {
-          this.observers.delete(adoptDemand);
+          this.priorityObservers.delete(adoptDemand);
         }
       },
       () =>
@@ -206,9 +192,16 @@ export class SharedBuildCoordinator {
   ): Promise<T> {
     signal.throwIfAborted();
     const id = randomUUID();
-    this.db
-      .prepare("INSERT INTO slots(id, owner, priority, running, capacity) VALUES (?, ?, ?, 0, ?)")
-      .run(id, this.owner, rank(priority.priority), this.capacity);
+    for (const refreshDemand of [...this.priorityObservers]) refreshDemand();
+    this.transaction(() => {
+      this.reap();
+      this.db
+        .prepare("INSERT INTO slots(id, owner, priority, running, capacity) VALUES (?, ?, ?, 0, ?)")
+        .run(id, this.owner, rank(priority.priority), this.capacity);
+      // Admit against the existing shared queue atomically. A free permit is
+      // an immediate native fact, not work that requires a filesystem watch.
+      this.admitSlots();
+    });
     return runWithOwnedCleanup(
       async () => {
         priority.bindQueuedPromotion((next) => {
@@ -247,6 +240,7 @@ export class SharedBuildCoordinator {
     if (this.closed) return;
     if (
       this.observers.size ||
+      this.priorityObservers.size ||
       this.db
         .prepare(
           "SELECT id FROM requests WHERE owner = ? UNION SELECT id FROM slots WHERE owner = ? LIMIT 1"
@@ -257,9 +251,37 @@ export class SharedBuildCoordinator {
     }
     this.closed = true;
     if (this.refresh) clearImmediate(this.refresh);
-    clearInterval(this.observationTimer);
-    this.watcher.close();
+    this.retireObservation();
     this.db.close();
+  }
+
+  private subscribe(observer: () => void): () => void {
+    if (!this.watcher) {
+      const watcher = fs.watch(path.dirname(this.notification), (_event, filename) => {
+        if (filename?.toString() === "build-coordinator.changed") this.changed();
+      });
+      this.watcher = watcher;
+      watcher.on("error", (error) => {
+        this.observationFailure = error;
+        this.changed();
+      });
+      // Observe confirmed process death only while another owner matters.
+      // Ordinary progress remains driven by native filesystem notifications.
+      this.observationTimer = setInterval(() => this.changed(), 1000);
+      this.observationTimer.unref();
+    }
+    this.observers.add(observer);
+    return () => {
+      this.observers.delete(observer);
+      if (!this.observers.size) this.retireObservation();
+    };
+  }
+
+  private retireObservation(): void {
+    clearInterval(this.observationTimer);
+    this.observationTimer = undefined;
+    this.watcher?.close();
+    this.watcher = undefined;
   }
 
   private settle(id: string, successful: boolean, error?: unknown): void {
@@ -363,6 +385,7 @@ export class SharedBuildCoordinator {
     this.refresh = setImmediate(() => {
       this.refresh = undefined;
       try {
+        for (const refreshDemand of [...this.priorityObservers]) refreshDemand();
         this.transaction(() => {
           this.reap();
           this.admitSlots();
@@ -411,10 +434,26 @@ export class SharedBuildCoordinator {
     signal: AbortSignal
   ): Promise<T> {
     return new Promise((resolve, reject) => {
+      let finished = false;
+      let stopObserving: (() => void) | undefined;
       const finish = (error: unknown, value?: T) => {
-        this.observers.delete(check);
+        if (finished) return;
+        finished = true;
+        let failure = error;
+        try {
+          stopObserving?.();
+        } catch (retirementError) {
+          failure =
+            error === undefined
+              ? retirementError
+              : new AggregateError(
+                  [error, retirementError],
+                  "Shared build observation and retirement failed",
+                  { cause: error }
+                );
+        }
         signal.removeEventListener("abort", aborted);
-        if (error !== undefined) reject(error);
+        if (failure !== undefined) reject(failure);
         else resolve(value!);
       };
       const check = () => {
@@ -427,7 +466,20 @@ export class SharedBuildCoordinator {
         }
       };
       const aborted = () => finish(signal.reason);
-      this.observers.add(check);
+      // Most cold interactive builds own their key and have a free permit.
+      // Inspect first, then subscribe and inspect again to close the race.
+      if (signal.aborted) {
+        aborted();
+        return;
+      }
+      check();
+      if (finished) return;
+      try {
+        stopObserving = this.subscribe(check);
+      } catch (error) {
+        finish(error);
+        return;
+      }
       signal.addEventListener("abort", aborted, { once: true });
       if (signal.aborted) aborted();
       else check();

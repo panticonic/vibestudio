@@ -7230,7 +7230,7 @@ export function openOutcomeGoalEvidence(execution, exercise, _scenario, workflow
     requireEvidence(!proof.execution || proof.execution.receipt?.stateHash === proof.plan?.stateHash,
       "Suite execution evidence must belong to the independently observed workspace state");
   }
-  if(observedContentKinds.has(world.kind)){
+  if(observedContentKinds.has(world.kind)&&!(world.kind==="spectrolite"&&world.writablePath)){
     const reviewInput=observedContentReviewInput(proof,world);
     requireEvidence((workflow.requiresReview===true)===Boolean(reviewInput),"Domain content meaning review must match the declared requested content");
     return {world:worldBinding,checks:{...checks},evidence,...(reviewInput?{reviewInput}:{})};

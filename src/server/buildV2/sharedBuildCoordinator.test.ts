@@ -7,6 +7,7 @@ import fsSync from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { DatabaseSync } from "node:sqlite";
 import { SharedBuildCoordinator } from "./sharedBuildCoordinator.js";
+import { BuildPriorityOwner } from "./builderLifetime.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { deserializeRpcFailure } from "@vibestudio/rpc";
 
@@ -196,19 +197,134 @@ describe("cross-process build ownership", () => {
   });
 });
 
-it("retires the SQLite connection when watcher admission fails, preserving the original error", () => {
+it("runs uncontended cold builds at every priority without allocating a watcher", async () => {
   const failure = Object.assign(new Error("watch admission exhausted"), { code: "EMFILE" });
-  const close = vi.spyOn(DatabaseSync.prototype, "close");
   const watch = vi.spyOn(fsSync, "watch").mockImplementation(() => {
     throw failure;
   });
   syncBuiltinESMExports();
+  const coordinator = new SharedBuildCoordinator(root(), 3);
+  try {
+    const signal = new AbortController().signal;
+    for (const demand of ["interactive", "background", "speculative"] as const) {
+      const result = await coordinator.run(
+        "cold-" + demand,
+        new BuildPriorityOwner(demand),
+        signal,
+        (priority) => coordinator.withSlot(priority, signal, async () => "actual artifact")
+      );
+      expect(result).toEqual({ produced: true, value: "actual artifact" });
+    }
+    expect(watch).not.toHaveBeenCalled();
+  } finally {
+    coordinator.close();
+    watch.mockRestore();
+    syncBuiltinESMExports();
+  }
+});
+
+it("preserves an actual borrower observation failure without corrupting its producer", async () => {
+  const failure = Object.assign(new Error("watch admission exhausted"), { code: "EMFILE" });
+  const watch = vi.spyOn(fsSync, "watch").mockImplementation(() => {
+    throw failure;
+  });
+  syncBuiltinESMExports();
+  const directory = root();
+  const producer = new SharedBuildCoordinator(directory, 3);
+  const borrower = new SharedBuildCoordinator(directory, 3);
+  let entered!: () => void, release!: () => void;
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const permitted = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const work = producer.run(
+    "cold",
+    new BuildPriorityOwner("speculative"),
+    new AbortController().signal,
+    async () => {
+      entered();
+      await permitted;
+      return "actual artifact";
+    }
+  );
+  try {
+    await started;
+    await expect(
+      borrower.run(
+        "cold",
+        new BuildPriorityOwner("interactive"),
+        new AbortController().signal,
+        async () => "must not run"
+      )
+    ).rejects.toBe(failure);
+    expect(watch).toHaveBeenCalledTimes(1);
+    borrower.close();
+    release();
+    await expect(work).resolves.toEqual({ produced: true, value: "actual artifact" });
+  } finally {
+    release();
+    await work;
+    producer.close();
+    borrower.close();
+    watch.mockRestore();
+    syncBuiltinESMExports();
+  }
+});
+
+it("closes SQLite if its initialization itself fails before observation exists", () => {
+  const failure = new Error("coordinator database initialization failed");
+  const close = vi.spyOn(DatabaseSync.prototype, "close");
+  const exec = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementationOnce(() => {
+    throw failure;
+  });
   try {
     expect(() => new SharedBuildCoordinator(root(), 3)).toThrow(failure);
     expect(close).toHaveBeenCalledTimes(1);
   } finally {
-    watch.mockRestore();
+    exec.mockRestore();
     close.mockRestore();
-    syncBuiltinESMExports();
+  }
+});
+
+it("adopts joined interactive demand before later requesting an otherwise free compiler slot", async () => {
+  const directory = root();
+  const producer = new SharedBuildCoordinator(directory, 3);
+  const borrower = new SharedBuildCoordinator(directory, 3);
+  let entered!: () => void, release!: () => void;
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const dependency = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const signal = new AbortController().signal;
+  const work = producer.run(
+    "late-permit",
+    new BuildPriorityOwner("speculative"),
+    signal,
+    async (priority) => {
+      entered();
+      await dependency;
+      return producer.withSlot(priority, signal, async () => priority.priority);
+    }
+  );
+  try {
+    await started;
+    const joined = borrower.run(
+      "late-permit",
+      new BuildPriorityOwner("interactive"),
+      signal,
+      async () => "must not run"
+    );
+    release();
+    await expect(work).resolves.toEqual({ produced: true, value: "interactive" });
+    await expect(joined).resolves.toEqual({ produced: false });
+  } finally {
+    release();
+    await work;
+    producer.close();
+    borrower.close();
   }
 });
