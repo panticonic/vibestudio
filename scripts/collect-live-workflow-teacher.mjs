@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { runNativeReferenceTail } from "./lib/native-reference-tail.mjs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -43,6 +44,8 @@ const { values } = parseArgs({
     preflight: { type: "boolean" },
     "review-model": { type: "string" },
     "no-partial-salvage": { type: "boolean" },
+    "native-reference-tail": { type: "string", default: "1" },
+    "native-reference-state": { type: "string" },
     "test-timeout-ms": { type: "string" },
     concurrency: { type: "string", default: "1" },
     "cases-per-instance": { type: "string", default: "12" },
@@ -67,6 +70,9 @@ if (!/^\d+$/u.test(values["cases-per-instance"]) || !Number.isSafeInteger(batchS
 const concurrency = Number(values.concurrency);
 if (!/^\d+$/u.test(values.concurrency) || !Number.isSafeInteger(concurrency) || concurrency < 1)
   throw new Error("--concurrency must be a positive integer");
+const nativeReferenceLimit=Number(values["native-reference-tail"]);
+if(!/^\d+$/u.test(values["native-reference-tail"])||!Number.isSafeInteger(nativeReferenceLimit))
+  throw new Error("--native-reference-tail must be a nonnegative integer (0 disables)");
 const caseTimeout = teacherEpisodeTimeout(values["test-timeout-ms"]);
 if (
   values["approve-codex-session"] &&
@@ -83,13 +89,15 @@ if (
   (!list && !preflight && (values.list || values.preflight || !values.out || !requested.length))
 ) {
   throw new Error(
-    "Usage: pnpm natlang:teacher --list | --preflight [--case CASE ...] | --case CASE [--case CASE ...] --out NEW_DIR [--model PROVIDER:MODEL] [--test-timeout-ms MS] [--cases-per-instance N] [--concurrency N] [--approve-codex-session] [--assignments]"
+    "Usage: pnpm natlang:teacher --list | --preflight [--case CASE ...] | --case CASE [--case CASE ...] --out NEW_DIR [--model PROVIDER:MODEL] [--test-timeout-ms MS] [--cases-per-instance N] [--concurrency N] [--native-reference-tail N] [--native-reference-state DIR] [--approve-codex-session] [--assignments]"
   );
 }
 
 const host = fileURLToPath(new URL("../", import.meta.url));
 const { checkouts } = requireDevelopmentTemplateCheckouts(host);
 const liveTeacherCases = await loadLiveTeacherCases(checkouts);
+// Reference coverage is independent of the selected teacher/assignment cohort.
+const nativeReferenceWorkflows = new Map(liveTeacherCases);
 for (const [scenario, workflow] of liveTeacherCases) {
   if ((workflow.interaction === "open-user-goal") === Boolean(values.assignments)) {
     liveTeacherCases.delete(scenario);
@@ -221,9 +229,9 @@ async function installedTests(group, signal) {
   return byName;
 }
 
-const deploymentPackageProblem = scenarios.some(
+const deploymentPackageProblem = (scenarios.some(
   (scenario) => liveTeacherCases.get(scenario).requiresDeploymentPackage
-)
+) || (nativeReferenceLimit > 0 && Boolean(process.env.VIBESTUDIO_MANAGED_DEPLOYMENT_PACKAGE?.trim())))
   ? await (async () => {
       const input = process.env.VIBESTUDIO_MANAGED_DEPLOYMENT_PACKAGE?.trim();
       if (!input) return "set VIBESTUDIO_MANAGED_DEPLOYMENT_PACKAGE to an installed server package";
@@ -533,6 +541,24 @@ try {
             console.error(`${label} ${scenario} failed: ${String(error)}`);
             failures.push(error);
           }
+        }
+      }
+      if (nativeReferenceLimit > 0 && !interruption.signal.aborted && [...nativeReferenceWorkflows].some(([name,world]) =>
+        name.startsWith("open-goal-") && world.interaction === "open-user-goal" &&
+        (world.workspace ?? "system") === workspace)) {
+        try {
+          if(JSON.stringify(pinSources())!==JSON.stringify(pinned))throw new Error("Source pins changed before native reference tail");
+          const referenceCatalog=await installedTests(group,interruption.signal);
+          const references=await runNativeReferenceTail({group,workflows:nativeReferenceWorkflows,catalog:referenceCatalog,pinned,out,
+            stateRoot:path.resolve(values["native-reference-state"]??path.join(path.dirname(out),"native-reference-qualification")),
+            limit:nativeReferenceLimit,systemTest,signal:interruption.signal,
+            assertPins:()=>{if(JSON.stringify(pinSources())!==JSON.stringify(pinned))throw new Error("Source pins changed during native reference tail");},
+            deploymentPackageAvailable:Boolean(process.env.VIBESTUDIO_MANAGED_DEPLOYMENT_PACKAGE?.trim()) && deploymentPackageProblem === null});
+          console.log(JSON.stringify({nativeReferenceOnly:true,instance,references:references.length,passed:references.filter(row=>row.status==="passed").length}));
+        } catch(error) {
+          // Qualification failures retain their own evidence and never change
+          // teacher admission or make a second paid attempt.
+          console.error(`Native reference tail retained an incomplete attempt: ${String(error)}`);
         }
       }
     } catch (error) {

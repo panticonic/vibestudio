@@ -32,6 +32,7 @@ test(
       path.join(root, "scripts/review-live-workflow-teacher.mjs")
     );
     await mkdir(path.join(root, "scripts/lib"));
+    await copyFile(new URL("lib/native-reference-tail.mjs",import.meta.url),path.join(root,"scripts/lib/native-reference-tail.mjs"));
     await copyFile(
       new URL("lib/live-teacher-groups.mjs", import.meta.url),
       path.join(root, "scripts/lib/live-teacher-groups.mjs")
@@ -87,6 +88,9 @@ test(
       entry: { program: 'skills/mail/sendUpdate.nl', callable: 'sendUpdate',
         resultType: 'DeliveryReceipt', arguments: { goal: 'Send a café update.\\n"Use the new time."' } },
     });
+    if(process.env.VIBE_TEST_NATIVE_REFERENCE)liveTeacherCases.set('open-goal-native-reference',{
+      ...liveTeacherCases.get('passing'),interaction:'open-user-goal',assignment:{goal:'TEST-only check the native note'}
+    });
     export async function loadLiveTeacherCases() { return liveTeacherCases; }
     export function workflowSourceGroups(workflow) { return [workflow.group]; }
     export async function exportLiveTeacherWorkflow({ out, pins, trajectory, review, salvageFailedInvocations }) {
@@ -112,6 +116,7 @@ exit 0
     await put(
       "src/dev/runSystemTest.ts",
       `import fs from 'node:fs';
+    import {gzipSync} from 'node:zlib';
     import path from 'node:path';
     const words = process.argv.slice(2);
     if (words[0] === '--silent') words.shift();
@@ -131,12 +136,21 @@ exit 0
     if (command === 'stop' && fs.existsSync(retainedState)) fs.writeFileSync(path.join(retainedState, 'stopped'), 'joined');
     if (command === 'list') {
       const names = workspace === 'personal' ? ['personal'] : ['passing', 'failing'];
+      if(process.env.VIBE_TEST_NATIVE_REFERENCE && workspace==='system')names.push('open-goal-oracle-native-reference');
       console.log(JSON.stringify(names.map(name => ({
-        name, orchestrated: true, installed: name !== process.env.VIBE_TEST_ABSENT,
+        name, ...(name==='open-goal-oracle-native-reference'?{nativeReference:true}:{}), orchestrated: true, installed: name !== process.env.VIBE_TEST_ABSENT,
         requiresUnits: ['skills/fixture'],
       }))));
     }
     const out = args[args.indexOf('--out-dir') + 1];
+    if(command==='run'&&args[0]==='open-goal-oracle-native-reference') {
+      if(args.includes('--model'))throw new Error('Reference received paid model flag');
+      fs.mkdirSync(path.join(out,'${runId}'));process.exit(0);
+    }
+    if(command==='trajectory'&&args[1]==='open-goal-oracle-native-reference') {
+      const packet={test:{name:args[1]},result:{passed:true},execution:{provenance:{contextId:'TEST-native-context'},trajectoryReview:{modelCallCount:0},diagnostics:{natlangTeacher:null,openGoalVerification:{caseId:'native-reference',contextId:'TEST-native-context',goal:'TEST-only check the native note',passed:true,checks:{actualNativeNote:true}}}}};
+      fs.writeFileSync(path.join(out,'${runId}','trajectory-'+args[1]+'-full.json.gz'),gzipSync(JSON.stringify(packet)));process.exit(0);
+    }
     if (command === 'run') {
       fs.mkdirSync(path.join(out, '${runId}'));
       if (process.env.VIBE_TEST_WAIT) {
@@ -490,6 +504,20 @@ exit 0
         ["doctor", "list", "run", "canonical-cancel-retained", "stop"]
       );
     }
+
+    const nativeOut=path.join(root,'native-tail-capture');
+    const nativeBefore=(await readFile(path.join(root,'commands.jsonl'),'utf8')).trim().split('\n').length;
+    const native=spawnSync(process.execPath,['scripts/collect-live-workflow-teacher.mjs','--assignments','--case','passing','--out',nativeOut],{cwd:root,env:{...process.env,VIBE_TEST_NATIVE_REFERENCE:'1',PATH:path.join(root,'bin')+path.delimiter+process.env.PATH},encoding:'utf8'});
+    assert.equal(native.status,0,native.stderr);
+    const nativeCommands=(await readFile(path.join(root,'commands.jsonl'),'utf8')).trim().split('\n').map(JSON.parse).slice(nativeBefore);
+    assert.deepEqual(nativeCommands.map(row=>row.command),['doctor','list','run','trajectory','list','run','trajectory','stop']);
+    assert.equal(new Set(nativeCommands.map(row=>row.instance)).size,1,'Native tail must reuse the exact owned instance');
+    const reference=nativeCommands[5];assert.equal(reference.args[0],'open-goal-oracle-native-reference');assert.ok(!reference.args.includes('--model'));
+    const referencesRoot=path.join(nativeOut,'native-reference-only');
+    const referenceDirs=await retainedDirectories(referencesRoot);assert.equal(referenceDirs.length,1);
+    const nativeProof=JSON.parse(await readFile(path.join(referencesRoot,referenceDirs[0],'reference-results.json'),'utf8'));
+    assert.equal(nativeProof.results[0].status,'passed');assert.equal(nativeProof.teacherRegistryWrites,false);
+    await assert.rejects(readFile(path.join(nativeOut,'cases/open-goal-native-reference/verified/manifest.json')),{code:'ENOENT'});
 
     const preflight = spawnSync(
       process.execPath,
