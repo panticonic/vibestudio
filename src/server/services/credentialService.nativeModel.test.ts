@@ -92,17 +92,19 @@ const credential = {
   ],
 };
 
-function fixture() {
+function fixture(hostedModelRoute?: import("./hostedModelRoute.js").HostedModelRoute | null) {
   const resolveNativeInvocation = vi.fn(async () => ({ nativeInvocation, active: true }));
+  const listUrlBound = vi.fn(async () => [credential]);
   const service = createCredentialService({
+    hostedModelRoute,
     credentialStore: {
-      listUrlBound: async () => [credential],
+      listUrlBound,
       loadUrlBound: async (id: string) => (id === credential.id ? credential : null),
     } as never,
     resolveNativeInvocation,
   });
   const prepare = service.authorityPreparation![RESOLVE_NATIVE_MODEL_AUTHORITY_RESOLVER]!;
-  return { service, prepare, resolveNativeInvocation };
+  return { service, prepare, resolveNativeInvocation, listUrlBound };
 }
 
 function dispatchFixture(options: { declaresModelUse?: boolean; connected?: boolean } = {}) {
@@ -194,6 +196,122 @@ function dispatchFixture(options: { declaresModelUse?: boolean; connected?: bool
 }
 
 describe("native model credential admission", () => {
+  function modelAdmission(
+    modelId: string,
+    route?: { model: string; fallback?: string },
+    taskKind = "vibestudio.model-helper",
+    hostedModelRoute?: import("./hostedModelRoute.js").HostedModelRoute | null
+  ) {
+    const params = { ...request, providerId: "openai-codex", modelId };
+    const invocation = nativeInvocationIdentity({
+      owner: {
+        ...source.owner,
+        contextId: "context:one",
+        incarnation: "storage:one",
+        channelId: "channel:one",
+        ...workerImage,
+        className: "Agent",
+        objectKey: "one",
+      },
+      task: { ...source.task, kind: taskKind, version: 1 },
+      operation: { ...source.operation, ...params, requestDigest: "b".repeat(64) },
+    });
+    const f = fixture(hostedModelRoute);
+    f.resolveNativeInvocation.mockResolvedValue({ nativeInvocation: invocation, active: true });
+    const policy = route
+      ? {
+          policyId: "test:run:case",
+          kind: "case" as const,
+          orchestratorPolicyId: "test:run",
+          case: {
+            testId: "configured-model",
+            agent: {
+              model: route.model,
+              approvalLevel: 2 as const,
+              fallback: route.fallback
+                ? {
+                    model: route.fallback,
+                    thinkingLevel: "low" as const,
+                    on: ["usage_limit_terminal"] as const,
+                    scope: "all-turns" as const,
+                  }
+                : ("disabled" as const),
+            },
+            authority: [],
+            unexpectedPrompts: "fail" as const,
+          },
+        }
+      : undefined;
+    return {
+      ...f,
+      admit: () =>
+        f.prepare(
+          {
+            caller: {
+              ...caller,
+              nativeInvocation: invocation,
+              ...(policy ? { testPolicy: policy } : {}),
+            },
+          },
+          [params]
+        ),
+    };
+  }
+
+  it("refuses ambient unscoped hosted Sol requests before lookup under an owned Luna instance", async () => {
+    const owner = { primary: "openai-codex:gpt-6-luna", fallback: null };
+    for (const kind of ["pi.generation", "vibestudio.model-helper"]) {
+      const f = modelAdmission("gpt-6-sol", undefined, kind, owner);
+      await expect(f.admit()).rejects.toThrow("Host owner's configured hosted-model route");
+      expect(f.listUrlBound).not.toHaveBeenCalled();
+    }
+    await expect(
+      modelAdmission("gpt-6-luna", undefined, undefined, owner).admit()
+    ).resolves.toBeDefined();
+  });
+
+  it("intersects owner and case routes without permitting either to weaken the other", async () => {
+    const owner = { primary: "openai-codex:gpt-6-luna", fallback: null };
+    await expect(
+      modelAdmission("gpt-6-sol", { model: "openai-codex:gpt-6-sol" }, undefined, owner).admit()
+    ).rejects.toThrow("Host owner's configured hosted-model route");
+    await expect(
+      modelAdmission("gpt-6-sol", { model: "openai-codex:gpt-6-luna" }, undefined, {
+        ...owner,
+        fallback: "openai-codex:gpt-6-sol",
+      }).admit()
+    ).rejects.toThrow("outside this system test's configured model route");
+  });
+
+  it("rejects generation and helper tasks requesting Sol under Luna before credential lookup", async () => {
+    for (const kind of ["pi.generation", "vibestudio.model-helper"]) {
+      const f = modelAdmission("gpt-6-sol", { model: "openai-codex:gpt-6-luna" }, kind);
+      await expect(f.admit()).rejects.toThrow("outside this system test's configured model route");
+      expect(f.resolveNativeInvocation).toHaveBeenCalledOnce();
+      expect(f.listUrlBound).not.toHaveBeenCalled();
+    }
+  });
+  it("rejects a profile-default Sol model at final admission even when no child is being created", async () => {
+    const f = modelAdmission("gpt-6.1-sol", { model: "openai-codex:gpt-6-luna" });
+    await expect(f.admit()).rejects.toThrow("outside this system test's configured model route");
+    expect(f.listUrlBound).not.toHaveBeenCalled();
+  });
+
+  it("admits the configured Luna helper and preserves ordinary model choice outside a test", async () => {
+    await expect(
+      modelAdmission("gpt-6-luna", { model: "openai-codex:gpt-6-luna" }).admit()
+    ).resolves.toBeDefined();
+    await expect(modelAdmission("gpt-6-sol").admit()).resolves.toBeDefined();
+  });
+
+  it("admits only the explicitly declared fallback route", async () => {
+    const route = { model: "openai-codex:gpt-6-luna", fallback: "openai-codex:gpt-6-sol" };
+    await expect(modelAdmission("gpt-6-sol", route).admit()).resolves.toBeDefined();
+    await expect(modelAdmission("gpt-6.1-sol", route).admit()).rejects.toThrow(
+      "outside this system test's configured model route"
+    );
+  });
+
   it("joins the existing unit review before resolving credentials and retries after its acceptance", async () => {
     const options = { declaresModelUse: true, connected: true };
     const f = dispatchFixture(options);

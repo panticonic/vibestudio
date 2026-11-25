@@ -77,6 +77,25 @@ export function outcomeWorkspaceReviewInput(proof,world){
   return input;
 }
 
+/** Bind client query meaning to captured output and actual native observations, never gold enums. */
+export function clientDiagnosticsReviewInput(proof,world,applicationResult){
+  const input=proof.semanticReviewInput,observations=proof.clientObservations;
+  const required=!world.handoff,answer=required?applicationResult?.decision?.answer:null;
+  const handoff=proof.handoff?{audience:proof.handoff.audience,answer:proof.handoff.decision?.answer}:null;
+  requireFact(world.kind==="clientDiagnostics"&&proof.semanticReviewRequired===true&&
+    proof.requestedAnswerRequired===required&&(!required||typeof answer==="string"&&answer.trim())&&
+    (!world.handoff||handoff?.audience===world.handoff&&typeof handoff.answer==="string"&&handoff.answer.trim())&&
+    observations&&Array.isArray(observations.views)&&
+    Array.isArray(observations.trace)&&Array.isArray(observations.journal)&&
+    equal(observations.catalog,proof.catalog)&&equal(observations.trace,proof.trace)&&
+    equal(observations.journal,proof.journal)&&equal(observations.final,proof.final)&&
+    equal(observations.channel?.durable,proof.durable)&&equal(observations.handoff,handoff)&&
+    equal(input?.actual,{goal:world.goal,observations,requestedAnswer:answer})&&
+    equal(input?.expected,{goal:world.goal,requestedAnswerRequired:required})&&typeof input.rubric==="string"&&input.rubric.trim(),
+    "Client meaning review differs from the captured answer, native observations or actual retained handoff");
+  return input;
+}
+
 /** Bind a requested vault answer to captured output and actor-visible native facts. */
 export function vaultKnowledgeReviewInput(proof,world,applicationResult){
   const input=proof.semanticReviewInput;

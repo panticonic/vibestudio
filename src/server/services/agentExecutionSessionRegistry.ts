@@ -156,7 +156,7 @@ export class AgentExecutionSessionRegistry {
   inheritTestContext(childContextId: string, ownerContextId: string | null): void {
     if (!ownerContextId) return;
     const policy = this.testPoliciesByContext.get(ownerContextId);
-    if (policy) this.testPoliciesByContext.set(childContextId, policy);
+    if (policy) this.markTestContext(childContextId, policy);
   }
 
   removeTestContext(contextId: string): void {

@@ -1,3 +1,9 @@
+import {
+  readHostedModelRoute,
+  assertHostedModelAllowed,
+  hostedModelAllowed,
+  type HostedModelRoute,
+} from "./hostedModelRoute.js";
 import { isAuthorityPending } from "@vibestudio/shared/authority/reviewPending";
 import {
   assertExecutionAuthorityMatches,
@@ -230,7 +236,10 @@ export interface RuntimeServiceInternal {
     trusted?: { agentBinding?: RuntimeAgentBinding }
   ): Promise<RuntimeEntityHandle>;
   /** Complete a durable code reservation from the server-owned reconciler. */
-  activateReservedEntity(spec: RuntimeCodeEntityCreateSpec, caller?: VerifiedCaller): Promise<RuntimeEntityHandle>;
+  activateReservedEntity(
+    spec: RuntimeCodeEntityCreateSpec,
+    caller?: VerifiedCaller
+  ): Promise<RuntimeEntityHandle>;
   /** Preparing panel reservations that must be resumed after server startup. */
   listPreparingPanels(): Promise<EntityRecord[]>;
   retireEntity(id: string): Promise<void>;
@@ -247,11 +256,14 @@ export interface RuntimeServiceInternal {
    * session. It intentionally does not create entities, clone DO storage, or
    * materialize a host projection.
    */
-  forkSemanticContext(input: {
-    ownerRuntimeId: string;
-    parentContextId: string;
-    targetContextId: string;
-  }, caller: VerifiedCaller): Promise<{
+  forkSemanticContext(
+    input: {
+      ownerRuntimeId: string;
+      parentContextId: string;
+      targetContextId: string;
+    },
+    caller: VerifiedCaller
+  ): Promise<{
     contextId: string;
     parentContextId: string;
     parentWorkingHead: VcsStateNodeRef;
@@ -323,6 +335,7 @@ export interface RuntimeSemanticContexts {
 }
 
 export interface RuntimeServiceDeps {
+  hostedModelRoute?: HostedModelRoute | null;
   /**
    * The single owner of WorkspaceDO entity state. The runtime service never
    * dispatches `entityActivate`/`entityRetire` or touches the cache mirror
@@ -438,11 +451,14 @@ function deriveEntityKey(srcKey: string, targetKey: string, srcId: string): stri
 
 export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceResult {
   const store = deps.entityStore;
+  const hostedModelRoute =
+    deps.hostedModelRoute === undefined ? readHostedModelRoute() : deps.hostedModelRoute;
   // Physical creation/recovery and terminal release own the same canonical
   // entity transition. Receipt inspection and domain settlement remain outside
   // this queue so an owner can finish teardown without awaiting itself.
   const entityTransitions = new Map<string, Promise<unknown>>();
   const contextClones = new Map<string, Promise<unknown>>();
+  const contextAdmissions = new Map<string, Promise<unknown>>();
   const activationChains = new Map<string, Promise<RuntimeEntityHandle>>();
   let recoveryAttemptCount = 0;
 
@@ -497,13 +513,20 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       : undefined;
   }
 
-  function applyTestAgentPolicy(
+  function applyAgentModelPolicy<T extends RuntimeEntityCreateSpec>(
     caller: VerifiedCaller,
-    spec: RuntimeEntityCreateSpec
-  ): RuntimeEntityCreateSpec {
+    spec: T
+  ): T {
     const agentPolicy =
       caller.testPolicy?.kind === "case" ? caller.testPolicy.case.agent : undefined;
-    if (!agentPolicy || !selfAgentChannelFromSpec(spec) || spec.kind === "session") return spec;
+    if (
+      (!agentPolicy && !hostedModelRoute) ||
+      !selfAgentChannelFromSpec(spec) ||
+      spec.kind === "session"
+    )
+      return spec;
+    const primary = agentPolicy?.model ?? hostedModelRoute!.primary;
+    assertHostedModelAllowed(hostedModelRoute, primary);
 
     const stateArgs =
       spec.stateArgs && typeof spec.stateArgs === "object" && !Array.isArray(spec.stateArgs)
@@ -515,26 +538,52 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       !Array.isArray(stateArgs["agentConfig"])
         ? { ...(stateArgs["agentConfig"] as Record<string, unknown>) }
         : {};
-    delete currentConfig["fallbackModel"];
-    delete currentConfig["fallbackThinkingLevel"];
-    delete currentConfig["fallbackOn"];
-    delete currentConfig["fallbackScope"];
-    const requestedChildModel =
-      caller.runtime.kind === "do" && typeof currentConfig["model"] === "string"
-        ? currentConfig["model"]
-        : agentPolicy.model;
+    if (caller.runtime.kind === "do") {
+      const requestedModel = currentConfig["model"];
+      const requestedFallback = currentConfig["fallbackModel"];
+      if (typeof requestedModel === "string")
+        assertHostedModelAllowed(hostedModelRoute, requestedModel);
+      if (typeof requestedFallback === "string")
+        assertHostedModelAllowed(hostedModelRoute, requestedFallback);
+      if (
+        agentPolicy &&
+        ((typeof requestedModel === "string" && requestedModel !== agentPolicy.model) ||
+          (typeof requestedFallback === "string" &&
+            (agentPolicy.fallback === "disabled" ||
+              requestedFallback !== agentPolicy.fallback.model)))
+      ) {
+        throw new Error(
+          "Explicit child model configuration is outside this system test's configured model route"
+        );
+      }
+    }
+    if (
+      agentPolicy ||
+      (typeof currentConfig["fallbackModel"] === "string" &&
+        !hostedModelAllowed(hostedModelRoute, currentConfig["fallbackModel"]))
+    ) {
+      delete currentConfig["fallbackModel"];
+      delete currentConfig["fallbackThinkingLevel"];
+      delete currentConfig["fallbackOn"];
+      delete currentConfig["fallbackScope"];
+    }
     stateArgs["agentConfig"] = {
       ...currentConfig,
-      model: requestedChildModel,
-      approvalLevel: agentPolicy.approvalLevel,
-      ...(agentPolicy.fallback === "disabled"
-        ? {}
-        : {
+      model:
+        !agentPolicy && caller.runtime.kind === "do" && typeof currentConfig["model"] === "string"
+          ? currentConfig["model"]
+          : primary,
+      ...(agentPolicy ? { approvalLevel: agentPolicy.approvalLevel } : {}),
+      ...(agentPolicy &&
+      agentPolicy.fallback !== "disabled" &&
+      hostedModelAllowed(hostedModelRoute, agentPolicy.fallback.model)
+        ? {
             fallbackModel: agentPolicy.fallback.model,
             fallbackThinkingLevel: agentPolicy.fallback.thinkingLevel,
             fallbackOn: [...agentPolicy.fallback.on],
             fallbackScope: agentPolicy.fallback.scope,
-          }),
+          }
+        : {}),
     };
     return { ...spec, stateArgs };
   }
@@ -642,6 +691,31 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     return (await store.resolveWorkContext(caller.runtime.id)) ?? randomUUID();
   }
 
+  /** Bind test custody before a new context can publish executable actors. */
+  async function admitCaseContext(caller: VerifiedCaller, contextId: string): Promise<void> {
+    const policy = caller.testPolicy;
+    if (policy?.kind !== "case") return;
+    const current = deps.testPolicyForContext(contextId);
+    if (current) {
+      if (current.policyId !== policy.policyId)
+        throw new Error("Runtime context belongs to a different system-test policy");
+      return;
+    }
+    if (
+      (await deps.semanticContexts.listContexts(contextId)).includes(contextId) ||
+      (await store.listByContext(contextId)).length > 0
+    ) {
+      throw new Error("Existing runtime context is outside this system test's policy");
+    }
+    await deps.onContextCreated?.({
+      contextId,
+      ownerContextId: await store.resolveWorkContext(caller.runtime.id),
+      inheritedTestPolicy: policy,
+    });
+    if (deps.testPolicyForContext(contextId)?.policyId !== policy.policyId)
+      throw new Error("Runtime context did not retain its system-test policy");
+  }
+
   /** Ensure one durable semantic workspace context before attaching an entity. */
   async function setUpContext(contextId: string): Promise<WorkspaceContext> {
     await deps.semanticContexts.ensureContext(contextId);
@@ -667,7 +741,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     rawSpec: RuntimeEntityCreateSpec
   ): Promise<RuntimeEntityHandle> {
     const caller = actors.lifecycleCaller;
-    const spec = { ...applyTestAgentPolicy(caller, rawSpec), key: rawSpec.key ?? randomUUID() };
+    const spec = { ...applyAgentModelPolicy(caller, rawSpec), key: rawSpec.key ?? randomUUID() };
     assertCreateEntityAllowed(caller, spec);
     if (
       spec.kind === "do" &&
@@ -919,6 +993,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     spec: RuntimeCodeEntityCreateSpec
   ): Promise<RuntimeEntityHandle> {
     const caller = actors.lifecycleCaller;
+    spec = applyAgentModelPolicy(caller, spec);
     assertCreateEntityAllowed(caller, spec);
     const key = spec.key ?? randomUUID();
     const canonicalId = canonicalEntityId({
@@ -981,6 +1056,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       // feed the deliberately unresolved reservation source (effectiveVersion
       // "") back through the store after activation sealed that field.
       if (preexisting.status === "active") {
+        await admitCaseContext(actors.initiatingCaller, preexisting.contextId);
         return { ...entityHandle(preexisting), created: false };
       }
     }
@@ -1004,29 +1080,32 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     const agentBinding = selfAgentChannelId
       ? { entityId: canonicalId, contextId, channelId: selfAgentChannelId }
       : externalAgentBinding;
-    const record = await store.reserve({
-      kind: spec.kind,
-      ...(cloneProvenance ? { cloneProvenance } : {}),
-      source: { repoPath: spec.execution.source, effectiveVersion: "" },
-      contextId,
-      className: spec.kind === "do" ? spec.className : undefined,
-      key,
-      stateArgs: "stateArgs" in spec ? spec.stateArgs : undefined,
-      agentBinding,
-      parentId: caller.runtime.id,
-      ownerUserId: contextOwner.subject?.userId,
-      executionAuthority: retainExecutionAuthority(
-        executionAuthorityForCaller(actors.initiatingCaller, store.cache),
-        actors.retainedExecutionAuthority
-      ),
-      ...(ownerContextId && ownerContextId !== contextId
-        ? {
-            lifecycleOwner: {
-              contextId: ownerContextId,
-              entityId: contextOwner.runtime.id,
-            },
-          }
-        : {}),
+    const record = await serializeByKey(contextAdmissions, contextId, async () => {
+      await admitCaseContext(contextOwner, contextId);
+      return store.reserve({
+        kind: spec.kind,
+        ...(cloneProvenance ? { cloneProvenance } : {}),
+        source: { repoPath: spec.execution.source, effectiveVersion: "" },
+        contextId,
+        className: spec.kind === "do" ? spec.className : undefined,
+        key,
+        stateArgs: "stateArgs" in spec ? spec.stateArgs : undefined,
+        agentBinding,
+        parentId: caller.runtime.id,
+        ownerUserId: contextOwner.subject?.userId,
+        executionAuthority: retainExecutionAuthority(
+          executionAuthorityForCaller(actors.initiatingCaller, store.cache),
+          actors.retainedExecutionAuthority
+        ),
+        ...(ownerContextId && ownerContextId !== contextId
+          ? {
+              lifecycleOwner: {
+                contextId: ownerContextId,
+                entityId: contextOwner.runtime.id,
+              },
+            }
+          : {}),
+      });
     });
     inheritTaskAuthority(record.id, actors, contextId);
     // The reservation retains the parent's selected revision for the child
@@ -1113,9 +1192,10 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     await setUpContext(existing.contextId);
     const reservedRef = `ctx:${existing.contextId}`;
     const ref = spec.execution.ref ?? (caller ? reservedRef : "main");
-    const sourceContextId = caller && ref !== reservedRef
-      ? await store.resolveWorkContext(caller.runtime.id)
-      : existing.contextId;
+    const sourceContextId =
+      caller && ref !== reservedRef
+        ? await store.resolveWorkContext(caller.runtime.id)
+        : existing.contextId;
     const prepared = await deps.hooks.prepare({
       spec: { ...spec, execution: { ...spec.execution, ref } },
       key: spec.key,
@@ -1285,7 +1365,10 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     }
 
     mark("identity");
-    await setUpContext(contextId);
+    await serializeByKey(contextAdmissions, contextId, async () => {
+      await admitCaseContext(actors.initiatingCaller, contextId);
+      await setUpContext(contextId);
+    });
     mark("context");
     const parentKind = caller.runtime.kind;
     // Runtime context owns filesystem/state isolation. Code selection follows
@@ -1297,11 +1380,17 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         ? await store.resolveWorkContext(actors.initiatingCaller.runtime.id)
         : null;
     let prepared: PreparedIncarnation;
-    const inheritForkExecutable = cloneSource && spec.kind === "do" && spec.forkStorage && spec.execution.ref === undefined;
-    const sealedExecutable = cloneSource && existing?.activeBuildKey ? existing
-      : inheritForkExecutable ? cloneSource : undefined;
+    const inheritForkExecutable =
+      cloneSource && spec.kind === "do" && spec.forkStorage && spec.execution.ref === undefined;
+    const sealedExecutable =
+      cloneSource && existing?.activeBuildKey
+        ? existing
+        : inheritForkExecutable
+          ? cloneSource
+          : undefined;
     if (sealedExecutable) {
-      if (!sealedExecutable.activeBuildKey) throw new Error(`Clone ${canonicalId} has no sealed build`);
+      if (!sealedExecutable.activeBuildKey)
+        throw new Error(`Clone ${canonicalId} has no sealed build`);
       const identity = requireActiveExecutionIdentity(
         {
           executionDigest: sealedExecutable.activeExecutionDigest,
@@ -1327,8 +1416,10 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
                 ...spec,
                 execution: {
                   ...spec.execution,
-                  ref: cloneWorkspaceSource?.stateHash ??
-                    spec.execution.ref ?? (sourceContextId ? `ctx:${sourceContextId}` : "main"),
+                  ref:
+                    cloneWorkspaceSource?.stateHash ??
+                    spec.execution.ref ??
+                    (sourceContextId ? `ctx:${sourceContextId}` : "main"),
                 },
               }
             : spec,
@@ -1514,7 +1605,10 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         ? await store.resolveWorkContext(ctx.chainCaller.callerId)
         : undefined;
     const contextId = args.contextId ?? randomUUID();
-    const context = await setUpContext(contextId);
+    const context = await serializeByKey(contextAdmissions, contextId, async () => {
+      await admitCaseContext(caller, contextId);
+      return setUpContext(contextId);
+    });
     // An extension call is delegated work: the upstream verified code context
     // and entity own any lifecycle context created for that request. The
     // extension is the executing deputy, not the authority principal that may
@@ -2218,22 +2312,29 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         ownsDefinition = true;
       }
       const semanticCaller = actors.initiatingCaller;
-      const semanticOwner = semanticCaller.agentBinding?.contextId ?? await store.resolveWorkContext(semanticCaller.runtime.id);
+      const semanticOwner =
+        semanticCaller.agentBinding?.contextId ??
+        (await store.resolveWorkContext(semanticCaller.runtime.id));
       for (const srcCtx of sourceContexts) {
         const isRoot = srcCtx === sourceContextId;
         const targetCtx = newContextIdOf.get(srcCtx) as string;
         // Fork semantic state first so every cloned runtime observes the exact
         // source working frontier and can then diverge independently.
         const selectedState = await deps.semanticContexts.forkParticipantContext({
-          caller: semanticCaller, sourceContextId: srcCtx, targetContextId: targetCtx,
+          caller: semanticCaller,
+          sourceContextId: srcCtx,
+          targetContextId: targetCtx,
           retainForRuntime: true,
           ...(semanticOwner ? { ownerContextId: semanticOwner } : {}),
         });
         let workspaceSource: Promise<RuntimeWorkspaceSource> | undefined;
-        const readCloneWorkspaceSource = () => workspaceSource ??= deps.semanticContexts.readForkSource({
-          caller: semanticCaller, contextId: targetCtx, ownerContextId: semanticOwner ?? srcCtx,
-          state: selectedState,
-        });
+        const readCloneWorkspaceSource = () =>
+          (workspaceSource ??= deps.semanticContexts.readForkSource({
+            caller: semanticCaller,
+            contextId: targetCtx,
+            ownerContextId: semanticOwner ?? srcCtx,
+            state: selectedState,
+          }));
         if (!existingContexts.has(targetCtx)) {
           if (isRoot) {
             await store.recordContextEdge({
@@ -2676,9 +2777,13 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
 
     const contextId = contextIdForTargetKey(args.targetKey);
     await deps.semanticContexts.forkParticipantContext({
-      caller, sourceContextId: args.parentContextId, targetContextId: contextId,
-      ownerContextId: caller.agentBinding?.contextId ??
-        await store.resolveWorkContext(caller.runtime.id) ?? args.parentContextId,
+      caller,
+      sourceContextId: args.parentContextId,
+      targetContextId: contextId,
+      ownerContextId:
+        caller.agentBinding?.contextId ??
+        (await store.resolveWorkContext(caller.runtime.id)) ??
+        args.parentContextId,
       retainForRuntime: true,
     });
     await store.recordContextEdge({
@@ -2719,7 +2824,9 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     const parentContextId = input.parentContextId;
     const contextId = input.targetContextId;
     const selected = await deps.semanticContexts.forkParticipantContext({
-      caller, sourceContextId: parentContextId, targetContextId: contextId,
+      caller,
+      sourceContextId: parentContextId,
+      targetContextId: contextId,
     });
     await store.recordContextEdge({
       contextId,
@@ -2976,7 +3083,8 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         return { aborted: true as const };
       },
       forwardHistoryPacket: (ctx, [input]) => {
-        if (!deps.forwardHistoryPacket) throw new Error("Workspace history transfer is unavailable");
+        if (!deps.forwardHistoryPacket)
+          throw new Error("Workspace history transfer is unavailable");
         return deps.forwardHistoryPacket(ctx.caller, input);
       },
       retireEntity: async (_ctx, [{ id, removeContext }]) => {
@@ -3017,12 +3125,18 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       forkSemanticContext: (ctx, [input]) => {
         const caller = [ctx.caller, ctx.authorizingCaller].find((principal) => {
           if (!principal) return false;
-          if (principal.runtime.id === input.ownerRuntimeId ||
-              principal.agentBinding?.entityId === input.ownerRuntimeId) return true;
+          if (
+            principal.runtime.id === input.ownerRuntimeId ||
+            principal.agentBinding?.entityId === input.ownerRuntimeId
+          )
+            return true;
           const owner = admittedEvalContextOwner(store.cache, principal);
-          return owner?.runtimeId === input.ownerRuntimeId && owner.contextId === input.parentContextId;
+          return (
+            owner?.runtimeId === input.ownerRuntimeId && owner.contextId === input.parentContextId
+          );
         });
-        if (!caller) throw new Error("The verified caller must own the workspace context being forked");
+        if (!caller)
+          throw new Error("The verified caller must own the workspace context being forked");
         return forkSemanticContext(input, caller);
       },
       dropSemanticContext: async (_ctx, [{ contextId }]) => {

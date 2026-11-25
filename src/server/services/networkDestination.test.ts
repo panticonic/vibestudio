@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { LookupAddress } from "node:dns";
-import { isPublicNetworkAddress, resolveNetworkDestination } from "@vibestudio/shared/networkDestination";
+import { setImmediate as immediate } from "node:timers/promises";
+import {
+  isPublicNetworkAddress,
+  resolveNetworkDestination,
+} from "@vibestudio/shared/networkDestination";
 
 const publicAddress = { address: "93.184.216.34", family: 4 as const };
 
@@ -163,5 +167,105 @@ describe("network destination policy", () => {
     );
     never.abort();
     await expect(neverResolves).rejects.toThrow();
+  });
+
+  it("recovers temporary DNS failure before returning a vetted pinned destination", async () => {
+    const temporary = Object.assign(new Error("temporary resolution failure"), {
+      code: "EAI_AGAIN",
+    });
+    const resolve = vi.fn().mockRejectedValueOnce(temporary).mockResolvedValue([publicAddress]);
+    const destination = await resolveNetworkDestination(
+      new URL("https://example.test/"),
+      { kind: "public" },
+      new AbortController().signal,
+      resolve,
+      []
+    );
+    expect(resolve).toHaveBeenCalledTimes(2);
+    expect(destination.addresses).toEqual([publicAddress]);
+    await new Promise<void>((accept, reject) =>
+      destination.lookup("example.test", {}, (error, address) => {
+        if (error) reject(error);
+        else {
+          expect(address).toBe(publicAddress.address);
+          accept();
+        }
+      })
+    );
+    expect(resolve).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves the final temporary failure and bounds DNS attempts", async () => {
+    const first = Object.assign(new Error("first"), { code: "EAI_AGAIN" });
+    const final = Object.assign(new Error("last"), { code: "EAI_AGAIN", syscall: "getaddrinfo" });
+    const resolve = vi.fn().mockRejectedValueOnce(first).mockRejectedValue(final);
+    await expect(
+      resolveNetworkDestination(
+        new URL("https://example.test/"),
+        { kind: "public" },
+        new AbortController().signal,
+        resolve,
+        []
+      )
+    ).rejects.toBe(final);
+    expect(resolve).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not retry permanent DNS failures or explicit opt-out", async () => {
+    for (const [code, options] of [
+      ["ENOTFOUND", {}],
+      ["EAI_AGAIN", { retryTransientDns: false }],
+    ] as const) {
+      const failure = Object.assign(new Error(code), { code });
+      const resolve = vi.fn().mockRejectedValue(failure);
+      await expect(
+        resolveNetworkDestination(
+          new URL("https://example.test/"),
+          { kind: "public" },
+          new AbortController().signal,
+          resolve,
+          [],
+          options
+        )
+      ).rejects.toBe(failure);
+      expect(resolve).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("cancels DNS backoff without starting another resolution", async () => {
+    const controller = new AbortController();
+    const reason = new Error("request owner cancelled");
+    const temporary = Object.assign(new Error("temporary"), { code: "EAI_AGAIN" });
+    const resolve = vi.fn().mockRejectedValue(temporary);
+    const resolving = resolveNetworkDestination(
+      new URL("https://example.test/"),
+      { kind: "public" },
+      controller.signal,
+      resolve,
+      []
+    );
+    await immediate();
+    expect(resolve).toHaveBeenCalledTimes(1);
+    controller.abort(reason);
+    await expect(resolving).rejects.toBe(reason);
+    expect(resolve).toHaveBeenCalledTimes(1);
+  });
+
+  it("still rejects every mixed/private answer after transient recovery", async () => {
+    const temporary = Object.assign(new Error("temporary"), { code: "EAI_AGAIN" });
+    const resolve = vi
+      .fn()
+      .mockRejectedValueOnce(temporary)
+      .mockResolvedValue([publicAddress, { address: "127.0.0.1", family: 4 }]);
+    await expect(
+      resolveNetworkDestination(
+        new URL("https://example.test/"),
+        { kind: "public" },
+        new AbortController().signal,
+        resolve,
+        []
+      )
+    ).rejects.toThrow("outside the authorized address space");
+    expect(resolve).toHaveBeenCalledTimes(2);
   });
 });

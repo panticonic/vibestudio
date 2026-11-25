@@ -2,6 +2,7 @@ import { lookup } from "node:dns/promises";
 import type { LookupAddress } from "node:dns";
 import { BlockList, isIP, type LookupFunction } from "node:net";
 import { networkInterfaces } from "node:os";
+import { setTimeout as delay } from "node:timers/promises";
 
 const nonPublic = new BlockList();
 for (const [address, prefix] of [
@@ -78,7 +79,8 @@ export interface NetworkDestination {
 async function resolveWithDeadline(
   hostname: string,
   resolve: (hostname: string) => Promise<LookupAddress[]>,
-  signal: AbortSignal
+  signal: AbortSignal,
+  retryTransientDns: boolean
 ): Promise<LookupAddress[]> {
   const deadline = AbortSignal.any([signal, AbortSignal.timeout(10_000)]);
   deadline.throwIfAborted();
@@ -86,9 +88,27 @@ async function resolveWithDeadline(
     const aborted = () => reject(deadline.reason);
     deadline.addEventListener("abort", aborted, { once: true });
     Promise.resolve()
-      .then(() => {
-        deadline.throwIfAborted();
-        return resolve(hostname);
+      .then(async () => {
+        for (let attempt = 0; ; attempt += 1) {
+          deadline.throwIfAborted();
+          try {
+            return await resolve(hostname);
+          } catch (error) {
+            // EAI_AGAIN is a temporary resolver failure, before any connection
+            // or request exists. Never replay provider requests or streams here.
+            if (deadline.aborted) throw deadline.reason;
+            if (
+              !retryTransientDns ||
+              attempt >= 2 ||
+              !error ||
+              typeof error !== "object" ||
+              !("code" in error) ||
+              error.code !== "EAI_AGAIN"
+            )
+              throw error;
+            await delay(100 * 2 ** attempt, undefined, { signal: deadline });
+          }
+        }
       })
       .then(accept, reject)
       .finally(() => deadline.removeEventListener("abort", aborted));
@@ -103,14 +123,15 @@ export async function resolveNetworkDestination(
     lookup(hostname, { all: true }),
   hostAddresses: readonly string[] = Object.values(networkInterfaces()).flatMap(
     (entries) => entries?.map((entry) => entry.address) ?? []
-  )
+  ),
+  options: { retryTransientDns?: boolean } = {}
 ): Promise<NetworkDestination> {
   signal.throwIfAborted();
   const hostname = networkHostname(target.hostname);
   const family = isIP(hostname);
   const addresses = family
     ? [{ address: hostname, family }]
-    : await resolveWithDeadline(hostname, resolve, signal);
+    : await resolveWithDeadline(hostname, resolve, signal, options.retryTransientDns !== false);
   signal.throwIfAborted();
   if (!addresses.length) throw new Error("Network destination has no addresses");
   if (authority.kind === "internal-loopback" && authority.origin !== target.origin) {

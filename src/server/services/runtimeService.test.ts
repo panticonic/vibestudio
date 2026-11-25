@@ -97,6 +97,7 @@ function makeDODispatch(instance: WorkspaceStateDO): {
 const forkedRevision = { kind: "event", eventId: "event:test" } as const;
 
 interface BuildDepsOptions {
+  hostedModelRoute?: import("./hostedModelRoute.js").HostedModelRoute | null;
   resolveNativeOwner?: (
     input: import("@vibestudio/shared/runtime/entitySpec").EntityActivationInput
   ) => { incarnation: string; generation: number } | null;
@@ -209,9 +210,9 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
       semanticContextIds.delete(contextId);
     }),
     forkParticipantContext: vi.fn(async () => forkedRevision),
-    readForkSource: vi.fn<Parameters<typeof createRuntimeService>[0]["semanticContexts"]["readForkSource"]>(
-      async ({ state }) => ({ stateHash: `state:${"b".repeat(64)}`, semanticState: state })
-    ),
+    readForkSource: vi.fn<
+      Parameters<typeof createRuntimeService>[0]["semanticContexts"]["readForkSource"]
+    >(async ({ state }) => ({ stateHash: `state:${"b".repeat(64)}`, semanticState: state })),
     listContexts: vi.fn(async () => [
       ...new Set([...semanticContextIds, ...contextFolders.existing]),
     ]),
@@ -229,10 +230,13 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
   const taskAuthorities = new TaskAuthorityRegistry();
   const unitSupervisor = new UnitSupervisor();
 
+  const contextPolicies = new AgentExecutionSessionRegistry();
   const runtimeResult = createRuntimeService({
+    hostedModelRoute: opts.hostedModelRoute,
     prepareResourceBindings: opts.prepareResourceBindings,
     taskAuthorities,
-    testPolicyForContext: opts.testPolicyForContext ?? (() => null),
+    testPolicyForContext:
+      opts.testPolicyForContext ?? ((id) => contextPolicies.testPolicyForContext(id)),
     unitSupervisor,
     entityStore,
     hooks: {
@@ -311,7 +315,13 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
         entityCache.listActive().find((e) => e.contextId === id)?.id,
     },
     contextFolders,
-    onContextCreated: opts.onContextCreated,
+    onContextCreated:
+      opts.onContextCreated ??
+      (async (input) => {
+        if (input.inheritedTestPolicy)
+          contextPolicies.markTestContext(input.contextId, input.inheritedTestPolicy);
+        else contextPolicies.inheritTestContext(input.contextId, input.ownerContextId);
+      }),
     onContextRemoved: opts.onContextRemoved,
     onPanelExecutionActivated: opts.onPanelExecutionActivated,
     setEntityTitle: opts.setEntityTitle,
@@ -567,9 +577,9 @@ describe("runtimeService system-test agent execution policy", () => {
     );
   });
 
-  it("preserves an explicit model selected by a test-owned Pi child", async () => {
+  it("refuses an explicit Sol model or fallback selected by a test-owned DO child", async () => {
     const prepareDurableObject = vi.fn(async () => ({
-      targetId: "target:child-agent",
+      targetId: "target:child",
       effectiveVersion: "ev-agent",
       ...sealedExecution,
     }));
@@ -581,36 +591,234 @@ describe("runtimeService system-test agent execution policy", () => {
       null,
       null,
       null,
-      systemTestCasePolicy()
+      systemTestCasePolicy("openai-codex:gpt-6-luna")
     );
+    for (const agentConfig of [
+      { model: "openai-codex:gpt-6-sol" },
+      { fallbackModel: "openai-codex:gpt-6-sol" },
+    ]) {
+      await expect(
+        internal.createEntity(
+          caller,
+          doCreateSpec({
+            key: "child",
+            contextId: "ctx-child",
+            agentChannelId: "task-child",
+            stateArgs: { agentConfig },
+          })
+        )
+      ).rejects.toThrow("Explicit child model configuration");
+    }
+    expect(prepareDurableObject).not.toHaveBeenCalled();
+  });
 
+  it("seeds unscoped ambient agent defaults with the owned primary instead of profile Sol", async () => {
+    const prepareDurableObject = vi.fn(async () => ({
+      targetId: "target:ambient",
+      effectiveVersion: "ev-agent",
+      ...sealedExecution,
+    }));
+    const { internal } = await buildDeps({
+      prepareDurableObject,
+      hostedModelRoute: { primary: "openai-codex:gpt-6-luna", fallback: null },
+    });
     await internal.createEntity(
-      caller,
+      serverCaller,
       doCreateSpec({
-        key: "subagent:explicit-model",
-        contextId: "ctx-system-test-child",
-        agentChannelId: "task-explicit-model",
+        key: "ambient",
+        contextId: "ctx-ambient",
+        agentChannelId: "chat-ambient",
         stateArgs: {
           agentConfig: {
-            model: "openai-codex:gpt-5.3-codex-spark",
-            thinkingLevel: "minimal",
-            approvalLevel: 0,
+            model: "openai-codex:gpt-6.1-sol",
+            fallbackModel: "openai-codex:gpt-6-sol",
+            approvalLevel: 1,
           },
         },
       })
     );
+    expect(prepareDurableObject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stateArgs: { agentConfig: { model: "openai-codex:gpt-6-luna", approvalLevel: 1 } },
+      })
+    );
+    const ordinaryDo = createVerifiedCaller("do:workers/agent:Agent:ambient", "do");
+    await expect(
+      internal.createEntity(
+        ordinaryDo,
+        doCreateSpec({
+          key: "explicit",
+          contextId: "ctx-explicit",
+          agentChannelId: "chat-explicit",
+          stateArgs: { agentConfig: { model: "openai-codex:gpt-6-sol" } },
+        })
+      )
+    ).rejects.toThrow("Host owner's configured");
+  });
 
+  function caseCustody() {
+    const registry = new AgentExecutionSessionRegistry();
+    const policy = systemTestCasePolicy("openai-codex:gpt-6-luna");
+    const caller = createVerifiedCaller(
+      "do:workers/agent-worker:AiChatWorker:parent",
+      "do",
+      null,
+      null,
+      null,
+      null,
+      policy
+    );
+    const onContextCreated = vi.fn(
+      async (input: {
+        contextId: string;
+        ownerContextId: string | null;
+        inheritedTestPolicy?: import("@vibestudio/rpc").AgentExecutionTestPolicy;
+      }) => {
+        if (input.inheritedTestPolicy)
+          registry.markTestContext(input.contextId, input.inheritedTestPolicy);
+        else registry.inheritTestContext(input.contextId, input.ownerContextId);
+      }
+    );
+    return {
+      registry,
+      policy,
+      caller,
+      onContextCreated,
+      testPolicyForContext: (id: string) => registry.testPolicyForContext(id),
+    };
+  }
+
+  it("binds a fresh explicit context to the exact case before direct actor preparation", async () => {
+    const custody = caseCustody();
+    const prepareDurableObject = vi.fn(async () => {
+      expect(custody.registry.testPolicyForContext("ctx-explicit")).toBe(custody.policy);
+      return { targetId: "target:child", effectiveVersion: "ev-agent", ...sealedExecution };
+    });
+    const { internal } = await buildDeps({ ...custody, prepareDurableObject });
+    await internal.createEntity(
+      custody.caller,
+      doCreateSpec({ key: "fresh", contextId: "ctx-explicit", agentChannelId: "task-fresh" })
+    );
     expect(prepareDurableObject).toHaveBeenCalledWith(
       expect.objectContaining({
         stateArgs: {
-          agentConfig: {
-            model: "openai-codex:gpt-5.3-codex-spark",
-            thinkingLevel: "minimal",
-            approvalLevel: 2,
-          },
+          agentConfig: { model: "openai-codex:gpt-6-luna", approvalLevel: 2 },
         },
       })
     );
+    expect(custody.registry.testPolicyForContext("ctx-explicit")).toBe(custody.policy);
+  });
+
+  it("binds explicit reservations before publication and seeds the case model", async () => {
+    const custody = caseCustody();
+    const { service, entityCache } = await buildDeps(custody);
+    const reserved = (await service.handler({ caller: custody.caller }, "reserveEntity", [
+      doCreateSpec({
+        key: "reserved",
+        contextId: "ctx-reserved",
+        agentChannelId: "task-reserved",
+      }),
+    ])) as { id: string };
+    expect(custody.registry.testPolicyForContext("ctx-reserved")).toBe(custody.policy);
+    expect(entityCache.resolve(reserved.id)?.stateArgs).toEqual({
+      agentConfig: { model: "openai-codex:gpt-6-luna", approvalLevel: 2 },
+    });
+  });
+
+  it("inherits case custody for explicit semantic context creation", async () => {
+    const custody = caseCustody();
+    const { internal } = await buildDeps(custody);
+    await internal.createContext({ caller: custody.caller }, { contextId: "ctx-semantic" });
+    expect(custody.registry.testPolicyForContext("ctx-semantic")).toBe(custody.policy);
+  });
+
+  it("refuses unrelated existing explicit contexts without changing their policy or preparing code", async () => {
+    for (const foreignPolicy of [null, systemTestCasePolicy("openai-codex:other")]) {
+      const custody = caseCustody();
+      if (foreignPolicy)
+        custody.registry.markTestContext("ctx-foreign", {
+          ...foreignPolicy,
+          policyId: "another-case",
+        });
+      const prepareDurableObject = vi.fn();
+      const { internal, service } = await buildDeps({
+        ...custody,
+        prepareDurableObject,
+        semanticContexts: { listContexts: async () => ["ctx-foreign"] },
+      });
+      for (const method of ["createEntity", "reserveEntity"] as const) {
+        await expect(
+          service.handler({ caller: custody.caller }, method, [
+            doCreateSpec({
+              key: method,
+              contextId: "ctx-foreign",
+            }),
+          ])
+        ).rejects.toThrow(/different system-test policy|outside this system test/);
+      }
+      await expect(
+        internal.createContext({ caller: custody.caller }, { contextId: "ctx-foreign" })
+      ).rejects.toThrow(/different system-test policy|outside this system test/);
+      expect(custody.registry.testPolicyForContext("ctx-foreign")?.policyId ?? null).toBe(
+        foreignPolicy ? "another-case" : null
+      );
+      expect(prepareDurableObject).not.toHaveBeenCalled();
+    }
+  });
+
+  it("joins an in-flight ordinary context creation instead of relabelling it as a test context", async () => {
+    const custody = caseCustody();
+    let entered!: () => void, release!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let exists = false;
+    const { internal } = await buildDeps({
+      ...custody,
+      semanticContexts: {
+        ensureContext: async () => {
+          entered();
+          await gate;
+          exists = true;
+        },
+        listContexts: async () => (exists ? ["ctx-concurrent"] : []),
+      },
+    });
+    const ordinary = internal.createEntity(
+      serverCaller,
+      doCreateSpec({ key: "ordinary", contextId: "ctx-concurrent" })
+    );
+    await started;
+    const test = internal.createEntity(
+      custody.caller,
+      doCreateSpec({ key: "case", contextId: "ctx-concurrent" })
+    );
+    const refused = expect(test).rejects.toThrow("Existing runtime context is outside");
+    release();
+    await ordinary;
+    await refused;
+    expect(custody.registry.testPolicyForContext("ctx-concurrent")).toBeNull();
+  });
+
+  it("allows actors to share an existing context owned by the same exact case", async () => {
+    const custody = caseCustody();
+    custody.registry.markTestContext("ctx-shared", custody.policy);
+    const { internal } = await buildDeps({
+      ...custody,
+      semanticContexts: { listContexts: async () => ["ctx-shared"] },
+    });
+    await internal.createEntity(
+      custody.caller,
+      doCreateSpec({ key: "one", contextId: "ctx-shared" })
+    );
+    await internal.createEntity(
+      custody.caller,
+      doCreateSpec({ key: "two", contextId: "ctx-shared" })
+    );
+    expect(custody.registry.testPolicyForContext("ctx-shared")).toBe(custody.policy);
   });
 });
 
@@ -623,19 +831,32 @@ describe("runtimeService.forkSemanticContext", () => {
     });
     const caller = panelCaller("panel:development");
     entityCache._onActivate({
-      id: caller.runtime.id, kind: "panel", contextId: "ctx-parent",
+      id: caller.runtime.id,
+      kind: "panel",
+      contextId: "ctx-parent",
       source: { repoPath: "panels/caller", effectiveVersion: "v1" },
-      key: "development", createdAt: 1, status: "active", cleanupComplete: true,
+      key: "development",
+      createdAt: 1,
+      status: "active",
+      cleanupComplete: true,
     });
-    const result = await service.handler({ caller }, "forkSemanticContext", [{
-      ownerRuntimeId: caller.runtime.id, parentContextId: "ctx-parent", targetContextId: "ctx-child",
-    }]);
+    const result = await service.handler({ caller }, "forkSemanticContext", [
+      {
+        ownerRuntimeId: caller.runtime.id,
+        parentContextId: "ctx-parent",
+        targetContextId: "ctx-child",
+      },
+    ]);
     expect(result).toEqual({
-      contextId: "ctx-child", parentContextId: "ctx-parent",
-      parentWorkingHead: selected, childBaseState: selected,
+      contextId: "ctx-child",
+      parentContextId: "ctx-parent",
+      parentWorkingHead: selected,
+      childBaseState: selected,
     });
     expect(forkParticipantContext).toHaveBeenCalledWith({
-      caller, sourceContextId: "ctx-parent", targetContextId: "ctx-child",
+      caller,
+      sourceContextId: "ctx-parent",
+      targetContextId: "ctx-child",
     });
     expect(contextFolders.ensureContextFolder).not.toHaveBeenCalled();
   });
@@ -667,10 +888,13 @@ describe("runtimeService.forkSemanticContext", () => {
     const first = await internal.forkSemanticContext(input, caller);
     const second = await internal.forkSemanticContext(input, caller);
     await expect(
-      internal.forkSemanticContext({
-        ...input,
-        ownerRuntimeId: "panel:other",
-      }, caller)
+      internal.forkSemanticContext(
+        {
+          ...input,
+          ownerRuntimeId: "panel:other",
+        },
+        caller
+      )
     ).rejects.toThrow(/does not own semantic context ctx-parent/);
 
     expect(first).toMatchObject({
@@ -680,7 +904,9 @@ describe("runtimeService.forkSemanticContext", () => {
     });
     expect(second.contextId).toBe(first.contextId);
     expect(forkParticipantContext).toHaveBeenCalledWith({
-      caller, sourceContextId: "ctx-parent", targetContextId: first.contextId,
+      caller,
+      sourceContextId: "ctx-parent",
+      targetContextId: first.contextId,
     });
     expect(forkParticipantContext).toHaveBeenCalledTimes(2);
     expect(contextFolders.ensureContextFolder).not.toHaveBeenCalled();
@@ -928,13 +1154,15 @@ describe("runtimeService deferred panel activation", () => {
     ])) as { id: string; contextId: string };
 
     expect(reserved.contextId).not.toBe("ctx-creator");
-    expect(forkParticipantContext).toHaveBeenCalledWith(expect.objectContaining({
-      caller: mediatedCreator,
-      sourceContextId: "ctx-creator",
-      targetContextId: reserved.contextId,
-      ownerContextId: "ctx-creator",
-      retainForRuntime: true,
-    }));
+    expect(forkParticipantContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        caller: mediatedCreator,
+        sourceContextId: "ctx-creator",
+        targetContextId: reserved.contextId,
+        ownerContextId: "ctx-creator",
+        retainForRuntime: true,
+      })
+    );
     await service.handler({ caller: mediatedCreator }, "activateReservedEntity", [
       {
         kind: "panel",
@@ -1062,8 +1290,20 @@ describe("runtimeService deferred panel activation", () => {
   });
 
   it("carries a resident test policy into an implicit panel context even without an entity-backed owner context", async () => {
-    const onContextCreated = vi.fn(async () => {});
-    const { service } = await buildDeps({ onContextCreated });
+    const policies = new AgentExecutionSessionRegistry();
+    const onContextCreated = vi.fn(
+      async (input: {
+        contextId: string;
+        inheritedTestPolicy?: import("@vibestudio/rpc").AgentExecutionTestPolicy;
+      }) => {
+        if (input.inheritedTestPolicy)
+          policies.markTestContext(input.contextId, input.inheritedTestPolicy);
+      }
+    );
+    const { service } = await buildDeps({
+      onContextCreated,
+      testPolicyForContext: (id) => policies.testPolicyForContext(id),
+    });
     const policy = systemTestCasePolicy();
     const mediatedCreator = createVerifiedCaller(
       "do:workers/session:SessionDO:transient",
@@ -2911,16 +3151,19 @@ describe("runtimeService session entities", () => {
   it("retries interrupted context removal after the last entity was retired", async () => {
     const dropContext = vi.fn(async () => {});
     dropContext.mockRejectedValueOnce(new Error("Archive interrupted"));
-    const { service, contextFolders, instance } = await buildDeps({ semanticContexts: { dropContext } });
+    const { service, contextFolders, instance } = await buildDeps({
+      semanticContexts: { dropContext },
+    });
     const handle = (await service.handler({ caller: shellCaller }, "createEntity", [
       sessionSpec({ key: "s-rm" }),
     ])) as { id: string; contextId: string };
     await contextFolders.ensureContextFolder(handle.contextId);
     expect(contextFolders.existing.has(handle.contextId)).toBe(true);
 
-    const retire = () => service.handler({ caller: shellCaller }, "retireEntity", [
-      { id: handle.id, removeContext: true },
-    ]);
+    const retire = () =>
+      service.handler({ caller: shellCaller }, "retireEntity", [
+        { id: handle.id, removeContext: true },
+      ]);
     await expect(retire()).rejects.toThrow("Archive interrupted");
 
     expect(instance.entityResolve(handle.id)?.status).toBe("retired");
@@ -3324,17 +3567,29 @@ interface OwnedContexts {
 
 describe("runtimeService.cloneContext", () => {
   it("captures the admitted author's working copy before cloning entities", async () => {
-    const forkParticipantContext = vi.fn(async () => ({ kind: "application" as const, applicationId: "private-edit" }));
-    const { service, cloneDurableStorage } = await buildDeps({ semanticContexts: { forkParticipantContext } });
+    const forkParticipantContext = vi.fn(async () => ({
+      kind: "application" as const,
+      applicationId: "private-edit",
+    }));
+    const { service, cloneDurableStorage } = await buildDeps({
+      semanticContexts: { forkParticipantContext },
+    });
     const source = await seedDO(service, "participant-root", "author");
     const caller = createVerifiedCaller(source.id, "do");
-    const input = [{ sourceContextId: "participant-root", targetKey: "participant-ordinary-clone" }];
+    const input = [
+      { sourceContextId: "participant-root", targetKey: "participant-ordinary-clone" },
+    ];
     const cloned = (await service.handler({ caller }, "cloneContext", input)) as CloneResult;
     expect(forkParticipantContext).toHaveBeenCalledWith({
-      caller, sourceContextId: "participant-root", targetContextId: cloned.contextId, ownerContextId: "participant-root",
+      caller,
+      sourceContextId: "participant-root",
+      targetContextId: cloned.contextId,
+      ownerContextId: "participant-root",
       retainForRuntime: true,
     });
-    expect(forkParticipantContext.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(cloneDurableStorage).mock.invocationCallOrder[0]!);
+    expect(forkParticipantContext.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(cloneDurableStorage).mock.invocationCallOrder[0]!
+    );
     expect(await service.handler({ caller }, "cloneContext", input)).toEqual(cloned);
     expect(forkParticipantContext).toHaveBeenCalledOnce();
   });
@@ -3548,8 +3803,10 @@ describe("runtimeService.cloneContext", () => {
     vi.mocked(cloneDurableStorage).mockClear();
     const preparationCalls = vi.mocked(prepareDurableObject).mock.calls.length;
     const forkRequest = expect.objectContaining({
-      caller: serverCaller, sourceContextId: "ctx-resumed",
-      targetContextId: first.contextId, retainForRuntime: true,
+      caller: serverCaller,
+      sourceContextId: "ctx-resumed",
+      targetContextId: first.contextId,
+      retainForRuntime: true,
     });
     expect(await service.handler({ caller: serverCaller }, "cloneContext", input)).toEqual(first);
     expect(forkParticipantContext).toHaveBeenCalledTimes(2);
@@ -3886,11 +4143,17 @@ describe("runtimeService.cloneContext", () => {
   it("clones every durable entity into a fresh isolated context, mapping source→clone", async () => {
     const forkParticipantContext = vi.fn(async () => forkedRevision);
     const onContextCreated = vi.fn(async () => {});
-    const { service, entityCache, cloneDurableStorage, contextFolders, prepareDurableObject, semanticContexts } =
-      await buildDeps({
-        semanticContexts: { forkParticipantContext },
-        onContextCreated,
-      });
+    const {
+      service,
+      entityCache,
+      cloneDurableStorage,
+      contextFolders,
+      prepareDurableObject,
+      semanticContexts,
+    } = await buildDeps({
+      semanticContexts: { forkParticipantContext },
+      onContextCreated,
+    });
     const { ch, agent } = await seedConversation(service, "ctx-src");
 
     const result = (await service.handler({ caller: serverCaller }, "cloneContext", [
@@ -3901,9 +4164,12 @@ describe("runtimeService.cloneContext", () => {
     expect(result.contextId).toMatch(/^[0-9a-f-]{36}$/);
     expect(result.contextId).not.toBe("ctx-src");
     // The fork selects source state before any runtime needs its files.
-    expect(forkParticipantContext).toHaveBeenCalledWith(expect.objectContaining({
-      sourceContextId: "ctx-src", targetContextId: result.contextId,
-    }));
+    expect(forkParticipantContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceContextId: "ctx-src",
+        targetContextId: result.contextId,
+      })
+    );
     expect(contextFolders.ensureContextFolder).not.toHaveBeenCalled();
     expect(onContextCreated).toHaveBeenCalledWith({
       contextId: result.contextId,
@@ -3973,11 +4239,20 @@ describe("runtimeService.cloneContext", () => {
           ? { incarnation: `storage:${input.key}`, generation: 1 }
           : null,
     });
-    const native = (await service.handler({ caller: serverCaller }, "createEntity", [{
-      kind: "do", execution: { surface: "code", source: "workers/native-execution" },
-      className: "NativeExecutionDO", key: "native", contextId: "ctx-native-clone",
-    }])) as {id:string};
-    expect(instance.entityResolve(native.id)?.agentBinding).toEqual({entityId:native.id,channelId:native.id,contextId:"ctx-native-clone"});
+    const native = (await service.handler({ caller: serverCaller }, "createEntity", [
+      {
+        kind: "do",
+        execution: { surface: "code", source: "workers/native-execution" },
+        className: "NativeExecutionDO",
+        key: "native",
+        contextId: "ctx-native-clone",
+      },
+    ])) as { id: string };
+    expect(instance.entityResolve(native.id)?.agentBinding).toEqual({
+      entityId: native.id,
+      channelId: native.id,
+      contextId: "ctx-native-clone",
+    });
     const ordinary = (await service.handler({ caller: serverCaller }, "createEntity", [
       {
         kind: "do",
@@ -3995,8 +4270,8 @@ describe("runtimeService.cloneContext", () => {
     expect(instance.entityResolve(nativeClone.newId)?.cloneProvenance?.storage).toBe("snapshot");
     expect(instance.entityResolve(nativeClone.newId)?.agentBinding).toBeUndefined();
     expect(instance.entityResolve(ordinaryClone.newId)?.cloneProvenance?.storage).toBe("snapshot");
-    expect(cloneDurableStorage).toHaveBeenCalledTimes(1);
-    expect(cloneDurableStorage).not.toHaveBeenCalledWith(
+    expect(cloneDurableStorage).toHaveBeenCalledTimes(2);
+    expect(cloneDurableStorage).toHaveBeenCalledWith(
       expect.objectContaining({
         fromKey: "native",
         toKey: nativeClone.newKey,
@@ -4047,11 +4322,14 @@ describe("runtimeService.cloneContext", () => {
       })
     );
     expect(instance.entityResolve(child.id)?.cloneProvenance?.storage).toBe("snapshot");
-    expect(recoverExactExecution).toHaveBeenCalledWith(expect.objectContaining({
-      id: child.id, status: "preparing",
-      activeBuildKey: instance.entityResolve(parent.id)?.activeBuildKey,
-      activeExecutionDigest: instance.entityResolve(parent.id)?.activeExecutionDigest,
-    }));
+    expect(recoverExactExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: child.id,
+        status: "preparing",
+        activeBuildKey: instance.entityResolve(parent.id)?.activeBuildKey,
+        activeExecutionDigest: instance.entityResolve(parent.id)?.activeExecutionDigest,
+      })
+    );
     // Another class is not the caller's own: no entity reads another's storage through this.
     await expect(
       service.handler({ caller }, "createEntity", [
@@ -4238,7 +4516,9 @@ describe("runtimeService.cloneContext", () => {
   });
 
   it("rolls back (retires clones, deletes cloned storage, drops the new context) on failure", async () => {
-    const forkParticipantContext = vi.fn(async (_input: { targetContextId: string }) => forkedRevision);
+    const forkParticipantContext = vi.fn(
+      async (_input: { targetContextId: string }) => forkedRevision
+    );
     // Fail storage-cloning the SECOND DO so the clone loop throws mid-way.
     const cloneDurableStorage = vi
       .fn()
@@ -4498,10 +4778,12 @@ describe("runtimeService execution recovery", () => {
     const { service, instance, prepareDurableObject, restartDurableObjectIncarnation } =
       await buildDeps();
     const owner = createVerifiedCaller(shellCaller.runtime.id, "shell", null, null, {
-      userId: "user:owner", handle: "owner",
+      userId: "user:owner",
+      handle: "owner",
     });
     const outsider = createVerifiedCaller("shell:outside", "shell", null, null, {
-      userId: "user:outside", handle: "outside",
+      userId: "user:outside",
+      handle: "outside",
     });
     const handle = (await service.handler({ caller: owner }, "createEntity", [
       doCreateSpec({ contextId: "ctx-recovery" }),
@@ -4519,8 +4801,9 @@ describe("runtimeService execution recovery", () => {
       expectedExecutionDigest: sealedExecution.executionDigest,
       strategy: "replace-incarnation",
     };
-    await expect(service.handler({ caller: outsider }, "recoverExecution", [replacement]))
-      .rejects.toMatchObject({ code: "EACCES" });
+    await expect(
+      service.handler({ caller: outsider }, "recoverExecution", [replacement])
+    ).rejects.toMatchObject({ code: "EACCES" });
     const result = await service.handler({ caller: owner }, "recoverExecution", [replacement]);
 
     expect(result).toMatchObject({
@@ -5046,9 +5329,12 @@ describe("runtimeService.createSubagentContext", () => {
       { parentContextId: "ctx-parent", ownerEntityId: owner.id, targetKey: "run:r1" },
     ])) as { contextId: string };
     expect(out1.contextId).toMatch(/^ctx-[0-9a-f]{32}$/);
-    expect(forkParticipantContext).toHaveBeenCalledWith(expect.objectContaining({
-      sourceContextId: "ctx-parent", targetContextId: out1.contextId,
-    }));
+    expect(forkParticipantContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceContextId: "ctx-parent",
+        targetContextId: out1.contextId,
+      })
+    );
     expect(contextFolders.ensureContextFolder).not.toHaveBeenCalled();
     expect(onContextCreated).toHaveBeenCalledWith({
       contextId: out1.contextId,
@@ -5075,7 +5361,9 @@ describe("runtimeService.createSubagentContext", () => {
 
   it("allows the owner DO to create its own subagent context", async () => {
     const forkParticipantContext = vi.fn(async () => forkedRevision);
-    const { service, approvalQueue } = await buildDeps({ semanticContexts: { forkParticipantContext } });
+    const { service, approvalQueue } = await buildDeps({
+      semanticContexts: { forkParticipantContext },
+    });
     const owner = await seedDO(service, "ctx-parent-do", "owner");
 
     const out = (await service.handler(
@@ -5084,9 +5372,12 @@ describe("runtimeService.createSubagentContext", () => {
       [{ parentContextId: "ctx-parent-do", ownerEntityId: owner.id, targetKey: "run:owner" }]
     )) as { contextId: string };
 
-    expect(forkParticipantContext).toHaveBeenCalledWith(expect.objectContaining({
-      sourceContextId: "ctx-parent-do", targetContextId: out.contextId,
-    }));
+    expect(forkParticipantContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceContextId: "ctx-parent-do",
+        targetContextId: out.contextId,
+      })
+    );
     expect(approvalQueue.request).not.toHaveBeenCalled();
   });
 
@@ -5095,14 +5386,18 @@ describe("runtimeService.createSubagentContext", () => {
     const { service } = await buildDeps({ semanticContexts: { forkParticipantContext } });
     const orchestrator = await seedDO(service, "ctx-orchestrator", "orchestrator");
     const caller = createVerifiedCaller(orchestrator.id, "do");
-    const source = (await service.handler({ caller }, "createContext", [{}])) as { contextId: string };
+    const source = (await service.handler({ caller }, "createContext", [{}])) as {
+      contextId: string;
+    };
     const owner = await seedDO(service, source.contextId, "fork-owner", caller);
 
-    const target = (await service.handler({ caller }, "createSubagentContext", [{
-      parentContextId: source.contextId,
-      ownerEntityId: owner.id,
-      targetKey: "fixture-fork",
-    }])) as { contextId: string };
+    const target = (await service.handler({ caller }, "createSubagentContext", [
+      {
+        parentContextId: source.contextId,
+        ownerEntityId: owner.id,
+        targetKey: "fixture-fork",
+      },
+    ])) as { contextId: string };
 
     expect(forkParticipantContext).toHaveBeenCalledWith({
       caller,
@@ -5115,7 +5410,9 @@ describe("runtimeService.createSubagentContext", () => {
 
   it("allows the owner DO to create an entity inside its lifecycle child context without approval", async () => {
     const forkParticipantContext = vi.fn(async () => forkedRevision);
-    const { service, approvalQueue } = await buildDeps({ semanticContexts: { forkParticipantContext } });
+    const { service, approvalQueue } = await buildDeps({
+      semanticContexts: { forkParticipantContext },
+    });
     const owner = await seedDO(service, "ctx-parent-attach", "owner");
     const caller = createVerifiedCaller(owner.id, "do");
 
