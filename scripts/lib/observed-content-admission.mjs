@@ -1,8 +1,9 @@
 import {isDeepStrictEqual as equal} from "node:util";
 /** Per-domain actual native evidence; no expected answer vocabulary enters review. */
 export const observedContentFields = {
+  phoneFirstRun: [["card","assignment","phases","build","journal"], []],
   mobileContinuity: [["profile","observations","journal"], []],
-  sourceAttribution: [["assignment","files","evidence","effects","native"], ["receipt","retainedText"]],
+  "source-attribution": [["assignment","files","evidence","effects","native"], ["receipt","retainedText"]],
   "program-run": [["catalog","inspections","attempts","observations"], ["signedText"]],
   terminalAppRepair: [["journal","proof"], []],
   "live-local-inventory": [["docket","inventoryReadback"], []],

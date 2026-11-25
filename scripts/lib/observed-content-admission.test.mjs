@@ -9,7 +9,7 @@ function example(required=true){
 }
 test("binds each domain's actual proof independently of authored answer vocabulary",()=>{
  const {world,proof}=example();assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
- assert.equal(Object.keys(observedContentFields).length,62);
+ assert.equal(Object.keys(observedContentFields).length,63);
  for(const mutation of [p=>p.semanticReviewInput.actual.requestedReturn={reason:"Invented"},p=>p.semanticReviewInput.actual.observations.reads=[],p=>p.semanticReviewInput.actual.artifacts.artifact="Invented",p=>p.semanticReviewInput.actual.goal="Different goal",p=>p.semanticReviewRequired=false]){
   const clone=structuredClone(proof);mutation(clone);assert.throws(()=>observedContentReviewInput(clone,world));
  }
@@ -175,8 +175,9 @@ test("program-run meaning review binds actual catalog, causal native attempts an
 });
 
 for(const [kind,native,artifacts,answer] of [
+ ["phoneFirstRun",{card:{device:"paired-target"},assignment:{debugAllowed:false},phases:[{phase:"readback",desktopAvailable:true}],build:{id:"native-build"},journal:[{operation:"inspect"}]},{},"The paired target has the native build, while the requested debug capability is absent"],
  ["mobileContinuity",{profile:{id:"owned-profile"},observations:[{buildId:"actual-build",cacheKey:"owned-cache",transport:"native"}],journal:[{operation:"observe",profileId:"owned-profile"}]},{},"The current owned profile retains its native build and transport"],
- ["sourceAttribution",{assignment:{unitId:"owned-unit"},files:[{path:"owned.ts",revision:"current-head",text:"actual source"}],evidence:[{path:"owned.ts",fact:"native declaration"}],effects:[{kind:"retained-note"}],native:{readback:{revision:"current-head"},protectedMain:"unchanged"}},{receipt:{path:"private/receipt.md",sha256:"native-retained-text-hash"},retainedText:"Actual source attribution"},{conclusion:"The actual source owns the native declaration",receipt:{path:"private/receipt.md"}}],
+ ["source-attribution",{assignment:{unitId:"owned-unit"},files:[{path:"owned.ts",revision:"current-head",text:"actual source"}],evidence:[{path:"owned.ts",fact:"native declaration"}],effects:[{kind:"retained-note"}],native:{readback:{revision:"current-head"},protectedMain:"unchanged"}},{receipt:{path:"private/receipt.md",sha256:"native-retained-text-hash"},retainedText:"Actual source attribution"},{conclusion:"The actual source owns the native declaration",receipt:{path:"private/receipt.md"}}],
 ])test(`${kind} requires native-bound meaning review independent of optional status copies`,()=>{
  const world={kind,goal:kind==="mobileContinuity"?"Explain the current mobile continuity":"Attribute the current declaration and preserve its private note"};
  const proof={...native,...artifacts,actualResult:answer,semanticReviewRequired:true,outcomeContract:{returnedValue:{required:true}}};
