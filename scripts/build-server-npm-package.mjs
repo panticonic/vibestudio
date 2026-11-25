@@ -36,7 +36,6 @@ import { createRequire } from "node:module";
 import semver from "semver";
 import { fileURLToPath } from "node:url";
 import { formatRpcFailure } from "@vibestudio/rpc";
-import { execPnpmSync } from "./cli/lib/package-manager.mjs";
 import { assertNoBundledUserlandSource } from "./packaged-userland-boundary.mjs";
 import {
   assertRuntimeScriptDependencies,
@@ -78,19 +77,20 @@ export const SERVER_RUNTIME_ARTIFACTS = STANDALONE_SERVER_RUNTIME_ARTIFACTS;
 // not when imported (e.g. by the drift-guard test) — importing must be free of
 // side effects beyond the cheap top-level reads above.
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
-  ownedEntry(main).catch((err) => {
+  ownedEntry(main, { scratchPrefix: "server-npm-package" }).catch((err) => {
     console.error(formatRpcFailure(err));
     process.exitCode = 1;
   });
 }
 
-async function main({ signal, ownership }) {
+async function main({ signal, ownership, scratchRoot }) {
   console.log(`Staging ${PUBLIC_SERVER_PACKAGE_NAME} @ v${VERSION}`);
   assertBuilt();
   const nativeArtifacts = assertNativeIsolationArtifacts(repoRoot);
-  buildSelfContainedExtensionHost();
+  const extensionHostPublishRoot = path.join(scratchRoot, "extension-host");
+  await buildSelfContainedExtensionHost({ ownership, signal, output: extensionHostPublishRoot });
   rmrf(outRoot);
-  await stageServer(nativeArtifacts);
+  await stageServer(nativeArtifacts, { extensionHostPublishRoot });
   await prepareServerTemplateRelease(path.join(outRoot, "server"), ownership, signal);
   assertNoBundledUserlandSource(path.join(outRoot, "server"), "staged server npm package");
   console.log("\n✔ Staged dist-packages/server. Validate with:");
@@ -227,19 +227,49 @@ function assertBuilt() {
   }
 }
 
-function buildSelfContainedExtensionHost() {
+export async function buildSelfContainedExtensionHost({
+  ownership,
+  signal,
+  output,
+  packageRoot = path.join(repoRoot, "packages/extension-host"),
+}) {
+  signal.throwIfAborted();
+  if (typeof output !== "string" || !path.isAbsolute(output))
+    throw new Error("Extension-host publication needs an owned absolute output");
   console.log("• Building self-contained @vibestudio/extension-host (publish)…");
-  execPnpmSync(["--filter", "@vibestudio/extension-host", "run", "build"], {
-    cwd: repoRoot,
+  const owned = ownership.spawn(process.execPath, ["build.mjs"], {
+    cwd: packageRoot,
+    env: {
+      ...process.env,
+      VIBESTUDIO_EXTHOST_PUBLISH: "1",
+      VIBESTUDIO_EXTHOST_PUBLISH_DIR: output,
+    },
     stdio: "inherit",
-    env: { ...process.env, VIBESTUDIO_EXTHOST_PUBLISH: "1" },
+    kill: "immediate",
+    label: "extension-host-publish",
   });
+  retireOnAbort(ownership, signal, owned);
+  await withOwnedCleanup(
+    async () => {
+      const result = await joinChildProcess(owned.child);
+      signal.throwIfAborted();
+      const failures = [];
+      if (result.error) failures.push(result.error);
+      if (result.code !== 0 || result.signal)
+        failures.push(
+          new Error(`Extension-host publication failed (${result.signal ?? result.code})`)
+        );
+      throwFailures(failures, "Extension-host publication failed");
+    },
+    [() => owned.join()],
+    "Extension-host publication and retirement failed"
+  );
 }
 
 // ---------------------------------------------------------------------------
 // @panticonic/vibestudio-server
 // ---------------------------------------------------------------------------
-export async function stageServer(nativeArtifacts) {
+export async function stageServer(nativeArtifacts, { extensionHostPublishRoot }) {
   const root = path.join(outRoot, "server");
   console.log(`• Staging ${PUBLIC_SERVER_PACKAGE_NAME}…`);
   mkdirp(root);
@@ -279,7 +309,7 @@ export async function stageServer(nativeArtifacts) {
   // (getExistingAppNodeModulesRoots → builder.ts initBuilder). extension-host
   // ships self-contained; @workspace/* are NOT host deps (workspace's own build).
   vendorVibestudioPackages(root);
-  vendorExtensionHost(root);
+  vendorExtensionHost(root, extensionHostPublishRoot);
   stagePinnedRootDependencies(root);
   copyFile("scripts/vendor-install.mjs", path.join(root, "scripts/vendor-install.mjs"));
   stageNodeRuntimeInstaller(root);
@@ -358,10 +388,11 @@ export function assertPassthroughScriptsStaged(root) {
 // ---------------------------------------------------------------------------
 // Vendoring
 // ---------------------------------------------------------------------------
-function vendorExtensionHost(pkgRoot) {
-  const distPublish = path.join(repoRoot, "packages/extension-host/dist-publish");
+function vendorExtensionHost(pkgRoot, distPublish) {
   if (!fs.existsSync(distPublish)) {
-    throw new Error("extension-host dist-publish/ missing — self-contained build did not run");
+    throw new Error(
+      "Owned extension-host publication output missing — self-contained build did not run"
+    );
   }
   const dest = path.join(pkgRoot, "vendor/@vibestudio/extension-host");
   rmrf(dest);
