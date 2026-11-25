@@ -7,6 +7,7 @@ import { test } from "node:test";
 import { pathToFileURL } from "node:url";
 import templateConfig from "../src/dev/developmentTemplateConfig.cjs";
 import { loadLiveTeacherCases, openOutcomeGoalEvidence } from "./export-live-workflow-teacher.mjs";
+import { observedContentFields } from "./lib/observed-content-admission.mjs";
 
 const ref = value => {
   const json = JSON.stringify(value);
@@ -47,8 +48,14 @@ test("semantic application admission accepts arbitrary internal decompositions w
   const entry = { program: "skills/open-user-goal/workOnApiReadinessGoal.nl", callable: "workOnApiReadinessGoal", arguments: { goal } };
   const proof = { passed: true, caseId: "readiness", contextId: "owned", goal, entry, actualResult: result,
     checks: { groundedInNativeReadback: true, preservedAuthorizedScope: true } };
+  proof.outcomeContract={returnedValue:{required:true}};
+  proof.semanticReviewRequired=true;
+  proof.index={provider:"owned",status:"unobserved"};
+  const [observations,artifacts]=observedContentFields["api-readiness"];
+  const pick=keys=>Object.fromEntries(keys.map(key=>[key,proof[key]??null]));
+  proof.semanticReviewInput={actual:{goal,observations:pick(observations),artifacts:pick(artifacts),requestedReturn:result},expected:{goal,requestedReturnRequired:true},rubric:"Judge the requested provider assessment against the native evidence."};
   const execution = { provenance: { contextId: "owned" }, diagnostics: { openGoalVerification: proof } };
-  const workflow = { entry, assignment: { kind: "api-readiness", id: proof.caseId, goal } };
+  const workflow = { entry, requiresReview:true, assignment: { kind: "api-readiness", id: proof.caseId, goal } };
   const root = { callId: "root", record: { definition: { name: entry.callable }, inputs: { goal: ref(goal) }, output: ref(result) } };
   const call = (name, id) => ({ callId: id, record: { parent_call_id: "root", definition: { name }, outcome: "done" } });
   for (const children of [[], [call("resolveCurrentReadiness", "a")],

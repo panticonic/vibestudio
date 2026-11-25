@@ -1,6 +1,9 @@
 import {isDeepStrictEqual as equal} from "node:util";
 /** Per-domain actual native evidence; no expected answer vocabulary enters review. */
 export const observedContentFields = {
+  gmail: [["catalog", "selected", "native", "operations", "requests", "persisted", "before", "readback", "providerObservations"], []],
+  calendar: [["catalog", "attempts", "providerRequests", "windows", "readback"], ["handoffText"]],
+  "google-handoff": [["threads", "reviews", "providerRequests", "freshness"], ["handoffText"]],
   news: [["initial", "latest", "observations", "reads", "attempts", "concurrentReceipt"], []],
   spectrolite: [["observations", "hops", "receipts", "final"], []],
   "agent-capability": [["effects", "assignment", "evidence", "decision", "continuation"], []],
