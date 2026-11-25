@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { test } from "node:test";
-import { openOutcomeGoalEvidence, reassessObservedReturnPresence } from "./export-live-workflow-teacher.mjs";
+import { openOutcomeGoalEvidence, reassessObservedReturnPresence, applicationEntryBinding } from "./export-live-workflow-teacher.mjs";
 import {editorialReviewInput,coordinatedRevisionReviewInput,outcomeWorkspaceReviewInput,sourceContentReviewInput}from "./lib/source-claim-admission.mjs";
 
 const reference = value => {
@@ -181,6 +181,8 @@ test("actual native-pass capture retains its declared nonvoid entry type", async
  const captured=JSON.parse(await readFile(new URL("./fixtures/observed-entry-binding.json",import.meta.url),"utf8"));
  assert.equal(captured.originalCaptureSha256,"d4ebe34d092777633c2c1da8999b59c40bd3cf8fb8ac67c193de24c21280acbd");
  assert.equal(captured.exercise.entry.resultType,"OpenProblemOutcome");
+ assert.deepEqual(applicationEntryBinding(captured.workflow.entry),captured.execution.diagnostics.openGoalVerification.entry);
+ assert.deepEqual(applicationEntryBinding(captured.workflow.entry),captured.exercise.entry);
  assert.equal(openOutcomeGoalEvidence(captured.execution,captured.exercise,"actual",captured.workflow).checks,captured.execution.diagnostics.openGoalVerification.checks);
  for(const target of ["proof","capture"]){
   const changed=structuredClone(captured);

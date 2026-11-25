@@ -7161,15 +7161,19 @@ function researchHandoffEvidence(execution, exercise, scenario, workflow) {
   return { world: { context_id: contextId, case_id: caseId }, checks, evidence: { workspace: { fixture } } };
 }
 
+export function applicationEntryBinding(entry) {
+  return entry && {program:entry.program,callable:entry.callable,arguments:entry.arguments,
+    ...(entry.resultType!==undefined?{resultType:entry.resultType}:{}),
+    ...(entry.argumentJson?{argumentJson:entry.argumentJson}:{})};
+}
+
 export function openOutcomeGoalEvidence(execution, exercise, _scenario, workflow) {
   const proof = execution.diagnostics.openGoalVerification;
   const world = workflow.assignment;
   const root = exercise.calls.find(({ callId }) => callId === exercise.rootCallIds[0])?.record;
   const checks = proof?.checks ?? {};
   const entry = workflow.entry;
-  const attestedEntry = entry && { program: entry.program, callable: entry.callable, arguments: entry.arguments,
-    ...(entry.resultType !== undefined ? {resultType:entry.resultType} : {}),
-    ...(entry.argumentJson ? { argumentJson: entry.argumentJson } : {}) };
+  const attestedEntry = applicationEntryBinding(entry);
   const declaredVoid = entry?.resultType === "void";
   const dimensionRequirement = proof?.outcomeDimensions?.returnedValue?.required;
   const contractRequirement = proof?.outcomeContract?.returnedValue?.required;
@@ -11405,13 +11409,7 @@ export async function exportLiveTeacherWorkflow({
   if (outcomeRecheck) observed.evidence.workspace.outcomeRecheck = outcomeRecheck;
   const interaction = workflow.interaction === "open-user-goal"
     ? { interaction: { kind: workflow.interaction, goal: workflow.assignment.goal, program: workflow.program,
-        ...(workflow.entry ? { entry: {
-          program: workflow.entry.program,
-          callable: workflow.entry.callable,
-          arguments: workflow.entry.arguments,
-          ...(workflow.entry.resultType === "void" ? {resultType:"void"} : {}),
-          ...(workflow.entry.argumentJson ? { argumentJson: workflow.entry.argumentJson } : {}),
-        } } : {}) } }
+        ...(workflow.entry ? {entry:applicationEntryBinding(workflow.entry)} : {}) } }
     : {};
   const world = {
     instance: source.instance,
