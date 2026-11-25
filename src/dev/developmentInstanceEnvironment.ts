@@ -1,3 +1,4 @@
+import { NATIVE_CAPTURE_EVIDENCE_ROOT_ENV } from "../server/systemTestInstanceMode.js";
 import { WORKSPACE_PREPARATION_TEMPLATES_ENV } from "../server/workspacePreparationTemplates.js";
 import { WORKSPACE_SOURCES_ENV } from "@vibestudio/workspace/workspaceSources";
 import * as path from "node:path";
@@ -24,6 +25,8 @@ export function developmentInstanceEnvironment(input: {
   parent: NodeJS.ProcessEnv;
   repoRoot: string;
   instanceRoot: string;
+  /** Native capture storage is independent of the disposable runtime root. */
+  captureEvidenceRoot?: string;
   instanceId: string;
   sourceCoupled: boolean;
   /** True when the instance root is a temporary directory removed on exit. */
@@ -50,6 +53,8 @@ export function developmentInstanceEnvironment(input: {
           })
         )
     : [];
+  delete env[NATIVE_CAPTURE_EVIDENCE_ROOT_ENV];
+  if (input.captureEvidenceRoot) env[NATIVE_CAPTURE_EVIDENCE_ROOT_ENV] = input.captureEvidenceRoot;
   delete env[DEFAULT_WORKSPACE_TEMPLATES_ENV];
   delete env[WORKSPACE_PREPARATION_TEMPLATES_ENV];
   delete env[INITIAL_WORKSPACE_TEMPLATE_ENV];

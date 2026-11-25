@@ -28,6 +28,12 @@ const templates = [
 ];
 
 describe("development instance environment", () => {
+  it("uses only the supervisor-selected capture root and clears stale inherited custody", () => {
+    const input = { parent: { VIBESTUDIO_NATIVE_CAPTURE_EVIDENCE_ROOT: "/foreign" }, repoRoot: "/host", instanceRoot: "/runtime", instanceId: "test", sourceCoupled: false, disposable: true };
+    expect(developmentInstanceEnvironment(input)["VIBESTUDIO_NATIVE_CAPTURE_EVIDENCE_ROOT"]).toBeUndefined();
+    expect(developmentInstanceEnvironment({ ...input, captureEvidenceRoot: "/owned/evidence" })["VIBESTUDIO_NATIVE_CAPTURE_EVIDENCE_ROOT"]).toBe("/owned/evidence");
+  });
+
   it("retains the three foundation pins used for private workspace bootstrap", () => {
     const env = developmentInstanceEnvironment({
       parent: {},

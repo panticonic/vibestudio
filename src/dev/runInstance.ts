@@ -43,7 +43,6 @@ import {
   devInstanceRecordPath,
   generatedInstanceId,
   persistentInstanceRoot,
-  retainedSystemTestInstanceRoot,
   publishDevInstanceReady,
   registerDevInstance,
   type DevInstanceRecord,
@@ -54,6 +53,7 @@ import {
   selfDevelopmentProjects,
 } from "./selfDevelopmentAdoption.js";
 import { resolveDevelopmentTemplateSet } from "./developmentTemplateSet.js";
+import { allocateDevelopmentInstanceStorage } from "./developmentInstanceStorage.js";
 import { developmentInstanceEnvironment } from "./developmentInstanceEnvironment.js";
 import { extractDevelopmentTemplateCheckoutArguments } from "./developmentTemplateOptions.js";
 import { resolveDevelopmentInstanceIsolation } from "./developmentInstanceIsolation.js";
@@ -791,13 +791,6 @@ async function main(): Promise<void> {
   }
   // A hung-up terminal fails every write with EIO; the cleanup still runs.
   if (terminalOptions) tolerateTerminalHangup();
-  // System-test state is evidence, including unfinished model exchanges. Its
-  // lifetime must survive owner death and retirement even if the CLI could not
-  // retrieve a final trajectory. Generated generation paths below remain owned
-  // and disposable; no child process survives normal retirement.
-  const retainedSystemTestRoot = parsed.systemTestManaged && disposable
-    ? retainedSystemTestInstanceRoot(repoRoot, id)
-    : undefined;
   const persistentRoot = disposable ? undefined : persistentInstanceRoot(repoRoot, id);
   let launchFailure: unknown;
   let retirementFailure: unknown;
@@ -807,9 +800,9 @@ async function main(): Promise<void> {
   const resources: LaunchResources = {};
   const sourceCoupled = id === "source" && !disposable;
   try {
-    const root =
-      retainedSystemTestRoot ??
-      (disposable ? await ownership.scratch(`vs-${id}-`) : persistentInstanceRoot(repoRoot, id));
+    const { root, captureEvidenceRoot } = await allocateDevelopmentInstanceStorage({
+      ownership, repoRoot, id, disposable, managed: parsed.systemTestManaged, environment: process.env,
+    });
     fs.mkdirSync(root, { recursive: true, mode: 0o700 });
     const cleanRoomProfileRoot = cleanRoom ? path.join(root, "profile") : undefined;
     // Owned before it exists: the record is removed with the claim.
@@ -861,6 +854,7 @@ async function main(): Promise<void> {
       parent: process.env,
       repoRoot,
       instanceRoot: root,
+      captureEvidenceRoot,
       instanceId: id,
       sourceCoupled,
       disposable,
@@ -997,6 +991,7 @@ async function main(): Promise<void> {
         parent: env,
         repoRoot,
         instanceRoot: root,
+        captureEvidenceRoot,
         instanceId: id,
         sourceCoupled,
         disposable,

@@ -15,18 +15,18 @@ describe("collection custody ownership", () => {
       }).root
     ).toBe("/workspace/state/capture-evidence");
   });
-  it("requires the trusted managed instance root and partitions exact workspace owners", () => {
+  it("requires the trusted managed capture evidence root and partitions exact workspace owners", () => {
     const enabled = { VIBESTUDIO_RETAIN_NATIVE_STORAGE: "1", VIBESTUDIO_SYSTEM_TEST_INSTANCE: "1" };
     expect(() => captureEvidenceForWorkspace("/workspace/state", "owner", enabled)).toThrow(
-      "managed supervisor instance root"
+      "managed supervisor capture evidence root"
     );
     expect(() =>
       captureEvidenceForWorkspace("/workspace/state", "owner", {
         ...enabled,
-        VIBESTUDIO_INSTANCE_ROOT: "relative",
+        VIBESTUDIO_NATIVE_CAPTURE_EVIDENCE_ROOT: "relative",
       })
     ).toThrow("absolute");
-    const environment = { ...enabled, VIBESTUDIO_INSTANCE_ROOT: "/retained/generation" };
+    const environment = { ...enabled, VIBESTUDIO_NATIVE_CAPTURE_EVIDENCE_ROOT: "/retained/generation" };
     const first = captureEvidenceForWorkspace("/workspace/state", "../owner", environment),
       second = captureEvidenceForWorkspace("/workspace/state", "other", environment);
     expect(first.root).toMatch(
@@ -37,19 +37,20 @@ describe("collection custody ownership", () => {
   it("retains native and existing Natlang evidence after the owned workspace is removed", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "capture-owner-"));
     try {
-      const workspace = path.join(root, "workspaces/owned"),
+      const runtimeRoot = path.join(root, "runtime");
+      const workspace = path.join(runtimeRoot, "workspaces/owned"),
         state = path.join(workspace, "state");
       await fs.mkdir(state, { recursive: true });
       const custody = captureEvidenceForWorkspace(state, "owned", {
         VIBESTUDIO_RETAIN_NATIVE_STORAGE: "1",
         VIBESTUDIO_SYSTEM_TEST_INSTANCE: "1",
-        VIBESTUDIO_INSTANCE_ROOT: root,
+        VIBESTUDIO_NATIVE_CAPTURE_EVIDENCE_ROOT: path.join(root, "retained"),
       });
       for (const directory of [custody.nativeStorage, custody.natlang]) {
         await fs.mkdir(directory, { recursive: true });
         await fs.writeFile(path.join(directory, "fixture"), "exact retained bytes");
       }
-      await fs.rm(workspace, { recursive: true });
+      await fs.rm(runtimeRoot, { recursive: true });
       for (const directory of [custody.nativeStorage, custody.natlang])
         expect(await fs.readFile(path.join(directory, "fixture"), "utf8")).toBe(
           "exact retained bytes"
