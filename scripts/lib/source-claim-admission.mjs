@@ -113,6 +113,31 @@ export function vaultKnowledgeReviewInput(proof,world,applicationResult){
   return input;
 }
 
+/** Bind Adventure findings to captured claims and independently observed player state. */
+export function adventureJourneyReviewInput(proof, world, applicationResult) {
+  const input = proof.semanticReviewInput, observations = proof.journeyObservations;
+  requireFact(world.kind === "adventure-journey" && proof.semanticReviewRequired === true &&
+    Array.isArray(applicationResult?.evidence) && applicationResult.evidence.length > 0 &&
+    observations && Array.isArray(proof.assigned) && proof.assigned.length === world.saves.length &&
+    proof.assigned.every(save => typeof save?.id === "string" && save.id) &&
+    Array.isArray(observations.before) && Array.isArray(observations.final) &&
+    observations.before.length === proof.assigned.length && observations.final.length === proof.assigned.length &&
+    [observations.before,observations.final].every(views => views.every((view,index) =>
+      view?.save?.id === proof.assigned[index].id && typeof view.observation === "string" && view.observation)) &&
+    Array.isArray(observations.readbacks) && Array.isArray(observations.actions) &&
+    equal(observations.assigned, proof.assigned) &&
+    equal(observations.before, proof.initial) && equal(observations.final, proof.nativeReadback) &&
+    equal(observations.readbacks, proof.readbacks) && equal(observations.actions, proof.actions) &&
+    observations.selected === proof.selected && observations.selected === proof.assigned?.[world.expected.save]?.id &&
+    equal(observations.final?.[world.expected.save], proof.final) &&
+    equal(observations.comparison, (world.expected.compared ?? []).map(index => proof.assigned?.[index]?.id)) &&
+    equal(input?.actual, { goal: world.goal, observations, requestedReturn: applicationResult }) &&
+    equal(input.expected, { goal: world.goal, requestedReturnRequired: true }) &&
+    typeof input.rubric === "string" && input.rubric.trim(),
+    "Adventure findings review differs from the actual return, native player snapshots or assigned save scope");
+  return input;
+}
+
 export function sourceContentReviewInput(proof,world){
   const nested=world.kind==="pdfVault"?proof.proof?.vault:proof;
   const input=nested?.semanticReviewInput,evidence=nested?.sourceContentEvidence;
