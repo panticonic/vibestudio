@@ -1,4 +1,5 @@
 import { formatRpcFailure } from "@vibestudio/rpc";
+import { printSystemTestDoctorResult } from "./systemTestDoctorOutput.js";
 import { schemaRpcCaller } from "@vibestudio/rpc/internal";
 import { isRemoteRpcError } from "@vibestudio/rpc";
 import { createHash, randomUUID } from "node:crypto";
@@ -1411,14 +1412,7 @@ async function doctor(inv: ParsedInvocation): Promise<number> {
       return prepared ? { ...value, startupApprovals: prepared.startupApprovals } : value;
     });
     const value = result;
-    printResult(result, {
-      json,
-      human: () => {
-        for (const check of value.checks ?? []) {
-          console.log(`${check.ok ? "PASS" : "FAIL"}\t${check.name}\t${check.detail}`);
-        }
-      },
-    });
+    printSystemTestDoctorResult(result, json);
     return value.ok ? 0 : 1;
   } catch (error) {
     const recovery = systemTestDoctorRecovery(error);

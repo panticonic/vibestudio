@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   assertSystemTestPreparationResult,
   systemTestPreparationFailureDetail,
+  canUseRequestedStartupDoctor,
+  startupDoctorCommand,
 } from "./systemTestPreparation.js";
 
 describe("managed system-test startup preparation output", () => {
@@ -55,7 +57,9 @@ describe("managed system-test startup preparation output", () => {
       JSON.stringify({
         ok: true,
         startupApprovals: { approvedReviewIds: [], approvedPartCount: 0, creationReviewStatus },
-        checks: [{ name: "server", ok: true, data: { workspaceId: "workspace-one" } }],
+        checks: [
+          { name: "server", ok: true, detail: "reachable", data: { workspaceId: "workspace-one" } },
+        ],
       });
     expect(() =>
       assertSystemTestPreparationResult(result("not-required"), "workspace-one")
@@ -68,5 +72,78 @@ describe("managed system-test startup preparation output", () => {
         /no completed creation-review receipt/u
       );
     }
+  });
+
+  it("preserves the caller's exact doctor model/session and one approval/json flag", () => {
+    const command = [
+      "doctor",
+      "--session",
+      "owned-review",
+      "--model",
+      "openai-codex:gpt-6-luna",
+      "--approve-startup",
+      "--json",
+    ];
+    expect(startupDoctorCommand(command)).toEqual(command);
+    expect(startupDoctorCommand(["run", "actual-case", "--model=openai-codex:gpt-6-luna"])).toEqual(
+      ["doctor", "--approve-startup", "--json", "--model=openai-codex:gpt-6-luna"]
+    );
+    expect(
+      startupDoctorCommand(["run", "actual-case", "--model", "openai-codex:gpt-6-luna"])
+    ).toEqual(["doctor", "--approve-startup", "--json", "--model", "openai-codex:gpt-6-luna"]);
+    expect(() => startupDoctorCommand(["run", "actual-case", "--model"])).toThrow(
+      "requires a value"
+    );
+    expect(startupDoctorCommand(["run", "--", "--model", "literal-test-name"])).toEqual([
+      "doctor",
+      "--approve-startup",
+      "--json",
+    ]);
+    expect(startupDoctorCommand(["run", "native-case", "--native-reference"])).toEqual([
+      "doctor",
+      "--approve-startup",
+      "--json",
+      "--native-reference",
+    ]);
+  });
+
+  it("reuses a fresh doctor's validated result while retaining distinct adoption/device and explicit recheck phases", () => {
+    const fresh = {
+      created: true,
+      command: ["doctor"],
+      selfDevelopment: false,
+      devices: [],
+      recheck: false,
+    };
+    expect(canUseRequestedStartupDoctor(fresh)).toBe(true);
+    for (const changed of [
+      { created: false },
+      { command: ["run", "case"] },
+      { selfDevelopment: true },
+      { devices: ["terminal"] },
+      { recheck: true },
+    ]) {
+      expect(canUseRequestedStartupDoctor({ ...fresh, ...changed })).toBe(false);
+    }
+  });
+
+  it("rejects a contradictory successful aggregate and retains original startup metadata", () => {
+    const result = {
+      ok: true,
+      checks: [
+        { name: "server", ok: true, detail: "reachable", data: { workspaceId: "workspace-one" } },
+      ],
+      startupApprovals: { creationReviewStatus: "resolved", approvedPartCount: 2 },
+      extraNativeObservation: { id: "actual" },
+    };
+    expect(assertSystemTestPreparationResult(JSON.stringify(result), "workspace-one")).toEqual(
+      result
+    );
+    expect(() =>
+      assertSystemTestPreparationResult(
+        JSON.stringify({ ...result, checks: [{ ...result.checks[0], ok: false }] }),
+        "workspace-one"
+      )
+    ).toThrow("failed readiness checks");
   });
 });
