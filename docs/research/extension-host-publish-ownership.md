@@ -37,3 +37,11 @@ consumers, the actual self-contained compiler, original child failure,
 cancellation with process join, and automatic SIGKILL retirement with a live
 compiler. The public package's separate npm pack failure remains open; these
 checks do not claim an installed-package or full-release qualification.
+
+Publication follow-up: plain npm pack also exposes upstream tar writer
+starvation on this hardlinked CAS, and npm extraction deliberately omits Link
+entries. The existing authoritative publication path already handles this:
+publish-npm.mjs calls packNpmPackageCandidate, which carries regular archive
+entries without changing source links and verifies the immutable candidate
+receipt. Staging now points to that existing publication command instead of
+direct directory publication. No new archive implementation or guard exemption.
