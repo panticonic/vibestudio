@@ -176,7 +176,7 @@ test("program-run meaning review binds actual catalog, causal native attempts an
 
 for(const [kind,native,artifacts,answer] of [
  ["mobileContinuity",{profile:{id:"owned-profile"},observations:[{buildId:"actual-build",cacheKey:"owned-cache",transport:"native"}],journal:[{operation:"observe",profileId:"owned-profile"}]},{},"The current owned profile retains its native build and transport"],
- ["sourceAttribution",{assignment:{unitId:"owned-unit"},files:[{path:"owned.ts",revision:"current-head",text:"actual source"}],evidence:[{path:"owned.ts",fact:"native declaration"}],effects:[{kind:"retained-note"}],native:{readback:{revision:"current-head"},protectedMain:"unchanged"}},{receipt:{path:"private/receipt.md",text:"Actual source attribution"}},{conclusion:"The actual source owns the native declaration",receipt:{path:"private/receipt.md"}}],
+ ["sourceAttribution",{assignment:{unitId:"owned-unit"},files:[{path:"owned.ts",revision:"current-head",text:"actual source"}],evidence:[{path:"owned.ts",fact:"native declaration"}],effects:[{kind:"retained-note"}],native:{readback:{revision:"current-head"},protectedMain:"unchanged"}},{receipt:{path:"private/receipt.md",sha256:"native-retained-text-hash"},retainedText:"Actual source attribution"},{conclusion:"The actual source owns the native declaration",receipt:{path:"private/receipt.md"}}],
 ])test(`${kind} requires native-bound meaning review independent of optional status copies`,()=>{
  const world={kind,goal:kind==="mobileContinuity"?"Explain the current mobile continuity":"Attribute the current declaration and preserve its private note"};
  const proof={...native,...artifacts,actualResult:answer,semanticReviewRequired:true,outcomeContract:{returnedValue:{required:true}}};
@@ -185,7 +185,7 @@ for(const [kind,native,artifacts,answer] of [
  assert.equal(observedContentNeedsReview(world),true);
  assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
  for(const mutate of [p=>p.semanticReviewRequired=false,p=>p.semanticReviewInput.actual.observations[fields[0][0]]=null,p=>p.semanticReviewInput.actual.requestedReturn="Invented"]){const changed=structuredClone(proof);mutate(changed);assert.throws(()=>observedContentReviewInput(changed,world));}
- if(fields[1].length){const changed=structuredClone(proof);changed.semanticReviewInput.actual.artifacts[fields[1][0]]=null;assert.throws(()=>observedContentReviewInput(changed,world));}
+ for(const artifact of fields[1]){const changed=structuredClone(proof);changed.semanticReviewInput.actual.artifacts[artifact]=null;assert.throws(()=>observedContentReviewInput(changed,world));}
  const optional=structuredClone(proof);optional.actualResult={status:"irrelevant"};optional.outcomeContract.returnedValue.required=false;optional.semanticReviewInput.actual.requestedReturn=null;optional.semanticReviewInput.expected.requestedReturnRequired=false;
  assert.equal(observedContentNeedsReview(world),true);assert.equal(observedContentReviewInput(optional,world),optional.semanticReviewInput);
 });
