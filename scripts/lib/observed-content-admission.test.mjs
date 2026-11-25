@@ -9,7 +9,7 @@ function example(required=true){
 }
 test("binds each domain's actual proof independently of authored answer vocabulary",()=>{
  const {world,proof}=example();assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
- assert.equal(Object.keys(observedContentFields).length,27);
+ assert.equal(Object.keys(observedContentFields).length,28);
  for(const mutation of [p=>p.semanticReviewInput.actual.requestedReturn={reason:"Invented"},p=>p.semanticReviewInput.actual.observations.reads=[],p=>p.semanticReviewInput.actual.artifacts.artifact="Invented",p=>p.semanticReviewInput.actual.goal="Different goal",p=>p.semanticReviewRequired=false]){
   const clone=structuredClone(proof);mutation(clone);assert.throws(()=>observedContentReviewInput(clone,world));
  }
@@ -51,7 +51,34 @@ test("binds actual owned-task output bytes and reference independently of receip
  const proof={outcomeContract:{returnedValue:{required:true}},semanticReviewRequired:true,effects:[],current:{task:{id:"actual"}},original:{content:"accepted filename"},delivery:null,nativeDeliveryError:null,raceInjected:false,
  resultArtifacts:[{record:{taskId:"actual",owner:"current",attempt:"run",artifact:"measurements.csv"},artifact:{name:"measurements.csv",reference:{digest:"actual-content-hash",mediaType:"text/csv"},content:"zone,litres\nNorth,1148\n"}}],actualResult:{result:{content:"zone,litres\nNorth,1148\n"}}};
  const pick=keys=>Object.fromEntries(keys.map(key=>[key,proof[key]??null]));const [observations,artifacts]=observedContentFields[world.kind];
- proof.semanticReviewInput={actual:{goal:world.goal,observations:pick(observations),artifacts:pick(artifacts),requestedReturn:proof.actualResult},expected:{goal:world.goal,requestedReturnRequired:true},rubric:"Judge actual requested findings against retained output"};
+ proof.semanticReviewInput={actual:{goal:world.goal,observations:pick(observations),artifacts:pick(artifacts),requestedReturn:structuredClone(proof.actualResult)},expected:{goal:world.goal,requestedReturnRequired:true},rubric:"Judge actual requested findings against retained output"};
  assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
  for(const alter of [p=>p.semanticReviewInput.actual.observations.resultArtifacts[0].artifact.content="Invented",p=>p.semanticReviewInput.actual.observations.resultArtifacts[0].artifact.reference.digest="foreign",p=>p.semanticReviewInput.actual.observations.resultArtifacts[0].record.owner="foreign"]){const changed=JSON.parse(JSON.stringify(proof));alter(changed);assert.throws(()=>observedContentReviewInput(changed,world));}
+});
+test("migration meaning binds actual native sources and requested answer without a gold disposition",()=>{
+ const world={kind:"templateMigration",goal:"Does this other group's receipt prove our adoption? Keep it read-only."};
+ const proof={outcomeContract:{returnedValue:{required:true}},semanticReviewRequired:true,
+  journal:[{method:"read",owner:"ours",receiptOwner:"other"}],observations:[{revision:2,owner:"ours",receipt:null}],
+  readIds:["owned-dossier"],nativePrepared:null,protectedMain:"main-current",handoff:null,receiptText:null,
+  actualResult:{status:"draft-only",candidateId:"owned-local",answer:"No. The receipt belongs to the other group and our adoption remains unproven."}};
+ const [observations,artifacts]=observedContentFields.templateMigration;
+ const pick=keys=>Object.fromEntries(keys.map(key=>[key,proof[key]??null]));
+ proof.semanticReviewInput={actual:{goal:world.goal,observations:pick(observations),artifacts:pick(artifacts),requestedReturn:structuredClone(proof.actualResult)},
+  expected:{goal:world.goal,requestedReturnRequired:true},rubric:"Judge the requested answer from actual native evidence, not an incidental status or candidate label."};
+ assert.equal(observedContentNeedsReview(world),true);
+ assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
+ for(const alter of [p=>p.semanticReviewInput.actual.observations.journal=[],p=>p.semanticReviewInput.actual.observations.nativePrepared={operationId:"invented"},
+  p=>p.semanticReviewInput.actual.requestedReturn.answer="Yes, adopted",p=>p.semanticReviewRequired=false,p=>p.semanticReviewInput.actual.artifacts.receiptText="Invented receipt"]){
+  const changed=structuredClone(proof);alter(changed);assert.throws(()=>observedContentReviewInput(changed,world));
+ }
+});
+test("migration effect review remains mandatory without making incidental returns required",()=>{
+ const world={kind:"templateMigration",goal:"Prepare this owned candidate for review without adopting it."};
+ const proof={outcomeContract:{returnedValue:{required:false}},semanticReviewRequired:true,nativePrepared:{operationId:"native-owned",mainEventId:"main-current"},actualResult:null};
+ const [observations,artifacts]=observedContentFields.templateMigration;
+ const pick=keys=>Object.fromEntries(keys.map(key=>[key,proof[key]??null]));
+ proof.semanticReviewInput={actual:{goal:world.goal,observations:pick(observations),artifacts:pick(artifacts),requestedReturn:null},
+  expected:{goal:world.goal,requestedReturnRequired:false},rubric:"Judge the requested native preparation from the actual owned evidence."};
+ assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
+ proof.semanticReviewRequired=false;assert.throws(()=>observedContentReviewInput(proof,world));
 });

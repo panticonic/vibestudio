@@ -1,6 +1,10 @@
 import {isDeepStrictEqual as equal} from "node:util";
 /** Per-domain actual native evidence; no expected answer vocabulary enters review. */
 export const observedContentFields = {
+  templateMigration: [
+    ["journal", "observations", "readIds", "nativePrepared", "protectedMain"],
+    ["handoff", "receiptText"]
+  ],
   "image-candidate": [
     [
       "index",
