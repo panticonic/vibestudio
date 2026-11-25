@@ -10185,3 +10185,32 @@ test("void TS entries bind actual undefined transport without waiving requested 
   value=>{value.root.record.output=ref('wrong');},
  ]){const value=make();corrupt(value);assert.throws(()=>expectVoid(value),/independently verified outcomes/);}
 });
+
+test('note-only nonvoid root error retains native-goal review without inventing a return', () => {
+ const goal='Retain the independently checked private note.';
+ const entry={program:'skills/reference/review.ts',callable:'review',arguments:{goal},argumentJson:{goal:JSON.stringify(goal)},resultType:'SourceAttributionReport'};
+ const text=JSON.stringify(goal),root={call_id:'root',outcome:'error',error:{message:'Optional readout failed'},executor:{kind:'crisp'},definition:{name:'review',source:'review.ts',id:'ts:review.ts#default',returns:entry.resultType},inputs:{goal:{complete:true,bytes:Buffer.byteLength(text),hash:createHash('sha256').update(text).digest('hex')}}};
+ const world={id:'note-only',goal,kind:'source-attribution'};
+ const proof={passed:true,caseId:world.id,contextId:'ctx',goal,entry,checks:{actualNativeNote:true},assignment:{goal},files:[],evidence:[],effects:[],native:{currentHead:'owned-head'},receipt:{sha256:'native-note-hash'},retainedText:'Actual retained note',semanticReviewRequired:true,outcomeContract:{returnedValue:{required:false}},outcomeDimensions:{returnedValue:{required:false,passed:true}}};
+ const input={actual:{goal,observations:Object.fromEntries(['assignment','files','evidence','effects','native'].map(key=>[key,proof[key]])),artifacts:{receipt:proof.receipt,retainedText:proof.retainedText},requestedReturn:null},expected:{goal,requestedReturnRequired:false},rubric:'Judge requested meaning against actual native observations and retained note.'};
+ proof.semanticReviewInput=input;
+ const exercise={entry,rootCallIds:['root'],calls:[{callId:'root',record:root}]};
+ const execution={provenance:{contextId:'ctx'},diagnostics:{openGoalVerification:proof}},workflow={entry,assignment:world,requiresReview:true};
+ const observed=openOutcomeGoalEvidence(execution,exercise,world.id,workflow);
+ assert.equal(observed.reviewInput,input);
+ assert.equal(Object.hasOwn(observed.evidence.workspace,'applicationReturn'),false);
+ assert.equal(Object.hasOwn(root,'output'),false);
+ assert.equal(root.outcome,'error');
+ for(const mutate of [
+  ()=>{proof.outcomeContract.returnedValue.required=proof.outcomeDimensions.returnedValue.required=true;},
+  ()=>{proof.actualResult={invented:true};},
+  ()=>{proof.checks.actualNativeNote=false;},
+  ()=>{input.actual.artifacts.retainedText='Other note';},
+  ()=>{proof.semanticReviewRequired=false;},
+ ]){
+  mutate();
+  assert.throws(()=>openOutcomeGoalEvidence(execution,exercise,world.id,workflow));
+  proof.outcomeContract.returnedValue.required=proof.outcomeDimensions.returnedValue.required=false;
+  delete proof.actualResult;proof.checks.actualNativeNote=true;input.actual.artifacts.retainedText=proof.retainedText;proof.semanticReviewRequired=true;
+ }
+});

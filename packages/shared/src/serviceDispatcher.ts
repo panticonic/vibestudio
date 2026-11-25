@@ -1,3 +1,4 @@
+import { testPolicyDecision } from "./authority/testPolicy.js";
 import { rpcDiagnosticIdOf, attachRpcDiagnosticId } from "@vibestudio/rpc";
 import {
   parseQualifiedServiceMethod,
@@ -2100,6 +2101,24 @@ export class ServiceDispatcher {
             authorityFailure,
           });
         }
+      }
+      // A resident explicit refusal attenuates existing grants as well as new
+      // acquisitions. A previous paid call cannot authorize a native reference.
+      const policyDecision = testPolicyDecision(resolved.context.testPolicy, {
+        capability,resourceKey,tier:reviewedTier,irreversible:receiverPolicy.irreversible,
+      });
+      if (policyDecision?.decision === "deny") {
+        const failure = {reasonCode:"user-denied" as const,
+          reason:`Resident test policy ${policyDecision.ruleId} denies ${capability} for ${resourceKey}`,
+          capability,resourceKey};
+        this.observeAuthority(resolved.context,"authority-decided",{
+          capability,resourceKey,tier:reviewedTier,decision:"test-policy-denied",snapshotDigest,
+        });
+        if (preflight) return {origin:resolved.context.authorizingOrigin.kind,
+          leaf:{capability,resourceKey,status:"denied",tier:reviewedTier,failure}};
+        throw new ServiceAccessError(service,method,failure.reason,"ETESTPOLICYDENIED",{
+          denied:true,authorityFailure:failure,
+        });
       }
       const admissionExecutor = resolved.context.executionSession?.executor;
       const runManifest =

@@ -51,6 +51,7 @@ export type SystemTestRunConfig = z.infer<typeof systemTestRunConfigSchema>;
 
 export const systemTestDescriptorSchema = z
   .object({
+    nativeReference: z.literal(true).optional(),
     explicitOnly: z.literal(true).optional(),
     name: z.string(),
     category: z.string(),
