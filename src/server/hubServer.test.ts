@@ -1,3 +1,4 @@
+import { URL as NodeURL } from "node:url";
 import { hubControlMethods } from "@vibestudio/service-schemas/hubControl";
 import * as fs from "node:fs";
 import * as http from "node:http";
@@ -627,7 +628,7 @@ describe("workspace child process-tree ownership", () => {
       const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-hub-killed-"));
       profiles.push(profileDir);
       const receipt = path.join(profileDir, "child-shutdown.json");
-      const ownershipModule = new URL("../../packages/shared/src/ownership.mjs", import.meta.url)
+      const ownershipModule = new NodeURL("../../packages/shared/src/ownership.mjs", import.meta.url)
         .href;
       // The hub stand-in registers a workspace child exactly as the hub does.
       const hub = spawn(

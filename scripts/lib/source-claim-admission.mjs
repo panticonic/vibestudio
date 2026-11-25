@@ -1,3 +1,4 @@
+import { URL as NodeURL } from "node:url";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { isDeepStrictEqual as equal } from "node:util";
@@ -206,8 +207,8 @@ export function sourceClaimReviewInput(proof, world) {
 
 export async function sourceClaimProgramIdentity() {
   const [source, types] = await Promise.all([
-    readFile(new URL("../reviews/assessPublicClaims.nl", import.meta.url), "utf8"),
-    readFile(new URL("../reviews/types.ts", import.meta.url), "utf8"),
+    readFile(new NodeURL("../reviews/assessPublicClaims.nl", import.meta.url), "utf8"),
+    readFile(new NodeURL("../reviews/types.ts", import.meta.url), "utf8"),
   ]);
   return { path: "reviews/assessPublicClaims.nl", source, types, sha256: sha(source + "\n" + types) };
 }

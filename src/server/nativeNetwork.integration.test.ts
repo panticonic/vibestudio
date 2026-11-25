@@ -5,7 +5,7 @@ import { once } from "node:events";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 import {
   assertNativePrerequisites,
   compileNativeLaunch,
@@ -81,7 +81,7 @@ it("exercises host networking on Windows and MXC network policy on Unix", async 
   const home = path.join(root, "home");
   mkdirSync(runtimeRoot);
   mkdirSync(home);
-  const appRoot = realpathSync(fileURLToPath(new URL("../../", import.meta.url)));
+  const appRoot = realpathSync(fileURLToPath(new NodeURL("../../", import.meta.url)));
   const runtime = prepareNativeRuntime({ appRoot, runtimeRoot, platform });
   const installation = getNativeExecutionInstallation(appRoot);
   let hostRequests = 0;

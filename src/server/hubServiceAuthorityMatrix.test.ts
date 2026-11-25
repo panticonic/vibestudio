@@ -1,10 +1,10 @@
 import { readFileSync, writeFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { createDirectHubControlService } from "./hubServer.js";
 
 const goldenPath = fileURLToPath(
-  new URL("./__hubServiceAuthorityMatrix.golden.json", import.meta.url)
+  new NodeURL("./__hubServiceAuthorityMatrix.golden.json", import.meta.url)
 );
 
 describe("hub service authority matrix", () => {

@@ -1,7 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 
-const outputUrl = new URL(
+const outputUrl = new NodeURL(
   "../packages/service-schemas/src/clients/generated/runtimeClientMethods.ts",
   import.meta.url
 );
@@ -85,7 +85,7 @@ const isCommandBound = (definition) =>
 const contextBound = [];
 const commandBound = [];
 for (const [constant, relativeModule, exportName, service] of sources) {
-  const module = await import(new URL(relativeModule, import.meta.url).href);
+  const module = await import(new NodeURL(relativeModule, import.meta.url).href);
   const methods = module[exportName];
   if (!methods || typeof methods !== "object") {
     throw new Error(`${relativeModule} does not export an object named ${exportName}`);

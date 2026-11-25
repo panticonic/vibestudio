@@ -2,7 +2,7 @@ import { shutdownError } from "./shutdownProtocol.js";
 import * as path from "node:path";
 import { EventEmitter } from "node:events";
 import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 import { createProcessAdapter, type ProcessAdapter } from "@vibestudio/process-adapter";
 import { describe, expect, it, vi } from "vitest";
 
@@ -24,7 +24,7 @@ describe("ExtensionProcessManager runtime resolution", () => {
   });
 
   it("resolves the built artifact under the actual source-host loader", () => {
-    const module = fileURLToPath(new URL("./processManager.ts", import.meta.url));
+    const module = fileURLToPath(new NodeURL("./processManager.ts", import.meta.url));
     const script = `import {resolveChildRuntimePath} from ${JSON.stringify(module)}; process.stdout.write(resolveChildRuntimePath());`;
     const resolved = execFileSync(
       process.execPath,

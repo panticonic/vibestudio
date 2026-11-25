@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { runNpmInstall } from "./npmInstaller.js";
 
@@ -50,7 +50,7 @@ describe.runIf(process.platform === "linux")("sandboxed native npm builds", () =
       `
       );
       await runNpmInstall(install, {
-        appRoot: fileURLToPath(new URL("../../../", import.meta.url)),
+        appRoot: fileURLToPath(new NodeURL("../../../", import.meta.url)),
         ignoreScripts: false,
       });
       expect(await readFile(path.join(install, "result"), "utf8")).toBe("42");

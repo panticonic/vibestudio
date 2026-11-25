@@ -1,12 +1,12 @@
 import { build } from "esbuild";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 
 let channelRpcReadBundle: Promise<string> | undefined;
 
 export function getChannelRpcReadBundle(): Promise<string> {
   channelRpcReadBundle ??= build({
     absWorkingDir: process.cwd(),
-    entryPoints: [fileURLToPath(new URL("./channelRpcReads.ts", import.meta.url))],
+    entryPoints: [fileURLToPath(new NodeURL("./channelRpcReads.ts", import.meta.url))],
     bundle: true,
     format: "iife",
     platform: "browser",

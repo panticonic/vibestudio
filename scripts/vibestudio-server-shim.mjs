@@ -6,9 +6,9 @@
 import { spawn } from "node:child_process";
 import * as path from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 
-const packageRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
+const packageRoot = path.resolve(fileURLToPath(new NodeURL("..", import.meta.url)));
 const env = { ...process.env };
 if (!env["VIBESTUDIO_APP_ROOT"]) env["VIBESTUDIO_APP_ROOT"] = packageRoot;
 env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = path.join(packageRoot, "dist");

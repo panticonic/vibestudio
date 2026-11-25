@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeAll, describe, it, expect, vi } from "vitest
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 import { evaluateAuthority, requirementForPrincipals } from "@vibestudio/shared/authorization";
 import { authorizeVerifiedCaller } from "./services/authorityRuntime.js";
 import { createAuthorityService } from "./services/authorityService.js";
@@ -7286,7 +7286,7 @@ describe("RpcServer native process sessions", () => {
       ].join("\n")
     );
     const runtimeBundle = fileURLToPath(
-      new URL("../../packages/extension-host/dist/childRuntime.js", import.meta.url)
+      new NodeURL("../../packages/extension-host/dist/childRuntime.js", import.meta.url)
     );
     const proc = createNodeProcessAdapter(runtimeBundle, {
       VIBESTUDIO_EXTENSION_NAME: extensionId,

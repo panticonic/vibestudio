@@ -3,7 +3,7 @@ import { execFileSync, type ChildProcess } from "node:child_process";
 import { copyFile, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 import type { ProcessAdapter } from "../index.js";
 import { WorkspaceRuntime } from "./workspace.js";
 import type { ExecutionPolicy } from "./policy.js";
@@ -73,11 +73,11 @@ async function fixture() {
   const runtime = path.join(root, "runtime");
   await mkdir(runtime);
   const prepared = prepareNativeRuntime({
-    appRoot: fileURLToPath(new URL("../../../../", import.meta.url)),
+    appRoot: fileURLToPath(new NodeURL("../../../../", import.meta.url)),
     runtimeRoot: runtime,
   });
   const { executable } = prepared;
-  const installed = fileURLToPath(new URL("../../dist/isolation/", import.meta.url));
+  const installed = fileURLToPath(new NodeURL("../../dist/isolation/", import.meta.url));
   for (const file of ["workspaceChild.js", "control.js"])
     await copyFile(path.join(installed, file), path.join(runtime, file));
   await writeFile(path.join(runtime, "package.json"), '{"type":"module"}');
@@ -112,7 +112,7 @@ async function fixture() {
           mechanism: "mxc-process",
           launcher: await realpath(
             fileURLToPath(
-              new URL(
+              new NodeURL(
                 `../../../../dist/mxc/${platform}-${process.arch}/${platform === "darwin" ? "mxc-exec-mac" : "lxc-exec"}`,
                 import.meta.url
               )

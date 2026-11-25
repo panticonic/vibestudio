@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 import { Ownership } from "@vibestudio/shared/ownership";
 import { describe, expect, it } from "vitest";
 import { IROH_CONCURRENT_BI_STREAM_WINDOW } from "../packages/iroh-transport/src/nodeEndpoint.js";
@@ -10,7 +10,7 @@ import { IROH_CONCURRENT_BI_STREAM_WINDOW } from "../packages/iroh-transport/src
 const RUN = process.env["VIBESTUDIO_RUN_IROH_E2E"] === "1" && process.platform === "linux";
 const require = createRequire(import.meta.url);
 const electronPath = require("electron") as string;
-const fixturePath = fileURLToPath(new URL("./fixtures/iroh-electron-native.cjs", import.meta.url));
+const fixturePath = fileURLToPath(new NodeURL("./fixtures/iroh-electron-native.cjs", import.meta.url));
 
 interface FixtureResult {
   code: number | null;

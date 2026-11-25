@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, writeFile, rm, realpath, copyFile, cp } from "node:fs/p
 import path from "node:path";
 import os from "node:os";
 import { createServer, type Server } from "node:net";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import type { ProcessAdapter } from "../index.js";
 import { WorkspaceRuntime } from "./workspace.js";
@@ -73,12 +73,12 @@ describe("shared workspace runtime on the native platform", () => {
     const hostCanary = path.join(root, "host-secret");
     await writeFile(hostCanary, "host-only");
     const prepared = prepareNativeRuntime({
-      appRoot: fileURLToPath(new URL("../../../../", import.meta.url)),
+      appRoot: fileURLToPath(new NodeURL("../../../../", import.meta.url)),
       runtimeRoot: runtime,
     });
     const { executable } = prepared;
     const installedRuntime = await realpath(
-      fileURLToPath(new URL("../../dist/isolation", import.meta.url))
+      fileURLToPath(new NodeURL("../../dist/isolation", import.meta.url))
     );
     for (const name of ["workspaceChild.js", "control.js"])
       await copyFile(path.join(installedRuntime, name), path.join(runtime, name));
@@ -198,7 +198,7 @@ describe("shared workspace runtime on the native platform", () => {
             mechanism: "mxc-process",
             launcher: await realpath(
               fileURLToPath(
-                new URL(
+                new NodeURL(
                   `../../../../dist/mxc/${platform}-${process.arch}/${platform === "darwin" ? "mxc-exec-mac" : "lxc-exec"}`,
                   import.meta.url
                 )
@@ -313,7 +313,7 @@ describe("shared workspace runtime on the native platform", () => {
     const address = listener.address();
     if (!address || typeof address === "string") throw new Error("Missing listener address");
     const installedRuntime = await realpath(
-      fileURLToPath(new URL("../../dist/isolation", import.meta.url))
+      fileURLToPath(new NodeURL("../../dist/isolation", import.meta.url))
     );
     const platform = process.platform;
     if (platform !== "linux" && platform !== "darwin" && platform !== "win32") {
@@ -327,7 +327,7 @@ describe("shared workspace runtime on the native platform", () => {
             mechanism: "mxc-process",
             launcher: await realpath(
               fileURLToPath(
-                new URL(
+                new NodeURL(
                   `../../../../dist/mxc/${platform}-${process.arch}/${platform === "darwin" ? "mxc-exec-mac" : "lxc-exec"}`,
                   import.meta.url
                 )
@@ -342,7 +342,7 @@ describe("shared workspace runtime on the native platform", () => {
         const runtime = path.join(privateRoot, "runtime");
         await mkdir(runtime, { recursive: true });
         const prepared = prepareNativeRuntime({
-          appRoot: fileURLToPath(new URL("../../../../", import.meta.url)),
+          appRoot: fileURLToPath(new NodeURL("../../../../", import.meta.url)),
           runtimeRoot: runtime,
         });
         const { executable } = prepared;

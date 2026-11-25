@@ -1,3 +1,4 @@
+import { URL as NodeURL } from "node:url";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createHash } from "node:crypto";
@@ -36,7 +37,7 @@ import {
 
 test("pins CI and all supported installed runtime targets to the same official release", async () => {
   assert.equal(
-    (await readFile(new URL("../.nvmrc", import.meta.url), "utf8")).trim(),
+    (await readFile(new NodeURL("../.nvmrc", import.meta.url), "utf8")).trim(),
     NODE_RUNTIME_VERSION
   );
   assert.match(NODE_RUNTIME_VERSION, /^\d+\.\d+\.\d+$/);

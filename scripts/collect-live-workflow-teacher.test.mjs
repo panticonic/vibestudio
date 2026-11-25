@@ -1,3 +1,4 @@
+import { fileURLToPath, URL as NodeURL } from "node:url";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
@@ -20,32 +21,32 @@ test(
     }
     await mkdir(path.join(root, "scripts"));
     await symlink(
-      new URL("../node_modules", import.meta.url).pathname,
+      fileURLToPath(new NodeURL("../node_modules", import.meta.url)),
       path.join(root, "node_modules")
     );
     await copyFile(
-      new URL("collect-live-workflow-teacher.mjs", import.meta.url),
+      new NodeURL("collect-live-workflow-teacher.mjs", import.meta.url),
       path.join(root, "scripts/collect-live-workflow-teacher.mjs")
     );
     await copyFile(
-      new URL("review-live-workflow-teacher.mjs", import.meta.url),
+      new NodeURL("review-live-workflow-teacher.mjs", import.meta.url),
       path.join(root, "scripts/review-live-workflow-teacher.mjs")
     );
     await mkdir(path.join(root, "scripts/lib"));
     await copyFile(
-      new URL("lib/live-teacher-groups.mjs", import.meta.url),
+      new NodeURL("lib/live-teacher-groups.mjs", import.meta.url),
       path.join(root, "scripts/lib/live-teacher-groups.mjs")
     );
     await copyFile(
-      new URL("lib/live-teacher-budget.mjs", import.meta.url),
+      new NodeURL("lib/live-teacher-budget.mjs", import.meta.url),
       path.join(root, "scripts/lib/live-teacher-budget.mjs")
     );
     await copyFile(
-      new URL("lib/live-teacher-retention.mjs", import.meta.url),
+      new NodeURL("lib/live-teacher-retention.mjs", import.meta.url),
       path.join(root, "scripts/lib/live-teacher-retention.mjs")
     );
     await copyFile(
-      new URL("lib/live-teacher-interruption.mjs", import.meta.url),
+      new NodeURL("lib/live-teacher-interruption.mjs", import.meta.url),
       path.join(root, "scripts/lib/live-teacher-interruption.mjs")
     );
     await put("scripts/natlang-vendor.mjs", "process.exit(0);");

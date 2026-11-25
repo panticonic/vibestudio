@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 import { getProfileDataPath } from "@vibestudio/env-paths";
 import { Ownership } from "@vibestudio/shared/ownership";
 import { awaitRetirement, ledgerDirOf, listLedgers } from "@vibestudio/shared/ownershipLedger";
@@ -36,7 +36,7 @@ export async function launchManagedServerOwner(
   try {
     owned = ownership.spawn(
       process.execPath,
-      [fileURLToPath(new URL("./managedServerOwner.mjs", import.meta.url)), instance, directory],
+      [fileURLToPath(new NodeURL("./managedServerOwner.mjs", import.meta.url)), instance, directory],
       {
         stdio: ["ignore", log, log, "ipc"],
         env: { ...process.env, ...environment },

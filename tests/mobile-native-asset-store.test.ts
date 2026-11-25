@@ -1,3 +1,4 @@
+import { URL as NodeURL } from "node:url";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { exactTemplateRoots } from "./exactUserlandRoot";
@@ -7,20 +8,20 @@ import { join } from "node:path";
 // owns per-instance write handles; PanelAssetStore owns the on-disk lifecycle.
 const androidDir = "../hosts/android/app/src/main/java/app/vibestudio/mobile/";
 const androidModule = readFileSync(
-  new URL(`${androidDir}VibestudioPanelHostModule.kt`, import.meta.url),
+  new NodeURL(`${androidDir}VibestudioPanelHostModule.kt`, import.meta.url),
   "utf8"
 );
 const androidStore = readFileSync(
-  new URL(`${androidDir}PanelAssetStore.kt`, import.meta.url),
+  new NodeURL(`${androidDir}PanelAssetStore.kt`, import.meta.url),
   "utf8"
 );
 const android = `${androidModule}\n${androidStore}`;
 const ios = readFileSync(
-  new URL("../hosts/ios/Vibestudio/VibestudioPanelHost.mm", import.meta.url),
+  new NodeURL("../hosts/ios/Vibestudio/VibestudioPanelHost.mm", import.meta.url),
   "utf8"
 );
 const tcpPatch = readFileSync(
-  new URL("../patches/react-native-tcp-socket.patch", import.meta.url),
+  new NodeURL("../patches/react-native-tcp-socket.patch", import.meta.url),
   "utf8"
 );
 const facade = readFileSync(

@@ -1,3 +1,4 @@
+import { URL as NodeURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 
@@ -34,7 +35,7 @@ describe("desktop launcher argument routing", () => {
 
   it("is the vibestudio entry point in a built or linked source checkout", () => {
     const manifest = JSON.parse(
-      fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")
+      fs.readFileSync(new NodeURL("../package.json", import.meta.url), "utf8")
     ) as { bin?: Record<string, string> };
 
     expect(manifest.bin?.["vibestudio"]).toBe("scripts/vibestudio-cli-shim.mjs");

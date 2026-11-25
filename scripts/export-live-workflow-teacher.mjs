@@ -4,7 +4,7 @@ import {observedContentKinds,observedContentNeedsReview,observedContentReviewInp
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { URL as NodeURL, fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual, parseArgs } from "node:util";
 import { gunzipSync } from "node:zlib";
 import { requireDevelopmentTemplateCheckouts } from "../src/dev/developmentTemplateConfig.cjs";
@@ -11489,7 +11489,7 @@ export async function exportLiveTeacherWorkflow({
   if(partial){
     const originalPacket=await bind("original-trajectory.json.gz",await readFile(trajectory));
     const originalOutcome=await bind("original-outcome.json",result);
-    const assessor=await bind("independent-invocation-assessor.mjs",await readFile(new URL("./lib/independent-invocation-outcomes.mjs",import.meta.url)));
+    const assessor=await bind("independent-invocation-assessor.mjs",await readFile(new NodeURL("./lib/independent-invocation-outcomes.mjs",import.meta.url)));
     const invocations=[];
     for(const [index,invocation] of observed.invocations.entries()){
       const source=invocation.certificate.checker;
@@ -11569,7 +11569,7 @@ if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === imp
     review: workflowReviewer(values["review-model"]),
     loadCases: () =>
       loadLiveTeacherCases(
-        requireDevelopmentTemplateCheckouts(fileURLToPath(new URL("../", import.meta.url)))
+        requireDevelopmentTemplateCheckouts(fileURLToPath(new NodeURL("../", import.meta.url)))
           .checkouts
       ),
   });

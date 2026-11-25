@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { URL as NodeURL, fileURLToPath, pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 import { parseArgs } from "node:util";
 import { persistentInstanceRoot } from "../src/dev/instanceRegistry.js";
@@ -87,7 +87,7 @@ if (
   );
 }
 
-const host = fileURLToPath(new URL("../", import.meta.url));
+const host = fileURLToPath(new NodeURL("../", import.meta.url));
 const { checkouts } = requireDevelopmentTemplateCheckouts(host);
 const liveTeacherCases = await loadLiveTeacherCases(checkouts);
 for (const [scenario, workflow] of liveTeacherCases) {

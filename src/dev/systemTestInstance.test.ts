@@ -1,3 +1,4 @@
+import { URL as NodeURL } from "node:url";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -32,9 +33,9 @@ import {
 } from "./testSupport/ledgerFixture.js";
 
 const tsxLoader = createRequire(import.meta.url).resolve("tsx");
-const OWNERSHIP_URL = new URL("../../packages/shared/src/ownership.mjs", import.meta.url).href;
-const SYSTEM_TEST_INSTANCE_URL = new URL("./systemTestInstance.ts", import.meta.url).href;
-const REGISTRY_URL = new URL("./instanceRegistry.ts", import.meta.url).href;
+const OWNERSHIP_URL = new NodeURL("../../packages/shared/src/ownership.mjs", import.meta.url).href;
+const SYSTEM_TEST_INSTANCE_URL = new NodeURL("./systemTestInstance.ts", import.meta.url).href;
+const REGISTRY_URL = new NodeURL("./instanceRegistry.ts", import.meta.url).href;
 
 describe("self-provisioning system-test instance", () => {
   let tempDir: string;

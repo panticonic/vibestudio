@@ -9,7 +9,7 @@ import { spawn as spawnProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 import {
   captureOwnedProcessIdentity,
   captureProcessStart,
@@ -41,7 +41,7 @@ export { watchLease } from "./ownershipLease.mjs";
  */
 function defaultReaperPath() {
   try {
-    return fileURLToPath(new URL("./reaper.mjs", import.meta.url));
+    return fileURLToPath(new NodeURL("./reaper.mjs", import.meta.url));
   } catch (cause) {
     throw ownershipError(
       "Cannot locate reaper.mjs beside the ownership module; pass Ownership.open({ reaperPath })",

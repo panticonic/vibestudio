@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { URL as NodeURL, fileURLToPath, pathToFileURL } from "node:url";
 import { prepareDarwinProcessObserver } from "./owned-process-group-observer.mjs";
 
 export function prepareDarwinProcessObservers(cwd) {
@@ -11,7 +11,7 @@ export function prepareDarwinProcessObservers(cwd) {
 }
 
 async function main() {
-  const cwd = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
+  const cwd = path.resolve(fileURLToPath(new NodeURL("..", import.meta.url)));
   const outputs = prepareDarwinProcessObservers(cwd);
   for (const output of outputs) console.log(`[darwin-observer] verified ${output}`);
 }

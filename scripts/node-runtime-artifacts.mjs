@@ -19,16 +19,16 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 
 const execute = promisify(execFile);
-const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
+const repositoryRoot = fileURLToPath(new NodeURL("../", import.meta.url));
 const distribution = JSON.parse(
-  await readFile(new URL("../native/node/distribution.json", import.meta.url), "utf8")
+  await readFile(new NodeURL("../native/node/distribution.json", import.meta.url), "utf8")
 );
 export const NODE_RUNTIME_VERSION = distribution.version;
 export const NODE_RUNTIME_TARGETS = Object.freeze(distribution.targets);
-if ((await readFile(new URL("../.nvmrc", import.meta.url), "utf8")).trim() !== NODE_RUNTIME_VERSION)
+if ((await readFile(new NodeURL("../.nvmrc", import.meta.url), "utf8")).trim() !== NODE_RUNTIME_VERSION)
   throw new Error("The installed Node distribution and .nvmrc must pin the same exact version");
 export function nodeRuntimeTarget(platform = process.platform, arch = process.arch) {
   const target = NODE_RUNTIME_TARGETS.find(

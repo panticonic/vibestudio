@@ -1,3 +1,4 @@
+import { URL as NodeURL } from "node:url";
 import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
@@ -59,7 +60,7 @@ afterEach(() => {
 test("preserves the canonical ordered package boundary across both closure passes", async () => {
   const root = fixture();
   const config = parse(
-    fs.readFileSync(new URL("../electron-builder.yml", import.meta.url), "utf8")
+    fs.readFileSync(new NodeURL("../electron-builder.yml", import.meta.url), "utf8")
   );
   const payloads = [
     "dist/main.cjs",
@@ -385,7 +386,7 @@ test("preserves the original Linux app hook failure and does not promote its out
 
 test("fails and retires owned staging if the builder promise outlives all event-loop work", () => {
   const root = fixture();
-  const moduleUrl = new URL("./package-desktop.mjs", import.meta.url).href;
+  const moduleUrl = new NodeURL("./package-desktop.mjs", import.meta.url).href;
   const source =
     `import { packageDesktop } from ${JSON.stringify(moduleUrl)};\n` +
     `void packageDesktop("linux", { appRoot: ${JSON.stringify(root)}, arch: "x64", linuxMode: "app", runBuild: () => new Promise(() => {}) });\n`;

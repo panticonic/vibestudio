@@ -8,7 +8,7 @@ import * as path from "node:path";
 import process from "node:process";
 import { Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { URL as NodeURL, fileURLToPath, pathToFileURL } from "node:url";
 import { createGunzip } from "node:zlib";
 import { formatRpcFailure } from "@vibestudio/rpc";
 import { compare as compareSemver, valid as validSemver } from "semver";
@@ -26,7 +26,7 @@ export { validateNpmPackageManifest };
 
 export { runWithOwnedCleanup } from "./lib/owned-cleanup.mjs";
 
-const repoRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
+const repoRoot = path.resolve(fileURLToPath(new NodeURL("..", import.meta.url)));
 const rootPkg = readJson(path.join(repoRoot, "package.json"));
 let announcedTokenEnv = false;
 let npmAuth;

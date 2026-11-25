@@ -1,10 +1,11 @@
+import { URL as NodeURL } from "node:url";
 import { createHash } from "node:crypto";
 import { readFileSync, lstatSync } from "node:fs";
 import path from "node:path";
 
 export const MXC_SDK_VERSION = "0.8.0";
 export const NATIVE_ISOLATION_TARGETS = Object.freeze(
-  JSON.parse(readFileSync(new URL("../native/isolation/targets.json", import.meta.url), "utf8"))
+  JSON.parse(readFileSync(new NodeURL("../native/isolation/targets.json", import.meta.url), "utf8"))
 );
 export function nativeIsolationTarget(platform = process.platform, arch = process.arch) {
   const target = NATIVE_ISOLATION_TARGETS.find(

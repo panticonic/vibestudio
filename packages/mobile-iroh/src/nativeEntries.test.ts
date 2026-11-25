@@ -1,3 +1,4 @@
+import { fileURLToPath, URL as NodeURL } from "node:url";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -6,8 +7,8 @@ import { describe, expect, it } from "vitest";
 // so a `.native.ts` entry that imports its own base name imports itself and
 // silently exports nothing. Entries must import a differently named module.
 const roots = [
-  new URL(".", import.meta.url).pathname,
-  new URL("../../rn-client-api/src/", import.meta.url).pathname,
+  fileURLToPath(new NodeURL(".", import.meta.url)),
+  fileURLToPath(new NodeURL("../../rn-client-api/src/", import.meta.url)),
 ];
 
 describe("platform entries", () => {

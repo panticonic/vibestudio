@@ -2,9 +2,9 @@ import * as esbuild from "esbuild";
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 
-const repoRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
+const repoRoot = path.resolve(fileURLToPath(new NodeURL("..", import.meta.url)));
 const entryPoint = path.join(repoRoot, "packages/shared/src/connect.ts");
 const outputPath = path.join(repoRoot, "scripts/cli/lib/connect-grammar.generated.mjs");
 const generatedHeader =

@@ -1,3 +1,4 @@
+import { URL as NodeURL } from "node:url";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -11,8 +12,8 @@ import { processIsRunning } from "../../tests/fixtures/processLiveness.js";
 const roots: string[] = [];
 const ownerships: Ownership[] = [];
 const CHILD_FIXTURE_STARTUP_POLL_MS = 5_000;
-const OWNERSHIP_URL = new URL("../../packages/shared/src/ownership.mjs", import.meta.url).href;
-const SUPERVISOR_URL = new URL("./devInstanceSupervisor.ts", import.meta.url).href;
+const OWNERSHIP_URL = new NodeURL("../../packages/shared/src/ownership.mjs", import.meta.url).href;
+const SUPERVISOR_URL = new NodeURL("./devInstanceSupervisor.ts", import.meta.url).href;
 
 /** Full-suite load delayed fixture readiness beyond Vitest's default 1s poll (up to 1.4s); this
  * bounded test-only budget covers tsx/node scheduling without changing production readiness. */

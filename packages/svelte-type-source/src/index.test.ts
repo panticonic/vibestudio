@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { expect, it } from "vitest";
 
@@ -11,7 +11,7 @@ it("bundles compiler declarations and helpers into an artifact with no installed
   const root = await mkdtemp(join(tmpdir(), "svelte-type-artifact-"));
   try {
     await build({
-      entryPoints: [fileURLToPath(new URL("./index.ts", import.meta.url))],
+      entryPoints: [fileURLToPath(new NodeURL("./index.ts", import.meta.url))],
       bundle: true,
       platform: "node",
       format: "esm",

@@ -11,10 +11,10 @@ import {
 } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 
 const sourcePath = fileURLToPath(
-  new URL("../native/owned-process-group/darwin.c", import.meta.url)
+  new NodeURL("../native/owned-process-group/darwin.c", import.meta.url)
 );
 const executableName = "owned-process-group-observer";
 

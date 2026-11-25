@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 import { compileNativeLaunch } from "@vibestudio/process-adapter/native-launch";
 import { getInstalledNodeRuntime } from "./runtimePaths.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -415,7 +415,7 @@ function createFakeNpmFixture(): { root: string; appRoot: string; installDir: st
   fs.mkdirSync(parserRoot, { recursive: true });
   fs.writeFileSync(
     path.join(parserRoot, "index.js"),
-    `module.exports = require(${JSON.stringify(createRequire(getInstalledNodeRuntime(fileURLToPath(new URL("../../../", import.meta.url))).npmCli).resolve("npm-package-arg"))});`
+    `module.exports = require(${JSON.stringify(createRequire(getInstalledNodeRuntime(fileURLToPath(new NodeURL("../../../", import.meta.url))).npmCli).resolve("npm-package-arg"))});`
   );
   fs.writeFileSync(path.join(appRoot, "package.json"), JSON.stringify({ private: true }));
   fs.writeFileSync(

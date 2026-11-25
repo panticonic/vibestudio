@@ -1,3 +1,4 @@
+import { URL as NodeURL } from "node:url";
 import { copyFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -21,5 +22,5 @@ export function prepareWindowsWorkerdMetadata({
   if (typeof executable !== "string" || !path.isAbsolute(executable)) {
     throw new Error("Workerd must export an absolute executable path");
   }
-  copyFileSync(new URL("./workerd.exe.manifest", import.meta.url), `${executable}.manifest`);
+  copyFileSync(new NodeURL("./workerd.exe.manifest", import.meta.url), `${executable}.manifest`);
 }

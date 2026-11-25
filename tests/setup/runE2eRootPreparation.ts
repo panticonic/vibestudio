@@ -1,4 +1,4 @@
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 import { withOwnership } from "../../scripts/lib/owned-entry.mjs";
 
 /** The existing owner/reaper owns the complete preparation process group. */
@@ -10,7 +10,7 @@ export async function runE2eRootPreparation<T>(
   return withOwnership(async (ownership) => {
     const owned = ownership.spawn(
       process.execPath,
-      ["--import", "tsx", fileURLToPath(new URL("./e2eRootPreparation.ts", import.meta.url))],
+      ["--import", "tsx", fileURLToPath(new NodeURL("./e2eRootPreparation.ts", import.meta.url))],
       {
         kill: "immediate",
         stdio: ["ignore", "ignore", "pipe", "ipc"],

@@ -1,3 +1,4 @@
+import { URL as NodeURL } from "node:url";
 import * as crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -239,7 +240,7 @@ it("coordinates digest capacity across independent publisher processes", async (
     await fs.promises.writeFile(path.join(tree, "package.js"), "cross-process payload");
   }
 
-  const moduleUrl = new URL("./dependencyContentStore.ts", import.meta.url).href;
+  const moduleUrl = new NodeURL("./dependencyContentStore.ts", import.meta.url).href;
   const childCode = `
     import { deduplicateDependencyContent } from ${JSON.stringify(moduleUrl)};
     import { closeDerivedCacheCoordinators } from "@vibestudio/shared/derivedCache";
