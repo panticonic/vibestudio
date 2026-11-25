@@ -64,3 +64,34 @@ used LOW 1.5 GiB/reserve 7.5 GiB, heap 768 MiB, observed peak 534.9 MiB,
 17.27 seconds. Scoped syntax lint (typed mode disabled), formatting and diff
 checks passed. Full project type checks and live hosted execution were not run;
 no paid/model/network calls were made.
+
+Follow-up custody inventory before edits: explicit-context reserveEntity skipped
+onContextCreated entirely (runtimeService.ts880-931), and direct createEntity
+activation only ensured semantic state (1162). Thus an actor could lose its case
+policy when attached to a new explicit context. Explicit createContext (1401),
+cloneContext (2222), subagent context (2524) and semantic fork (2562) already call
+the canonical context hook; index.ts4641 registers inherited policy. Registry
+inheritTestContext itself used an unchecked map.set, unlike guarded
+markTestContext, allowing a conflicting existing context to be relabelled.
+
+Use one case-context admission before reservation/activation/context creation:
+fresh contexts inherit before executable publication; existing contexts must
+already carry the same case identity, and are refused otherwise. Never relabel an
+unrelated existing context. Registry inheritance must use its guarded setter.
+Reserve also needs the same default model seeding as create. A DO's deliberate
+model/fallback override outside the case route must be rejected honestly, while
+trusted runner bootstrap can replace a profile default with the case primary.
+
+Custody follow-up verification: final component suite passed 192/192 tests in
+`vibe-system-test-case-custody-20261125b` (562 MiB peak, 15.6 s). Fresh explicit
+contexts inherit before preparation/reservation publication; foreign and existing
+unscoped contexts are refused; same-case reuse succeeds. Existing keyed
+serialization covers the short context admission/materialization boundary so a
+concurrent ordinary context cannot be relabelled. Explicit DO model/fallback
+changes outside the case route now refuse before code preparation. Syntax lint,
+format and diff checks passed. Full typed graph remains unchecked.
+
+This case-only mechanism does not constrain unrelated ambient actors in unscoped
+contexts. An owned-instance hosted-model route is still required for the
+campaign's stronger no-Sol-in-any-role constraint; no whole-instance assurance is
+claimed from the case gate alone.

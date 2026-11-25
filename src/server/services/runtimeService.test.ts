@@ -226,10 +226,12 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
   const taskAuthorities = new TaskAuthorityRegistry();
   const unitSupervisor = new UnitSupervisor();
 
+  const contextPolicies = new AgentExecutionSessionRegistry();
   const runtimeResult = createRuntimeService({
     prepareResourceBindings: opts.prepareResourceBindings,
     taskAuthorities,
-    testPolicyForContext: opts.testPolicyForContext ?? (() => null),
+    testPolicyForContext:
+      opts.testPolicyForContext ?? ((id) => contextPolicies.testPolicyForContext(id)),
     unitSupervisor,
     entityStore,
     hooks: {
@@ -308,7 +310,13 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
         entityCache.listActive().find((e) => e.contextId === id)?.id,
     },
     contextFolders,
-    onContextCreated: opts.onContextCreated,
+    onContextCreated:
+      opts.onContextCreated ??
+      (async (input) => {
+        if (input.inheritedTestPolicy)
+          contextPolicies.markTestContext(input.contextId, input.inheritedTestPolicy);
+        else contextPolicies.inheritTestContext(input.contextId, input.ownerContextId);
+      }),
     onContextRemoved: opts.onContextRemoved,
     onPanelExecutionActivated: opts.onPanelExecutionActivated,
     setEntityTitle: opts.setEntityTitle,
@@ -564,9 +572,9 @@ describe("runtimeService system-test agent execution policy", () => {
     );
   });
 
-  it("pins a delegated DO child to the Luna run despite an explicit Sol configuration", async () => {
+  it("refuses an explicit Sol model or fallback selected by a test-owned DO child", async () => {
     const prepareDurableObject = vi.fn(async () => ({
-      targetId: "target:child-agent",
+      targetId: "target:child",
       effectiveVersion: "ev-agent",
       ...sealedExecution,
     }));
@@ -580,34 +588,188 @@ describe("runtimeService system-test agent execution policy", () => {
       null,
       systemTestCasePolicy("openai-codex:gpt-6-luna")
     );
+    for (const agentConfig of [
+      { model: "openai-codex:gpt-6-sol" },
+      { fallbackModel: "openai-codex:gpt-6-sol" },
+    ]) {
+      await expect(
+        internal.createEntity(
+          caller,
+          doCreateSpec({
+            key: "child",
+            contextId: "ctx-child",
+            agentChannelId: "task-child",
+            stateArgs: { agentConfig },
+          })
+        )
+      ).rejects.toThrow("Explicit child model configuration");
+    }
+    expect(prepareDurableObject).not.toHaveBeenCalled();
+  });
 
-    await internal.createEntity(
-      caller,
-      doCreateSpec({
-        key: "subagent:explicit-model",
-        contextId: "ctx-system-test-child",
-        agentChannelId: "task-explicit-model",
-        stateArgs: {
-          agentConfig: {
-            model: "openai-codex:gpt-6-sol",
-            thinkingLevel: "minimal",
-            approvalLevel: 0,
-          },
-        },
-      })
+  function caseCustody() {
+    const registry = new AgentExecutionSessionRegistry();
+    const policy = systemTestCasePolicy("openai-codex:gpt-6-luna");
+    const caller = createVerifiedCaller(
+      "do:workers/agent-worker:AiChatWorker:parent",
+      "do",
+      null,
+      null,
+      null,
+      null,
+      policy
     );
+    const onContextCreated = vi.fn(
+      async (input: {
+        contextId: string;
+        ownerContextId: string | null;
+        inheritedTestPolicy?: import("@vibestudio/rpc").AgentExecutionTestPolicy;
+      }) => {
+        if (input.inheritedTestPolicy)
+          registry.markTestContext(input.contextId, input.inheritedTestPolicy);
+        else registry.inheritTestContext(input.contextId, input.ownerContextId);
+      }
+    );
+    return {
+      registry,
+      policy,
+      caller,
+      onContextCreated,
+      testPolicyForContext: (id: string) => registry.testPolicyForContext(id),
+    };
+  }
 
+  it("binds a fresh explicit context to the exact case before direct actor preparation", async () => {
+    const custody = caseCustody();
+    const prepareDurableObject = vi.fn(async () => {
+      expect(custody.registry.testPolicyForContext("ctx-explicit")).toBe(custody.policy);
+      return { targetId: "target:child", effectiveVersion: "ev-agent", ...sealedExecution };
+    });
+    const { internal } = await buildDeps({ ...custody, prepareDurableObject });
+    await internal.createEntity(
+      custody.caller,
+      doCreateSpec({ key: "fresh", contextId: "ctx-explicit", agentChannelId: "task-fresh" })
+    );
     expect(prepareDurableObject).toHaveBeenCalledWith(
       expect.objectContaining({
         stateArgs: {
-          agentConfig: {
-            model: "openai-codex:gpt-6-luna",
-            thinkingLevel: "minimal",
-            approvalLevel: 2,
-          },
+          agentConfig: { model: "openai-codex:gpt-6-luna", approvalLevel: 2 },
         },
       })
     );
+    expect(custody.registry.testPolicyForContext("ctx-explicit")).toBe(custody.policy);
+  });
+
+  it("binds explicit reservations before publication and seeds the case model", async () => {
+    const custody = caseCustody();
+    const { service, entityCache } = await buildDeps(custody);
+    const reserved = (await service.handler({ caller: custody.caller }, "reserveEntity", [
+      doCreateSpec({
+        key: "reserved",
+        contextId: "ctx-reserved",
+        agentChannelId: "task-reserved",
+      }),
+    ])) as { id: string };
+    expect(custody.registry.testPolicyForContext("ctx-reserved")).toBe(custody.policy);
+    expect(entityCache.resolve(reserved.id)?.stateArgs).toEqual({
+      agentConfig: { model: "openai-codex:gpt-6-luna", approvalLevel: 2 },
+    });
+  });
+
+  it("inherits case custody for explicit semantic context creation", async () => {
+    const custody = caseCustody();
+    const { internal } = await buildDeps(custody);
+    await internal.createContext({ caller: custody.caller }, { contextId: "ctx-semantic" });
+    expect(custody.registry.testPolicyForContext("ctx-semantic")).toBe(custody.policy);
+  });
+
+  it("refuses unrelated existing explicit contexts without changing their policy or preparing code", async () => {
+    for (const foreignPolicy of [null, systemTestCasePolicy("openai-codex:other")]) {
+      const custody = caseCustody();
+      if (foreignPolicy)
+        custody.registry.markTestContext("ctx-foreign", {
+          ...foreignPolicy,
+          policyId: "another-case",
+        });
+      const prepareDurableObject = vi.fn();
+      const { internal, service } = await buildDeps({
+        ...custody,
+        prepareDurableObject,
+        semanticContexts: { listContexts: async () => ["ctx-foreign"] },
+      });
+      for (const method of ["createEntity", "reserveEntity"] as const) {
+        await expect(
+          service.handler({ caller: custody.caller }, method, [
+            doCreateSpec({
+              key: method,
+              contextId: "ctx-foreign",
+            }),
+          ])
+        ).rejects.toThrow(/different system-test policy|outside this system test/);
+      }
+      await expect(
+        internal.createContext({ caller: custody.caller }, { contextId: "ctx-foreign" })
+      ).rejects.toThrow(/different system-test policy|outside this system test/);
+      expect(custody.registry.testPolicyForContext("ctx-foreign")?.policyId ?? null).toBe(
+        foreignPolicy ? "another-case" : null
+      );
+      expect(prepareDurableObject).not.toHaveBeenCalled();
+    }
+  });
+
+  it("joins an in-flight ordinary context creation instead of relabelling it as a test context", async () => {
+    const custody = caseCustody();
+    let entered!: () => void, release!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let exists = false;
+    const { internal } = await buildDeps({
+      ...custody,
+      semanticContexts: {
+        ensureContext: async () => {
+          entered();
+          await gate;
+          exists = true;
+        },
+        listContexts: async () => (exists ? ["ctx-concurrent"] : []),
+      },
+    });
+    const ordinary = internal.createEntity(
+      serverCaller,
+      doCreateSpec({ key: "ordinary", contextId: "ctx-concurrent" })
+    );
+    await started;
+    const test = internal.createEntity(
+      custody.caller,
+      doCreateSpec({ key: "case", contextId: "ctx-concurrent" })
+    );
+    const refused = expect(test).rejects.toThrow("Existing runtime context is outside");
+    release();
+    await ordinary;
+    await refused;
+    expect(custody.registry.testPolicyForContext("ctx-concurrent")).toBeNull();
+  });
+
+  it("allows actors to share an existing context owned by the same exact case", async () => {
+    const custody = caseCustody();
+    custody.registry.markTestContext("ctx-shared", custody.policy);
+    const { internal } = await buildDeps({
+      ...custody,
+      semanticContexts: { listContexts: async () => ["ctx-shared"] },
+    });
+    await internal.createEntity(
+      custody.caller,
+      doCreateSpec({ key: "one", contextId: "ctx-shared" })
+    );
+    await internal.createEntity(
+      custody.caller,
+      doCreateSpec({ key: "two", contextId: "ctx-shared" })
+    );
+    expect(custody.registry.testPolicyForContext("ctx-shared")).toBe(custody.policy);
   });
 });
 
@@ -1031,8 +1193,20 @@ describe("runtimeService deferred panel activation", () => {
   });
 
   it("carries a resident test policy into an implicit panel context even without an entity-backed owner context", async () => {
-    const onContextCreated = vi.fn(async () => {});
-    const { service } = await buildDeps({ onContextCreated });
+    const policies = new AgentExecutionSessionRegistry();
+    const onContextCreated = vi.fn(
+      async (input: {
+        contextId: string;
+        inheritedTestPolicy?: import("@vibestudio/rpc").AgentExecutionTestPolicy;
+      }) => {
+        if (input.inheritedTestPolicy)
+          policies.markTestContext(input.contextId, input.inheritedTestPolicy);
+      }
+    );
+    const { service } = await buildDeps({
+      onContextCreated,
+      testPolicyForContext: (id) => policies.testPolicyForContext(id),
+    });
     const policy = systemTestCasePolicy();
     const mediatedCreator = createVerifiedCaller(
       "do:vibestudio/internal:EvalDO:transient",

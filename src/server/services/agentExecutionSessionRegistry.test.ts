@@ -44,6 +44,18 @@ function admission(
 }
 
 describe("AgentExecutionSessionRegistry test policy", () => {
+  it("does not overwrite another test policy when inheriting into an existing context", () => {
+    const registry = new AgentExecutionSessionRegistry();
+    const parent = registry.createTestPolicy("system-test-runner:parent");
+    const other = registry.createTestPolicy("system-test-runner:other");
+    registry.markTestContext("parent", parent);
+    registry.markTestContext("child", other);
+    expect(() => registry.inheritTestContext("child", "parent")).toThrow(
+      "already belongs to test policy"
+    );
+    expect(registry.testPolicyForContext("child")).toBe(other);
+  });
+
   it("cannot drop a website launch scope by replaying or reusing a warm eval", () => {
     const registry = new AgentExecutionSessionRegistry();
     const input = {
