@@ -213,3 +213,9 @@ export { runtimeConnectionInfoFromBootstrap } from "./provider.js";
 export { validateWebsiteMethodPolicy, type WebsiteMethodPolicy } from "./authority.js";
 
 export { rpcDiagnosticIdOf, attachRpcDiagnosticId } from "./errors.js";
+
+export {
+  operationalErrorMetadata,
+  errorDataProperty,
+  type OperationalErrorMetadata,
+} from "./operationalErrorMetadata.js";

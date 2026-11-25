@@ -97,6 +97,11 @@ export interface RpcFailure {
   stack?: string;
   errorKind: RpcErrorKind;
   code?: string;
+  syscall?: string;
+  phase?: import("./operationalErrorMetadata.js").OperationalErrorMetadata["phase"];
+  address?: string;
+  port?: number;
+  errno?: number;
   errorData?: RpcErrorData;
   systemError?: RpcSystemError;
   diagnosticId?: string;
