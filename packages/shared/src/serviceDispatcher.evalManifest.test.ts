@@ -13,8 +13,10 @@ function setup(input: {
   requests?: Array<{ capability: string; resource: { kind: "exact"; key: string } }>;
   granted: boolean;
   testPolicy?: boolean;
+  testDecision?: "once" | "deny";
+  capability?: string;
 }) {
-  const capability = "workspace.file.write";
+  const capability = input.capability ?? "workspace.file.write";
   const resourceKey = "context:one/file.txt";
   const session = createTestExecutionSession({
     runtimeId: "do:eval:one",
@@ -38,7 +40,7 @@ function setup(input: {
                   capability: { kind: "exact" as const, key: capability },
                   resource: { kind: "exact" as const, key: resourceKey },
                   tier: "gated" as const,
-                  decision: "once" as const,
+                  decision: input.testDecision ?? "once" as const,
                 },
               ],
               unexpectedPrompts: "fail" as const,
@@ -117,6 +119,13 @@ function setup(input: {
 }
 
 describe("evaluated-run authority ceiling", () => {
+  it.each(["model.use", "credential.use", "internal-model-runtime.use"])("denies explicit native-reference %s despite a preexisting grant", async capability => {
+    const {dispatcher,context,handler,request}=setup({mode:"adaptive",approvals:"prompt",granted:true,testPolicy:true,testDecision:"deny",capability});
+    await expect(dispatcher.dispatch(context,"manifestTest","write",[])).rejects.toMatchObject({code:"ETESTPOLICYDENIED"});
+    expect(handler).not.toHaveBeenCalled();expect(request).not.toHaveBeenCalled();
+    const preflight=await dispatcher.preflightAuthority(context,"manifestTest","write",[]);
+    expect(preflight.leaves).toEqual(expect.arrayContaining([expect.objectContaining({status:"denied"})]));
+  });
   it("returns typed writable-session recovery for a read-only eval", async () => {
     const { dispatcher, context, handler } = setup({
       mode: "adaptive",

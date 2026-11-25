@@ -1,3 +1,4 @@
+import { testPolicyDecision } from "@vibestudio/shared/authority/testPolicy";
 import type {
   AuthorizationContext,
   AuthorityGrant,
@@ -6,7 +7,7 @@ import type {
 } from "@vibestudio/rpc";
 import type { DirectAuthorityAttestation } from "@vibestudio/rpc/internal";
 import { randomUUID } from "node:crypto";
-import { requirementForPrincipals, scopeCovers } from "@vibestudio/shared/authorization";
+import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import { isHostIntrinsicDirectMethod } from "@vibestudio/shared/authority/hostIntrinsicDirectMethods";
 import { codePrincipal } from "@vibestudio/shared/authority/codePrincipal";
 import {
@@ -87,19 +88,7 @@ export function testPolicyAuthorityDecision(
 ): { ruleId: string; decision: "once" | "task" | "deny" | "queue" } | null {
   const policy =
     authorization?.testPolicy ?? caller.testPolicy ?? caller.executionSession?.testPolicy;
-  if (!policy) return null;
-  if (policy.kind === "orchestrator") {
-    return input.tier === "gated" && input.irreversible !== true
-      ? { ruleId: "orchestrator-gated", decision: "once" }
-      : null;
-  }
-  const rule = policy.case.authority.find(
-    (candidate) =>
-      scopeCovers(candidate.capability, input.capability) &&
-      candidate.tier === input.tier &&
-      scopeCovers(candidate.resource, input.resourceKey)
-  );
-  return rule ? { ruleId: rule.ruleId, decision: rule.decision } : null;
+  return testPolicyDecision(policy, input);
 }
 
 export function testPolicyAllowsGatedInvocation(
