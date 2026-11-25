@@ -45,3 +45,13 @@ test("native displayed presentations require goal review even with no requested 
   const changed=structuredClone(proof);alter(changed);assert.throws(()=>observedContentReviewInput(changed,world));
  }
 });
+
+test("binds actual owned-task output bytes and reference independently of receipt labels",()=>{
+ const world={kind:"owned-task",goal:"Find the accepted measurements",expected:{update:null,handoff:null}};
+ const proof={outcomeContract:{returnedValue:{required:true}},semanticReviewRequired:true,effects:[],current:{task:{id:"actual"}},original:{content:"accepted filename"},delivery:null,nativeDeliveryError:null,raceInjected:false,
+ resultArtifacts:[{record:{taskId:"actual",owner:"current",attempt:"run",artifact:"measurements.csv"},artifact:{name:"measurements.csv",reference:{digest:"actual-content-hash",mediaType:"text/csv"},content:"zone,litres\nNorth,1148\n"}}],actualResult:{result:{content:"zone,litres\nNorth,1148\n"}}};
+ const pick=keys=>Object.fromEntries(keys.map(key=>[key,proof[key]??null]));const [observations,artifacts]=observedContentFields[world.kind];
+ proof.semanticReviewInput={actual:{goal:world.goal,observations:pick(observations),artifacts:pick(artifacts),requestedReturn:proof.actualResult},expected:{goal:world.goal,requestedReturnRequired:true},rubric:"Judge actual requested findings against retained output"};
+ assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
+ for(const alter of [p=>p.semanticReviewInput.actual.observations.resultArtifacts[0].artifact.content="Invented",p=>p.semanticReviewInput.actual.observations.resultArtifacts[0].artifact.reference.digest="foreign",p=>p.semanticReviewInput.actual.observations.resultArtifacts[0].record.owner="foreign"]){const changed=JSON.parse(JSON.stringify(proof));alter(changed);assert.throws(()=>observedContentReviewInput(changed,world));}
+});

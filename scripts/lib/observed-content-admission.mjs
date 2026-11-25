@@ -52,7 +52,8 @@ export const observedContentFields = {
       "original",
       "delivery",
       "nativeDeliveryError",
-      "raceInjected"
+      "raceInjected",
+      "resultArtifacts"
     ],
     []
   ],
