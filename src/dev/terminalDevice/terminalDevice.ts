@@ -79,6 +79,8 @@ export function createTerminalDevice(
   const bin = binDirectoryOf(options.home);
   const surfaces = new Map<string, Surface>();
   const shells = new Set<AbortController>();
+  const artifactWatches = new Set<{ cancel(): void; closed: Promise<void> }>();
+  let closing = false;
   const vibestudio = path.join(bin, "vibestudio");
 
   const surfaceOf = (id: string): Surface => {
@@ -287,19 +289,41 @@ export function createTerminalDevice(
       if (gone()) return null;
       // The running host reconciles its shims when the server reports the
       // client gone; the removal is a file event in the bin directory.
+      signal.throwIfAborted();
+      if (closing) throw new Error("The terminal device is closing");
       await new Promise<void>((resolve, reject) => {
+        let settled = false;
         const watcher = fs.watch(bin, () => {
-          if (gone()) settle(resolve);
+          try {
+            if (gone()) settle();
+          } catch (error) {
+            settle(error);
+          }
         });
-        const abort = () => settle(() => reject(signal.reason));
-        const settle = (finish: () => void) => {
-          watcher.close();
+        const closed = new Promise<void>((done) => watcher.once("close", done));
+        const owner = { cancel: () => settle(new Error("The terminal device is closing")), closed };
+        artifactWatches.add(owner);
+        const abort = () => settle(signal.reason);
+        const settle = (error?: unknown) => {
+          if (settled) return;
+          settled = true;
           signal.removeEventListener("abort", abort);
-          finish();
+          watcher.close();
+          void closed.then(() => {
+            artifactWatches.delete(owner);
+            if (error !== undefined) reject(error);
+            else resolve();
+          });
         };
+        watcher.on("error", (error) => settle(error));
         signal.addEventListener("abort", abort, { once: true });
         if (signal.aborted) abort();
-        else if (gone()) settle(resolve);
+        else
+          try {
+            if (gone()) settle();
+          } catch (error) {
+            settle(error);
+          }
       });
       return null;
     },
@@ -361,6 +385,10 @@ export function createTerminalDevice(
   return {
     ops,
     async close() {
+      closing = true;
+      const watches = [...artifactWatches];
+      for (const watch of watches) watch.cancel();
+      await Promise.all(watches.map((watch) => watch.closed));
       for (const owner of shells) owner.abort(new Error("The terminal device is closing"));
       const ended: Promise<PtyEnd>[] = [];
       for (const surface of surfaces.values()) {

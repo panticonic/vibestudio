@@ -1,7 +1,9 @@
 import * as fs from "node:fs";
+import fsSync from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApprovalSurfaces, type DeviceOperations } from "@vibestudio/shared/deviceDriver";
 import type { ClientLaunchResult, ClientListing } from "@vibestudio/workspace-contracts/clients";
 import { ChangeSignal } from "../../../hosts/terminal/clientLaunchGate.js";
@@ -311,6 +313,43 @@ describe("terminal device", () => {
       output: "answer\n",
       stderr: "trace\n",
     });
+  });
+
+  it("propagates a watcher error and joins its close before rejecting the operation", async () => {
+    const f = fixture();
+    fs.writeFileSync(path.join(bin, "chat"), "shim");
+    f.state.shims.chat = { clientId: "chat", command: "open chat" };
+    const watch = fsSync.watch.bind(fsSync);
+    let owned: fs.FSWatcher | undefined;
+    const spy = vi.spyOn(fsSync, "watch").mockImplementation(((
+      ...args: Parameters<typeof fsSync.watch>
+    ) => {
+      owned = watch(...args);
+      return owned;
+    }) as typeof fsSync.watch);
+    syncBuiltinESMExports();
+    try {
+      const wait = f.op("waitForArtifactsRemoved", { clientId: "chat" });
+      const failure = Object.assign(new Error("watch lost"), { code: "EMFILE" });
+      const rejected = expect(wait).rejects.toBe(failure);
+      owned!.emit("error", failure);
+      await rejected;
+      expect(owned!.listenerCount("close")).toBe(0);
+    } finally {
+      spy.mockRestore();
+      syncBuiltinESMExports();
+      await f.device.close();
+    }
+  });
+
+  it("retires a pending artifact watcher when its terminal device closes", async () => {
+    const f = fixture();
+    fs.writeFileSync(path.join(bin, "chat"), "shim");
+    f.state.shims.chat = { clientId: "chat", command: "open chat" };
+    const wait = f.op("waitForArtifactsRemoved", { clientId: "chat" });
+    const rejected = expect(wait).rejects.toThrow("terminal device is closing");
+    await f.device.close();
+    await rejected;
   });
 
   it("tracks launcher shims and settles their removal on the bin directory's file events", async () => {
