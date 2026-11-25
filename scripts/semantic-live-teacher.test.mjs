@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { test } from "node:test";
-import { openOutcomeGoalEvidence } from "./export-live-workflow-teacher.mjs";
+import { openOutcomeGoalEvidence, reassessObservedReturnPresence } from "./export-live-workflow-teacher.mjs";
 import {editorialReviewInput,coordinatedRevisionReviewInput,outcomeWorkspaceReviewInput,sourceContentReviewInput}from "./lib/source-claim-admission.mjs";
 
 const reference = value => {
@@ -186,5 +186,26 @@ test("actual native-pass capture retains its declared nonvoid entry type", async
   const changed=structuredClone(captured);
   (target==="proof"?changed.execution.diagnostics.openGoalVerification.entry:changed.exercise.entry).resultType="UnobservedReturn";
   assert.throws(()=>openOutcomeGoalEvidence(changed.execution,changed.exercise,"actual",changed.workflow));
+ }
+});
+
+test("legacy absent-return reassessment preserves all checks and refuses genuine null or requested results",()=>{
+ const original=()=>{const f=applicationFixture(),p=f.execution.diagnostics.openGoalVerification;
+ p.actualResult=null;p.outcomeDimensions={returnedValue:{required:false}};p.outcomeContract={returnedValue:{required:false}};
+ f.exercise.report=null;f.exercise.calls[0].record.outcome="error";delete f.exercise.calls[0].record.output;
+ f.execution.diagnostics.natlangTeacher=f.exercise;return f;};
+ const f=original(),before=structuredClone(f.execution);
+ const derived=reassessObservedReturnPresence(f.execution);
+ assert.equal(Object.hasOwn(f.execution.diagnostics.openGoalVerification,"actualResult"),false);
+ assert.equal(derived.originalProof.actualResult,null);assert.equal(derived.originalProofSha256.length,64);
+ assert.deepEqual(f.execution.diagnostics.openGoalVerification.checks,before.diagnostics.openGoalVerification.checks);
+ assert.deepEqual(f.exercise,before.diagnostics.natlangTeacher);
+ assert.equal(openOutcomeGoalEvidence(f.execution,f.exercise,"hours",f.workflow).checks.storedRequestedHours,true);
+ for(const change of [f=>{f.exercise.applicationResult=null;},f=>{f.exercise.applicationResultKind="void";},
+ f=>{f.execution.diagnostics.openGoalVerification.outcomeDimensions.returnedValue.required=true;},
+ f=>{f.execution.diagnostics.openGoalVerification.outcomeContract.returnedValue.required=true;},
+ f=>{f.execution.diagnostics.openGoalVerification.checks.storedRequestedHours=false;},
+ f=>{f.exercise.calls[0].record.output=reference(null);},f=>{f.exercise.calls[0].record.outcome="done";}]){
+  const f=original();change(f);assert.throws(()=>reassessObservedReturnPresence(f.execution));
  }
 });
