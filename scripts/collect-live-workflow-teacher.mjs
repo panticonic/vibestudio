@@ -42,6 +42,7 @@ const { values } = parseArgs({
     list: { type: "boolean" },
     preflight: { type: "boolean" },
     "review-model": { type: "string" },
+    "no-partial-salvage": { type: "boolean" },
     "test-timeout-ms": { type: "string" },
     concurrency: { type: "string", default: "1" },
     "cases-per-instance": { type: "string", default: "12" },
@@ -467,10 +468,6 @@ try {
         if (summary.status === "completed")
           for (const row of batch) terminalCases.add(row.scenario);
         interruption.complete([...terminalCases]);
-        const failed = new Set([
-          ...(summary.failedTests ?? []),
-          ...(summary.testsWithUnexpectedToolFailures ?? []),
-        ]);
         for (const { scenario, directory, pins, caseSource } of batch) {
           try {
             writePins(pins, { ...caseSource, run_id: runId });
@@ -493,21 +490,15 @@ try {
             ) {
               throw new Error(`Unable to retrieve the durable trajectory for ${runId}`);
             }
-            // An explicit cancellation preserves the real partial packet, but an
-            // unfinished case has no terminal goal verdict to export as completed.
-            if (interruption.signal.aborted && !terminalCases.has(scenario)) continue;
-            // Overall interruption and a missing aggregate summary do not invalidate
-            // independent completed cases. The exporter verifies this packet
-            // against its exact source/model/root/outcome before admitting it.
-            if (failed.has(scenario)) {
-              throw new Error(
-                `System test ${runId} failed. Its full trajectory was retained in ${directory}`
-              );
-            }
+            // A durable raw packet is the authority even when the outer run is
+            // cancelled and its terminal wrapper has no progress/completed list.
+            // The exporter verifies exact source, roots, native outcome and any
+            // partial scope; neither aggregate shape nor elapsed time grants it.
             if (JSON.stringify(pinSources()) !== JSON.stringify(pinned))
               throw new Error("Source pins changed during the live run");
             const destination = path.join(directory, "verified");
             await exportLiveTeacherWorkflow({
+              salvageFailedInvocations: !values["no-partial-salvage"] && process.env.VIBESTUDIO_NATIVE_PARTIAL_SALVAGE !== "0",
               trajectory: target,
               pins,
               validator: validators.get(scenario),
@@ -527,10 +518,18 @@ try {
               console.error(`Teacher case ${scenario} pending review after interruption; actual packet retained`);
               continue;
             }
-            const label =
-              interruption.signal.aborted && !terminalCases.has(scenario)
-                ? "Teacher evidence"
-                : "Teacher case";
+            if (interruption.signal.aborted) {
+              // Attempting every retained packet must not turn a graceful
+              // checkpoint into an aggregate test failure. Keep its actual
+              // exporter rejection visible and withhold admission for recovery.
+              interruption.defer(scenario, "unverified-capture");
+              writeFileSync(path.join(directory, "export-rejection.json"), JSON.stringify({
+                scenario, runId, interrupted: true, error: String(error),
+              }, null, 2) + "\n", {mode:0o600,flag:"wx"});
+              console.error(`Teacher evidence ${scenario} unverified after interruption: ${String(error)}`);
+              continue;
+            }
+            const label = "Teacher case";
             console.error(`${label} ${scenario} failed: ${String(error)}`);
             failures.push(error);
           }

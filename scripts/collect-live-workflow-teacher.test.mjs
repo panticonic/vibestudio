@@ -89,16 +89,16 @@ test(
     });
     export async function loadLiveTeacherCases() { return liveTeacherCases; }
     export function workflowSourceGroups(workflow) { return [workflow.group]; }
-    export async function exportLiveTeacherWorkflow({ out, pins, trajectory, review }) {
+    export async function exportLiveTeacherWorkflow({ out, pins, trajectory, review, salvageFailedInvocations }) {
       const source = JSON.parse(await readFile(pins, 'utf8'));
       const run = JSON.parse(await readFile(trajectory, 'utf8'));
-      if (run.scenario === 'failing') throw new Error('Fixture outcome failed');
+      if (run.scenario === 'failing' && (!process.env.VIBE_TEST_CERTIFIED_PARTIAL || !salvageFailedInvocations)) throw new Error('Fixture outcome failed');
       if (process.env.VIBE_TEST_REVIEW_CAPTURE) throw Object.assign(new Error('Checkpoint during settled review exchange'), {
         reviewCapture: {schema:'natlang.live-workflow-review-interrupted/1',complete:false,exchanges:[{request:{actual:'request'},reply:{actual:'reply'}}]}
       });
       if (process.env.VIBE_TEST_REVIEW_REQUIRED) await review({kind:'actual-retained-fixture'},source.teacher);
       await mkdir(out);
-      await writeFile(path.join(out, 'manifest.json'), JSON.stringify({ source, run }));
+      await writeFile(path.join(out, 'manifest.json'), JSON.stringify({ source, run, ...(run.scenario === 'failing' ? {status:'partial',task_completed:false} : {}) }));
     }`
     );
     await put(
@@ -143,7 +143,7 @@ exit 0
         process.on('SIGTERM', () => {
           const evidence = path.join(out, '${runId}', 'failure-evidence');
           fs.mkdirSync(evidence, {recursive:true});
-          fs.writeFileSync(path.join(evidence, 'interrupted-status.json'), JSON.stringify({progress:{completed:[{name:'passing',outcome:'passed'}]}}));
+          fs.writeFileSync(path.join(evidence, 'interrupted-status.json'), JSON.stringify(process.env.VIBE_TEST_OUTER_DONE ? {status:'done',result:{success:true,returnValue:{status:'cancelled',total:2,passed:1,errored:1,failedTests:['failing']}}} : {progress:{completed:[{name:'passing',outcome:'passed'}]}}));
           fs.appendFileSync('commands.jsonl', JSON.stringify({command:'canonical-cancel-retained'}) + '\\n');
           process.exit(130);
         });
@@ -210,6 +210,7 @@ exit 0
       [
         "scripts/collect-live-workflow-teacher.mjs",
         "--assignments",
+        "--no-partial-salvage",
         "--case",
         "passing",
         "--case",
@@ -221,7 +222,7 @@ exit 0
       ],
       {
         cwd: root,
-        env: { ...process.env, PATH: path.join(root, "bin") + path.delimiter + process.env.PATH },
+        env: { ...process.env, VIBE_TEST_CERTIFIED_PARTIAL:"1", PATH: path.join(root, "bin") + path.delimiter + process.env.PATH },
         encoding: "utf8",
       }
     );
@@ -322,12 +323,11 @@ exit 0
       ],
       {
         cwd: root,
-        env: { ...process.env, PATH: path.join(root, "bin") + path.delimiter + process.env.PATH },
+        env: { ...process.env, VIBE_TEST_CERTIFIED_PARTIAL:"1", PATH: path.join(root, "bin") + path.delimiter + process.env.PATH },
         encoding: "utf8",
       }
     );
-    assert.equal(parallel.status, 1);
-    assert.match(parallel.stderr, /Teacher case failing failed.*full trajectory was retained/);
+    assert.equal(parallel.status, 0,parallel.stderr);
     const parallelCommands = (await readFile(path.join(root, "commands.jsonl"), "utf8"))
       .trim()
       .split("\n")
@@ -353,9 +353,8 @@ exit 0
       ).scenario,
       "failing"
     );
-    await assert.rejects(readFile(path.join(parallelFailed, "verified/manifest.json")), {
-      code: "ENOENT",
-    });
+    const partialManifest=JSON.parse(await readFile(path.join(parallelFailed,"verified/manifest.json"),"utf8"));
+    assert.equal(partialManifest.status,"partial");assert.equal(partialManifest.task_completed,false);
 
     // A supervisor interruption after individual completion leaves no summary.
     // The real exporter remains the authority; the fixture rejects its bad case.
@@ -426,6 +425,7 @@ exit 0
             ...process.env,
             PATH: path.join(root, "bin") + path.delimiter + process.env.PATH,
             VIBE_TEST_WAIT: "1",
+            ...(mode === "checkpoint" ? {VIBE_TEST_OUTER_DONE:"1"} : {}),
             ...(mode.startsWith("review-") ? {VIBE_TEST_REVIEW_REQUIRED:"1"} : {}),
             ...(mode === "review-in-flight" ? {VIBE_TEST_REVIEW_CAPTURE:"1"} : {}),
           },
