@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { withOwnership } from "./lib/owned-entry.mjs";
 import { assertArtifactIdentity, downloadReleaseArtifact } from "./download-release-artifact.mjs";
 
 /**
@@ -166,33 +166,36 @@ if (process.argv[1] === new URL(import.meta.url).pathname) {
       enabled,
       includePlatformArtifacts,
     });
-    const scratch = fs.mkdtempSync(
-      path.join(process.env.RUNNER_TEMP ?? os.tmpdir(), "vibestudio-release-gate-")
-    );
-    try {
-      const gate = selected[`vibestudio-release-gate-${sourceSha}`];
-      await downloadReleaseArtifact({
-        ...gate,
-        output: scratch,
-        runId,
-        attempt: run.run_attempt,
-        sourceSha,
-        repository,
-      });
-      const receipt = JSON.parse(
-        fs.readFileSync(path.join(scratch, "release-candidate-gate.json"), "utf8")
-      );
-      const registry = JSON.parse(fs.readFileSync("templates/registry.json", "utf8"));
-      validateGateReceipt(receipt, {
-        sourceSha,
-        releaseTag,
-        attempt: run.run_attempt,
-        enabled: includePlatformArtifacts ? enabled : null,
-        templateIds: registry.templates.map((template) => template.id),
-      });
-    } finally {
-      fs.rmSync(scratch, { recursive: true, force: true });
-    }
+    await withOwnership(async (ownership) => {
+      const scratch = await ownership.scratch("vibestudio-release-gate-");
+      try {
+        const gate = selected[`vibestudio-release-gate-${sourceSha}`];
+        await downloadReleaseArtifact(
+          {
+            ...gate,
+            output: scratch,
+            runId,
+            attempt: run.run_attempt,
+            sourceSha,
+            repository,
+          },
+          ownership
+        );
+        const receipt = JSON.parse(
+          fs.readFileSync(path.join(scratch, "release-candidate-gate.json"), "utf8")
+        );
+        const registry = JSON.parse(fs.readFileSync("templates/registry.json", "utf8"));
+        validateGateReceipt(receipt, {
+          sourceSha,
+          releaseTag,
+          attempt: run.run_attempt,
+          enabled: includePlatformArtifacts ? enabled : null,
+          templateIds: registry.templates.map((template) => template.id),
+        });
+      } finally {
+        fs.rmSync(scratch, { recursive: true, force: true });
+      }
+    });
     const outputNames = {
       gate: `vibestudio-release-gate-${sourceSha}`,
       npm: candidateNpmArtifactName(artifacts, sourceSha, run.run_attempt),

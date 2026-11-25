@@ -1,26 +1,26 @@
 // Run on Linux with: xvfb-run -a node scripts/fullscreen-electron-smoke.mjs
 import { build } from "esbuild";
-import { spawn } from "node:child_process";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { ownedEntry, retireOnAbort } from "./lib/owned-entry.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const scratchRoot = path.join(root, ".tmp");
-await mkdir(scratchRoot, { recursive: true });
-const scratch = await mkdtemp(path.join(scratchRoot, "fullscreen-smoke-"));
-let childProcess;
-let evidence = "";
-try {
-  const preload = path.join(scratch, "preload.cjs");
-  await writeFile(preload, "");
-  const entry = path.join(scratch, "main.cjs");
-  await build({
-    stdin: {
-      resolveDir: root,
-      sourcefile: "fullscreen-smoke.ts",
-      loader: "ts",
-      contents: `
+await ownedEntry(
+  async ({ ownership, signal, scratchRoot: scratch }) => {
+    let owned;
+    let childProcess;
+    let evidence = "";
+    try {
+      const preload = path.join(scratch, "preload.cjs");
+      await writeFile(preload, "");
+      const entry = path.join(scratch, "main.cjs");
+      await build({
+        stdin: {
+          resolveDir: root,
+          sourcefile: "fullscreen-smoke.ts",
+          loader: "ts",
+          contents: `
 import { app, BaseWindow, session } from "electron";
 import { once } from "node:events";
 import http from "node:http";
@@ -165,47 +165,54 @@ globalThis.runFullscreenSmoke().then(
   result => { console.log(JSON.stringify(result)); app.quit(); },
   error => { console.error(error); app.exit(1); }
 );`,
-    },
-    outfile: entry,
-    bundle: true,
-    platform: "node",
-    format: "cjs",
-    external: ["electron"],
-    logLevel: "warning",
-  });
-  childProcess = spawn(
-    path.join(root, "node_modules/electron/dist/electron"),
-    ["--ozone-platform=x11", entry],
-    {
-      cwd: root,
-      stdio: ["ignore", "pipe", "pipe"],
+        },
+        outfile: entry,
+        bundle: true,
+        platform: "node",
+        format: "cjs",
+        external: ["electron"],
+        logLevel: "warning",
+      });
+      signal.throwIfAborted();
+    owned = ownership.spawn(
+        path.join(root, "node_modules/electron/dist/electron"),
+        ["--ozone-platform=x11", entry],
+        {
+          kill: "graceful",
+          cwd: root,
+          stdio: ["ignore", "pipe", "pipe"],
+        }
+      );
+      childProcess = owned.child;
+      retireOnAbort(ownership, signal, owned);
+      const forwardSignal = (signal) => childProcess.kill(signal);
+      const interrupt = () => forwardSignal("SIGINT");
+      const terminate = () => forwardSignal("SIGTERM");
+      process.once("SIGINT", interrupt);
+      process.once("SIGTERM", terminate);
+      for (const stream of [childProcess.stdout, childProcess.stderr]) {
+        stream?.on("data", (chunk) => {
+          const text = chunk.toString();
+          evidence = (evidence + text).slice(-8000);
+          process.stdout.write(text);
+        });
+      }
+      try {
+        const code = await new Promise((resolve, reject) => {
+          childProcess.once("error", reject);
+          childProcess.once("close", resolve);
+        });
+        if (code !== 0) throw new Error("Fullscreen smoke failed with exit code " + code);
+      } finally {
+        process.removeListener("SIGINT", interrupt);
+        process.removeListener("SIGTERM", terminate);
+      }
+    } catch (error) {
+      if (evidence) console.error(evidence);
+      throw error;
+    } finally {
+      await owned?.retire();
     }
-  );
-  const forwardSignal = (signal) => childProcess.kill(signal);
-  const interrupt = () => forwardSignal("SIGINT");
-  const terminate = () => forwardSignal("SIGTERM");
-  process.once("SIGINT", interrupt);
-  process.once("SIGTERM", terminate);
-  for (const stream of [childProcess.stdout, childProcess.stderr]) {
-    stream?.on("data", (chunk) => {
-      const text = chunk.toString();
-      evidence = (evidence + text).slice(-8000);
-      process.stdout.write(text);
-    });
-  }
-  try {
-    const code = await new Promise((resolve, reject) => {
-      childProcess.once("error", reject);
-      childProcess.once("close", resolve);
-    });
-    if (code !== 0) throw new Error("Fullscreen smoke failed with exit code " + code);
-  } finally {
-    process.removeListener("SIGINT", interrupt);
-    process.removeListener("SIGTERM", terminate);
-  }
-} catch (error) {
-  if (evidence) console.error(evidence);
-  throw error;
-} finally {
-  await rm(scratch, { recursive: true, force: true });
-}
+  },
+  { appRoot: root, scratchPrefix: "fullscreen-smoke-" }
+);

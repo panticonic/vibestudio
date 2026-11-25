@@ -1,25 +1,26 @@
 import { build } from "esbuild";
-import { spawn } from "node:child_process";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import { ownedEntry, retireOnAbort } from "./lib/owned-entry.mjs";
 
 // Exercise the real capture owner and native view lifecycle against toy pages.
 // No developer instance, user profile, or desktop screenshot is used.
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(import.meta.url);
-const temp = await mkdtemp(join(tmpdir(), "vibestudio-frame-smoke-"));
-let child;
-let exited;
-let timer;
-try {
-  await writeFile(join(temp, "preload.cjs"), "");
-  await build({
-    stdin: {
-      resolveDir: root,
-      contents: `
+await ownedEntry(
+  async ({ ownership, signal, scratchRoot: temp }) => {
+    let owned;
+    let child;
+    let exited;
+    let timer;
+    try {
+      await writeFile(join(temp, "preload.cjs"), "");
+      await build({
+        stdin: {
+          resolveDir: root,
+          contents: `
 import { app, BaseWindow, nativeImage, webContents } from 'electron';
 import assert from 'node:assert/strict';
 import { ViewManager } from './hosts/desktop/main/viewManager.ts';
@@ -81,29 +82,36 @@ async function run() {
 }
 run().then(() => app.quit(), error => { console.error(error); app.exit(1); });
 `,
-    },
-    outfile: join(temp, "main.cjs"),
-    bundle: true,
-    platform: "node",
-    format: "cjs",
-    external: ["electron"],
-  });
-  child = spawn(require("electron"), [join(temp, "main.cjs")], {
-    stdio: "inherit",
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: undefined },
-  });
-  exited = new Promise((resolve, reject) => {
-    child.once("error", reject);
-    child.once("exit", (code, signal) => resolve({ code, signal }));
-  });
-  timer = setTimeout(() => child.kill("SIGTERM"), 30_000);
-  const result = await exited;
-  if (result.code !== 0) throw new Error(`Frame smoke failed: ${JSON.stringify(result)}`);
-} finally {
-  clearTimeout(timer);
-  if (child && child.exitCode === null && child.signalCode === null) {
-    child.kill("SIGTERM");
-    await exited;
-  }
-  await rm(temp, { recursive: true, force: true });
-}
+        },
+        outfile: join(temp, "main.cjs"),
+        bundle: true,
+        platform: "node",
+        format: "cjs",
+        external: ["electron"],
+      });
+      signal.throwIfAborted();
+    owned = ownership.spawn(require("electron"), [join(temp, "main.cjs")], {
+        kill: "graceful",
+        stdio: "inherit",
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: undefined },
+      });
+      child = owned.child;
+      retireOnAbort(ownership, signal, owned);
+      exited = new Promise((resolve, reject) => {
+        child.once("error", reject);
+        child.once("exit", (code, signal) => resolve({ code, signal }));
+      });
+      timer = setTimeout(() => child.kill("SIGTERM"), 30_000);
+      const result = await exited;
+      if (result.code !== 0) throw new Error(`Frame smoke failed: ${JSON.stringify(result)}`);
+    } finally {
+      clearTimeout(timer);
+      if (child && child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGTERM");
+        await exited;
+      }
+      await owned?.join();
+    }
+  },
+  { appRoot: root, scratchPrefix: "vibestudio-frame-smoke-" }
+);

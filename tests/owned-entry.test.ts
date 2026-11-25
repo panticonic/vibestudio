@@ -205,3 +205,22 @@ describe("ownedEntry in process", () => {
     );
   });
 });
+
+it("retains scratch only by explicit request while still retiring its processes", async () => {
+  let scratch: string | undefined, pid: number | undefined;
+  await ownedEntry(
+    async ({ ownership, scratchRoot }) => {
+      scratch = scratchRoot;
+      const work = ownership.spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], {
+        kill: "immediate",
+        stdio: "ignore",
+      });
+      await work.registered;
+      pid = work.child.pid;
+      fs.writeFileSync(path.join(scratchRoot!, "requested.txt"), "retained");
+    },
+    { profileDir: profile, scratchPrefix: "explicit-keep-", keepScratch: true }
+  );
+  expect(fs.readFileSync(path.join(scratch!, "requested.txt"), "utf8")).toBe("retained");
+  if (process.platform === "linux") expect(running(pid!)).toBe(false);
+});

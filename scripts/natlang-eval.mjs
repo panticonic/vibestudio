@@ -507,11 +507,11 @@ export async function runNatlangEval(options, context, dependencies = defaultDep
         runRoot: path.join(scratchRoot, "natlang"),
       });
 
-      const composition = projectionTools.composeDevelopmentTemplateCheckouts(
-        sources.map(({ id, url }) => ({ checkout: selected.checkouts[id], url }))
+      const composition = await projectionTools.composeDevelopmentTemplateCheckouts(
+        sources.map(({ id, url }) => ({ checkout: selected.checkouts[id], url })),
+        { ownership }
       );
       retirements.push(composition.release);
-      await ownership.own(composition.root, "template composition");
       // Workspace source runs as ES modules in workerd. The host-owned Node projection must declare that same
       // module boundary: otherwise NodeNext treats package-less skill folders as CommonJS (and rejects import.meta).
       const packagePath = path.join(composition.root, "package.json");

@@ -21,7 +21,7 @@ import type {
   HistoryTransition,
 } from "../types.js";
 import { BrowserDataError } from "../errors.js";
-import { copyDatabaseToTemp, cleanupTempCopy } from "../import/fileCopier.js";
+import { copyDatabaseToTemp } from "../import/fileCopier.js";
 import { chromeTimestampToMs } from "../normalize/history.js";
 import {
   chromiumCookieIsolation,
@@ -114,7 +114,7 @@ function tableColumns(db: Database, tableName: string): Set<string> {
 async function withDatabase<T>(dbPath: string, fn: (db: Database) => T | Promise<T>): Promise<T> {
   const tempPath = await copyDatabaseToTemp(dbPath);
   try {
-    const db = await openReadonlySqlite(tempPath);
+    const db = await openReadonlySqlite(tempPath.path);
     try {
       return await fn(db);
     } finally {
@@ -138,7 +138,7 @@ async function withDatabase<T>(dbPath: string, fn: (db: Database) => T | Promise
       error.message
     );
   } finally {
-    cleanupTempCopy(tempPath);
+    await tempPath.release();
   }
 }
 

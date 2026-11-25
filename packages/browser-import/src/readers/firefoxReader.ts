@@ -19,7 +19,7 @@ import type {
   SameSiteValue,
 } from "../types.js";
 import { BrowserDataError } from "../errors.js";
-import { copyDatabaseToTemp, cleanupTempCopy } from "../import/fileCopier.js";
+import { copyDatabaseToTemp, releaseTempDatabase, type TempCopy } from "../import/fileCopier.js";
 import { buildFolderPath, normalizeTitle } from "../normalize/bookmarks.js";
 import { firefoxTimestampToMs } from "../normalize/history.js";
 import {
@@ -166,14 +166,14 @@ export function decompressMozLz4(data: Buffer): Buffer {
  * Helper to open a SQLite database from the profile, copying to temp first.
  * Returns [db, tempPath] so caller can clean up.
  */
-async function openProfileDb(profilePath: string, dbName: string): Promise<[Database, string]> {
+async function openProfileDb(profilePath: string, dbName: string): Promise<[Database, TempCopy]> {
   const dbPath = path.join(profilePath, dbName);
   const tempPath = await copyDatabaseToTemp(dbPath);
   try {
-    const db = await openReadonlySqlite(tempPath);
+    const db = await openReadonlySqlite(tempPath.path);
     return [db, tempPath];
   } catch (err: unknown) {
-    cleanupTempCopy(tempPath);
+    await tempPath.release();
     const message = err instanceof Error ? err.message : String(err);
     if (message.includes("not a database") || message.includes("malformed")) {
       throw new BrowserDataError("DB_CORRUPT", `Database is corrupt: ${dbName}`, message);
@@ -302,8 +302,7 @@ export class FirefoxReader implements BrowserDataReader {
 
       return bookmarks;
     } finally {
-      db.close();
-      cleanupTempCopy(tempPath);
+      await releaseTempDatabase(db, tempPath);
     }
   }
 
@@ -374,8 +373,7 @@ export class FirefoxReader implements BrowserDataReader {
 
       return Array.from(byUrl.values());
     } finally {
-      db.close();
-      cleanupTempCopy(tempPath);
+      await releaseTempDatabase(db, tempPath);
     }
   }
 
@@ -426,8 +424,7 @@ export class FirefoxReader implements BrowserDataReader {
         };
       });
     } finally {
-      db.close();
-      cleanupTempCopy(tempPath);
+      await releaseTempDatabase(db, tempPath);
     }
   }
 
@@ -506,8 +503,7 @@ export class FirefoxReader implements BrowserDataReader {
         timesUsed: row.timesUsed,
       }));
     } finally {
-      db.close();
-      cleanupTempCopy(tempPath);
+      await releaseTempDatabase(db, tempPath);
     }
   }
 
@@ -637,8 +633,7 @@ export class FirefoxReader implements BrowserDataReader {
         setting: firefoxPermissionToSetting(row.permission),
       }));
     } finally {
-      db.close();
-      cleanupTempCopy(tempPath);
+      await releaseTempDatabase(db, tempPath);
     }
   }
 
@@ -696,8 +691,7 @@ export class FirefoxReader implements BrowserDataReader {
         };
       });
     } finally {
-      db.close();
-      cleanupTempCopy(tempPath);
+      await releaseTempDatabase(db, tempPath);
     }
   }
 }

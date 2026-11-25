@@ -2,6 +2,10 @@ import { deploy, main, parseArgs, REQUIRED_NODE_VERSION } from "../scripts/cli/r
 import { bindRemoteDeployment } from "../scripts/cli/remote-deployment-workflow.mjs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 type RunCall = { command: string; args: string[]; options?: { input?: string } };
 
 afterEach(() => vi.restoreAllMocks());
@@ -213,4 +217,33 @@ describe("Natlang deployment binding", () => {
       });
     }
   );
+});
+
+it("retires the exact remote upload after a failed SCP without deleting its caller artifact", async () => {
+  vi.spyOn(console, "log").mockImplementation(() => undefined);
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "remote-upload-lifecycle-"));
+  const artifact = path.join(directory, "candidate.tgz");
+  fs.writeFileSync(artifact, "candidate");
+  const calls: RunCall[] = [],
+    failure = new Error("SCP interrupted");
+  try {
+    await expect(
+      deploy(
+        { ...parseArgs(["deploy@example.test"]), artifact },
+        {
+          run: async (command: string, args: string[], options?: { input?: string }) => {
+            calls.push({ command, args, options });
+            if (command === "scp") throw failure;
+          },
+        }
+      )
+    ).rejects.toBe(failure);
+    const upload = calls.find((call) => call.command === "scp")!;
+    const remote = upload.args[1]!.slice("deploy@example.test:".length);
+    expect(remote).toMatch(/^\/tmp\/vibestudio-[a-f0-9-]+\.tgz$/u);
+    expect(calls.at(-1)?.options?.input).toBe(`rm -f '${remote}'`);
+    expect(fs.readFileSync(artifact, "utf8")).toBe("candidate");
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
