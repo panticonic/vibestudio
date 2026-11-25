@@ -22,6 +22,16 @@ async function loopbackPort() {
   });
 }
 
+async function requireHostedModelRouteSupport(appRoot) {
+  if (process.env.VIBESTUDIO_HOSTED_MODEL_ROUTE === undefined) return;
+  const manifest = JSON.parse(await readFile(path.join(appRoot, "package.json"), "utf8"));
+  if (manifest.vibestudioHostedModelRouteVersion !== 1) {
+    throw new Error(
+      "The installed server cannot enforce VIBESTUDIO_HOSTED_MODEL_ROUTE; install a policy-capable release before launching this owned target"
+    );
+  }
+}
+
 export async function requireInstalledDeploymentPackage(appRoot) {
   try {
     const manifest = JSON.parse(await readFile(path.join(appRoot, "package.json"), "utf8"));
@@ -33,6 +43,8 @@ export async function requireInstalledDeploymentPackage(appRoot) {
       { cause }
     );
   }
+
+  await requireHostedModelRouteSupport(appRoot);
 
   // Probe the packaged loader in its own process, using the same Node binary
   // as the deployment. The development checkout has a separate Iroh binding.
@@ -48,11 +60,14 @@ export async function requireInstalledDeploymentPackage(appRoot) {
       path.resolve(appRoot, "node_modules", "@number0", "iroh"),
     ]);
   } catch (cause) {
-    throw new Error("The installed Vibestudio server could not load its Iroh native binding", { cause });
+    throw new Error("The installed Vibestudio server could not load its Iroh native binding", {
+      cause,
+    });
   }
 }
 
 export async function openOwnedDeploymentTarget({ appRoot, ownership, scratchRoot, signal }) {
+  await requireHostedModelRouteSupport(appRoot);
   const home = path.join(scratchRoot, "home");
   const instance = path.join(scratchRoot, "instance");
   const readyFile = path.join(instance, "hub-ready.json");
@@ -63,7 +78,8 @@ export async function openOwnedDeploymentTarget({ appRoot, ownership, scratchRoo
       ([name]) =>
         !name.startsWith("VIBESTUDIO_") ||
         name === "VIBESTUDIO_TEMPLATE_CHECKOUTS" ||
-        name === "VIBESTUDIO_MAX_CONCURRENT_BUILDS"
+        name === "VIBESTUDIO_MAX_CONCURRENT_BUILDS" ||
+        name === "VIBESTUDIO_HOSTED_MODEL_ROUTE"
     )
   );
   const env = {

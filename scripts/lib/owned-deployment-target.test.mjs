@@ -26,13 +26,22 @@ test("an installed deployment child uses production dependencies under a develop
   await mkdir(scratchRoot);
   const captured = path.join(appRoot, "child-env.json");
   await writeFile(
+    path.join(appRoot, "package.json"),
+    JSON.stringify({ name: "@panticonic/vibestudio-server", vibestudioHostedModelRouteVersion: 1 })
+  );
+  await writeFile(
     path.join(cli, "remote-serve.mjs"),
     `import { writeFileSync } from "node:fs";
      writeFileSync(${JSON.stringify(captured)}, JSON.stringify(process.env));`
   );
   const previous = process.env.NODE_ENV;
+  const priorRoute = process.env.VIBESTUDIO_HOSTED_MODEL_ROUTE;
+  const route = '{"primary":"openai-codex:gpt-6-luna","fallback":null}';
   process.env.NODE_ENV = "development";
+  process.env.VIBESTUDIO_HOSTED_MODEL_ROUTE = route;
   t.after(() => {
+    if (priorRoute === undefined) delete process.env.VIBESTUDIO_HOSTED_MODEL_ROUTE;
+    else process.env.VIBESTUDIO_HOSTED_MODEL_ROUTE = priorRoute;
     if (previous === undefined) delete process.env.NODE_ENV;
     else process.env.NODE_ENV = previous;
   });
@@ -51,6 +60,7 @@ test("an installed deployment child uses production dependencies under a develop
     );
     const env = JSON.parse(await readFile(captured, "utf8"));
     assert.equal(env.NODE_ENV, "production");
+    assert.equal(env.VIBESTUDIO_HOSTED_MODEL_ROUTE, route);
     assert.equal(env.VIBESTUDIO_APP_ROOT, appRoot);
     assert.equal(process.env.NODE_ENV, "development");
   } finally {
@@ -76,4 +86,34 @@ test("deployment preflight rejects an installed server whose Iroh binding cannot
     requireInstalledDeploymentPackage(appRoot),
     /the installed Vibestudio server could not load its Iroh native binding/i
   );
+});
+
+test("an older installed target is refused before resource allocation when it cannot enforce the owner route", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "deployment-policy-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(
+    path.join(root, "package.json"),
+    JSON.stringify({ name: "@panticonic/vibestudio-server" })
+  );
+  const previous = process.env.VIBESTUDIO_HOSTED_MODEL_ROUTE;
+  process.env.VIBESTUDIO_HOSTED_MODEL_ROUTE =
+    '{"primary":"openai-codex:gpt-6-luna","fallback":null}';
+  t.after(() => {
+    if (previous === undefined) delete process.env.VIBESTUDIO_HOSTED_MODEL_ROUTE;
+    else process.env.VIBESTUDIO_HOSTED_MODEL_ROUTE = previous;
+  });
+  await assert.rejects(
+    openOwnedDeploymentTarget({
+      appRoot: root,
+      ownership: {
+        spawn() {
+          throw new Error("must not spawn");
+        },
+      },
+      scratchRoot: path.join(root, "never-created"),
+      signal: new AbortController().signal,
+    }),
+    /cannot enforce VIBESTUDIO_HOSTED_MODEL_ROUTE/
+  );
+  await assert.rejects(readFile(path.join(root, "never-created", "home")), { code: "ENOENT" });
 });

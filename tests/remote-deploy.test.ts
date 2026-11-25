@@ -11,6 +11,32 @@ type RunCall = { command: string; args: string[]; options?: { input?: string } }
 afterEach(() => vi.restoreAllMocks());
 
 describe("remote-deploy CLI", () => {
+  it("carries an owner model route into the managed service and checks installed support before starting it", async () => {
+    const route = JSON.stringify({ primary: "openai-codex:gpt-6-luna", fallback: null });
+    vi.stubEnv("VIBESTUDIO_HOSTED_MODEL_ROUTE", route);
+    try {
+      const scripts: string[] = [];
+      await deploy(parseArgs(["local"]), {
+        run: async (_command: string, _args: string[], options?: { input?: string }) => {
+          scripts.push(options?.input ?? "");
+        },
+      });
+      const unit = scripts.find((script) =>
+        script.includes("cat > $HOME/.config/systemd/user/vibestudio-server.service")
+      )!;
+      const line = unit
+        .split("\n")
+        .find((line) => line.startsWith('Environment="VIBESTUDIO_HOSTED_MODEL_ROUTE='))!;
+      const encoded = JSON.parse(line.slice("Environment=".length));
+      expect(encoded).toBe(`VIBESTUDIO_HOSTED_MODEL_ROUTE=${route}`);
+      expect(unit.indexOf("manifest.vibestudioHostedModelRouteVersion!==1")).toBeLessThan(
+        unit.indexOf("systemctl --user restart")
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("requires an explicit file for an artifact argument", async () => {
     expect(() => parseArgs(["local", "--artifact"])).toThrow(/requires a file path/u);
     await expect(deploy(parseArgs(["local", "--artifact", "."]))).rejects.toThrow(

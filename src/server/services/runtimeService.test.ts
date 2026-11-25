@@ -96,6 +96,7 @@ function makeDODispatch(instance: WorkspaceDO): {
 }
 
 interface BuildDepsOptions {
+  hostedModelRoute?: import("./hostedModelRoute.js").HostedModelRoute | null;
   resolveNativeOwner?: (
     input: import("@vibestudio/shared/runtime/entitySpec").EntityActivationInput
   ) => { incarnation: string; generation: number } | null;
@@ -228,6 +229,7 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
 
   const contextPolicies = new AgentExecutionSessionRegistry();
   const runtimeResult = createRuntimeService({
+    hostedModelRoute: opts.hostedModelRoute,
     prepareResourceBindings: opts.prepareResourceBindings,
     taskAuthorities,
     testPolicyForContext:
@@ -605,6 +607,50 @@ describe("runtimeService system-test agent execution policy", () => {
       ).rejects.toThrow("Explicit child model configuration");
     }
     expect(prepareDurableObject).not.toHaveBeenCalled();
+  });
+
+  it("seeds unscoped ambient agent defaults with the owned primary instead of profile Sol", async () => {
+    const prepareDurableObject = vi.fn(async () => ({
+      targetId: "target:ambient",
+      effectiveVersion: "ev-agent",
+      ...sealedExecution,
+    }));
+    const { internal } = await buildDeps({
+      prepareDurableObject,
+      hostedModelRoute: { primary: "openai-codex:gpt-6-luna", fallback: null },
+    });
+    await internal.createEntity(
+      serverCaller,
+      doCreateSpec({
+        key: "ambient",
+        contextId: "ctx-ambient",
+        agentChannelId: "chat-ambient",
+        stateArgs: {
+          agentConfig: {
+            model: "openai-codex:gpt-6.1-sol",
+            fallbackModel: "openai-codex:gpt-6-sol",
+            approvalLevel: 1,
+          },
+        },
+      })
+    );
+    expect(prepareDurableObject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stateArgs: { agentConfig: { model: "openai-codex:gpt-6-luna", approvalLevel: 1 } },
+      })
+    );
+    const ordinaryDo = createVerifiedCaller("do:workers/agent:Agent:ambient", "do");
+    await expect(
+      internal.createEntity(
+        ordinaryDo,
+        doCreateSpec({
+          key: "explicit",
+          contextId: "ctx-explicit",
+          agentChannelId: "chat-explicit",
+          stateArgs: { agentConfig: { model: "openai-codex:gpt-6-sol" } },
+        })
+      )
+    ).rejects.toThrow("Host owner's configured");
   });
 
   function caseCustody() {

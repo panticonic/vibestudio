@@ -28,10 +28,37 @@ const templates = [
 ];
 
 describe("development instance environment", () => {
+  it("preserves an explicit owner hosted-model constraint through isolated launch selection", () => {
+    const route = '{"primary":"openai-codex:gpt-6-luna","fallback":null}';
+    const env = developmentInstanceEnvironment({
+      parent: { VIBESTUDIO_HOSTED_MODEL_ROUTE: route },
+      repoRoot: "/host",
+      instanceRoot: "/instance",
+      instanceId: "owned",
+      sourceCoupled: false,
+      disposable: true,
+      cleanRoom: true,
+    });
+    expect(env.VIBESTUDIO_HOSTED_MODEL_ROUTE).toBe(route);
+  });
+
   it("uses only the supervisor-selected capture root and clears stale inherited custody", () => {
-    const input = { parent: { VIBESTUDIO_NATIVE_CAPTURE_EVIDENCE_ROOT: "/foreign" }, repoRoot: "/host", instanceRoot: "/runtime", instanceId: "test", sourceCoupled: false, disposable: true };
-    expect(developmentInstanceEnvironment(input)["VIBESTUDIO_NATIVE_CAPTURE_EVIDENCE_ROOT"]).toBeUndefined();
-    expect(developmentInstanceEnvironment({ ...input, captureEvidenceRoot: "/owned/evidence" })["VIBESTUDIO_NATIVE_CAPTURE_EVIDENCE_ROOT"]).toBe("/owned/evidence");
+    const input = {
+      parent: { VIBESTUDIO_NATIVE_CAPTURE_EVIDENCE_ROOT: "/foreign" },
+      repoRoot: "/host",
+      instanceRoot: "/runtime",
+      instanceId: "test",
+      sourceCoupled: false,
+      disposable: true,
+    };
+    expect(
+      developmentInstanceEnvironment(input)["VIBESTUDIO_NATIVE_CAPTURE_EVIDENCE_ROOT"]
+    ).toBeUndefined();
+    expect(
+      developmentInstanceEnvironment({ ...input, captureEvidenceRoot: "/owned/evidence" })[
+        "VIBESTUDIO_NATIVE_CAPTURE_EVIDENCE_ROOT"
+      ]
+    ).toBe("/owned/evidence");
   });
 
   it("retains the three foundation pins used for private workspace bootstrap", () => {

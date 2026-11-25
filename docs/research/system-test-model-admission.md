@@ -95,3 +95,52 @@ This case-only mechanism does not constrain unrelated ambient actors in unscoped
 contexts. An owned-instance hosted-model route is still required for the
 campaign's stronger no-Sol-in-any-role constraint; no whole-instance assurance is
 claimed from the case gate alone.
+
+Owned-instance route inventory before edits: `systemTestInstanceEnvironment`
+(src/dev/systemTestInstance.ts60) spreads the trusted launch environment;
+runInstance.ts855 passes it through developmentInstanceEnvironment, which starts
+with `{...input.parent}`. Public server launchers also inherit that environment.
+`owned-deployment-target.mjs` explicitly strips most VIBESTUDIO_* keys and must
+preserve the owner route. Its installed package can be older than this Host:
+require declared package support before launching under a constraint, rather
+than claiming an ignored environment variable is enforcement.
+
+A typed optional VIBESTUDIO_HOSTED_MODEL_ROUTE applies only to this owned Host
+process, independent of case context. Credential native admission intersects it
+with any case route. Known agent creation defaults inherit its primary, while
+DO-authored explicit disallowed choices refuse. Unset keeps ordinary product
+choices. Local model-under-test and deterministic branches are unchanged.
+The independent review command scripts/review-live-workflow-teacher.mjs65-96
+constructs a standalone Node createPiModelBackend for its explicitly chosen
+reviewer; it does not acquire a hosted model through this server or case route.
+
+Public remote-deploy is another environment boundary: it writes a systemd unit
+instead of inheriting the local shell environment. Preserve the explicit owner
+route in that unit and check installed package support before writing/starting
+it. This covers local and SSH deployment through their existing shared script.
+An older installed release refuses under the constraint; no unsupported target
+is launched with a silently ignored variable. The package producer declares
+support only for the new implementation.
+
+Owned-instance configuration is exactly:
+`VIBESTUDIO_HOSTED_MODEL_ROUTE='{"primary":"openai-codex:gpt-6-luna","fallback":null}'`.
+It is parsed and snapshotted in the Host credential/runtime services; malformed
+configuration refuses initialization. Hosted native requests in ambient contexts
+are refused before credentials when outside that route, even without case policy.
+Case and owner constraints intersect. Known agent-channel creation inherits the
+owner primary for absent/profile defaults; deliberate DO overrides refuse.
+Explicitly selected default/helper targets already resolved elsewhere are never
+silently relabelled by the final gate: disallowed canonical requests refuse.
+
+Final verification: 224/224 component tests in
+`vibe-owned-hosted-model-route-20261125b` (LOW 1.5 GiB/reserve 7.5 GiB,
+heap 768 MiB, peak 583.9 MiB, 17.73 s), plus 3/3 actual Node owned-target tests
+in `vibe-owned-target-model-route-20261125a` (159.1 MiB, 1.05 s). These test
+ambient generation/helper refusal before credential lookup, owner/case
+intersection, default agent model seeding, invalid configuration, managed launch
+environment, remote systemd unit propagation/preflight, and unsupported installed
+target refusal before allocation/spawn. Source syntax lint, script lint with the
+repository's script configuration, formatting and diff checks passed. Full typed
+graph/build and live provider execution remain unchecked. No network/model calls.
+The old installed 0.1.106 package lacks the feature declaration and must remain a
+prerequisite refusal until replaced with a current policy-capable package.

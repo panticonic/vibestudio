@@ -92,10 +92,11 @@ const credential = {
   ],
 };
 
-function fixture() {
+function fixture(hostedModelRoute?: import("./hostedModelRoute.js").HostedModelRoute | null) {
   const resolveNativeInvocation = vi.fn(async () => ({ nativeInvocation, active: true }));
   const listUrlBound = vi.fn(async () => [credential]);
   const service = createCredentialService({
+    hostedModelRoute,
     credentialStore: {
       listUrlBound,
       loadUrlBound: async (id: string) => (id === credential.id ? credential : null),
@@ -198,7 +199,8 @@ describe("native model credential admission", () => {
   function modelAdmission(
     modelId: string,
     route?: { model: string; fallback?: string },
-    taskKind = "vibestudio.model-helper"
+    taskKind = "vibestudio.model-helper",
+    hostedModelRoute?: import("./hostedModelRoute.js").HostedModelRoute | null
   ) {
     const params = { ...request, providerId: "openai-codex", modelId };
     const invocation = nativeInvocationIdentity({
@@ -214,7 +216,7 @@ describe("native model credential admission", () => {
       task: { ...source.task, kind: taskKind, version: 1 },
       operation: { ...source.operation, ...params, requestDigest: "b".repeat(64) },
     });
-    const f = fixture();
+    const f = fixture(hostedModelRoute);
     f.resolveNativeInvocation.mockResolvedValue({ nativeInvocation: invocation, active: true });
     const policy = route
       ? {
@@ -255,6 +257,31 @@ describe("native model credential admission", () => {
         ),
     };
   }
+
+  it("refuses ambient unscoped hosted Sol requests before lookup under an owned Luna instance", async () => {
+    const owner = { primary: "openai-codex:gpt-6-luna", fallback: null };
+    for (const kind of ["pi.generation", "vibestudio.model-helper"]) {
+      const f = modelAdmission("gpt-6-sol", undefined, kind, owner);
+      await expect(f.admit()).rejects.toThrow("Host owner's configured hosted-model route");
+      expect(f.listUrlBound).not.toHaveBeenCalled();
+    }
+    await expect(
+      modelAdmission("gpt-6-luna", undefined, undefined, owner).admit()
+    ).resolves.toBeDefined();
+  });
+
+  it("intersects owner and case routes without permitting either to weaken the other", async () => {
+    const owner = { primary: "openai-codex:gpt-6-luna", fallback: null };
+    await expect(
+      modelAdmission("gpt-6-sol", { model: "openai-codex:gpt-6-sol" }, undefined, owner).admit()
+    ).rejects.toThrow("Host owner's configured hosted-model route");
+    await expect(
+      modelAdmission("gpt-6-sol", { model: "openai-codex:gpt-6-luna" }, undefined, {
+        ...owner,
+        fallback: "openai-codex:gpt-6-sol",
+      }).admit()
+    ).rejects.toThrow("outside this system test's configured model route");
+  });
 
   it("rejects generation and helper tasks requesting Sol under Luna before credential lookup", async () => {
     for (const kind of ["pi.generation", "vibestudio.model-helper"]) {

@@ -1,3 +1,9 @@
+import {
+  readHostedModelRoute,
+  assertHostedModelAllowed,
+  hostedModelAllowed,
+  type HostedModelRoute,
+} from "./hostedModelRoute.js";
 import { isAuthorityPending } from "@vibestudio/shared/authority/reviewPending";
 import {
   assertExecutionAuthorityMatches,
@@ -291,6 +297,7 @@ export interface RuntimeSemanticContexts {
 }
 
 export interface RuntimeServiceDeps {
+  hostedModelRoute?: HostedModelRoute | null;
   /**
    * The single owner of WorkspaceDO entity state. The runtime service never
    * dispatches `entityActivate`/`entityRetire` or touches the cache mirror
@@ -402,6 +409,8 @@ function deriveEntityKey(srcKey: string, targetKey: string, srcId: string): stri
 
 export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceResult {
   const store = deps.entityStore;
+  const hostedModelRoute =
+    deps.hostedModelRoute === undefined ? readHostedModelRoute() : deps.hostedModelRoute;
   // Physical creation/recovery and terminal release own the same canonical
   // entity transition. Receipt inspection and domain settlement remain outside
   // this queue so an owner can finish teardown without awaiting itself.
@@ -462,13 +471,20 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       : undefined;
   }
 
-  function applyTestAgentPolicy<T extends RuntimeEntityCreateSpec>(
+  function applyAgentModelPolicy<T extends RuntimeEntityCreateSpec>(
     caller: VerifiedCaller,
     spec: T
   ): T {
     const agentPolicy =
       caller.testPolicy?.kind === "case" ? caller.testPolicy.case.agent : undefined;
-    if (!agentPolicy || !selfAgentChannelFromSpec(spec) || spec.kind === "session") return spec;
+    if (
+      (!agentPolicy && !hostedModelRoute) ||
+      !selfAgentChannelFromSpec(spec) ||
+      spec.kind === "session"
+    )
+      return spec;
+    const primary = agentPolicy?.model ?? hostedModelRoute!.primary;
+    assertHostedModelAllowed(hostedModelRoute, primary);
 
     const stateArgs =
       spec.stateArgs && typeof spec.stateArgs === "object" && !Array.isArray(spec.stateArgs)
@@ -483,32 +499,49 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     if (caller.runtime.kind === "do") {
       const requestedModel = currentConfig["model"];
       const requestedFallback = currentConfig["fallbackModel"];
+      if (typeof requestedModel === "string")
+        assertHostedModelAllowed(hostedModelRoute, requestedModel);
+      if (typeof requestedFallback === "string")
+        assertHostedModelAllowed(hostedModelRoute, requestedFallback);
       if (
-        (typeof requestedModel === "string" && requestedModel !== agentPolicy.model) ||
-        (typeof requestedFallback === "string" &&
-          (agentPolicy.fallback === "disabled" || requestedFallback !== agentPolicy.fallback.model))
+        agentPolicy &&
+        ((typeof requestedModel === "string" && requestedModel !== agentPolicy.model) ||
+          (typeof requestedFallback === "string" &&
+            (agentPolicy.fallback === "disabled" ||
+              requestedFallback !== agentPolicy.fallback.model)))
       ) {
         throw new Error(
           "Explicit child model configuration is outside this system test's configured model route"
         );
       }
     }
-    delete currentConfig["fallbackModel"];
-    delete currentConfig["fallbackThinkingLevel"];
-    delete currentConfig["fallbackOn"];
-    delete currentConfig["fallbackScope"];
+    if (
+      agentPolicy ||
+      (typeof currentConfig["fallbackModel"] === "string" &&
+        !hostedModelAllowed(hostedModelRoute, currentConfig["fallbackModel"]))
+    ) {
+      delete currentConfig["fallbackModel"];
+      delete currentConfig["fallbackThinkingLevel"];
+      delete currentConfig["fallbackOn"];
+      delete currentConfig["fallbackScope"];
+    }
     stateArgs["agentConfig"] = {
       ...currentConfig,
-      model: agentPolicy.model,
-      approvalLevel: agentPolicy.approvalLevel,
-      ...(agentPolicy.fallback === "disabled"
-        ? {}
-        : {
+      model:
+        !agentPolicy && caller.runtime.kind === "do" && typeof currentConfig["model"] === "string"
+          ? currentConfig["model"]
+          : primary,
+      ...(agentPolicy ? { approvalLevel: agentPolicy.approvalLevel } : {}),
+      ...(agentPolicy &&
+      agentPolicy.fallback !== "disabled" &&
+      hostedModelAllowed(hostedModelRoute, agentPolicy.fallback.model)
+        ? {
             fallbackModel: agentPolicy.fallback.model,
             fallbackThinkingLevel: agentPolicy.fallback.thinkingLevel,
             fallbackOn: [...agentPolicy.fallback.on],
             fallbackScope: agentPolicy.fallback.scope,
-          }),
+          }
+        : {}),
     };
     return { ...spec, stateArgs };
   }
@@ -666,7 +699,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     rawSpec: RuntimeEntityCreateSpec
   ): Promise<RuntimeEntityHandle> {
     const caller = actors.lifecycleCaller;
-    const spec = { ...applyTestAgentPolicy(caller, rawSpec), key: rawSpec.key ?? randomUUID() };
+    const spec = { ...applyAgentModelPolicy(caller, rawSpec), key: rawSpec.key ?? randomUUID() };
     assertCreateEntityAllowed(caller, spec);
     if (
       spec.kind === "do" &&
@@ -840,7 +873,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     spec: RuntimeCodeEntityCreateSpec
   ): Promise<RuntimeEntityHandle> {
     const caller = actors.lifecycleCaller;
-    spec = applyTestAgentPolicy(caller, spec);
+    spec = applyAgentModelPolicy(caller, spec);
     assertCreateEntityAllowed(caller, spec);
     const key = spec.key ?? randomUUID();
     const canonicalId = canonicalEntityId({

@@ -337,6 +337,17 @@ export async function deploy(options, hooks = {}) {
   if (options.artifact && !fs.statSync(options.artifact, { throwIfNoEntry: false })?.isFile())
     throw new Error(`artifact is not a file: ${options.artifact}`);
   const unitDir = "$HOME/.config/systemd/user";
+  const rawHostedRoute = process.env.VIBESTUDIO_HOSTED_MODEL_ROUTE;
+  const hostedRoute =
+    rawHostedRoute === undefined ? undefined : JSON.stringify(JSON.parse(rawHostedRoute));
+  const hostedRouteEnv =
+    hostedRoute === undefined
+      ? ""
+      : `Environment=${systemdQuote(`VIBESTUDIO_HOSTED_MODEL_ROUTE=${hostedRoute}`)}\n`;
+  const requireHostedRoute =
+    hostedRoute === undefined
+      ? ""
+      : `"$node_bin" -e ${shellQuote(`const fs=require("node:fs"),path=require("node:path"); const manifest=JSON.parse(fs.readFileSync(path.resolve(process.argv[1],"..","..","package.json"),"utf8")); if(manifest.vibestudioHostedModelRouteVersion!==1)throw new Error("The installed server cannot enforce VIBESTUDIO_HOSTED_MODEL_ROUTE");`)} "$vibestudio_entry"\n`;
   const relayEnv = `Environment=${systemdQuote(`VIBESTUDIO_IROH_RELAYS=${options.relayUrls.join(",")}`)}\n`;
   const requiredNodeTuple = JSON.stringify(REQUIRED_NODE_VERSION);
   console.log(
@@ -421,7 +432,7 @@ StartLimitBurst=5
 [Service]
 Type=simple
 UMask=0077
-${relayEnv}ExecStart=${serverCommand}
+${relayEnv}${hostedRouteEnv}ExecStart=${serverCommand}
 Restart=on-failure
 RestartSec=3
 
@@ -432,7 +443,7 @@ WantedBy=default.target
     options.target,
     `set -e
 ${RESOLVE_REMOTE_RUNTIME}
-cat > ${unitDir}/vibestudio-server.service <<'UNIT'
+${requireHostedRoute}cat > ${unitDir}/vibestudio-server.service <<'UNIT'
 ${unit}
 UNIT
 sed -i "s|__NODE_BIN__|$node_bin|g; s|__VIBESTUDIO_ENTRY__|$vibestudio_entry|g" ${unitDir}/vibestudio-server.service

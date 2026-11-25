@@ -1,3 +1,8 @@
+import {
+  readHostedModelRoute,
+  assertHostedModelAllowed,
+  type HostedModelRoute,
+} from "./hostedModelRoute.js";
 import { randomUUID } from "node:crypto";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { ServiceRouteDecl } from "../routeRegistry.js";
@@ -165,6 +170,7 @@ interface CredentialUseContext {
 export type { CredentialRuntimeInspector, CredentialRuntimePanelInfo, SessionCredentialCapture };
 
 export interface CredentialServiceDeps {
+  hostedModelRoute?: HostedModelRoute | null;
   /** Workspace-owned durable record of reviewed publication operations. */
   publicationJournal?: WebsitePublicationJournal;
   credentialStore?: CredentialStore;
@@ -235,6 +241,8 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     error?: string;
   }) => Promise<void>;
 } {
+  const hostedModelRoute =
+    deps.hostedModelRoute === undefined ? readHostedModelRoute() : deps.hostedModelRoute;
   const credentialStore = deps.credentialStore ?? new CredentialStore();
   const clientConfigStore = deps.clientConfigStore ?? new ClientConfigStore();
   const auditLog = deps.auditLog;
@@ -962,6 +970,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     const testRoute =
       ctx.caller.testPolicy?.kind === "case" ? ctx.caller.testPolicy.case.agent : undefined;
     const requestedModel = `${params.providerId}:${params.modelId}`;
+    assertHostedModelAllowed(hostedModelRoute, requestedModel);
     if (
       testRoute &&
       requestedModel !== testRoute.model &&
