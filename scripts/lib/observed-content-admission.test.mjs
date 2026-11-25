@@ -9,7 +9,7 @@ function example(required=true){
 }
 test("binds each domain's actual proof independently of authored answer vocabulary",()=>{
  const {world,proof}=example();assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
- assert.equal(Object.keys(observedContentFields).length,58);
+ assert.equal(Object.keys(observedContentFields).length,59);
  for(const mutation of [p=>p.semanticReviewInput.actual.requestedReturn={reason:"Invented"},p=>p.semanticReviewInput.actual.observations.reads=[],p=>p.semanticReviewInput.actual.artifacts.artifact="Invented",p=>p.semanticReviewInput.actual.goal="Different goal",p=>p.semanticReviewRequired=false]){
   const clone=structuredClone(proof);mutation(clone);assert.throws(()=>observedContentReviewInput(clone,world));
  }
@@ -152,4 +152,13 @@ test("local inventory review binds actual native capabilities and requested find
  proof.semanticReviewInput={actual:{goal:world.goal,observations:pick(observations),artifacts:pick(artifacts),requestedReturn:proof.actualResult},expected:{goal:world.goal,requestedReturnRequired:true},rubric:"Judge the requested finding against native capabilities and original goal"};
  assert.equal(observedContentNeedsReview(world),true);assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
  for(const alter of [p=>p.semanticReviewRequired=false,p=>p.semanticReviewInput.actual.observations.inventoryReadback={...p.semanticReviewInput.actual.observations.inventoryReadback,rows:[]},p=>p.semanticReviewInput.actual.requestedReturn={reason:"Invented"}]){const changed=structuredClone(proof);alter(changed);assert.throws(()=>observedContentReviewInput(changed,world));}
+});
+
+test("terminal diagnostic review binds actual source/native assertions rather than a preferred hold label",()=>{
+ const world={kind:"terminalAppRepair",goal:"Explain the observed count discrepancy without editing"};
+ const proof={semanticReviewRequired:true,outcomeContract:{returnedValue:{required:true}},journal:[{service:"observe",result:{source:"return count+1",tests:{expected:3,actual:4},mayEdit:false}}],proof:{currentRevision:"native-current",protectedDigest:"unchanged"},actualResult:{outcome:"diagnosed",artifact:null,explanation:"The actual source increments the count"}};
+ const [observations,artifacts]=observedContentFields[world.kind],pick=keys=>Object.fromEntries(keys.map(key=>[key,proof[key]??null]));
+ proof.semanticReviewInput={actual:{goal:world.goal,observations:pick(observations),artifacts:pick(artifacts),requestedReturn:proof.actualResult},expected:{goal:world.goal,requestedReturnRequired:true},rubric:"Judge the requested diagnosis from actual source and native assertions"};
+ assert.equal(observedContentNeedsReview(world),true);assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
+ for(const alter of [p=>p.semanticReviewRequired=false,p=>p.semanticReviewInput.actual.observations.journal=[],p=>p.semanticReviewInput.actual.observations.proof={currentRevision:"invented"},p=>p.semanticReviewInput.actual.requestedReturn={explanation:"Permission alone"}]){const changed=structuredClone(proof);alter(changed);assert.throws(()=>observedContentReviewInput(changed,world));}
 });
