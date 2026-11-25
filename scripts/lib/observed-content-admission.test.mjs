@@ -1,6 +1,6 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
-import {observedContentFields,observedContentReviewInput} from "./observed-content-admission.mjs";
+import {observedContentFields,observedContentNeedsReview,observedContentReviewInput} from "./observed-content-admission.mjs";
 function example(required=true){
  const world={kind:"image-candidate",goal:"Explain whether the source is available"};
  const proof={outcomeContract:{returnedValue:{required}},semanticReviewRequired:true,index:{id:"owned"},snapshots:[{revision:2}],reads:[{status:"missing"}],artifact:required?null:"Actual retained prose",actualResult:{reason:"The original was removed"}};
@@ -26,4 +26,22 @@ test("native-only effects exclude incidental prose without waiving a required do
  proof.semanticReviewInput={actual:{goal:world.goal,observations:pick(fields[0]),artifacts:{},requestedReturn:null},expected:{goal:world.goal,requestedReturnRequired:false},rubric:"Native effect is authoritative"};
  assert.equal(observedContentReviewInput(proof,world),null);
  proof.outcomeContract.returnedValue.required=true;assert.throws(()=>observedContentReviewInput(proof,world));
+});
+
+test("native displayed presentations require goal review even with no requested return",()=>{
+ const world={kind:"localPresentation",goal:"Show two confirmed rooms here without reserving anything",expected:{holds:null}};
+ const proof={outcomeContract:{returnedValue:{required:false}},semanticReviewRequired:true,
+  current:{source:"Confirmed rooms Cedar; Willow"},journal:[],preview:{revision:"actual"},previewDisplay:{passed:true},
+  report:{views:[{component:"Choices",props:{id:"actual-choices",question:"Which room?",options:["Cedar","Willow"],multiple:false}}]},
+  display:{passed:true,rendered:{texts:["Which room? Cedar Willow"],controls:[[{role:"radio",disabled:false}]]}}};
+ const pick=keys=>Object.fromEntries(keys.map(key=>[key,proof[key]??null]));
+ const [observations,artifacts]=observedContentFields.localPresentation;
+ proof.semanticReviewInput={actual:{goal:world.goal,observations:pick(observations),artifacts:pick(artifacts),requestedReturn:null},
+  expected:{goal:world.goal,requestedReturnRequired:false},rubric:"Judge actual goal meaning and visible enabled controls"};
+ assert.equal(observedContentNeedsReview(world),true);
+ assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
+ for(const alter of [p=>p.semanticReviewRequired=false,p=>p.semanticReviewInput.actual.artifacts.display={passed:true},
+  p=>p.semanticReviewInput.actual.artifacts.report={views:[]},p=>p.semanticReviewInput.actual.observations.previewDisplay=null]){
+  const changed=structuredClone(proof);alter(changed);assert.throws(()=>observedContentReviewInput(changed,world));
+ }
 });

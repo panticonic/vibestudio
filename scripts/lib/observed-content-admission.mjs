@@ -136,15 +136,7 @@ export const observedContentFields = {
       "receiptBytes"
     ]
   ],
-  "localPresentation": [
-    [
-      "current",
-      "journal",
-      "preview",
-      "display"
-    ],
-    []
-  ],
+  "localPresentation": [["current","journal","preview","previewDisplay"],["report","display"]],
   "local-width": [
     [
       "effects",
@@ -286,14 +278,7 @@ export const observedContentFields = {
       "body"
     ]
   ],
-  "audience-response": [
-    [
-      "current",
-      "observed",
-      "operated"
-    ],
-    []
-  ],
+  "audience-response": [["current","observed","operated"],["presentation"]],
   "google": [
     [
       "requests",
@@ -310,7 +295,6 @@ export function observedContentNeedsReview(world){
  if(world.kind==="owned-task")return !world.expected.update&&!world.expected.handoff;
  if(world.kind==="scheduled-recovery")return !world.expected.effect&&!world.expected.handoff;
  if(world.kind==="local-delivery")return !world.expected.send;
- if(world.kind==="localPresentation")return Boolean(world.expected.holds);
  return true;
 }
 export function observedContentReviewInput(proof,world){

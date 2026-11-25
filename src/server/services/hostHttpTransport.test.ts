@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { requestHostHttp, withPublicHostHttp } from "./hostHttpTransport.js";
+import {
+  isProvenPreconnectFailure,
+  requestHostHttp,
+  withPublicHostHttp,
+} from "./hostHttpTransport.js";
 
 const agentState = vi.hoisted(() => ({ destroy: vi.fn(async () => {}), options: [] as unknown[] }));
 vi.mock("undici", () => ({
@@ -13,7 +17,10 @@ vi.mock("undici", () => ({
   },
 }));
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
 
 describe("host HTTP transport", () => {
   it("uses the caller-owned dispatcher and never follows redirects implicitly", async () => {
@@ -125,5 +132,153 @@ describe("host HTTP transport", () => {
     expect(failure).toBeInstanceOf(AggregateError);
     expect(failure).toMatchObject({ cause: transportFailure });
     expect((failure as AggregateError).errors).toEqual([transportFailure, cleanupFailure]);
+  });
+});
+
+function connectError(code = "ETIMEDOUT") {
+  return Object.assign(new Error("connect failure"), { code, syscall: "connect" });
+}
+function aggregateConnect() {
+  return new TypeError("fetch failed", {
+    cause: new AggregateError([connectError(), connectError("ENETUNREACH")]),
+  });
+}
+function input(body?: BodyInit) {
+  return {
+    url: new URL("https://example.test/model"),
+    method: "POST",
+    headers: { authorization: "Bearer private" },
+    body,
+    signal: new AbortController().signal,
+    dispatcher: {} as Parameters<typeof requestHostHttp>[0]["dispatcher"],
+  };
+}
+
+describe("proven preconnect HTTP retry", () => {
+  it("retries the real multi-address shape once with stable bytes and the same checked dispatcher", async () => {
+    const bytes = new Uint8Array([1, 2, 3]),
+      request = input(bytes);
+    const response = new Response("actual response");
+    const fetch = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        bytes.fill(9);
+        throw aggregateConnect();
+      })
+      .mockResolvedValueOnce(response);
+    vi.stubGlobal("fetch", fetch);
+    await expect(requestHostHttp(request)).resolves.toBe(response);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    for (const [url, options] of fetch.mock.calls) {
+      expect(url).toBe(request.url.href);
+      expect(options.dispatcher).toBe(request.dispatcher);
+      expect(options.signal).toBe(request.signal);
+      expect(options.redirect).toBe("manual");
+      expect([...options.body]).toEqual([1, 2, 3]);
+    }
+  });
+  it("propagates the original final error after the single retry", async () => {
+    const first = aggregateConnect(),
+      last = connectError();
+    const fetch = vi.fn().mockRejectedValueOnce(first).mockRejectedValueOnce(last);
+    vi.stubGlobal("fetch", fetch);
+    await expect(requestHostHttp(input("actual request"))).rejects.toBe(last);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+  it.each([
+    new TypeError("fetch failed"),
+    new TypeError("fetch failed", {
+      cause: Object.assign(new Error("socket reset"), { code: "ECONNRESET", syscall: "read" }),
+    }),
+    new TypeError("fetch failed", {
+      cause: new AggregateError([
+        connectError(),
+        Object.assign(new Error("TLS"), { code: "CERT_HAS_EXPIRED" }),
+      ]),
+    }),
+    Object.assign(new Error("aborted"), {
+      name: "AbortError",
+      code: "ETIMEDOUT",
+      syscall: "connect",
+    }),
+    Object.assign(new Error("ambiguous timeout"), { code: "ETIMEDOUT" }),
+    new AggregateError([]),
+  ])("does not replay ambiguous, mixed, body, TLS or abort errors: %s", async (error) => {
+    const fetch = vi.fn().mockRejectedValue(error);
+    vi.stubGlobal("fetch", fetch);
+    await expect(requestHostHttp(input("request"))).rejects.toBe(error);
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+  it("never replays streamed or multipart request bodies", async () => {
+    const error = aggregateConnect(),
+      fetch = vi.fn().mockRejectedValue(error);
+    vi.stubGlobal("fetch", fetch);
+    for (const body of [new ReadableStream(), new FormData()])
+      await expect(requestHostHttp(input(body))).rejects.toBe(error);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+  it("does not retry any HTTP response or a subsequent body failure", async () => {
+    const error = Object.assign(new Error("body reset"), { code: "ECONNRESET", syscall: "read" });
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("server error", { status: 500 }))
+      .mockResolvedValueOnce(
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.error(error);
+            },
+          })
+        )
+      );
+    vi.stubGlobal("fetch", fetch);
+    expect((await requestHostHttp(input("request"))).status).toBe(500);
+    const response = await requestHostHttp(input("request"));
+    await expect(response.text()).rejects.toBe(error);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+  it("honors abort after a failed connection without replaying", async () => {
+    const controller = new AbortController(),
+      request = { ...input(), signal: controller.signal },
+      error = aggregateConnect();
+    const fetch = vi.fn(async () => {
+      controller.abort();
+      throw error;
+    });
+    vi.stubGlobal("fetch", fetch);
+    await expect(requestHostHttp(request)).rejects.toBe(error);
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+  it("honors explicit opt-out and enclosing retry ownership", async () => {
+    const error = aggregateConnect(),
+      fetch = vi.fn().mockRejectedValue(error);
+    vi.stubGlobal("fetch", fetch);
+    vi.stubEnv("VIBESTUDIO_HTTP_PRECONNECT_RETRY", "0");
+    await expect(requestHostHttp(input())).rejects.toBe(error);
+    vi.unstubAllEnvs();
+    await expect(requestHostHttp({ ...input(), retryPreconnect: false })).rejects.toBe(error);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+  it("requires all authoritative leaves and refuses cyclic or accessor-backed proof", () => {
+    expect(isProvenPreconnectFailure(aggregateConnect())).toBe(true);
+    expect(
+      isProvenPreconnectFailure(
+        Object.assign(new Error("temporary DNS"), { code: "EAI_AGAIN", syscall: "getaddrinfo" })
+      )
+    ).toBe(true);
+    const cycle = connectError();
+    Object.assign(cycle, { cause: cycle });
+    expect(isProvenPreconnectFailure(cycle)).toBe(false);
+    let getters = 0;
+    const accessor = connectError();
+    Object.defineProperty(accessor, "cause", {
+      get() {
+        getters++;
+        throw Error("must not run");
+      },
+    });
+    expect(isProvenPreconnectFailure(accessor)).toBe(false);
+    expect(getters).toBe(0);
+    expect(isProvenPreconnectFailure({ code: "ETIMEDOUT", syscall: "connect" })).toBe(false);
   });
 });
