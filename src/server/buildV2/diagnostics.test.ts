@@ -13,6 +13,8 @@ describe("build diagnostics path normalization", () => {
     const error = new BuildRequestError("no_test_files", "Declared test suite selected no files", {
       include: ["**/*.test.ts"],
     });
+    expect(diagnosticsFromError(error)[0]).toMatchObject({ source: "schema", severity: "error" });
+    expect(diagnosticsFromError(error)[0]).not.toHaveProperty("operationalError");
     expect(error.errorData).toMatchObject({
       code: "no_test_files",
       failureKind: "invalid-input",

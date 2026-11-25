@@ -601,7 +601,11 @@ export class UnitHost<
   private reconciling: Promise<void> | null = null;
   private backgroundFlow: Promise<void> | null = null;
   private currentDeclarationsStaged: Promise<void> | null = null;
-  private readonly applications = new Map<string, Promise<void>>();
+  private readonly applications = new Map<
+    string,
+    { promise: Promise<void>; identityKey: string; pending: boolean; failed: boolean }
+  >();
+  private readonly explicitApplications = new Set<Promise<void>>();
   private lastReconciliationError: string | null = null;
   private preapprovedTrust = new Set<string>();
   private preapprovedTrustRevision = 0;
@@ -710,6 +714,8 @@ export class UnitHost<
   async whenSettled(signal?: AbortSignal): Promise<void> {
     await joinUnlessAborted(this.reconciling, signal);
     await joinUnlessAborted(this.backgroundFlow, signal);
+    while (this.explicitApplications.size)
+      await joinUnlessAborted(Promise.allSettled([...this.explicitApplications]), signal);
   }
 
   async whenReconciled(): Promise<void> {
@@ -739,7 +745,41 @@ export class UnitHost<
 
   /** Join this unit's queued or running application, preserving its failure. */
   async whenApplied(name: string, signal?: AbortSignal): Promise<void> {
-    await joinUnlessAborted(this.applications.get(name), signal);
+    await joinUnlessAborted(this.applications.get(name)?.promise, signal);
+  }
+
+  /** A new authorized request owns one application attempt, rather than replaying a settled failure. */
+  ensureApplied(node: Node, decl: Decl): Promise<void> {
+    const entry = this.opts.registry.get(node.name);
+    const trust = this.resolveCandidateTrust(node, decl, entry, this.preapprovedTrust);
+    if (trust.decision === "needs-approval")
+      return Promise.reject(new Error(`Unit requires review before application: ${node.name}`));
+    const current = this.applications.get(node.name);
+    if (current?.pending) {
+      if (current.identityKey === trust.identityKey) return current.promise;
+      // A new exact declaration waits for the previous owner to join, then gets its own attempt.
+      return this.trackExplicitApplication(
+        Promise.allSettled([current.promise]).then(() => this.ensureApplied(node, decl))
+      );
+    }
+    if (
+      trust.decision === "user-approved" &&
+      entry?.status !== "error" &&
+      (!current || (!current.failed && current.identityKey === trust.identityKey))
+    )
+      return current?.promise ?? Promise.resolve();
+    const apply = this.prepareTrustedApplications([{ node, decl }]);
+    // Register with this owner before the application may publish any resources.
+    return this.trackExplicitApplication(Promise.resolve().then(apply));
+  }
+
+  private trackExplicitApplication(work: Promise<void>): Promise<void> {
+    this.explicitApplications.add(work);
+    void work.then(
+      () => this.explicitApplications.delete(work),
+      () => this.explicitApplications.delete(work)
+    );
+    return work;
   }
 
   /**
@@ -1237,7 +1277,7 @@ export class UnitHost<
   async whenReviewed(node: Node, decl: Decl): Promise<UnitReviewOutcome> {
     const trust = this.trustForCandidate(node, decl, this.opts.registry.get(node.name));
     if (trust.decision !== "needs-approval") {
-      await this.whenApplied(node.name);
+      await this.ensureApplied(node, decl);
       return "accepted";
     }
     const open = this.reviewFlows.get(trust.identityKey);
@@ -1320,14 +1360,38 @@ export class UnitHost<
     items: Array<ResolvedUnitDeclaration<Decl, Node>>,
     maxConcurrentApplies?: number
   ): () => Promise<void> {
+    const identities = new Map(
+      items.map(({ node, decl }) => [
+        node.name,
+        canonicalUnitBuildIdentity(this.opts.candidateIdentity(node, decl)),
+      ])
+    );
+    if (identities.size !== items.length) throw new Error("Unit application repeats a target");
     const completions = new Map<string, { resolve(): void; reject(error: unknown): void }>();
     for (const { node } of items) {
-      const application = new Promise<void>((resolve, reject) => {
-        completions.set(node.name, { resolve, reject });
+      let resolve!: () => void, reject!: (error: unknown) => void;
+      const promise = new Promise<void>((done, failed) => {
+        resolve = done;
+        reject = failed;
       });
-      // The owner still observes every rejection; an unobserved target must
-      // not create an unhandled rejection while another unit is building.
-      void application.catch(() => {});
+      const application = {
+        promise,
+        identityKey: identities.get(node.name)!,
+        pending: true,
+        failed: false,
+      };
+      completions.set(node.name, {
+        resolve() {
+          application.pending = false;
+          resolve();
+        },
+        reject(error) {
+          application.pending = false;
+          application.failed = true;
+          reject(error);
+        },
+      });
+      void promise.catch(() => {});
       this.applications.set(node.name, application);
     }
     return async () => {
