@@ -211,3 +211,72 @@ describe("build diagnostics path normalization", () => {
     expect(error.errorData).toMatchObject({ diagnostics });
   });
 });
+
+it("keeps native IO identity and safe causes distinct from compiler diagnostics", () => {
+  const cause = Object.assign(new Error("private request contents"), {
+    code: "EMFILE",
+    syscall: "watch",
+    headers: { authorization: "secret" },
+  });
+  const error = new Error("Owned compiler setup failed", { cause });
+  const [diagnostic] = diagnosticsFromError(error);
+  expect(diagnostic).toMatchObject({
+    source: "infrastructure",
+    severity: "error",
+    message: "Owned compiler setup failed",
+    operationalError: { name: "Error", cause: { name: "Error", code: "EMFILE", syscall: "watch" } },
+  });
+  expect(JSON.stringify(diagnostic?.operationalError)).not.toMatch(
+    /private|secret|headers|message/
+  );
+});
+it("preserves operational plugin details without relabeling ordinary compiler errors", () => {
+  const native = Object.assign(new Error("watch failed"), { code: "EMFILE", syscall: "watch" });
+  const diagnostics = diagnosticsFromError({
+    errors: [
+      { text: "Owned plugin could not start", location: null, notes: [], detail: native },
+      {
+        text: "Expected expression",
+        location: { file: "src/a.ts", line: 2, column: 1 },
+        notes: [],
+      },
+    ],
+  });
+  expect(diagnostics[0]).toMatchObject({
+    source: "infrastructure",
+    operationalError: { code: "EMFILE" },
+  });
+  expect(diagnostics[1]).toMatchObject({
+    source: "esbuild",
+    message: "Expected expression",
+    file: "src/a.ts",
+    line: 2,
+    column: 1,
+  });
+  expect(diagnostics[1]).not.toHaveProperty("operationalError");
+});
+it("does not execute unknown error getters or conversions while observing a failure", () => {
+  let accesses = 0;
+  const fail = () => {
+    accesses++;
+    throw Error("observer must not run");
+  };
+  const error = Object.create(null);
+  for (const key of [
+    "message",
+    "name",
+    "code",
+    "cause",
+    "errors",
+    "warnings",
+    "toJSON",
+    "toString",
+  ])
+    Object.defineProperty(error, key, { get: fail });
+  expect(diagnosticsFromError(error)[0]).toMatchObject({
+    source: "infrastructure",
+    message: "Build operation failed",
+    operationalError: {},
+  });
+  expect(accesses).toBe(0);
+});

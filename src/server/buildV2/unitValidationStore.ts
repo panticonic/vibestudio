@@ -29,14 +29,24 @@ export class UnitValidationStore {
     try {
       try {
         const value = recordSchema.safeParse(JSON.parse(await fs.readFile(file, "utf8")));
-        if (value.success && value.data.key === key) {
+        if (
+          value.success &&
+          value.data.key === key &&
+          !value.data.diagnostics.some((diagnostic) => diagnostic.source === "infrastructure")
+        ) {
           return { diagnostics: value.data.diagnostics, reusable: true };
         }
       } catch (error) {
         if (!(error instanceof SyntaxError) && (error as NodeJS.ErrnoException).code !== "ENOENT")
           throw error;
       }
-      const result = await compute();
+      const computed = await compute();
+      const result = {
+        ...computed,
+        reusable:
+          computed.reusable &&
+          !computed.diagnostics.some((diagnostic) => diagnostic.source === "infrastructure"),
+      };
       if (result.reusable) {
         await fs.mkdir(directory, { recursive: true });
         const temporary = `${file}.${randomUUID()}.tmp`;

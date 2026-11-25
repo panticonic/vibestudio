@@ -391,3 +391,28 @@ describe("BuildV2 metadata details", () => {
     ).toBe(false);
   });
 });
+
+it("preserves bounded native operational causes while rejecting arbitrary error payloads on the build wire", () => {
+  const diagnostic = {
+    source: "infrastructure",
+    severity: "error",
+    file: "",
+    line: 0,
+    column: 0,
+    message: "Owned build setup failed",
+    operationalError: { name: "Error", cause: { code: "EMFILE", syscall: "watch" } },
+  };
+  expect(buildDiagnosticSchema.parse(diagnostic)).toEqual(diagnostic);
+  expect(
+    buildDiagnosticSchema.safeParse({
+      ...diagnostic,
+      operationalError: { headers: { authorization: "secret" } },
+    }).success
+  ).toBe(false);
+  expect(
+    buildDiagnosticSchema.safeParse({
+      ...diagnostic,
+      operationalError: { cause: { message: "private" } },
+    }).success
+  ).toBe(false);
+});
