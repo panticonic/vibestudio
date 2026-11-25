@@ -42,6 +42,17 @@ loopback.addAddress("::1", "ipv6");
 
 export class NetworkDestinationDenied extends Error {}
 
+/** Expiry belongs to name resolution, before a connection or request exists. */
+export class NetworkResolutionTimeoutError extends Error {
+  readonly code = "ETIMEDOUT";
+  readonly syscall = "getaddrinfo";
+  readonly phase = "dns";
+  constructor(cause: unknown) {
+    super("Network destination name resolution timed out", { cause });
+    this.name = "NetworkResolutionTimeoutError";
+  }
+}
+
 export type NetworkEndpointAuthority =
   | { kind: "public" }
   | { kind: "internal-loopback"; origin: string };
@@ -82,21 +93,29 @@ async function resolveWithDeadline(
   signal: AbortSignal,
   retryTransientDns: boolean
 ): Promise<LookupAddress[]> {
-  const deadline = AbortSignal.any([signal, AbortSignal.timeout(10_000)]);
-  deadline.throwIfAborted();
+  const resolutionDeadline = AbortSignal.timeout(10_000);
+  const deadline = AbortSignal.any([signal, resolutionDeadline]);
+  let timedOut: NetworkResolutionTimeoutError | undefined;
+  const abortReason = () =>
+    signal.aborted
+      ? signal.reason
+      : resolutionDeadline.aborted
+        ? (timedOut ??= new NetworkResolutionTimeoutError(resolutionDeadline.reason))
+        : deadline.reason;
+  if (deadline.aborted) throw abortReason();
   return new Promise((accept, reject) => {
-    const aborted = () => reject(deadline.reason);
+    const aborted = () => reject(abortReason());
     deadline.addEventListener("abort", aborted, { once: true });
     Promise.resolve()
       .then(async () => {
         for (let attempt = 0; ; attempt += 1) {
-          deadline.throwIfAborted();
+          if (deadline.aborted) throw abortReason();
           try {
             return await resolve(hostname);
           } catch (error) {
             // EAI_AGAIN is a temporary resolver failure, before any connection
             // or request exists. Never replay provider requests or streams here.
-            if (deadline.aborted) throw deadline.reason;
+            if (deadline.aborted) throw abortReason();
             if (
               !retryTransientDns ||
               attempt >= 2 ||

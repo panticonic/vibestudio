@@ -1,8 +1,10 @@
+import { operationalErrorMetadata } from "@vibestudio/rpc";
 import { describe, expect, it, vi } from "vitest";
 import type { LookupAddress } from "node:dns";
 import { setImmediate as immediate } from "node:timers/promises";
 import {
   isPublicNetworkAddress,
+  NetworkResolutionTimeoutError,
   resolveNetworkDestination,
 } from "@vibestudio/shared/networkDestination";
 
@@ -268,4 +270,71 @@ describe("network destination policy", () => {
     ).rejects.toThrow("outside the authorized address space");
     expect(resolve).toHaveBeenCalledTimes(2);
   });
+});
+
+it("retains the exact existing resolver deadline as a typed preconnect failure", async () => {
+  const deadline = new AbortController();
+  const original = new DOMException("The operation was aborted due to timeout", "TimeoutError");
+  const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+  let finish: ((rows: LookupAddress[]) => void) | undefined;
+  const resolver = vi.fn(
+    () =>
+      new Promise<LookupAddress[]>((resolve) => {
+        finish = resolve;
+      })
+  );
+  const pending = resolveNetworkDestination(
+    new URL("https://example.test/"),
+    { kind: "public" },
+    new AbortController().signal,
+    resolver,
+    []
+  );
+  try {
+    await immediate();
+    const rejected = expect(pending).rejects.toMatchObject({
+      name: "NetworkResolutionTimeoutError",
+      code: "ETIMEDOUT",
+      syscall: "getaddrinfo",
+      phase: "dns",
+      cause: original,
+    });
+    deadline.abort(original);
+    await rejected;
+    expect(timeout).toHaveBeenCalledWith(10_000);
+    expect(resolver).toHaveBeenCalledTimes(1);
+    finish!([publicAddress]);
+    await expect(pending).rejects.toBeInstanceOf(NetworkResolutionTimeoutError);
+    const error = await pending.catch((error) => error);
+    expect(operationalErrorMetadata(error)).toMatchObject({
+      name: "NetworkResolutionTimeoutError",
+      code: "ETIMEDOUT",
+      syscall: "getaddrinfo",
+      phase: "dns",
+    });
+  } finally {
+    timeout.mockRestore();
+  }
+});
+
+it("never relabels caller cancellation as a resolver timeout", async () => {
+  const deadline = new AbortController(),
+    owner = new AbortController();
+  const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+  const original = new Error("Caller released the request");
+  const pending = resolveNetworkDestination(
+    new URL("https://example.test/"),
+    { kind: "public" },
+    owner.signal,
+    async () => new Promise<LookupAddress[]>(() => {}),
+    []
+  );
+  try {
+    const rejected = expect(pending).rejects.toBe(original);
+    owner.abort(original);
+    deadline.abort(new DOMException("timeout", "TimeoutError"));
+    await rejected;
+  } finally {
+    timeout.mockRestore();
+  }
 });
