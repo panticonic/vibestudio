@@ -9,15 +9,27 @@ import { fileURLToPath } from "node:url";
 const require = createRequire(import.meta.url);
 
 // Publish mode (VIBESTUDIO_EXTHOST_PUBLISH=1) emits a fully self-contained bundle
-// into dist-publish/ for npm packaging: @vibestudio/extension and
+// into the publisher's explicit owned output for npm packaging: @vibestudio/extension and
 // @vibestudio/process-adapter are inlined too (on top of the always-inlined
 // source-only @vibestudio/shared + unit-host), so the published server package can
 // vendor *just* this package and resolve on any Node >=20 with no
 // workspace:* and no source-.ts imports at runtime. The default (dev/monorepo)
 // build keeps those two external to avoid the dual-package hazard for other
-// in-repo consumers (and skips the publish-only dist-publish/ output).
+// in-repo consumers. Public output never belongs to this editable package tree.
 const PUBLISH = process.env.VIBESTUDIO_EXTHOST_PUBLISH === "1";
-const outdir = PUBLISH ? "dist-publish" : "dist";
+const publishOutput = process.env.VIBESTUDIO_EXTHOST_PUBLISH_DIR;
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+if (PUBLISH) {
+  if (!publishOutput || !path.isAbsolute(publishOutput))
+    throw new Error("Publish mode requires an absolute owned VIBESTUDIO_EXTHOST_PUBLISH_DIR");
+  const relative = path.relative(repoRoot, publishOutput);
+  if (
+    relative === "" ||
+    (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`))
+  )
+    throw new Error("Publish output must be outside the editable host dependency tree");
+}
+const outdir = PUBLISH ? publishOutput : "dist";
 
 fs.rmSync(outdir, { recursive: true, force: true });
 fs.mkdirSync(outdir, { recursive: true });
@@ -59,7 +71,7 @@ for (const result of [hostBuild, childBuild])
   assertSingleInfrastructureModuleTree(result.metafile, path.resolve("../.."), process.cwd());
 
 if (PUBLISH) {
-  console.log("extension-host publish build complete (self-contained → dist-publish/)");
+  console.log(`extension-host publish build complete (self-contained → ${outdir})`);
 } else {
   // Emit real .d.ts files alongside the bundled JS (dev build only — the npm
   // publish bundle ships runtime JS, not types). Use the project's
