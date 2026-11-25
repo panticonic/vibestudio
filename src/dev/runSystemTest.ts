@@ -14,6 +14,8 @@ import {
 import { liveApprovalTransition } from "../../scripts/lib/approval-transition-observation.js";
 import { getProfileDataPath } from "@vibestudio/env-paths";
 import { formatRpcFailure } from "@vibestudio/rpc";
+import { jsonMode } from "../cli/output.js";
+import { printSystemTestDoctorResult } from "../cli/systemTestDoctorOutput.js";
 import { Ownership, awaitRetirement, readLedger, sweep } from "@vibestudio/shared/ownership";
 import { ledgerDirOf } from "@vibestudio/shared/ownershipLedger";
 import { signalExitCode } from "../../scripts/run-electron-lifecycle.mjs";
@@ -30,6 +32,8 @@ import {
 import {
   assertSystemTestPreparationResult,
   systemTestPreparationFailureDetail,
+  canUseRequestedStartupDoctor,
+  startupDoctorCommand,
 } from "./systemTestPreparation.js";
 import { attachDeviceDrivers } from "./deviceExecutors.js";
 import { seedIntegrationReadinessFixture } from "./systemTestIntegrationFixture.js";
@@ -166,7 +170,8 @@ function captureCli(
   ownership: Ownership,
   instanceId: string,
   command: readonly string[],
-  signal: AbortSignal
+  signal: AbortSignal,
+  env: NodeJS.ProcessEnv
 ): Promise<CliResult> {
   return spawnCli(
     ownership,
@@ -174,7 +179,7 @@ function captureCli(
     command,
     ["ignore", "pipe", "pipe"],
     command[0] ?? "CLI",
-    process.env,
+    env,
     signal
   );
 }
@@ -183,13 +188,16 @@ async function prepareFreshInstance(
   ownership: Ownership,
   instanceId: string,
   expectedWorkspaceId: string,
-  signal: AbortSignal
-): Promise<void> {
+  signal: AbortSignal,
+  command: readonly string[],
+  env: NodeJS.ProcessEnv
+): Promise<{ result: ReturnType<typeof assertSystemTestPreparationResult>; stderr: string }> {
   const prepared = await captureCli(
     ownership,
     instanceId,
-    ["system-test", "doctor", "--approve-startup", "--json"],
-    signal
+    ["system-test", ...startupDoctorCommand(command)],
+    signal,
+    env
   );
   if (prepared.code !== 0) {
     throw new Error(
@@ -199,19 +207,23 @@ async function prepareFreshInstance(
       )}`
     );
   }
-  assertSystemTestPreparationResult(prepared.stdout, expectedWorkspaceId);
+  return {
+    result: assertSystemTestPreparationResult(prepared.stdout, expectedWorkspaceId),
+    stderr: prepared.stderr,
+  };
 }
 
 async function adoptSelfDevelopmentSource(
   ownership: Ownership,
   instanceId: string,
   projects: readonly SelfDevelopmentProject[],
-  signal: AbortSignal
+  signal: AbortSignal,
+  env: NodeJS.ProcessEnv
 ): Promise<void> {
   if (projects.length === 0) return;
   const adopted = await adoptSelfDevelopmentProjects({
     projects,
-    runCli: (args) => captureCli(ownership, instanceId, args, signal),
+    runCli: (args) => captureCli(ownership, instanceId, args, signal, env),
   });
   for (const project of adopted) {
     console.error(
@@ -282,6 +294,12 @@ async function runCommand({
   if (!commandProvisionsSystemTestInstance(parsed.command)) {
     console.error(`[system-test] ${describeInstanceLedger(ensured.ledger)}`);
   }
+  const cliEnv = { ...process.env };
+  delete cliEnv[approvalObservationEnvironmentKey];
+  delete cliEnv["VIBESTUDIO_MANAGED_TEACHER_INSTANCE"];
+  if (ensured.managed && ensured.instance.id.startsWith("natlang-live-")) {
+    cliEnv["VIBESTUDIO_MANAGED_TEACHER_INSTANCE"] = ensured.instance.id;
+  }
   // The ready record means the host is addressable, not that asynchronous
   // workspace installation/admission has settled. A server provisioned for
   // unattended system tests owns that startup review, so settle it before the
@@ -289,29 +307,49 @@ async function runCommand({
   // instances are deliberately left alone: their reviews may belong to an
   // interactive user. Managed instances retain ownership across launcher
   // retries, including recovery from a failed first doctor call.
-  // Provisioning is not complete at the ready-file boundary. Run the same
-  // semantic startup barrier for every newly created instance, including a
-  // caller whose first command is doctor. Relying on that outer doctor alone
-  // leaves a race where it can return at transport readiness and the creation
-  // review appears immediately afterward, blocking the first real test.
+  // Provisioning is not complete at the ready-file boundary. The first actual
+  // doctor must settle creation review and return a validated workspace receipt.
+  // When doctor is itself the request and no later adoption/device attachment
+  // changes its subject, that receipt is the result, not a reason to run it twice.
   if (ensured.created) {
     // Startup preparation has to come first: until the creation review is
     // resolved, the workspace refuses to invoke the extension that adopts a
     // project. It also creates the system-test session, whose context forks
     // main at that moment — so tests move to a session created afterwards.
-    await prepareFreshInstance(
+    const prepared = await prepareFreshInstance(
       ownership,
       ensured.instance.id,
       pairedWorkspaceId(ensured.instance.root),
-      signal
+      signal,
+      parsed.command,
+      cliEnv
     );
+    if (
+      canUseRequestedStartupDoctor({
+        created: ensured.created,
+        command: parsed.command,
+        selfDevelopment: parsed.selfDevelopment,
+        devices: parsed.devices ?? [],
+        recheck: process.env["VIBESTUDIO_RECHECK_STARTUP_DOCTOR"] === "1",
+      })
+    ) {
+      if (prepared.stderr) process.stderr.write(prepared.stderr);
+      printSystemTestDoctorResult(
+        prepared.result,
+        parsed.command.includes("--json") ||
+          (!parsed.command.includes("--plain") && jsonMode(false))
+      );
+      process.exitCode = 0;
+      return;
+    }
   }
   if (parsed.selfDevelopment) {
     await adoptSelfDevelopmentSource(
       ownership,
       ensured.instance.id,
       selfDevelopmentProjects(repoRoot),
-      signal
+      signal,
+      cliEnv
     );
     const session = adoptSystemTestSession(ensured.instance, "self-development");
     console.error(`[system-test] tests on this instance run under session ${session}`);
@@ -339,12 +377,6 @@ async function runCommand({
       ? [...command, "--session", session]
       : command;
   await seedIntegrationReadinessFixture(ensured.instance, scopedCommand, signal);
-  const cliEnv = { ...process.env };
-  delete cliEnv[approvalObservationEnvironmentKey];
-  delete cliEnv["VIBESTUDIO_MANAGED_TEACHER_INSTANCE"];
-  if (ensured.managed && ensured.instance.id.startsWith("natlang-live-")) {
-    cliEnv["VIBESTUDIO_MANAGED_TEACHER_INSTANCE"] = ensured.instance.id;
-  }
   if (
     scopedCommand[0] === "run" &&
     approvalObservationRunNames.some((name) => scopedCommand.includes(name))
