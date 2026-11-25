@@ -151,5 +151,5 @@ test("local inventory review binds actual native capabilities and requested find
  const [observations,artifacts]=observedContentFields[world.kind],pick=keys=>Object.fromEntries(keys.map(key=>[key,proof[key]??null]));
  proof.semanticReviewInput={actual:{goal:world.goal,observations:pick(observations),artifacts:pick(artifacts),requestedReturn:proof.actualResult},expected:{goal:world.goal,requestedReturnRequired:true},rubric:"Judge the requested finding against native capabilities and original goal"};
  assert.equal(observedContentNeedsReview(world),true);assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
- for(const alter of [p=>p.semanticReviewRequired=false,p=>p.semanticReviewInput.actual.observations.inventoryReadback.rows=[],p=>p.semanticReviewInput.actual.requestedReturn={reason:"Invented"}]){const changed=structuredClone(proof);alter(changed);assert.throws(()=>observedContentReviewInput(changed,world));}
+ for(const alter of [p=>p.semanticReviewRequired=false,p=>p.semanticReviewInput.actual.observations.inventoryReadback={...p.semanticReviewInput.actual.observations.inventoryReadback,rows:[]},p=>p.semanticReviewInput.actual.requestedReturn={reason:"Invented"}]){const changed=structuredClone(proof);alter(changed);assert.throws(()=>observedContentReviewInput(changed,world));}
 });
