@@ -24,7 +24,12 @@ export function selectNativeReferences({group,workflows,catalog,completed={},lim
 export function inspectNativeReference(packet,selected) {
  assert.equal(packet.test?.name,selected.name);
  const execution=packet.execution,diagnostics=execution?.diagnostics,proof=diagnostics?.openGoalVerification;
- assert.equal(diagnostics?.natlangTeacher,null,'Reference returned teacher evidence');
+ assert.ok(execution,'Reference has no execution evidence');
+ assert.ok(diagnostics?.natlangTeacher==null,'Reference returned teacher evidence');
+ assert.equal(execution.trajectoryReview?.modelCallCount??0,0,'Reference executed a model');
+ if(execution.error) return {status:'errored',reason:execution.error,nativeProofValidated:false,
+   modelCallCount:execution.trajectoryReview?.modelCallCount??null};
+ assert.equal(diagnostics?.natlangTeacher,null,'Reference lacks its native completion witness');
  assert.equal(execution.trajectoryReview?.modelCallCount??0,0,'Reference executed a model');
  assert.ok(!(diagnostics.openGoalVerificationErrors??[]).length,'Reference native verification produced errors');
  assert.equal(proof?.goal,selected.goal,'Reference goal changed');
@@ -52,7 +57,7 @@ export async function runNativeReferenceTail({group,workflows,catalog,pinned,out
  const output=path.join(out,'native-reference-only',randomUUID());mkdirSync(output,{recursive:true,mode:0o700});
  writeFileSync(path.join(output,'source.json'),JSON.stringify({repositories:pinned.repositories,instance:group.instance,placement:JSON.parse(placement(group)),collectionRole:'native-reference-only',names:selected.map(row=>row.name)},null,2),{flag:'wx',mode:0o600});
  assertPins();
- await systemTest(['run',...selected.map(row=>row.name),'--concurrency','1','--retain-trajectories','--out-dir',output,'--json'],undefined,signal);
+ await systemTest(['run',...selected.map(row=>row.name),'--native-reference','--concurrency','1','--retain-trajectories','--out-dir',output,'--json'],undefined,signal);
  assertPins();
  const runs=readdirSync(output).filter(name=>/^st_[a-f0-9]{32}$/u.test(name));
  assert.equal(runs.length,1,'Reference must produce one canonically owned system-test run');
@@ -74,4 +79,40 @@ export async function runNativeReferenceTail({group,workflows,catalog,pinned,out
  const temporary=index+'.'+randomUUID()+'.tmp';writeFileSync(temporary,JSON.stringify(state,null,2)+'\n',{flag:'wx',mode:0o600});renameSync(temporary,index);
  writeFileSync(path.join(output,'reference-results.json'),JSON.stringify({schema:state.schema,repositories:state.repositories,results:records,teacherRegistryWrites:false},null,2)+'\n',{flag:'wx',mode:0o600});
  return records;
+}
+
+export const nativeReferenceCapabilities=Object.freeze({schema:'vibestudio.native-reference-capabilities/1',completionControl:1,nativeOnly:true});
+/** The existing parent collector owner decides from actual paid receipts. A
+ * source/nonce-bound decision is never inferred from elapsed time or exit text.
+ */
+export async function waitForNativeContinuation({control,out,pinned,signal,ownerIdentity,ownerAlive}) {
+ if(!control||signal.aborted)return false;
+ const source=path.join(out,'source.json'),sourceBytes=readFileSync(source);
+ const request={schema:'vibestudio.native-reference-continuation/1',nonce:randomUUID(),capture:out,sourceSha256:hash(sourceBytes),repositories:pinned.repositories};
+ const bytes=JSON.stringify(request)+'\n',requestPath=control+'.ready.json';
+ writeFileSync(requestPath,bytes,{flag:'wx',mode:0o600});
+ const requestSha256=hash(bytes);
+ while(!signal.aborted) {
+  if(!ownerAlive(ownerIdentity))return false;
+  if(existsSync(control+'.decision.json')) {
+   const response=JSON.parse(readFileSync(control+'.decision.json'));
+   assert.equal(response.schema,request.schema);assert.equal(response.requestSha256,requestSha256);
+   assert.ok(['continue-paid','drain-native'].includes(response.decision));
+   return response.decision==='drain-native';
+  }
+  await new Promise(resolve=>setTimeout(resolve,100));
+ }
+ return false;
+}
+
+export function summarizeNativeReferences({workflows,pinned,stateRoot}) {
+ const identity=hash(JSON.stringify(pinned.repositories)),index=path.join(stateRoot,identity,'state.json');
+ const state=existsSync(index)?JSON.parse(readFileSync(index)):{repositories:pinned.repositories,results:{}};
+ assert.deepEqual(state.repositories,pinned.repositories);
+ const names=[...workflows].filter(([name,world])=>name.startsWith('open-goal-')&&world.interaction==='open-user-goal').map(([name])=>'open-goal-oracle-'+name.slice('open-goal-'.length));
+ const results=names.flatMap(name=>state.results[name]?[state.results[name]]:[]);
+ const unchecked=names.filter(name=>!state.results[name]);
+ return {schema:'vibestudio.native-reference-coverage/1',repositories:pinned.repositories,planned:names.length,attempted:results.length,
+  passed:results.filter(row=>row.status==='passed').length,failed:results.filter(row=>row.status==='failed').length,errored:results.filter(row=>row.status==='errored').length,
+  unchecked:unchecked.length,uncheckedNames:unchecked,sweepCompleted:names.length>0&&unchecked.length===0,allQualified:names.length>0&&results.length===names.length&&results.every(row=>row.status==='passed'),teacherRegistryWrites:false};
 }

@@ -35,6 +35,7 @@ export type SystemTestApprovalObservation = z.infer<typeof systemTestApprovalObs
 
 export const systemTestRunConfigSchema = z
   .object({
+    nativeReference: z.literal(true).optional(),
     runId: z.string().min(1),
     contextId: z.string().min(1),
     names: z.array(z.string()).optional(),
@@ -84,6 +85,9 @@ export const systemTestRunSummarySchema = z
   })
   .strict();
 export type SystemTestRunSummary = z.infer<typeof systemTestRunSummarySchema>;
+
+export const systemTestDoctorOptionsSchema = z.object({nativeReference:z.literal(true).optional()}).strict();
+export type SystemTestDoctorOptions = z.infer<typeof systemTestDoctorOptionsSchema>;
 
 export const systemTestDoctorResultSchema = z
   .object({
@@ -208,7 +212,7 @@ export interface SystemTestRunnerRpc {
   runUnitRepairTeacher(input: UnitRepairTeacherInput): Promise<UnitRepairTeacherResult>;
   runWorkspaceIntegrationTeacher(input: WorkspaceIntegrationTeacherInput): Promise<PanelTeacherResult>;
   runPanelTeacher(input: PanelTeacherInput): Promise<PanelTeacherResult>;
-  doctor(model?: string): Promise<SystemTestDoctorResult>;
+  doctor(model?: string | null, options?: SystemTestDoctorOptions): Promise<SystemTestDoctorResult>;
   listSystemTests(category?: string): Promise<SystemTestDescriptor[]>;
   startSystemTestRun(options: SystemTestRunConfig): Promise<{ runId: string }>;
   getSystemTestRunSnapshot(runId: string): Promise<SystemTestRunnerSnapshot>;

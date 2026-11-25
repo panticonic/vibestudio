@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { runNativeReferenceTail } from "./lib/native-reference-tail.mjs";
+import { runNativeReferenceTail, waitForNativeContinuation, summarizeNativeReferences, nativeReferenceCapabilities } from "./lib/native-reference-tail.mjs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -40,6 +40,10 @@ const { values } = parseArgs({
   args: args[0] === "--" ? args.slice(1) : args,
   options: {
     case: { type: "string", multiple: true },
+    capabilities: {type:"boolean"},
+    "native-reference-only": {type:"boolean"},
+    "native-reference-completion-control": {type:"string"},
+    "native-reference-drain-batch-size": {type:"string",default:"16"},
     list: { type: "boolean" },
     preflight: { type: "boolean" },
     "review-model": { type: "string" },
@@ -57,6 +61,13 @@ const { values } = parseArgs({
     "checkpoint-request": { type: "string" },
   },
 });
+if(values.capabilities){
+  if((args[0]==="--"?args.slice(1):args).length!==1)throw new Error("--capabilities is a standalone metadata query");
+  console.log(JSON.stringify(nativeReferenceCapabilities));process.exit(0);
+}
+const nativeOnly=values["native-reference-only"]===true;
+const nativeDrainBatchSize=Number(values["native-reference-drain-batch-size"]);
+if(!Number.isSafeInteger(nativeDrainBatchSize)||nativeDrainBatchSize<1)throw new Error("--native-reference-drain-batch-size must be positive");
 const list =
   values.list && !values.preflight && values.case === undefined && values.out === undefined;
 const preflight =
@@ -83,10 +94,12 @@ if (
   );
 }
 const requested = values.case ?? [];
+if(nativeOnly && (requested.length || values["review-model"] || args.some(arg=>arg==="--model"||arg.startsWith("--model="))))
+  throw new Error("--native-reference-only never accepts teacher cases or model/review flags");
 if (
   (values.assignments && values["open-goals"]) ||
   new Set(requested).size !== requested.length ||
-  (!list && !preflight && (values.list || values.preflight || !values.out || !requested.length))
+  (!list && !preflight && (values.list || values.preflight || !values.out || (!requested.length && !nativeOnly)))
 ) {
   throw new Error(
     "Usage: pnpm natlang:teacher --list | --preflight [--case CASE ...] | --case CASE [--case CASE ...] --out NEW_DIR [--model PROVIDER:MODEL] [--test-timeout-ms MS] [--cases-per-instance N] [--concurrency N] [--native-reference-tail N] [--native-reference-state DIR] [--approve-codex-session] [--assignments]"
@@ -156,7 +169,9 @@ if (unknown.length) {
   );
 }
 
-const groups = groupLiveTeacherCases(scenarios, liveTeacherCases, preflight ? 0 : batchSize);
+const nativePlacements=()=>groupLiveTeacherCases([...nativeReferenceWorkflows].filter(([name,world])=>name.startsWith("open-goal-")&&world.interaction==="open-user-goal").map(([name])=>name),nativeReferenceWorkflows,0)
+  .map(group=>({...group,cases:[],referenceOnly:true}));
+const groups = nativeOnly ? nativePlacements() : groupLiveTeacherCases(scenarios, liveTeacherCases, preflight ? 0 : batchSize);
 
 // These are the documented package commands, invoked directly so the parent
 // owns the actual launcher rather than a package-manager signal intermediary.
@@ -348,9 +363,13 @@ if ((await command(["natlang:vendor", "--check"])) !== 0)
   throw new Error("Vendored Natlang pin check failed");
 const out = path.resolve(values.out);
 mkdirSync(out, { mode: 0o700 });
+let drainNative = nativeOnly;
+const controllerIdentity = values["native-reference-completion-control"] ? await import("../packages/shared/src/ownedProcessIdentity.mjs") : null;
+const nativeController = controllerIdentity?.captureProcessStart(process.ppid);
 const source = {
   repositories: pinned.repositories,
-  teacher: values.model,
+  teacher: nativeOnly?null:values.model,
+  ...(nativeOnly?{collectionRole:"native-reference-only"}:{}),
   teacherTimeoutMs: Number(caseTimeout),
 };
 const writePins = (destination, value) =>
@@ -402,7 +421,7 @@ try {
     let stopStatus;
     try {
       const doctor = await captureCommand(
-        systemTestArgs(group, ["doctor", "--approve-startup", "--model", source.teacher]),
+        systemTestArgs(group, ["doctor", "--approve-startup", ...(group.referenceOnly?["--native-reference"]:["--model", source.teacher])]),
         "pipe",
         interruption.signal
       );
@@ -543,21 +562,30 @@ try {
           }
         }
       }
-      if (nativeReferenceLimit > 0 && !interruption.signal.aborted && [...nativeReferenceWorkflows].some(([name,world]) =>
+      if (!drainNative && group===groups.at(-1) && !interruption.signal.aborted && values["native-reference-completion-control"]) {
+        drainNative=await waitForNativeContinuation({control:path.resolve(values["native-reference-completion-control"]),out,pinned,signal:interruption.signal,
+          ownerIdentity:nativeController,ownerAlive:identity=>controllerIdentity.observeProcessStart(identity)==="live"});
+        if(drainNative){
+          const current=JSON.stringify([group.workspace,group.workspaceBaseline??null,[...group.devices].sort()]);
+          groups.push(...nativePlacements().filter(row=>JSON.stringify([row.workspace,row.workspaceBaseline??null,[...row.devices].sort()])!==current));
+        }
+      }
+      if ((drainNative || nativeReferenceLimit > 0) && !interruption.signal.aborted && [...nativeReferenceWorkflows].some(([name,world]) =>
         name.startsWith("open-goal-") && world.interaction === "open-user-goal" &&
         (world.workspace ?? "system") === workspace)) {
         try {
-          if(JSON.stringify(pinSources())!==JSON.stringify(pinned))throw new Error("Source pins changed before native reference tail");
-          const referenceCatalog=await installedTests(group,interruption.signal);
-          const references=await runNativeReferenceTail({group,workflows:nativeReferenceWorkflows,catalog:referenceCatalog,pinned,out,
-            stateRoot:path.resolve(values["native-reference-state"]??path.join(path.dirname(out),"native-reference-qualification")),
-            limit:nativeReferenceLimit,systemTest,signal:interruption.signal,
-            assertPins:()=>{if(JSON.stringify(pinSources())!==JSON.stringify(pinned))throw new Error("Source pins changed during native reference tail");},
-            deploymentPackageAvailable:Boolean(process.env.VIBESTUDIO_MANAGED_DEPLOYMENT_PACKAGE?.trim()) && deploymentPackageProblem === null});
-          console.log(JSON.stringify({nativeReferenceOnly:true,instance,references:references.length,passed:references.filter(row=>row.status==="passed").length}));
+          let references;
+          do {
+            if(JSON.stringify(pinSources())!==JSON.stringify(pinned))throw new Error("Source pins changed before native reference tail");
+            const referenceCatalog=await installedTests(group,interruption.signal);
+            references=await runNativeReferenceTail({group,workflows:nativeReferenceWorkflows,catalog:referenceCatalog,pinned,out,
+              stateRoot:path.resolve(values["native-reference-state"]??path.join(path.dirname(out),"native-reference-qualification")),
+              limit:drainNative?nativeDrainBatchSize:nativeReferenceLimit,systemTest,signal:interruption.signal,
+              assertPins:()=>{if(JSON.stringify(pinSources())!==JSON.stringify(pinned))throw new Error("Source pins changed during native reference tail");},
+              deploymentPackageAvailable:Boolean(process.env.VIBESTUDIO_MANAGED_DEPLOYMENT_PACKAGE?.trim()) && deploymentPackageProblem === null});
+            console.log(JSON.stringify({nativeReferenceOnly:true,instance,references:references.length,passed:references.filter(row=>row.status==="passed").length,draining:drainNative}));
+          } while(drainNative&&references.length&&!interruption.signal.aborted);
         } catch(error) {
-          // Qualification failures retain their own evidence and never change
-          // teacher admission or make a second paid attempt.
           console.error(`Native reference tail retained an incomplete attempt: ${String(error)}`);
         }
       }
@@ -587,6 +615,12 @@ try {
       failures.push(new Error(`Could not retire the managed ${workspace} workspace ${instance}`));
       break;
     }
+  }
+  if(nativeReferenceLimit>0||drainNative){
+    const folder=path.join(out,"native-reference-only");mkdirSync(folder,{recursive:true,mode:0o700});
+    const summary=summarizeNativeReferences({workflows:nativeReferenceWorkflows,pinned,
+      stateRoot:path.resolve(values["native-reference-state"]??path.join(path.dirname(out),"native-reference-qualification"))});
+    writeFileSync(path.join(folder,"coverage.json"),JSON.stringify({...summary,interrupted:interruption.signal.aborted},null,2)+"\n",{flag:"wx",mode:0o600});
   }
   if (failures.length)
     throw new AggregateError(failures, `${failures.length} live teacher operation(s) failed`);

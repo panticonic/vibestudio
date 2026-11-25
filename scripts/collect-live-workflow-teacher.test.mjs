@@ -514,7 +514,7 @@ exit 0
     assert.equal(new Set(nativeCommands.map(row=>row.instance)).size,1,'Native tail must reuse the exact owned instance');
     const reference=nativeCommands[5];assert.equal(reference.args[0],'open-goal-oracle-native-reference');assert.ok(!reference.args.includes('--model'));
     const referencesRoot=path.join(nativeOut,'native-reference-only');
-    const referenceDirs=await retainedDirectories(referencesRoot);assert.equal(referenceDirs.length,1);
+    const referenceDirs=(await retainedDirectories(referencesRoot)).filter(name=>name!=="coverage.json");assert.equal(referenceDirs.length,1);
     const nativeProof=JSON.parse(await readFile(path.join(referencesRoot,referenceDirs[0],'reference-results.json'),'utf8'));
     assert.equal(nativeProof.results[0].status,'passed');assert.equal(nativeProof.teacherRegistryWrites,false);
     await assert.rejects(readFile(path.join(nativeOut,'cases/open-goal-native-reference/verified/manifest.json')),{code:'ENOENT'});

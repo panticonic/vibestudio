@@ -45,3 +45,29 @@ test('owned tail awaits the canonical run then retains separate source-bound raw
  assert.equal(evidence.teacherRegistryWrites,false);assert.ok(rows[0].artifact.includes('native-reference-only'));
  assert.deepEqual(await runNativeReferenceTail(options),[]);assert.equal(calls.length,2);
 });
+
+test('completion decisions are source-bound, wait for the same live owner and reject forged approval',async t=>{
+ const {waitForNativeContinuation}=await import('./native-reference-tail.mjs');
+ const {createHash}=await import('node:crypto');
+ const root=mkdtempSync(path.join(tmpdir(),'TEST-native-continuation-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
+ const out=path.join(root,'capture');mkdirSync(out);writeFileSync(path.join(out,'source.json'),JSON.stringify({repositories:{TEST:{git_commit:'a'.repeat(40)}}}));
+ const pinned={repositories:{TEST:{git_commit:'a'.repeat(40)}}},signal=new AbortController().signal;
+ const control=path.join(root,'continuation');
+ let observed;
+ const decision=await waitForNativeContinuation({control,out,pinned,signal,ownerIdentity:'TEST-owner',ownerAlive:identity=>{
+  assert.equal(identity,'TEST-owner');const bytes=readFileSync(control+'.ready.json');observed=JSON.parse(bytes);
+  writeFileSync(control+'.decision.json',JSON.stringify({schema:observed.schema,requestSha256:createHash('sha256').update(bytes).digest('hex'),decision:'drain-native'}));return true;
+ }});
+ assert.equal(decision,true);assert.equal(observed.capture,out);
+ const forged=path.join(root,'forged');
+ await assert.rejects(waitForNativeContinuation({control:forged,out,pinned,signal,ownerIdentity:null,ownerAlive:()=>{
+  writeFileSync(forged+'.decision.json',JSON.stringify({schema:observed.schema,requestSha256:'0'.repeat(64),decision:'drain-native'}));return true;
+ }}));
+ assert.equal(await waitForNativeContinuation({control:path.join(root,'dead-owner'),out,pinned,signal,ownerIdentity:null,ownerAlive:()=>false}),false);
+});
+
+test('native errors retain their actual failure without inventing a proof or zero model telemetry',()=>{
+ const value={test:{name},result:{passed:false},execution:{error:'TEST actual finite native evaluation deadline',diagnostics:{}}};
+ assert.deepEqual(inspectNativeReference(value,selected),{status:'errored',reason:value.execution.error,nativeProofValidated:false,modelCallCount:null});
+ value.execution.trajectoryReview={modelCallCount:1};assert.throws(()=>inspectNativeReference(value,selected));
+});
