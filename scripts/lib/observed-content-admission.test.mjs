@@ -9,7 +9,7 @@ function example(required=true){
 }
 test("binds each domain's actual proof independently of authored answer vocabulary",()=>{
  const {world,proof}=example();assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
- assert.equal(Object.keys(observedContentFields).length,60);
+ assert.equal(Object.keys(observedContentFields).length,62);
  for(const mutation of [p=>p.semanticReviewInput.actual.requestedReturn={reason:"Invented"},p=>p.semanticReviewInput.actual.observations.reads=[],p=>p.semanticReviewInput.actual.artifacts.artifact="Invented",p=>p.semanticReviewInput.actual.goal="Different goal",p=>p.semanticReviewRequired=false]){
   const clone=structuredClone(proof);mutation(clone);assert.throws(()=>observedContentReviewInput(clone,world));
  }
@@ -172,4 +172,20 @@ test("program-run meaning review binds actual catalog, causal native attempts an
  assert.doesNotThrow(()=>observedContentReviewInput(proof,world));
  const altered={...proof,attempts:[{id:"actual-native-attempt",output:"invented"}]};
  assert.throws(()=>observedContentReviewInput(altered,world));
+});
+
+for(const [kind,native,artifacts,answer] of [
+ ["mobileContinuity",{profile:{id:"owned-profile"},observations:[{buildId:"actual-build",cacheKey:"owned-cache",transport:"native"}],journal:[{operation:"observe",profileId:"owned-profile"}]},{},"The current owned profile retains its native build and transport"],
+ ["sourceAttribution",{assignment:{unitId:"owned-unit"},files:[{path:"owned.ts",revision:"current-head",text:"actual source"}],evidence:[{path:"owned.ts",fact:"native declaration"}],effects:[{kind:"retained-note"}],native:{readback:{revision:"current-head"},protectedMain:"unchanged"}},{receipt:{path:"private/receipt.md",text:"Actual source attribution"}},{conclusion:"The actual source owns the native declaration",receipt:{path:"private/receipt.md"}}],
+])test(`${kind} requires native-bound meaning review independent of optional status copies`,()=>{
+ const world={kind,goal:kind==="mobileContinuity"?"Explain the current mobile continuity":"Attribute the current declaration and preserve its private note"};
+ const proof={...native,...artifacts,actualResult:answer,semanticReviewRequired:true,outcomeContract:{returnedValue:{required:true}}};
+ const fields=observedContentFields[kind],pick=keys=>Object.fromEntries(keys.map(key=>[key,proof[key]??null]));
+ proof.semanticReviewInput={actual:{goal:world.goal,observations:pick(fields[0]),artifacts:pick(fields[1]),requestedReturn:answer},expected:{goal:world.goal,requestedReturnRequired:true},rubric:"Judge requested meaning from native current evidence and actual retained bytes"};
+ assert.equal(observedContentNeedsReview(world),true);
+ assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
+ for(const mutate of [p=>p.semanticReviewRequired=false,p=>p.semanticReviewInput.actual.observations[fields[0][0]]=null,p=>p.semanticReviewInput.actual.requestedReturn="Invented"]){const changed=structuredClone(proof);mutate(changed);assert.throws(()=>observedContentReviewInput(changed,world));}
+ if(fields[1].length){const changed=structuredClone(proof);changed.semanticReviewInput.actual.artifacts[fields[1][0]]=null;assert.throws(()=>observedContentReviewInput(changed,world));}
+ const optional=structuredClone(proof);optional.actualResult={status:"irrelevant"};optional.outcomeContract.returnedValue.required=false;optional.semanticReviewInput.actual.requestedReturn=null;optional.semanticReviewInput.expected.requestedReturnRequired=false;
+ assert.equal(observedContentNeedsReview(world),true);assert.equal(observedContentReviewInput(optional,world),optional.semanticReviewInput);
 });
