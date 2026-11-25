@@ -7253,7 +7253,7 @@ export function openOutcomeGoalEvidence(execution, exercise, _scenario, workflow
   if(world.kind==="vaultWork"){
     requireEvidence(workflow.requiresReview===true,"Vault goal meaning review must be declared before teacher execution");
     const reviewInput=world.expected.steps.some(step=>step.kind==="write")
-      ?sourceContentReviewInput(proof,world):vaultKnowledgeReviewInput(proof,world,proof.actualResult);
+      ?sourceContentReviewInput(proof,world,proof.actualResult):vaultKnowledgeReviewInput(proof,world,proof.actualResult);
     return {world:worldBinding,checks:{...checks},evidence,reviewInput};
   }
   if(world.kind==="spectrolite"&&world.writablePath||world.kind==="pdfVault"&&world.vault.writablePath){
