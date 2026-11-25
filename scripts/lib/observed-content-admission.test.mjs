@@ -9,7 +9,7 @@ function example(required=true){
 }
 test("binds each domain's actual proof independently of authored answer vocabulary",()=>{
  const {world,proof}=example();assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
- assert.equal(Object.keys(observedContentFields).length,56);
+ assert.equal(Object.keys(observedContentFields).length,57);
  for(const mutation of [p=>p.semanticReviewInput.actual.requestedReturn={reason:"Invented"},p=>p.semanticReviewInput.actual.observations.reads=[],p=>p.semanticReviewInput.actual.artifacts.artifact="Invented",p=>p.semanticReviewInput.actual.goal="Different goal",p=>p.semanticReviewRequired=false]){
   const clone=structuredClone(proof);mutation(clone);assert.throws(()=>observedContentReviewInput(clone,world));
  }
@@ -134,4 +134,13 @@ test("launch review binds assignment-owned companion observations and protected 
  proof.semanticReviewInput={actual:{goal:world.goal,observations:pick(observations),artifacts:pick(artifacts),requestedReturn:null},expected:{goal:world.goal,requestedReturnRequired:false},rubric:"Judge actual observations and scope"};
  assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
  for(const field of ["companionReadbacks","protectedCompanion"]){const changed=structuredClone(proof);changed.semanticReviewInput.actual.observations[field]=null;assert.throws(()=>observedContentReviewInput(changed,world));}
+});
+
+test("owned operations review binds native custody and actual retained bytes without private expected decisions",()=>{
+ const world={kind:"owned-operations",goal:"Tell us whether the current docket can proceed and keep any requested dossier private"};
+ const proof={semanticReviewRequired:true,outcomeContract:{returnedValue:{required:true}},docket:{id:"current",revision:"owned"},effects:{reads:[{authority:"local-exercise",request:{kind:"release-continuation",after:[{id:"training",state:"approved"}]}}]},audit:{opened:[{handle:{id:"worker",contextId:"owned"}}],retiredIds:["worker"],remainingEntityIds:[]},dossierReadback:"Actual retained native checkpoint and handoff bytes",actualResult:{reason:"The current training gate is approved"}};
+ const [observations,artifacts]=observedContentFields[world.kind],pick=keys=>Object.fromEntries(keys.map(key=>[key,proof[key]??null]));
+ proof.semanticReviewInput={actual:{goal:world.goal,observations:pick(observations),artifacts:pick(artifacts),requestedReturn:proof.actualResult},expected:{goal:world.goal,requestedReturnRequired:true},rubric:"Judge the actual goal against current native facts"};
+ assert.equal(observedContentNeedsReview(world),true);assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
+ for(const alter of [p=>p.semanticReviewRequired=false,p=>p.semanticReviewInput.actual.observations.audit={retiredIds:[]},p=>p.semanticReviewInput.actual.artifacts.dossierReadback="Invented",p=>p.semanticReviewInput.actual.requestedReturn={reason:"Invented"}]){const changed=structuredClone(proof);alter(changed);assert.throws(()=>observedContentReviewInput(changed,world));}
 });

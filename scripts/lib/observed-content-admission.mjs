@@ -1,6 +1,7 @@
 import {isDeepStrictEqual as equal} from "node:util";
 /** Per-domain actual native evidence; no expected answer vocabulary enters review. */
 export const observedContentFields = {
+  "owned-operations": [["docket","effects","audit"], ["dossierReadback"]],
   "personal-automation": [["initial","latest","observations","independent","attempts","requests"], []],
   "personal-artifacts": [["libraryFirst","collectionFirst","independentLibrary","independentCollection","libraryWrites","collectionWrites","links","refreshes"], []],
   "personal-history": [["catalogEvent","repositoryId","milestones","discovery","operations","reads"], []],
