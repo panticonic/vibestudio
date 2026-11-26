@@ -15,5 +15,13 @@
     ]
   },
   "design": "Propagate the original provider preparation exception, including its exact cancellation/error code, phase and cause. Preserve the registry actual-absence error; do not classify arbitrary preparation failures as missing dependencies. No timeout/grant/cancellation-lifetime change.",
-  "status": "inventory complete before correction; targeted actual builder controls pending"
+  "status": "corrected shared wrapper; actual four targeted builder/lifetime controls passed",
+  "verification": {
+    "unit": "vibe-provider-preparation-cancellation-20261126b.service",
+    "passed": 4,
+    "skipped": 17,
+    "durationSeconds": 19.77,
+    "peakMiB": 596,
+    "projection": "Canonical Host setup plus explicit read-only source-identical Source44 compiled generation; no frozen writes"
+  }
 }
