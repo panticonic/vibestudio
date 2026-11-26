@@ -126,3 +126,50 @@ test('native full scope continues across bounded batches until exhausted and tai
 test('a prior drain or cancellation admits no new native batch',async()=>{
  for(const cancelled of [false,true]){const controller=new AbortController();if(cancelled)controller.abort();let calls=0;assert.deepEqual(await runNativeReferenceBatches({draining:true,signal:controller.signal,drainAtBoundary:()=>true,runBatch:async()=>{calls++;return[];}}),{batches:0,observed:0});assert.equal(calls,0);}
 });
+
+test('a later owner recovers the actual passed packet after a lost CLI join before admitting another run',async t=>{
+ const root=mkdtempSync(path.join(tmpdir(),'TEST-native-lost-join-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
+ const out=path.join(root,'capture');mkdirSync(out);const stateRoot=path.join(root,'state'),runId='st_'+'d'.repeat(32);
+ const pinned={repositories:{TEST:{git_commit:'d'.repeat(40),dirty:false}}};let checkpoints=0;
+ const options={group,workflows,catalog,pinned,out,stateRoot,limit:1,signal:new AbortController().signal};
+ await assert.rejects(runNativeReferenceTail({...options,assertPins:()=>{
+  // Startup validation, then durable pre-launch registration, then lost join.
+  if(++checkpoints===3)throw new Error('TEST process died after retained packet, before outcome checkpoint');
+ },systemTest:async args=>{
+  const directory=args[args.indexOf('--out-dir')+1],retained=path.join(directory,runId,'failure-evidence');mkdirSync(retained,{recursive:true});
+  writeFileSync(path.join(retained,`trajectory-${name}-full.json.gz`),gzipSync(JSON.stringify(packet())));return 0;
+ }}),/TEST process died/);
+ const rows=await runNativeReferenceTail({...options,systemTest:()=>{throw new Error('Must not rerun independently passed reference');}});
+ assert.equal(rows.length,1);assert.equal(rows[0].status,'passed');assert.ok(rows[0].retainedPrefixRecovery.sourceSha256);
+ assert.deepEqual(await runNativeReferenceTail({...options,systemTest:()=>assert.fail('Already completed')}),[]);
+});
+
+test('pending prefix recovery rejects source substitution and forged packet provenance',async t=>{
+ const {recoverRetainedNativeReferencePackets}=await import('./native-reference-tail.mjs');
+ const {createHash}=await import('node:crypto');
+ const hash=v=>createHash('sha256').update(v).digest('hex');
+ for(const changed of ['source','goal','model','context']) {
+  const root=mkdtempSync(path.join(tmpdir(),'TEST-native-prefix-custody-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
+  const repositories={TEST:{git_commit:'e'.repeat(40),dirty:false}},source={repositories,collectionRole:'native-reference-only',placement:['examples',null,[]],names:[name]},bytes=JSON.stringify(source);
+  writeFileSync(path.join(root,'source.json'),bytes);
+  const state={repositories,results:{},pendingBatches:[{output:root,sourceSha256:hash(bytes),selected:[selected]}]};
+  const runId='st_'+'e'.repeat(32);mkdirSync(path.join(root,runId));const p=packet();
+  if(changed==='source')writeFileSync(path.join(root,'source.json'),JSON.stringify({...source,repositories:{foreign:true}}));
+  if(changed==='goal')p.execution.diagnostics.openGoalVerification.goal='foreign';
+  if(changed==='model')p.execution.trajectoryReview.modelCallCount=1;
+  if(changed==='context')p.execution.provenance.contextId='foreign';
+  writeFileSync(path.join(root,runId,`trajectory-${name}-full.json.gz`),gzipSync(JSON.stringify(p)));
+  assert.throws(()=>recoverRetainedNativeReferencePackets({state,workflows,catalog}));assert.deepEqual(state.results,{});
+ }
+});
+
+test('interrupted error and absent packets remain unchecked instead of becoming failed qualification or a pass',async t=>{
+ const {recoverRetainedNativeReferencePackets}=await import('./native-reference-tail.mjs');
+ const {createHash}=await import('node:crypto');
+ const root=mkdtempSync(path.join(tmpdir(),'TEST-native-prefix-error-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
+ const repositories={TEST:{git_commit:'f'.repeat(40)}},source={repositories,collectionRole:'native-reference-only',placement:['examples',null,[]],names:[name]},bytes=JSON.stringify(source);
+ writeFileSync(path.join(root,'source.json'),bytes);const runId='st_'+'f'.repeat(32);mkdirSync(path.join(root,runId));
+ writeFileSync(path.join(root,runId,`trajectory-${name}-full.json.gz`),gzipSync(JSON.stringify({test:{name},result:{passed:false},execution:{error:'TEST interrupted while disposing',diagnostics:{}}})));
+ const state={repositories,results:{},pendingBatches:[{output:root,sourceSha256:createHash('sha256').update(bytes).digest('hex'),selected:[selected]}]};
+ assert.deepEqual(recoverRetainedNativeReferencePackets({state,workflows,catalog}),[]);assert.deepEqual(state.results,{});assert.equal(state.pendingBatches,undefined);
+});

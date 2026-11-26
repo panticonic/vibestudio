@@ -54,6 +54,44 @@ export function inspectNativeReference(packet,selected) {
  const passed=!execution.error&&!(execution.cleanupErrors??[]).length&&!unexpected.length&&packet.result?.passed===true&&proof.passed===true&&Object.values(proof.checks).every(Boolean);
  return {status:passed?'passed':execution.error?'errored':'failed',checks:proof.checks,contextId:proof.contextId,modelCallCount};
 }
+/** Recover only independently passed native packets from this source's own
+ * pre-launch journal. A killed CLI owner may retain packets before its join
+ * finishes; aggregate cancellation is never a completion witness. */
+export function recoverRetainedNativeReferencePackets({state,workflows,catalog}) {
+ const recovered=[];
+ for(const pending of state.pendingBatches??[]) {
+  const sourceBytes=readFileSync(path.join(pending.output,'source.json'));
+  assert.equal(hash(sourceBytes),pending.sourceSha256,'Pending native batch source changed');
+  const source=JSON.parse(sourceBytes);
+  assert.deepEqual(source.repositories,state.repositories);
+  assert.equal(source.collectionRole,'native-reference-only');
+  assert.deepEqual(source.names,pending.selected.map(row=>row.name));
+  const runs=readdirSync(pending.output).filter(name=>/^st_[a-f0-9]{32}$/u.test(name));
+  assert.ok(runs.length<=1,'Pending reference has multiple owned runs');
+  if(!runs.length)continue;
+  for(const row of pending.selected) {
+   const world=workflows.get(row.scenario),entry=catalog.get(row.name);
+   assert.equal(row.name,'open-goal-oracle-'+row.scenario.slice('open-goal-'.length));
+   assert.equal(world?.interaction,'open-user-goal');assert.equal(world.assignment?.goal,row.goal);
+   assert.equal(placement(world),source.placement?JSON.stringify(source.placement):pending.placement);
+   assert.equal(entry?.nativeReference,true);assert.equal(entry.installed,true);assert.equal(entry.orchestrated,true);
+   const filename=`trajectory-${row.name.replace(/[^A-Za-z0-9_.-]+/gu,'_').slice(0,100)}-full.json.gz`,root=path.join(pending.output,runs[0]);
+   const file=[path.join(root,filename),path.join(root,'failure-evidence',filename)].find(existsSync);
+   if(!file)continue;
+   const raw=readFileSync(file),observed=inspectNativeReference(JSON.parse(gunzipSync(raw)),row);
+   // Interrupted errors/partial runs remain unchecked. Only the exact positive
+   // native completion proof can survive a lost CLI join automatically.
+   if(observed.status!=='passed'||state.results[row.name])continue;
+   const record={...row,...observed,artifact:file,sha256:hash(raw),runId:runs[0],
+    ...(source.deploymentPackage?{deploymentPackage:source.deploymentPackage}:{}),
+    retainedPrefixRecovery:{sourceSha256:pending.sourceSha256}};
+   state.results[row.name]=record;recovered.push(record);
+  }
+ }
+ delete state.pendingBatches;
+ return recovered;
+}
+
 /** Called only by the collector owning this exact instance, after its paid suite
  * and exporter have joined. The ordinary CLI still owns all fixture/resource cleanup.
  * Reference output is never passed to the teacher exporter or its registry.
@@ -63,14 +101,24 @@ export async function runNativeReferenceTail({group,workflows,catalog,pinned,out
  const identity=hash(JSON.stringify(pinned.repositories)),stateDir=path.join(stateRoot,identity);
  mkdirSync(stateDir,{recursive:true,mode:0o700});
  const index=path.join(stateDir,'state.json');
- const original=existsSync(index)?readFileSync(index):null;
+ let original=existsSync(index)?readFileSync(index):null;
  const state=original?JSON.parse(original):{schema:'vibestudio.native-reference-tail/1',repositories:pinned.repositories,results:{}};
  assert.deepEqual(state.repositories,pinned.repositories);
+ const persist=()=>{
+  assert.equal(existsSync(index)?hash(readFileSync(index)):null,original?hash(original):null,'Native-reference state has another writer');
+  assertPins();
+  const bytes=JSON.stringify(state,null,2)+'\n',temporary=index+'.'+randomUUID()+'.tmp';
+  writeFileSync(temporary,bytes,{flag:'wx',mode:0o600});renameSync(temporary,index);original=Buffer.from(bytes);
+ };
+ assertPins();
+ const recovered=recoverRetainedNativeReferencePackets({state,workflows,catalog});
+ if(recovered.length||original&&JSON.parse(original).pendingBatches)persist();
  const selected=selectNativeReferences({group,workflows,catalog,completed:state.results,limit,deploymentPackageAvailable});
- if(!selected.length)return [];
+ if(!selected.length)return recovered;
  const output=path.join(out,'native-reference-only',randomUUID());mkdirSync(output,{recursive:true,mode:0o700});
  writeFileSync(path.join(output,'source.json'),JSON.stringify({repositories:pinned.repositories,instance:group.instance,placement:JSON.parse(placement(group)),collectionRole:'native-reference-only',deploymentPackage:deploymentPackageIdentity,names:selected.map(row=>row.name)},null,2),{flag:'wx',mode:0o600});
- assertPins();
+ state.pendingBatches=[{output,sourceSha256:hash(readFileSync(path.join(output,'source.json'))),selected,placement:placement(group)}];
+ persist();
  const startedAt=new Date().toISOString();
  let commandExit=null,commandError;
  try {
@@ -117,12 +165,12 @@ export async function runNativeReferenceTail({group,workflows,catalog,pinned,out
  // unexpected second index writer instead of overwriting another owner's work.
  assert.equal(existsSync(index)?hash(readFileSync(index)):null,original?hash(original):null,'Native-reference state has another writer');
  assertPins();
- const temporary=index+'.'+randomUUID()+'.tmp';writeFileSync(temporary,JSON.stringify(state,null,2)+'\n',{flag:'wx',mode:0o600});renameSync(temporary,index);
+ delete state.pendingBatches;persist();
  writeFileSync(path.join(output,'reference-results.json'),JSON.stringify({schema:state.schema,repositories:state.repositories,results:records,unvalidated,teacherRegistryWrites:false},null,2)+'\n',{flag:'wx',mode:0o600});
  if(unvalidated.length)throw new AggregateError(unvalidated.map(row=>new Error(`${row.name}: ${row.reason}`)),
   'Reference batch retained unchecked evidence; verified prefix was preserved');
  if(commandError&&!records.length)throw commandError;
- return records;
+ return [...recovered,...records];
 }
 
 /** Honor the same non-aborting owner boundary for native-only continuation.
