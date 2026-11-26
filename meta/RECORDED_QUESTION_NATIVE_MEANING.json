@@ -1,0 +1,41 @@
+{
+  "schema": "vibestudio.native-meaning-correction/2",
+  "domain": "provenance-question",
+  "pairedPublicContract": "RecordedQuestionFindings = {answer:string}; no compatibility report/enum alias",
+  "mandatoryReviewFields": {
+    "observations": [
+      "assignment",
+      "candidates",
+      "evidence",
+      "native",
+      "effects"
+    ],
+    "artifacts": []
+  },
+  "requestedReturnRequired": true,
+  "privateExpectedAnswerExcluded": true,
+  "actualRootBinding": "Existing canonical exporter binds full actual application return; shared observed-content binder requires its exact equality with reviewed requestedReturn and native observations.",
+  "noGoalCompletionFromQualification": true,
+  "qualificationScope": "native-reference, goalMeaningReview:pending",
+  "originalFailures": "0073 missing limiting reason and0075 missing identity/cohort/answer remain preserved failures; no teacher or review call and no acceptance overlay.",
+  "nativeProof": "meta/OBSERVATION_GOAL_OBLIGATIONS.json",
+  "validation": {
+    "canonicalGenerationUnit": "vibe-observation-host-final-20261126a",
+    "services": 380,
+    "freshness": true,
+    "nodeControls": 78,
+    "nativeWorldControls": 53,
+    "publicLoader": {
+      "distinctControls": 12,
+      "finalHierarchyUnit": "vibe-observation-composition-final-20261126a",
+      "hierarchyTests": 5,
+      "wholeLibraryLeafAndRegistry": "passed",
+      "invalidFieldControl": "vibe-recorded-reference-feedback-20261126b passed"
+    }
+  },
+  "engineBoundary": "Authored Base code executes through the existing shared Core Node/Workerd/browser-capable virtual program mechanism. No serving, Core, SDK, transport, or model-policy implementation is modified. Native fixture/Host admission consumers changed together.",
+  "qualificationCustody": {
+    "producer": "workers/system-test-runner/index.ts:4385-4404",
+    "mode": "Explicit qualification branch returns teacher:null and closes its prepared fixture; actual teacher runs a separate bindingCode/fixture path. Qualification cannot contaminate a model invocation journal."
+  }
+}
