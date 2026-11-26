@@ -1,0 +1,21 @@
+{
+  "inventoryBeforeEdits": true,
+  "producer": "scripts/collect-live-workflow-teacher.mjs --native-reference-only/full continuation do/while608",
+  "sharedBoundary": "scripts/lib/live-teacher-interruption.mjs drainAtBoundary reads existing own drainfile, persists non-aborting checkpoint",
+  "paidConsumers": "collector checks drainAtBoundary atgroup/admission422/465; paidruntime-boundary behavior remains",
+  "nativeConsumers": "native-only and paidqueue-exhausted full drain share loop, currently ignoring existing softdrain untilall2327 finish",
+  "evidence": "ActualLOW full46first16complete11P5DDGerrors; laterready4GiB publiccontrols can wait for memory. Canonicalsoftdrain mustsettle currentnativebatch without cancellingusefulinflight thenyield, retaining exactsource-specific index forresume.",
+  "design": "One owner loop helper inexistingnative-reference-tail module; poll existingdrain boundary beforeeverynewbatch, never abort an underwaybatch or discardverifiedprefix. No newframework, no model/teacher registration changes.",
+  "verification": {
+    "unit": "vibe-native-soft-drain-20261126a.service",
+    "passed": 14,
+    "durationMs": 200.23,
+    "controls": [
+      "real owner drainfile during pendingbatch doesnotabort, exactcompletedrecords retained, no nextbatch",
+      "fullscope boundedbatches continueuntilactualexhaustion",
+      "tailmode remainsonebatch",
+      "priorownerdrain/cancellation admitsnone",
+      "existing native source/ownership/goal/model-negative contracts unchanged"
+    ]
+  }
+}
