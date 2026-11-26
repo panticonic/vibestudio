@@ -1,0 +1,16 @@
+# Provider outage admission inventory
+
+Observed original0087: one actual NativeRecords failed model exchange (`fetch failed`, matching request invocation and model_request/error event), then shared Host WebSocket TLS circuit refusals. All64 cases were admitted despite a provider failure already established. Current unauthenticated HTTP/Upgrade checks returning401/405 do not close the historical managed TLS cause.
+
+Dependency graph before edits:
+- Host `scripts/collect-live-workflow-teacher.mjs` starts one managed run containing all cases; cannot stop its per-case admission while awaiting the command.
+- SST `skills/system-testing/test-runner.ts` owns pending/resource scheduling; cancel currently also aborts all active waits, so it cannot implement graceful provider admission closure.
+- SST `skills/system-testing/cli.ts:onTestResult` receives actual native capture before retention and before that worker claims another case; all admitted workers are joined. This is the correctness boundary for source-bound outage detection.
+- Host `packages/service-schemas/src/systemTestRunner.ts` validates the shared terminal summary; collector must bind pending cases to explicit admissionStopped data, never infer unstarted from missing capture alone.
+- Host `scripts/lib/live-teacher-interruption.mjs` already persists completed/interrupted cases and graceful drain separately from AbortSignal cancellation. Reuse it for the remaining collector groups.
+- Python `scripts/neuralese_data/vibestudio_campaign.py:captured_provider_transport_errors/provider_transport_cause` already classifies exact native failed exchanges (not returned model text) and holds at2 failures/.5fraction, but only after wave completion. Preserve fullqueue/retries and consume collector interrupted status; no seed/goal changes.
+- Node/Workerd NativeRecords are the shared engine-neutral capture input; this changes scheduling, not Node/Workerd/browser engine inference or transport. No model calls in controls. Native-reference fixtures without model exchanges do not trigger provider-outage admission closure.
+
+Plan: stop pending claims only; retain and join actual useful inflight cases and complete evidence; expose authoritative queued names in the existing summary. Do not cancel, fabricate failed/passed records for queued cases, or use prose/elapsed-time heuristics. Existing collection opt-out may explicitly continue admission, but default prevents repeating an established provider outage.
+
+Implemented and checked: real64-case scheduler/CLI joins4admitted results and retains60queued, with no aborted active wait; explicit continuation opt-out preserves verdicts; captured native request/schema/event/root/model/RuntimeRetry checks reject free-text, foreign, missing-event, successful-root and local-cancel forgeries. Actual0087 immutable Mobile gzip SHA c5b2f50bf277c659ad9ef1e4185fec08e9ad3436dfa51d58aafc1969fcda97de replays positive without request; its exact error hash matches Python canonicalJSON.83 SST tests+14 Node collector/interruption controls pass;15 final replay/schema controls pass. This prevents the admission storm; historical managed TLS cause remains OPEN. No Source51/frozen edits, models or trainer registration.

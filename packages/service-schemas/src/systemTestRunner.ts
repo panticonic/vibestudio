@@ -69,6 +69,14 @@ export const systemTestRunSummarySchema = z
     runId: z.string(),
     status: z.enum(["running", "completed", "cancelled", "errored"]),
     error: z.string().optional(),
+    admissionStopped: z.object({
+      reason: z.literal("provider-transport-outage"),
+      queuedTests: z.array(z.string()),
+      evidence: z.array(z.object({
+        caseName: z.string(), callId: z.string(), kind: z.string(), model: z.string(),
+        errorSha256: z.string().regex(/^[a-f0-9]{64}$/), circuitOpen: z.boolean(),
+      }).strict()).min(1),
+    }).strict().optional(),
     total: z.number(),
     passed: z.number(),
     failed: z.number(),
