@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { operationalErrorMetadata, errorDataProperty } from "./operationalErrorMetadata.js";
+import { operationalErrorMetadata, errorDataProperty, setErrorStack } from "./operationalErrorMetadata.js";
 import { serializeRpcFailure, deserializeRpcFailure } from "./errors.js";
 it("retains real nested OS causes through RPC without adding request data to diagnostics", () => {
   const cause = Object.assign(new Error("secret request https://user:password@example"), {
@@ -100,4 +100,12 @@ it("inspects only the bounded aggregate prefix without enumerating a huge array"
   });
   expect(operationalErrorMetadata({ errors })).toEqual({ errors: [], truncated: true });
   expect(descriptors).toBeLessThanOrEqual(6);
+});
+
+it("restored stack data survives another RPC boundary without evaluating accessors", () => {
+ const error = new Error("native failure");
+ setErrorStack(error, "native retained stack");
+ const restored = deserializeRpcFailure(serializeRpcFailure(error));
+ expect(Object.getOwnPropertyDescriptor(restored, "stack")?.value).toBe("native retained stack");
+ expect(serializeRpcFailure(restored).stack).toBe("native retained stack");
 });

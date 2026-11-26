@@ -1,3 +1,4 @@
+import { errorDataProperty, setErrorStack } from "@vibestudio/rpc";
 import { createExtensionBuildProvider, extensionPrimaryArtifactPath } from "./buildProvider.js";
 import { traceInvocation } from "./invocationTrace.js";
 import { websiteAuthorityIdentity } from "@vibestudio/shared/serviceDispatcher";
@@ -1228,9 +1229,8 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       );
       if (error instanceof Error) {
         (wrapped as Error & { cause?: unknown }).cause = error;
-        if (error.stack) {
-          wrapped.stack = `${wrapped.message}\nCaused by: ${error.stack}`;
-        }
+        const stack = errorDataProperty(error, "stack");
+        if (typeof stack === "string") setErrorStack(wrapped, `${wrapped.message}\nCaused by: ${stack}`);
       }
       const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
       if (typeof code === "string") {

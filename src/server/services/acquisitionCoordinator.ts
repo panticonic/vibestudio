@@ -1,4 +1,4 @@
-import { serializeRpcFailure } from "@vibestudio/rpc";
+import { serializeRpcFailure, setErrorStack } from "@vibestudio/rpc";
 import { websiteAuthorityIdentity } from "@vibestudio/shared/serviceDispatcher";
 import type {
   AcquisitionInfo,
@@ -2598,7 +2598,7 @@ function invocationAcquisitionSettlement(
       value.error.errorData
     );
     error.name = value.error.name;
-    if (value.error.stack) error.stack = value.error.stack;
+    if (value.error.stack) setErrorStack(error, value.error.stack);
     return { state: "failed", error };
   }
   const outcome = record.resolution.value as unknown as AcquisitionOutcome;

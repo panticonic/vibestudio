@@ -5,7 +5,7 @@ import {
   type OutgoingHttpHeaders,
 } from "node:http";
 import { request as httpsRequest } from "node:https";
-import type { NetworkDestination } from "./networkDestination.js";
+import { pinnedConnectionOptions, type NetworkDestination } from "./networkDestination.js";
 export interface ForwardResult {
   statusCode: number;
   bytesIn: number;
@@ -32,7 +32,7 @@ export async function forwardPinnedHttpRequest(
       {
         protocol: targetUrl.protocol,
         hostname: destination.hostname,
-        lookup: destination.lookup,
+        ...pinnedConnectionOptions(destination),
         agent: false,
         signal,
         port: targetUrl.port ? Number(targetUrl.port) : defaultPort,

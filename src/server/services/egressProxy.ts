@@ -1,4 +1,5 @@
-import { parseConnectAuthority } from "@vibestudio/shared/networkDestination";
+import { errorDataProperty, setErrorStack } from "@vibestudio/rpc";
+import { parseConnectAuthority, pinnedConnectionOptions } from "@vibestudio/shared/networkDestination";
 import { forwardPinnedHttpRequest } from "@vibestudio/shared/pinnedHttpForward";
 import { serializeRpcFailure } from "@vibestudio/rpc";
 import { request as httpRequest } from "node:http";
@@ -294,7 +295,8 @@ class ForwardRejection extends Error {
     super(message);
     if (cause !== undefined) {
       Object.defineProperty(this, "cause", { value: cause, configurable: true });
-      if (cause instanceof Error && cause.stack) this.stack = cause.stack;
+      const stack = errorDataProperty(cause, "stack");
+      if (typeof stack === "string") setErrorStack(this, stack);
     }
   }
 }
@@ -1346,7 +1348,7 @@ export class EgressProxy {
                 bodyTimeout: GIT_HTTP_RESPONSE_TIMEOUT_MS,
               }
             : {}),
-          connect: { lookup: destination.lookup },
+          connect: pinnedConnectionOptions(destination),
         });
         let result: RequestExecutionResult<T> | undefined;
         try {
@@ -2515,7 +2517,7 @@ export class EgressProxy {
       upstream = netConnect({
         host: destination.hostname,
         port: target.port,
-        lookup: destination.lookup,
+        ...pinnedConnectionOptions(destination),
       });
       consumeSocketErrorsUntilClose(upstream);
       upstream.once("error", () => {
@@ -2773,7 +2775,7 @@ export class EgressProxy {
         const upstreamRequest = requestFn({
           protocol: requestUrl.protocol,
           hostname: destination.hostname,
-          lookup: destination.lookup,
+          ...pinnedConnectionOptions(destination),
           agent: false,
           signal,
           port: requestUrl.port ? Number(requestUrl.port) : defaultPort,

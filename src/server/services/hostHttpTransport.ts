@@ -1,5 +1,5 @@
 import { Agent, type Dispatcher } from "undici";
-import { resolveNetworkDestination } from "@vibestudio/shared/networkDestination";
+import { resolveNetworkDestination, pinnedConnectionOptions } from "@vibestudio/shared/networkDestination";
 
 export interface HostHttpRequest {
   url: URL;
@@ -138,7 +138,7 @@ export async function withPublicHostHttp<T>(
     pipelining: 0,
     headersTimeout: 0,
     bodyTimeout: 0,
-    connect: { lookup: destination.lookup },
+    connect: pinnedConnectionOptions(destination),
   });
   let result!: T;
   let failure: unknown;

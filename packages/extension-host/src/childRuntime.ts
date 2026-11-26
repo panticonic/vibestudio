@@ -1,3 +1,4 @@
+import { errorDataProperty, setErrorStack } from "@vibestudio/rpc";
 import { traceInvocation } from "./invocationTrace.js";
 import { createCredentialClient } from "@vibestudio/service-schemas/clients/credentialClient";
 import {
@@ -200,9 +201,8 @@ function extensionRuntimeError(
   if (errorData !== undefined) {
     (wrapped as Error & { errorData?: unknown }).errorData = errorData;
   }
-  if (error instanceof Error && error.stack) {
-    wrapped.stack = `${wrapped.message}\nCaused by: ${error.stack}`;
-  }
+  const stack = errorDataProperty(error, "stack");
+  if (typeof stack === "string") setErrorStack(wrapped, `${wrapped.message}\nCaused by: ${stack}`);
   return wrapped;
 }
 

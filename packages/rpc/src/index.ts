@@ -217,5 +217,6 @@ export { rpcDiagnosticIdOf, attachRpcDiagnosticId } from "./errors.js";
 export {
   operationalErrorMetadata,
   errorDataProperty,
+  setErrorStack,
   type OperationalErrorMetadata,
 } from "./operationalErrorMetadata.js";

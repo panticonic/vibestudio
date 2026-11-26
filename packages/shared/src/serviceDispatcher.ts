@@ -1,3 +1,4 @@
+import { errorDataProperty, setErrorStack } from "@vibestudio/rpc";
 import { testPolicyDecision } from "./authority/testPolicy.js";
 import { rpcDiagnosticIdOf, attachRpcDiagnosticId } from "@vibestudio/rpc";
 import {
@@ -713,9 +714,8 @@ export class ServiceError extends Error {
     this.name = "ServiceError";
     if (cause instanceof Error) {
       (this as Error & { cause?: unknown }).cause = cause;
-      if (cause.stack) {
-        this.stack = `${this.message}\nCaused by: ${cause.stack}`;
-      }
+      const stack = errorDataProperty(cause, "stack");
+      if (typeof stack === "string") setErrorStack(this, `${this.message}\nCaused by: ${stack}`);
     }
   }
 }

@@ -119,3 +119,9 @@ export function errorArrayItems(value: unknown, limit = Number.POSITIVE_INFINITY
   }
   return out;
 }
+
+/** Assignment may leave V8's lazy stack accessor in place; wire diagnostics
+ * intentionally serialize data properties without executing error accessors. */
+export function setErrorStack(error: Error, stack: string): void {
+  Object.defineProperty(error, "stack", { value: stack, configurable: true, writable: true });
+}

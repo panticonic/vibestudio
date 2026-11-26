@@ -87,6 +87,21 @@ export interface NetworkDestination {
   lookup: LookupFunction;
 }
 
+/** Node cancels each non-final address attempt; 250 ms can expire before a
+ * delayed TCP handshake or retransmission. Keep the approved DNS snapshot and
+ * the caller's overall deadline; only give address selection a usable window. */
+export function pinnedConnectionOptions(
+  destination: Pick<NetworkDestination, "lookup">,
+  env: Record<string, string | undefined> = process.env
+): { lookup: LookupFunction; autoSelectFamilyAttemptTimeout?: number } {
+  const configured = env["VIBESTUDIO_NETWORK_FAMILY_ATTEMPT_TIMEOUT_MS"]?.trim();
+  if (configured === "0") return { lookup: destination.lookup };
+  const milliseconds = configured ? Number(configured) : 1500;
+  if (!Number.isInteger(milliseconds) || milliseconds < 10 || milliseconds > 60_000)
+    throw new Error("VIBESTUDIO_NETWORK_FAMILY_ATTEMPT_TIMEOUT_MS must be 0 or an integer from 10 to 60000");
+  return { lookup: destination.lookup, autoSelectFamilyAttemptTimeout: milliseconds };
+}
+
 async function resolveWithDeadline(
   hostname: string,
   resolve: (hostname: string) => Promise<LookupAddress[]>,

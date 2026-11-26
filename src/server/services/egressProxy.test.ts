@@ -3089,6 +3089,8 @@ describe("EgressProxy", () => {
       undefined,
       { phase: "response" }
     );
+    // The wire preserves data properties; do not make this control depend on V8 lazy stack accessors.
+    Object.defineProperty(original, "stack", { value: "native transport fixture stack", configurable: true });
     attachRpcDiagnosticId(original, "f976e1f0-4a0f-43ca-beb2-4e9a3414d50b");
     const forward = vi
       .spyOn(proxy as unknown as { forwardHttpRequest: () => Promise<never> }, "forwardHttpRequest")
@@ -4157,3 +4159,16 @@ describe("protected HTTP preconnect retry ownership", () => {
     }
   });
 });
+
+ it("does not execute an untrusted stack getter while wrapping a transport failure", async () => {
+  const origin="http://127.0.0.1:12345";
+  const proxy=createProxy(createCredential({bindings:[]}),new MemoryAuditLog(),authorizeLoopbackFixture(origin));
+  let reads=0; const original=new RpcBoundaryError("native failed","transport","ECONNRESET");
+  Object.defineProperty(original,"stack",{configurable:true,get(){reads++;throw new Error("untrusted stack getter");}});
+  vi.spyOn(proxy as unknown as {forwardHttpRequest:()=>Promise<never>},"forwardHttpRequest").mockRejectedValue(original);
+  try {
+   const caller=workerCaller("worker:test");const proxyPort=await proxy.startForCaller(caller,()=>caller);
+   const result=await requestThroughHttpProxy({proxyPort,targetUrl:origin+"/v1/items",method:"POST"});
+   expect(result.status).toBe(500);expect(JSON.parse(result.body).error.code).toBe("ECONNRESET");expect(reads).toBe(0);
+  } finally {await proxy.stop();}
+ });

@@ -1,3 +1,4 @@
+import { setErrorStack } from "@vibestudio/rpc";
 import { resolveHostWorkerEntry } from "../hostWorkerEntry.js";
 import { Worker } from "node:worker_threads";
 
@@ -44,7 +45,7 @@ export class SqliteIntegrityWorkerClient {
         if (message.error) {
           const error = new Error(message.error.message);
           error.name = message.error.name ?? "Error";
-          error.stack = message.error.stack;
+          setErrorStack(error, message.error.stack);
           pending.reject(error);
         } else {
           pending.resolve();

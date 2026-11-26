@@ -1,5 +1,6 @@
 import {
   errorDataProperty,
+  setErrorStack,
   errorArrayItems,
   operationalErrorMetadata,
 } from "./operationalErrorMetadata.js";
@@ -389,7 +390,7 @@ export function deserializeRpcFailure(failure: unknown): RemoteRpcError | Remote
         });
     if (node.id !== undefined) restored.set(node.id, error);
     if (node.name !== undefined) error.name = node.name;
-    if (node.stack !== undefined) error.stack = node.stack;
+    if (node.stack !== undefined) setErrorStack(error, node.stack);
     if (node.diagnosticId !== undefined) attachRpcDiagnosticId(error, node.diagnosticId);
     if (node.cause !== undefined)
       Object.defineProperty(error, "cause", {

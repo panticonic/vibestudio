@@ -1,0 +1,58 @@
+{
+  "at": 1795718051.0738618,
+  "observation": "Original0092HTTP fetch-head errors contain connect ETIMEDOUT on BOTH vetted IPv4 addresses plus ENETUNREACH IPv6; HostWebSocketIPv4fallback reaches403 then providerHTTP SSE fallsback. Earlier unauth8automatic attempts all~512msTIMEOUT vs4forcedIPv4success767\u20131276ms. Node24defaultperaddress250ms documented. No TLS/auth/DNSauthority relaxation or request replay added.",
+  "hostConsumers": [
+    "packages/shared/src/networkDestination.ts",
+    "packages/shared/src/chromiumNetworkProxy.ts",
+    "packages/shared/src/pinnedHttpForward.ts",
+    "src/server/services/hostHttpTransport.ts",
+    "src/server/services/egressProxy.ts"
+  ],
+  "coreConsumers": [
+    "ts-host/src/model/node-connection-policy.ts: pure shared policy",
+    "ts-host/src/model/node-connection-runtime.ts: Node-only process initialization for Pi HTTP/WebSocket clients",
+    "ts-host/src/cli/main.ts: CLI provider/auth paths after help/version",
+    "ts-host/src/model/chat-completion.ts: explicit shared model HTTP dispatcher; scores/Neuralese/native state clients inherit",
+    "ts-host/src/model/pi-provider.ts: only default Node-owned registry; injected transports retain their platform policy"
+  ],
+  "nodePolicy": {
+    "defaultPerAddressAttemptMs": 1500,
+    "optOut": "0 uses existing Node default",
+    "bodyHeaderDeadlines": "unchanged",
+    "requestRetries": "unchanged",
+    "hostEnvironment": "VIBESTUDIO_NETWORK_FAMILY_ATTEMPT_TIMEOUT_MS",
+    "coreEnvironment": "NATLANG_NETWORK_FAMILY_ATTEMPT_TIMEOUT_MS"
+  },
+  "exclusions": {
+    "browserWorkerd": "Model HTTP traverses same pinned Host Egress; no Node net socket inside browser/Workerd",
+    "pythonNativeAndSglang": "not Node net automatic family selection, no Node250ms parameter; delegated runtime requests use ts-host adapters"
+  },
+  "references": [
+    "https://nodejs.org/download/release/v24.22.1/docs/api/net.html#socketconnectoptions-connectlistener"
+  ],
+  "modelsRequested": 0,
+  "frozen55Modified": false,
+  "parity": "All standalone Node Pi providers use process-local connection setup, including SDK adapters which reject custom fetch; browser/Workerd use pinned Host transport, not a node:net import in the core bundle. In-page Wasm inference is not a Node TCP client; Python native HTTP server serve/http.py19,84,772 and SGLang Python front serve/sglang_actor.py1-23 implement no Node address selection. Their Node model clients use shared dispatcher.",
+  "diagnosticMechanism": {
+    "finding": "V8 stack assignment can retain accessor descriptors, which safe RPC serialization intentionally omits. Preserve stack strings as explicit data properties; never execute arbitrary cause.stack getters.",
+    "producers": [
+      "packages/extension-host/src/childRuntime.ts",
+      "packages/extension-host/src/service.ts",
+      "packages/shared/src/serviceDispatcher.ts",
+      "src/server/services/egressProxy.ts",
+      "src/server/storage/sqliteIntegrityWorkerClient.ts",
+      "src/server/services/acquisitionCoordinator.ts",
+      "packages/rpc/src/errors.ts:wire reconstruction"
+    ],
+    "sharedSetter": "packages/rpc/src/operationalErrorMetadata.ts:setErrorStack",
+    "controls": "179 actual transport/RPC tests incl original-stack data roundtrip and zero untrusted getter execution",
+    "excluded": "panelBootstrapScript and panel/observation read/display browser errors rather than restoring RPC stack strings; Core runtime .sourceStack reads are not stack assignment producers."
+  },
+  "verification": {
+    "focusedTransportRpcTests": 179,
+    "focusedResult": "passed",
+    "syntaxLint": "28 warnings, two pre-existing no-unsafe-finally findings in untouched childRuntime stream cleanup",
+    "typedLint": "completed 6.4s / 1.6GiB peak; same two baseline errors and54 warnings; not a full typecheck pass",
+    "baselineEvidence": "git show HEAD:packages/extension-host/src/childRuntime.ts lines813-839 contains both identical throws preserving original plus cancellation errors"
+  }
+}
