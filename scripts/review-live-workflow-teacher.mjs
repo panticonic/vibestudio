@@ -65,7 +65,8 @@ export async function assessPublicClaims(input, driver, loader) {
 /** Reuse Natlang's canonical independent rubric judge and provider transport. */
 export function workflowReviewer(
   model,
-  repo = process.env.NATLANG_REPO ?? path.join(os.homedir(), "natlang")
+  repo = process.env.NATLANG_REPO ?? path.join(os.homedir(), "natlang"),
+  dependencies = {}
 ) {
   if (!model) return undefined;
   const separator = model.indexOf(":");
@@ -76,22 +77,31 @@ export function workflowReviewer(
   const modelId = model.slice(separator + 1);
   const loader = (relative) =>
     import(pathToFileURL(path.resolve(repo, "ts-host/dist", relative)).href);
-  const reviewer = async (input, teacher, signal) => {
+  const attempt = async (input, teacher, signal) => {
     signal?.throwIfAborted();
     if (model === teacher) throw new Error("Choose a reviewer model distinct from the executor");
     const [{ createPiModelBackend }, { modelOracleJudge }] = await Promise.all([
-      loader("model/pi-provider.js"),
-      loader("teacher/model-judge.js"),
+      dependencies.backend ? Promise.resolve({createPiModelBackend:dependencies.backend}) : loader("model/pi-provider.js"),
+      dependencies.judge ? Promise.resolve({modelOracleJudge:dependencies.judge}) : loader("teacher/model-judge.js"),
     ]);
     const backend = createPiModelBackend(provider, modelId);
     let exchange;
     const exchanges=[];
+    let providerFailure;
+    let terminalError;
+    const providerCall=async(phase,request,call)=>{
+      try{return await call();}catch(error){
+        providerFailure={phase,error:reviewError(error),...(request?{request}:{})};
+        if(request)exchanges.push({request,error:providerFailure.error});
+        throw error;
+      }
+    };
     try {
       signal?.throwIfAborted();
-      await backend.prepare();
+      await providerCall("provider-prepare",undefined,()=>backend.prepare());
       const turn=async (request) => {
         signal?.throwIfAborted();
-        const reply = await backend.turn(request);
+        const reply = await providerCall("provider-turn",request,()=>backend.turn(request));
         if (reply.raw_response?.provider !== provider || reply.raw_response?.model !== modelId) {
           throw new Error("Review reply does not identify the chosen reviewer");
         }
@@ -104,15 +114,54 @@ export function workflowReviewer(
       return { schema: "natlang.live-workflow-review/1", model, teacher, input, exchange, exchanges, verdict,
         ...(assessment?{semanticResult:assessment.semanticResult,program:assessment.program,inputSha256:assessment.inputSha256}:{}) };
     } catch(error) {
+      const failure=error instanceof Error?error:new Error(String(error));
+      terminalError=failure;
       if(signal?.aborted){
-        const failure=error instanceof Error?error:new Error(String(error));
         failure.reviewCapture={schema:"natlang.live-workflow-review-interrupted/1",model,teacher,input,exchange,exchanges,complete:false};
+      }else{
+        const transport=providerFailure!==undefined && isReviewTransportError(providerFailure.error);
+        failure.reviewCapture={schema:"natlang.live-workflow-review-failure/1",model,teacher,input,exchange,exchanges,complete:false,
+          failure:{kind:transport?"provider-transport":"review-error",phase:providerFailure?.phase??"assessment",error:providerFailure?.error??reviewError(error)}};
+      }
+      throw failure;
+    } finally {
+      try{await backend.close();}catch(error){
+        const failure=terminalError??(error instanceof Error?error:new Error(String(error)));
+        failure.reviewCapture={...(failure.reviewCapture??{schema:"natlang.live-workflow-review-failure/1",model,teacher,input,exchange,exchanges,complete:false}),
+          cleanupFailure:reviewError(error),failure:{kind:"review-error",phase:"backend-close",error:reviewError(error)}};
         throw failure;
       }
-      throw error;
-    } finally {
-      backend.close();
+    }
+  };
+  const reviewer=async(input,teacher,signal)=>{
+    const retries=Number(process.env.VIBESTUDIO_REVIEW_TRANSPORT_RETRIES??"1");
+    if(!Number.isInteger(retries)||retries<0||retries>2)throw Error("Review transport retries must be an integer from0 to2");
+    const previousAttempts=[];
+    for(let number=0;number<=retries;number++){
+      try{
+        const result=await attempt(input,teacher,signal);
+        return previousAttempts.length?{...result,previousAttempts}:result;
+      }catch(error){
+        const capture=error?.reviewCapture;
+        if(capture)previousAttempts.push(capture);
+        if(signal?.aborted||capture?.failure?.kind!=="provider-transport"||number===retries){
+          if(capture&&previousAttempts.length>1)capture.previousAttempts=previousAttempts.slice(0,-1);
+          throw error;
+        }
+      }
     }
   };
   return Object.assign(reviewer, { model });
+}
+
+/** Only failures thrown by the actual provider boundary are classified by this predicate. */
+export function isReviewTransportError(error){
+ const message=error?.message;
+ return typeof message==='string' && (/^(?:fetch failed$|socket hang up$|Client network socket disconnected before secure TLS connection (?:was )?established|(?:connect |read )?(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN)\b|getaddrinfo (?:EAI_AGAIN|ETIMEDOUT)\b|upstream HTTP (?:408|429|5[0-9]{2})\b)/u.test(message)||
+  ['ECONNRESET','ECONNREFUSED','ETIMEDOUT','EAI_AGAIN','UND_ERR_CONNECT_TIMEOUT','UND_ERR_SOCKET'].includes(error.code));
+}
+function reviewError(error){
+ const value={name:error instanceof Error?error.name:'Error',message:error instanceof Error?error.message:String(error)};
+ if(typeof error?.code==='string')value.code=error.code;
+ return value;
 }
