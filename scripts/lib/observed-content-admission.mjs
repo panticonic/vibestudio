@@ -155,7 +155,8 @@ export const observedContentFields = {
       "mergeHead",
       "nativeHead",
       "archiveRecheck",
-      "integrationOracle"
+      "integrationOracle",
+      "nativeReconciliation"
     ],
     [
       "artifact"
@@ -372,6 +373,14 @@ export function observedContentReviewInput(proof,world){
      typeof facts.readProtocol!=="string"||!facts.readProtocol.trim()||typeof facts.evidenceProtocol!=="string"||!facts.evidenceProtocol.trim())throw Error("Phone meaning review requires actual actor observations and native workspace/protocol facts");
  }
 
+ if(world.kind==="local-reconciliation"){
+  const facts=proof.nativeReconciliation;
+  if(!facts||typeof facts!=="object"||!facts.opening||typeof facts.opening.head!=="string"||!Array.isArray(facts.opening.files)||
+     !facts.final||facts.final.head!==proof.nativeHead||!equal(facts.final.window,proof.window)||!Array.isArray(facts.final.files)||!Array.isArray(facts.sources)||
+     !Array.isArray(proof.effects)||!equal(facts.actorReadbacks,proof.effects.filter(row=>["observe","read","readCurrent","list"].includes(row?.method)))||
+     typeof facts.protocol!=="string"||!facts.protocol.trim()||[...facts.opening.files,...facts.final.files].some(row=>!row||typeof row.path!=="string"||typeof row.text!=="string"))
+    throw Error("Reconciliation review requires actual opening/current native source values and truthful readback custody");
+ }
  if(world.kind==="testkit-closeout"){
   const facts=proof.nativeFacts;
   if(!facts||!Array.isArray(proof.actual)||proof.actual.length!==2||!Array.isArray(proof.readReceipts)||
