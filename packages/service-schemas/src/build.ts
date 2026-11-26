@@ -1039,6 +1039,9 @@ export const buildMethods = defineServiceMethods({
         ),
       z
         .object({
+          verifyWorkerSchemas: z.boolean().optional().describe(
+            "Await exact worker executable/schema validation without creating entities. This does not change compilation or cache identity."
+          ),
           library: z
             .boolean()
             .optional()

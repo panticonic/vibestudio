@@ -365,6 +365,33 @@ export async function withStandaloneReleaseSession(appRoot, executable, ownershi
   );
 }
 
+/** Exact source-generation adapter for the same genuine serving verifier. */
+export function developmentReleaseConsumerOptions({appRoot, resources, generation, ownership, scratchParent, sharedDerivedCacheRoot, executable=process.execPath, env={}}) {
+  const selectedTemplates = {};
+  for (const key of ["VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES","VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE","VIBESTUDIO_PREPARE_WORKSPACE_TEMPLATES","VIBESTUDIO_WORKSPACE_SOURCES"])
+    if (env[key] !== undefined) selectedTemplates[key] = env[key];
+  return {
+    appRoot, resources, executable, ownership, scratchParent, sharedDerivedCacheRoot,
+    hostArtifactRoot: generation,
+    serverEntry: path.join(generation,"server.mjs"),
+    cliEntry: path.join(generation,"cli/client.mjs"),
+    environment: {...selectedTemplates,NODE_ENV:"development",VIBESTUDIO_WORKSPACE_RELEASE_ROOT:resources,VIBESTUDIO_NATIVE_REFERENCE_ONLY:"1"},
+  };
+}
+
+export async function verifyDevelopmentReleaseUserland(input) {
+  const manifest=JSON.parse(await fsp.readFile(path.join(input.resources,"userland-builds/release.json"),"utf8"));
+  const workspaceKinds=releaseWorkspaceKinds(manifest);
+  const sharedDerivedCacheRoot=await fsp.mkdtemp(path.join(input.scratchParent,".schema-proof-cache-"));
+  await input.ownership.own(sharedDerivedCacheRoot,"schema-proof-cache");
+  // Cache only immutable recipes inside this operation. Every serving owner
+  // joins before the next role starts; all workspace/config/state owners stay fresh.
+  await verifyAndPublishSchemaEvidence(operation =>
+    withReleaseConsumerSession(developmentReleaseConsumerOptions({...input,sharedDerivedCacheRoot}), operation),
+    {workspaceKinds}
+  );
+}
+
 /**
  * Whether the exit code of a server this process asked to stop is a clean one.
  * An owned process is stopped by SIGTERM, which a server answers with its ordered
@@ -376,7 +403,7 @@ export function requestedStopExitedCleanly(code, platform = process.platform) {
 }
 
 async function withReleaseConsumerSession(
-  { appRoot, resources, executable, ownership, scratchParent, serverEntry, cliEntry, environment },
+  { appRoot, resources, executable, ownership, scratchParent, serverEntry, cliEntry, environment, hostArtifactRoot = path.join(appRoot,"dist"), sharedDerivedCacheRoot },
   operation
 ) {
   // The consumer's whole instance lives here, in a parent the caller keeps short
@@ -435,9 +462,9 @@ async function withReleaseConsumerSession(
           NODE_ENV: "production",
           ...environment,
           VIBESTUDIO_APP_ROOT: appRoot,
-          VIBESTUDIO_HOST_ARTIFACT_ROOT: path.join(appRoot, "dist"),
+          VIBESTUDIO_HOST_ARTIFACT_ROOT: hostArtifactRoot,
           VIBESTUDIO_INSTANCE_ROOT: path.join(scratch, "instance"),
-          VIBESTUDIO_SHARED_DERIVED_CACHE_DIR: path.join(scratch, "derived"),
+          VIBESTUDIO_SHARED_DERIVED_CACHE_DIR: sharedDerivedCacheRoot ?? path.join(scratch, "derived"),
           XDG_CONFIG_HOME: path.join(scratch, "config"),
           XDG_CACHE_HOME: path.join(scratch, "cache"),
           LOCALAPPDATA: path.join(scratch, "config"),
@@ -751,19 +778,26 @@ export async function verifyStandaloneReleaseUserland(appRoot, executable) {
   );
 }
 
-export async function verifyAndPublishSchemaEvidence(openSession) {
+export async function verifyAndPublishSchemaEvidence(openSession, {workspaceKinds}={}) {
+  if(workspaceKinds!==undefined&&(!Array.isArray(workspaceKinds)||!workspaceKinds.length||
+    workspaceKinds.some(kind=>typeof kind!=="string")||new Set(workspaceKinds).size!==workspaceKinds.length))
+    throw new Error("Schema verification requires distinct declared workspace roles");
   let staged;
   let resources;
+  const batches=workspaceKinds?.map(kind=>[kind])??[undefined];
   await runWithOwnedCleanup(
     async () => {
-      await openSession(async (session) => {
-        resources = session.resources;
-        staged = schemaProbeStagingPath(resources);
-        await verifyPreparedReleaseUserland(session, { resources, stagingPath: staged });
-      });
-      // openSession joins server/probe retirement and releases its ownership,
-      // which removes the private scratch.
-      // Failed retirement never publishes an installed evidence component.
+      for(const[index,selected]of batches.entries()){
+        await openSession(async (session) => {
+          if(resources!==undefined&&resources!==session.resources)
+            throw new Error("Schema verification sessions changed the exact release resource owner");
+          resources = session.resources;
+          staged ??= schemaProbeStagingPath(resources);
+          await verifyPreparedReleaseUserland({...session,workspaceKinds:selected},
+            index===batches.length-1?{resources,stagingPath:staged}:undefined);
+        });
+      }
+      // Every serving/native owner has joined; no pending session can publish facts.
       await publishSchemaProbeComponent(staged, resources);
     },
     () => (staged ? retireSchemaProbeStaging(staged, resources) : undefined),
@@ -771,30 +805,27 @@ export async function verifyAndPublishSchemaEvidence(openSession) {
   );
 }
 
+export function releaseWorkspaceKinds(manifest){
+  return ["base","system","personal",...Object.keys(manifest.templates??{})
+    .filter(kind=>!["base","system","personal"].includes(kind)).sort()];
+}
+
 export async function verifyPreparedReleaseUserland(
-  { cli, pair, resources, env, runBuildBatch },
+  { cli, pair, resources, env, runBuildBatch, workspaceKinds },
   schemaEvidence
 ) {
   const manifest = JSON.parse(
     await fsp.readFile(path.join(resources, "userland-builds/release.json"), "utf8")
   );
-  const base = await cli([
-    "remote",
-    "create-workspace",
-    "release-base",
-    "--operation-id",
-    "release_verification_base",
+  const availableKinds=releaseWorkspaceKinds(manifest);
+  const kinds=workspaceKinds??availableKinds;
+  if(!kinds.length||kinds.some(kind=>!availableKinds.includes(kind)))
+    throw new Error("Release verification requested an undeclared workspace role");
+  const workspaces = {...pair};
+  if(kinds.includes("base"))workspaces.base=await cli([
+    "remote","create-workspace","release-base","--operation-id","release_verification_base",
   ]);
-  const workspaces = { ...pair, base };
   let verified = 0;
-  const kinds = [
-    "base",
-    "system",
-    "personal",
-    ...Object.keys(manifest.templates ?? {})
-      .filter((kind) => !["base", "system", "personal"].includes(kind))
-      .sort(),
-  ];
   for (const kind of kinds) {
     let workspace = workspaces[kind];
     if (!workspace) {
@@ -818,7 +849,7 @@ export async function verifyPreparedReleaseUserland(
     if (records.length === 0) throw new Error(`Release has no prepared artifacts for ${kind}`);
     for (const record of records)
       console.log(`[release-builds] Verifying ${kind}: ${record.source}`);
-    const capture = kind === "personal" ? schemaEvidence : undefined;
+    const capture = kind === kinds.at(-1) ? schemaEvidence : undefined;
     const batch = await runBuildBatch(
       records.map((record) => record.source),
       capture
