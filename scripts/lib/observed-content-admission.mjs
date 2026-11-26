@@ -49,7 +49,7 @@ export const observedContentFields = {
   "workspace-config": [["brief", "lens", "evidence"], ["artifact"]],
   "workspace-share": [["assignment", "observation", "decision", "effects"], ["handoffText"]],
   "gadDurableQuestion": [["diagnostics"], []],
-  "examplesAdoption": [["card", "installed", "composition", "gate", "journal"], ["noteText"]],
+  "examplesAdoption": [["card", "installed", "composition", "gate", "journal", "nativeFacts"], ["noteText"]],
   "system-diagnostics": [["catalog", "windows"], ["handoffReadback"]],
   templateMigration: [
     ["journal", "observations", "readIds", "nativePrepared", "protectedMain"],
@@ -375,6 +375,22 @@ export function observedContentReviewInput(proof,world){
      typeof facts.readProtocol!=="string"||!facts.readProtocol.trim()||typeof facts.evidenceProtocol!=="string"||!facts.evidenceProtocol.trim())throw Error("Phone meaning review requires actual actor observations and native workspace/protocol facts");
  }
 
+ if(world.kind==="examplesAdoption"){
+  const facts=proof.nativeFacts,roles={installed:"installed",composition:"compose",frontier:"confirm",readback:"readback"};
+  if(!facts||typeof facts!=="object"||!proof.card||!proof.composition||!proof.readback||!Array.isArray(proof.journal)||
+     !equal(facts.reviewed?.card,proof.card)||!equal(facts.reviewed?.composition,proof.composition)||
+     facts.current?.event!==proof.readback.event||facts.current?.composition?.id!==proof.card.id||
+     facts.current?.composition?.event!==facts.current.event||!/^[a-f0-9]{64}$/u.test(facts.current?.sourceDigest??"")||
+     !equal(facts.artifact?.receipt,proof.receipt)||!equal(facts.artifact?.noteText,proof.noteText)||
+     !facts.actorObserved||Object.entries(roles).some(([role,method])=>typeof facts.actorObserved[role]!=="boolean"||
+       facts.actorObserved[role]!==proof.journal.some(row=>row?.service==="adoptionReview"&&row?.method===method))||
+     typeof facts.protocol!=="string"||!facts.protocol.trim()||
+     (proof.receipt!==null&&(typeof proof.noteText!=="string"||proof.receipt?.event!==facts.current.event||
+       !proof.card.mayRecord||!facts.actorObserved.composition||
+       !proof.journal.some(row=>row?.service==="adoptionHandoff"&&row?.method==="record"&&equal(row.result,proof.receipt))||
+       proof.receipt?.digest!==createHash("sha256").update(proof.noteText).digest("hex"))))
+    throw Error("Adoption meaning review requires actual reviewed/current native roles, persisted bytes and truthful actor observations");
+ }
  if(world.kind==="skillMaintenance"){
   const facts=proof.nativeFacts,roles={source:["skillMaintenanceEvidence","inspect"],authoring:["authoringCompiler",null],authority:["skillMaintenanceEvidence","confirm"],readback:["skillMaintenanceEvidence","readback"]};
   if(!facts||typeof facts!=="object"||!Array.isArray(proof.journal)||!proof.observation||!proof.final||

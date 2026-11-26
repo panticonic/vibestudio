@@ -96,6 +96,12 @@ test("every newly admitted open domain binds native goal effects independently o
   if(kind==="testkit-closeout"){proof.pair={current:{receipt:"current"},prior:{receipt:"prior"}};proof.actual=[{receipt:"current",outcome:"passed"},{receipt:"prior",outcome:"failed"}];proof.readReceipts=["current"];proof.nativeFacts={current:{receipt:"current",evidence:proof.actual[0],actorInspected:true},prior:{receipt:"prior",evidence:proof.actual[1],actorInspected:false},privateNotePermission:"off",protocol:"Current is the candidate; prior is comparison evidence."};}
   if(kind==="panel-source-migration"){proof.assignment={repository:"owned",destination:"panels/new"};proof.current={destinationPanel:true};proof.effects=[];const files={manifest:{id:"manifest",text:"actual manifest"},entry:{id:"entry",text:"actual entry"},guide:{id:"guide",text:"actual links"}};proof.nativeFacts={destination:{path:"panels/new",kind:"panel",browserPanel:true},original:{repository:"owned",...structuredClone(files)},final:structuredClone(files),coeditApplied:false,actorReadbacks:[],protocol:"Actual native state, not a private plan."};}
   for(const field of artifacts)proof[field]="Actual native retained bytes";
+  if(kind==="examplesAdoption"){
+   proof.card={id:"owned",event:"current",mayRecord:true};proof.composition={id:"owned",event:"current",status:"composed"};
+   proof.readback={event:"current",main:"protected"};proof.receipt={path:"/.tmp/owned/handoff.json",event:"current",digest:createHash("sha256").update(proof.noteText).digest("hex")};
+   proof.journal=[{service:"adoptionReview",method:"compose",args:["owned","current"],result:proof.composition},{service:"adoptionHandoff",method:"record",args:["owned","current",{finding:"Actual evidence",proof:[]}],result:proof.receipt}];
+   proof.nativeFacts={reviewed:{card:structuredClone(proof.card),composition:structuredClone(proof.composition)},current:{event:"current",composition:structuredClone(proof.composition),sourceDigest:"a".repeat(64)},actorObserved:{installed:false,composition:true,frontier:false,readback:false},artifact:{receipt:structuredClone(proof.receipt),noteText:proof.noteText},protocol:"Actual actor reads and native effects have separate roles."};
+  }
   const pick=keys=>Object.fromEntries(keys.map(key=>[key,proof[key]??null]));
   proof.semanticReviewInput={actual:{goal:world.goal,observations:pick(observations),artifacts:pick(artifacts),requestedReturn:null},expected:{goal:world.goal,requestedReturnRequired:false},rubric:"Judge actual requested effects and retained bytes; do not require an unrequested return."};
   assert.equal(observedContentNeedsReview(world),true,kind);
@@ -394,5 +400,22 @@ test('skill maintenance binds original versus current compiler witnesses and tru
   for(const mutate of [p=>delete p.nativeFacts,p=>p.nativeFacts.opening.witness=p.final,p=>p.nativeFacts.current.check=p.observation.check,p=>p.nativeFacts.actorObserved.authoring=true,p=>p.nativeFacts.actorReadbacks.push({service:'authoringCompiler',method:'inspect'}),p=>p.nativeFacts.current.measured.satisfied=false,p=>p.nativeFacts.current.files[0].text=null]){const bad=structuredClone(proof);mutate(bad);bind(bad);assert.throws(()=>observedContentReviewInput(bad,world));}
   const swapped=structuredClone(proof);swapped.semanticReviewInput.actual.observations.nativeFacts.current.files[0].text='Forged replacement';assert.throws(()=>observedContentReviewInput(swapped,world));
   if(required){const missing=structuredClone(proof);missing.semanticReviewInput.actual.requestedReturn=null;assert.throws(()=>observedContentReviewInput(missing,world));}
+ }
+});
+
+test('adoption review binds actual reviewed/current roles and bytes without inventing actor reads or committed writes',()=>{
+ for(const required of [true,false]){
+  const world={kind:'examplesAdoption',goal:'Settle the actual owned Examples composition question or requested private evidence.',requestedReturnRequired:required};
+  const card={id:'owned',event:'reviewed',mayRecord:true},composition={id:'owned',event:'reviewed',status:'composed',owner:'Examples',settings:['actual-setting']};
+  const receipt=required?null:{path:'/.tmp/owned/handoff.json',event:'reviewed',digest:createHash('sha256').update('Actual retained note').digest('hex')};
+  const journal=[{service:'adoptionReview',method:'compose',args:['owned','reviewed'],result:composition},...(required?[{service:'adoptionHandoff',method:'record',args:['owned','reviewed',{}],result:null}]:[{service:'adoptionHandoff',method:'record',args:['owned','reviewed',{finding:'Actual retained note',proof:[]}],result:receipt}])];
+  const proof={card,composition,journal,installed:{main:'protected'},gate:null,receipt,noteText:receipt?'Actual retained note':null,readback:{event:'reviewed',main:'protected'},semanticReviewRequired:true,outcomeContract:{returnedValue:{required}},actualResult:'The actual current source and setting settle the question.'};
+  proof.nativeFacts={reviewed:{card:structuredClone(card),composition:structuredClone(composition)},current:{event:'reviewed',composition:structuredClone(composition),sourceDigest:'a'.repeat(64)},actorObserved:{installed:false,composition:true,frontier:false,readback:false},artifact:{receipt:structuredClone(receipt),noteText:proof.noteText},protocol:'A grant is not a requested note. Null record results are refused attempts, not committed effects. Independent facts are not actor reads.'};
+  const bind=p=>{const [fields,artifacts]=observedContentFields[world.kind];p.semanticReviewInput={actual:{goal:world.goal,observations:Object.fromEntries(fields.map(k=>[k,structuredClone(p[k]??null)])),artifacts:Object.fromEntries(artifacts.map(k=>[k,structuredClone(p[k]??null)])),requestedReturn:required?p.actualResult:null},expected:{goal:world.goal,requestedReturnRequired:required},rubric:'Judge actual requested facts and notes against native authority and observations.'};};bind(proof);
+  assert.equal(observedContentNeedsReview(world),true);assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
+  for(const mutate of [p=>delete p.nativeFacts,p=>p.nativeFacts.reviewed.card.event='other',p=>p.nativeFacts.reviewed.composition.status='invented',p=>p.nativeFacts.current.event='stale',p=>p.nativeFacts.current.composition.id='foreign',p=>p.nativeFacts.current.sourceDigest=null,p=>p.nativeFacts.actorObserved.installed=true,p=>p.nativeFacts.artifact.noteText='Invented']){const bad=structuredClone(proof);mutate(bad);bind(bad);assert.throws(()=>observedContentReviewInput(bad,world));}
+  const swap=structuredClone(proof);swap.semanticReviewInput.actual.observations.nativeFacts.current.composition.owner='Invented';assert.throws(()=>observedContentReviewInput(swap,world));
+  if(receipt){const bad=structuredClone(proof);bad.receipt.digest='b'.repeat(64);bad.nativeFacts.artifact.receipt=structuredClone(bad.receipt);bind(bad);assert.throws(()=>observedContentReviewInput(bad,world));}
+  if(required){const bad=structuredClone(proof);bad.semanticReviewInput.actual.requestedReturn=null;assert.throws(()=>observedContentReviewInput(bad,world));}
  }
 });
