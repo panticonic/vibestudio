@@ -17,8 +17,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { tsImport } from "tsx/esm/api";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import developmentTemplateConfig from "../src/dev/developmentTemplateConfig.cjs";
-import { renderAuthoredService } from "./lib/authored-natlang-services.mjs";
+import { renderAuthoredService, createAuthoredTypeResolver } from "./lib/authored-natlang-services.mjs";
 import { docComment, renderMethod } from "./lib/json-schema-declarations.mjs";
+import { authoredServiceScopeFile } from "./lib/authored-service-scopes.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const OUTPUT = "packages/natlang-services/src/serviceDeclarations.generated.ts";
@@ -88,12 +89,15 @@ export async function renderServiceDeclarations(userlandRoot, checkouts) {
     importOptions
   );
   const names = new Set(SERVICE_CATALOG.map(({ name }) => name));
+  const workspaces = [];
   for (const [template, checkout] of Object.entries(checkouts)) {
     for (const relative of fs.globSync("skills/**/natlang.json", {
       cwd: checkout,
       exclude: ["**/node_modules/**"],
     })) {
       const manifest = JSON.parse(fs.readFileSync(path.join(checkout, relative), "utf8"));
+      if (manifest.workspaceModules && typeof manifest.workspaceModules === "object")
+        workspaces.push({root:path.join(checkout,path.dirname(relative)),checkout,mounts:manifest.workspaceModules});
       for (const [service, selectors] of Object.entries(manifest.serviceScopes ?? {})) {
         if (!names.has(service))
           throw new Error(
@@ -103,32 +107,45 @@ export async function renderServiceDeclarations(userlandRoot, checkouts) {
         if (
           !Array.isArray(selectors) ||
           selectors.some((selector) => {
-            if (typeof selector !== "string") return true;
-            const file = selector.endsWith("/**") ? selector.slice(0, -3) : selector;
-            return (
-              !file.endsWith(".nl") ||
-              path.isAbsolute(file) ||
-              file.startsWith("../") ||
-              file.includes("\\") ||
-              path.posix.normalize(file) !== file ||
-              !fs.statSync(path.join(directory, file), { throwIfNoEntry: false })?.isFile()
-            );
+            const file = authoredServiceScopeFile(selector);
+            return file === null ||
+              !fs.statSync(path.join(directory, file), { throwIfNoEntry: false })?.isFile();
           })
         ) {
           throw new Error(
-            `${template}/${relative} scopes ${service} outside existing relative .nl files`
+            `${template}/${relative} scopes ${service} outside existing relative .nl or .ts callable owners`
           );
         }
       }
     }
   }
+  const {discoveredUserlandSourceMappings} = await tsImport(
+    path.join(repoRoot, "vitest.sourceAliases.ts"), importOptions
+  );
+  const units = [];
+  for (const checkout of Object.values(checkouts)) {
+    for (const group of ["packages", "workers", "skills", "panels", "extensions", "clients"]) {
+      const groupRoot = path.join(checkout, group);
+      if (!fs.statSync(groupRoot, {throwIfNoEntry:false})?.isDirectory()) continue;
+      for (const unit of fs.readdirSync(groupRoot, {withFileTypes:true})) {
+        if (!unit.isDirectory()) continue;
+        const directory = path.join(checkout, group, unit.name);
+        const manifest = path.join(directory, "package.json");
+        if (!fs.existsSync(manifest)) continue;
+        const {name} = JSON.parse(fs.readFileSync(manifest, "utf8"));
+        if (typeof name === "string") units.push({name, path:directory});
+      }
+    }
+  }
+  const resolveTypeImport = createAuthoredTypeResolver(units, discoveredUserlandSourceMappings(units), {workspaces,checkouts:Object.values(checkouts)});
   const declarations = {};
   for (const entry of SERVICE_CATALOG) {
     const contract = entry.contract;
     if (contract.origin === "authored") {
       declarations[entry.name] = renderAuthoredService(
         entry,
-        path.join(checkouts[contract.template], contract.file)
+        path.join(checkouts[contract.template], contract.file),
+        {resolveTypeImport}
       );
     } else {
       declarations[entry.name] = renderService(entry, await loadTable(contract, userlandRoot));
