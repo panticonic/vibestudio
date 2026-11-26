@@ -239,3 +239,16 @@ test("phone meaning review binds actual refused operations without inventing a s
  assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
  for(const alter of [p=>p.semanticReviewInput.actual.observations.refusedOperations=[],p=>{delete p.refusedOperations;p.semanticReviewInput.actual.observations.refusedOperations=null;},p=>p.refusedOperations=[{...p.refusedOperations[0],method:"reinstall"}]]){const changed=structuredClone(proof);alter(changed);assert.throws(()=>observedContentReviewInput(changed,world));}
 });
+
+test("installed authority chronology and local release protocol remain bound to native observations and exact artifact bytes",()=>{
+ for(const kind of ["installed-package","system-release"]){
+  const world={kind,goal:kind==='installed-package'?"Restore the approved entry and identify its suite":"Leave a private local delivery diagnosis"};
+  const proof={actualResult:{finding:{reason:"Actual native finding"}},outcomeContract:{returnedValue:{required:kind==='installed-package'}},semanticReviewRequired:true};
+  const [observations,artifacts]=observedContentFields[kind];for(const key of [...observations,...artifacts])proof[key]=key==='authorization'?{before:{scopeMatches:true},action:{status:'restored'},after:{scopeMatches:false}}:key==='handoffProtocol'?{contextId:'owned',storage:'context-scoped-scratch',externalTransmission:false}:key==='handoffText'?'Actual JSON diagnostic bytes':{native:key};
+  const pick=keys=>Object.fromEntries(keys.map(key=>[key,structuredClone(proof[key])]));
+  proof.semanticReviewInput={actual:{goal:world.goal,observations:pick(observations),artifacts:pick(artifacts),requestedReturn:proof.outcomeContract.returnedValue.required?proof.actualResult:null},expected:{goal:world.goal,requestedReturnRequired:proof.outcomeContract.returnedValue.required},rubric:"Temporal authorization and format-neutral native evidence"};
+  assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
+  for(const key of kind==='installed-package'?['authorization']:['handoffProtocol']){const bad=structuredClone(proof);bad.semanticReviewInput.actual.observations[key]={forged:true};assert.throws(()=>observedContentReviewInput(bad,world));}
+  for(const key of artifacts){const bad=structuredClone(proof);bad.semanticReviewInput.actual.artifacts[key]='Forged artifact';assert.throws(()=>observedContentReviewInput(bad,world));}
+ }
+});
