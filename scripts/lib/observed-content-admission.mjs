@@ -1,4 +1,5 @@
 import {isDeepStrictEqual as equal} from "node:util";
+import {createHash} from "node:crypto";
 /** Per-domain actual native evidence; no expected answer vocabulary enters review. */
 export const observedContentFields = {
   "workspace-smoke": [["assignment","source","selection","runtime","effects"],["receipt","retainedText"]],
@@ -28,7 +29,7 @@ export const observedContentFields = {
   "content-archive": [["assignment", "observation", "working", "receipt", "effects"], []],
   "cli-route": [["docket", "observed", "selected", "scope", "available", "protocol"], []],
   "same-turn-eval": [["assignment", "evidence", "recovery", "effects"], []],
-  "agent-capability": [["effects", "assignment", "evidence", "decision", "continuation", "notebookState"], []],
+  "agent-capability": [["effects", "assignment", "evidence", "decision", "continuation", "notebookState", "retainedValueReads"], []],
   "board-migration": [["available","rendered","basis","targetObservations","final"], []],
   "bridge-delivery": [["index", "scope", "operations", "bridgeRead", "fileReads", "commit", "nativeFiles"], ["artifact"]],
   "deployed-interface": [["effects", "survey", "observation", "architecture", "decision"], ["handoffText"]],
@@ -378,6 +379,20 @@ export function observedContentReviewInput(proof,world){
      !readbacks||typeof inventory.actorObserved!=="boolean"||inventory.actorObserved!==(readbacks.length>0)||
      !equal(inventory.readbacks,readbacks)||readbacks.some(row=>row.method!=="listModels"||!equal(row.args,[])||!Array.isArray(row.result)||!equal(row.result,inventory.current)))
     throw Error("Local width review requires exact native inventory wire readbacks, distinct from interpreted readiness");
+ }
+ if(world.kind==="agent-capability"){
+  const reads=proof.retainedValueReads;
+  const effects=Array.isArray(proof.effects)?proof.effects.filter(row=>row?.service==="agentCapabilityEvidence"&&row?.method==="readRetainedValues"):null;
+  if(!Array.isArray(reads)||!effects||reads.some(row=>!row||typeof row.id!=="string"||typeof row.resultDigest!=="string"||typeof row.revision!=="string"||typeof row.returned!=="boolean"||
+      (row.returned?row.values!==null&&!Array.isArray(row.values):row.values!==null||typeof row.refusal!=="string"||!row.refusal))||
+     !equal(reads.filter(row=>row.returned).map(row=>({args:[row.id,row.resultDigest,row.revision],result:row.values})),effects.map(row=>({args:row.args,result:row.result})))||
+     reads.some(row=>row.values?.some(value=>!value||typeof value.content!=="string"||typeof value.digest!=="string"||
+       value.digest!==createHash("sha256").update(value.content).digest("hex")||value.attempt?.id!==row.id||value.attempt?.notebook!==proof.assignment?.notebook||
+       value.revision!==row.revision||value.attempt?.revision!==row.revision||!Array.isArray(proof.assignment?.attempts)||!equal(value.attempt,proof.assignment.attempts.find(card=>card.id===row.id))||
+       !proof.effects.some(effect=>effect?.service==="agentCapabilityEvidence"&&effect?.method==="inspect"&&effect.result?.attempt?.id===row.id&&effect.result?.runId===value.runId&&effect.result?.resultDigest===row.resultDigest&&effect.result?.notebook?.revision===row.revision)||
+       typeof value.runId!=="string"||typeof value.key!=="string"||
+       !(value.observedAfterContinuation===null||typeof value.observedAfterContinuation==="string"&&value.observedAfterContinuation===proof.continuation?.runId))))
+    throw Error("Agent recovery review requires actual owner-bound retained value reads and explicit refusals");
  }
  if(!fields||typeof required!=="boolean"||proof.semanticReviewRequired!==true||
     !equal(input?.actual,{goal:world.goal,observations:pick(fields[0]),artifacts:pick(fields[1]),requestedReturn:required?proof.actualResult??null:null})||

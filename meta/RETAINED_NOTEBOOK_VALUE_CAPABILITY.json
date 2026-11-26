@@ -1,0 +1,62 @@
+{
+  "schema": "vibestudio.retained-notebook-value-capability/1",
+  "status": "ready component/public compilation and binding proof; independent goal meaning review still required",
+  "inventory": "/home/werg/vibe-native-workflow-composition-ops/agent-retained-value-inventory.json",
+  "mechanism": "Actual owned retained string bytes existed in durable EvalDO scope but agent-capability exposed only digests. New exact inspected owner-bound read port returns real content and provenance, no continuation grant.",
+  "chain": [
+    "Host EvalDO.readScopeTextPage and its strict existing UTF-16LE page wire format (unchanged)",
+    "SST bindAgentCapabilityEval.text validates owned scope and joins exact pages (unchanged)",
+    "SST agentCapabilityEvidence.readRetainedValues joins observed owned card/resultDigest/revision and fresh current scope; excludes protected keys and opaque scope capability",
+    "Base canonical service catalog +authored declaration, Native wrapper/private natural readRequestedOutput; Root decides if requested content is needed",
+    "Host binds exact actual returned content and Native read/refusal observations"
+  ],
+  "qualifiedThroughAdmittedPorts": "Reference now calls the same admitted readRetainedValues service. Hidden scopeBytes verifier reads cannot stand in for application capability. referenceRetainedValueAdmission checks a genuine read or explicit stale-basis refusal; does not certify goal meaning.",
+  "publicValue": "AgentRecoveryFindings retains explanation/actual optional continuation; optional retainedValues carries requested real bytes and exact native first-class references. Metadata-only questions need no mandated read.",
+  "authority": [
+    "No arbitrary scope key or protected sibling read API.",
+    "Uninspected/foreign tuples are rejected and recorded returned:false without a fabricated null return.",
+    "Stale digest or revision returns actual null and issues no values.",
+    "Fresh inspection keeps the original mutation verification basis, not stale observations or a renewed grant.",
+    "Any later actual continuation is explicit on returned value provenance.",
+    "Any provided content must equal a genuine issued value; forged returned bytes are rejected."
+  ],
+  "validation": {
+    "native": {
+      "unit": "vibe-agent-retained-value-native-20261126b",
+      "passed": 29,
+      "worlds": 26,
+      "seconds": 3.813,
+      "peakMiB": 346.1
+    },
+    "host": {
+      "unit": "vibe-agent-retained-value-host-20261126b",
+      "passed": 32
+    },
+    "public": {
+      "unit": "vibe-agent-retained-value-public-20261126b",
+      "passed": 1,
+      "seconds": 84.06,
+      "peakGiB": 2.7,
+      "proof": "Actual public joint ProgramLoader/gateway Root\u2192inquiry\u2192optional NL content branch\u2192TS Native port\u2192computed retained values, read-only/no continuation."
+    },
+    "canonicalDeclarations": {
+      "unit": "vibe-retained-agent-declarations-20261126b",
+      "entryGenerateAndCheck": "PASS",
+      "service380GenerateAndCheck": "PASS",
+      "seconds": 16.927,
+      "peakMiB": 362.5
+    },
+    "all26GoalIdSplitWorldBytes": "UNCHANGED"
+  },
+  "excluded": [
+    "No Core or SDK change; no inference/backend storage implementation change. The same domain service serves every engine.",
+    "Existing Host owner-scoped physical page reader implementation/UTF-16 tests cited, not rerun; new full live physical EvalDO qualification not claimed.",
+    "No new model/provider/network probe, original teacher/review rerun, acceptance or source pin mutation. Original0083 rejected review remains preserved."
+  ],
+  "integrationParents": {
+    "base": "95ab2d1ba716aeedf1db4a457c5a29d764512c10",
+    "systemTesting": "37d515c217330ef5411d02d28fe22b4b242254aa",
+    "host": "617bf00645d8b18f48a6c5e94818747ed59ab49f"
+  },
+  "remaining": "Whole UnitHandoff/LocalWidth/LocalReconciliation semantic work continues separately in /home/werg/vibe-remaining-native-workflow-{base,sst,host}; Testkit/Panel/Delivery original audits remain open. This is not a full-corpus completion claim."
+}

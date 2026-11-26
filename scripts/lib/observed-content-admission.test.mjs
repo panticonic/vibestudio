@@ -1,5 +1,6 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
+import {createHash} from "node:crypto";
 import {observedContentFields,observedContentNeedsReview,observedContentReviewInput} from "./observed-content-admission.mjs";
 function phoneFacts(journal=[]){const roles={assignment:["phoneFirstRun","inspect"],startup:["phoneFirstRun","phases"],provider:["phoneFirstRun","provider"],resume:["phoneSetupRead","readiness"]};return {actorObserved:Object.fromEntries(Object.entries(roles).map(([role,[service,method]])=>[role,journal.some(row=>row.service===service&&row.method===method)])),workspaceBefore:{mainEventId:"owned-main"},workspaceAfter:{mainEventId:"owned-main"},readProtocol:"A refused read is no installation or pairing effect.",evidenceProtocol:"Trusted verifier facts and actual actor observations are distinct."};}
 function example(required=true){
@@ -91,7 +92,7 @@ test("every newly admitted open domain binds native goal effects independently o
   const world={kind,goal:"Perform only the requested owned operation; do not invent a report requirement."};
   const [observations,artifacts]=observedContentFields[kind];
   const proof={outcomeContract:{returnedValue:{required:false}},semanticReviewRequired:true,actualResult:{unrequested:"incidental"}};
-  for(const field of observations)proof[field]=kind==="agent-capability"&&field==="effects"?[]:kind==="phoneFirstRun"&&field==="refusedOperations"?[]:{source:"actual-owned-native",field};
+  for(const field of observations)proof[field]=kind==="agent-capability"&&["effects","retainedValueReads"].includes(field)?[]:kind==="phoneFirstRun"&&field==="refusedOperations"?[]:{source:"actual-owned-native",field};
   for(const field of artifacts)proof[field]="Actual native retained bytes";
   const pick=keys=>Object.fromEntries(keys.map(key=>[key,proof[key]??null]));
   proof.semanticReviewInput={actual:{goal:world.goal,observations:pick(observations),artifacts:pick(artifacts),requestedReturn:null},expected:{goal:world.goal,requestedReturnRequired:false},rubric:"Judge actual requested effects and retained bytes; do not require an unrequested return."};
@@ -294,7 +295,7 @@ test("installed authority chronology and local release protocol remain bound to 
 });
 
 test('all native recovery findings bind actual native evidence and literal answer obligations',()=>{
- const shapes={"cli-route":{arrays:["available"]},"same-turn-eval":{arrays:["effects"]},"content-archive":{arrays:["working","effects"]},"agent-capability":{arrays:["effects"]}};
+ const shapes={"cli-route":{arrays:["available"]},"same-turn-eval":{arrays:["effects"]},"content-archive":{arrays:["working","effects"]},"agent-capability":{arrays:["effects","retainedValueReads"]}};
  for(const[kind,shape]of Object.entries(shapes))for(const required of [true,false]){
   const world={kind,goal:'Recover the requested actual value or explicitly explain the native barrier.',requestedReturnRequired:required},[keys,artifacts]=observedContentFields[kind];const proof={semanticReviewRequired:true,outcomeContract:{returnedValue:{required}},actualResult:{explanation:'A real domain answer',result:{count:8,detail:'one exception'}}};for(const key of keys)proof[key]=shape.arrays.includes(key)?[]:{native:key};
   const review=()=>({actual:{goal:world.goal,observations:Object.fromEntries(keys.map(k=>[k,proof[k]??null])),artifacts:Object.fromEntries(artifacts.map(k=>[k,proof[k]??null])),requestedReturn:required?proof.actualResult:null},expected:{goal:world.goal,requestedReturnRequired:required},rubric:'Judge requested actual facts, not private route/status echoes.'});proof.semanticReviewInput=review();assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
@@ -317,4 +318,15 @@ test('local width binds raw native inventory without inventing a preferred/execu
   for(const mutate of [p=>{delete p.nativeInventory;p.semanticReviewInput.actual.observations.nativeInventory=null;},p=>p.nativeInventory.actorObserved=!observed,p=>p.nativeInventory.current[0].state='error',p=>p.semanticReviewInput.actual.observations.nativeInventory.current[0].slug='other-model',p=>p.semanticReviewInput.actual.requestedReturn={finding:{reason:'A different answer'}}]){const bad=structuredClone(proof);mutate(bad);assert.throws(()=>observedContentReviewInput(bad,world));}
   if(observed){const bad=structuredClone(proof);bad.effects[0].result={preferred:'local:qwen',models:[],executor:{}};bad.nativeInventory.readbacks=structuredClone(bad.effects);bad.semanticReviewInput.actual.observations=Object.fromEntries(fields.map(k=>[k,structuredClone(bad[k]??null)]));assert.throws(()=>observedContentReviewInput(bad,world));}
  }
+});
+
+test('agent retained content binds admitted current reads, explicit non-returning refusals and actual returned bytes',()=>{
+ const world={kind:'agent-capability',goal:'Reconcile the exact retained output without continuing.',requestedReturnRequired:true};
+ const card={id:'owned-action',notebook:'owned-notebook',revision:'current-revision',title:'Permit inspection'},content='Actual retained output 🖨',digest=createHash('sha256').update(content).digest('hex');
+ const value={attempt:card,runId:'actual-run',revision:card.revision,key:'ownedLargeResult',content,digest,observedAfterContinuation:null};
+ const read={id:card.id,resultDigest:'actual-result',revision:card.revision,returned:true,values:[value]};
+ const proof={assignment:{notebook:card.notebook,attempts:[card]},effects:[{service:'agentCapabilityEvidence',method:'inspect',args:[card.id],result:{attempt:card,runId:value.runId,resultDigest:read.resultDigest,notebook:{revision:card.revision}}},{service:'agentCapabilityEvidence',method:'readRetainedValues',args:[card.id,read.resultDigest,card.revision],result:[value]}],retainedValueReads:[{id:'uninspected',resultDigest:'unissued',revision:'other',returned:false,values:null,refusal:'foreign-or-uninspected-action'},read],evidence:{current:{attempt:card}},decision:'inspect-only',continuation:null,notebookState:{currentAction:{attempt:card}},outcomeContract:{returnedValue:{required:true}},semanticReviewRequired:true,actualResult:{explanation:'The exact current output is retained; no continuation was performed.',continuation:null,retainedValues:[value]}};
+ const [fields,artifacts]=observedContentFields[world.kind];const bind=p=>{p.semanticReviewInput={actual:{goal:world.goal,observations:Object.fromEntries(fields.map(k=>[k,structuredClone(p[k]??null)])),artifacts:Object.fromEntries(artifacts.map(k=>[k,p[k]??null])),requestedReturn:structuredClone(p.actualResult)},expected:{goal:world.goal,requestedReturnRequired:true},rubric:'Judge actual requested content and authority against native reads; refusals are not effects.'};return p;};bind(proof);assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
+ for(const change of [p=>{delete p.retainedValueReads;},p=>{p.retainedValueReads[1].values[0].content='Invented';},p=>{p.retainedValueReads[1].values[0].attempt.notebook='foreign';},p=>{p.retainedValueReads[0].returned=true;},p=>{delete p.retainedValueReads[0].refusal;},p=>{p.retainedValueReads[1].resultDigest='other-result';},p=>{p.retainedValueReads[1].values[0].observedAfterContinuation='unissued-run';}]){const bad=structuredClone(proof);change(bad);bind(bad);assert.throws(()=>observedContentReviewInput(bad,world));}
+ const swapped=structuredClone(proof);swapped.semanticReviewInput.actual.requestedReturn.retainedValues[0].content='Another output';assert.throws(()=>observedContentReviewInput(swapped,world));
 });
