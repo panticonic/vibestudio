@@ -100,7 +100,7 @@ describe("host HTTP transport", () => {
         pipelining: 0,
         headersTimeout: 0,
         bodyTimeout: 0,
-        connect: { lookup: expect.any(Function) },
+        connect: { lookup: expect.any(Function), autoSelectFamilyAttemptTimeout: 1500 },
       }),
     ]);
   });

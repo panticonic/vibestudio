@@ -1,3 +1,4 @@
+import { networkFamilyAttemptTimeout } from "./networkFamilyAttempt.js";
 import { lookup } from "node:dns/promises";
 import type { LookupAddress } from "node:dns";
 import { BlockList, isIP, type LookupFunction } from "node:net";
@@ -74,6 +75,19 @@ export interface NetworkDestination {
   hostname: string;
   addresses: readonly LookupAddress[];
   lookup: LookupFunction;
+}
+
+/** Node cancels each non-final address attempt; 250 ms can expire before a
+ * delayed TCP handshake or retransmission. Keep the approved DNS snapshot and
+ * the caller's overall deadline; only give address selection a usable window. */
+export function pinnedConnectionOptions(
+  destination: Pick<NetworkDestination, "lookup">,
+  env: Record<string, string | undefined> = process.env
+): { lookup: LookupFunction; autoSelectFamilyAttemptTimeout?: number } {
+  const milliseconds = networkFamilyAttemptTimeout(env);
+  return milliseconds === undefined
+    ? { lookup: destination.lookup }
+    : { lookup: destination.lookup, autoSelectFamilyAttemptTimeout: milliseconds };
 }
 
 async function resolveWithDeadline(

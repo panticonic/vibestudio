@@ -1,0 +1,30 @@
+{
+  "baseline": "origin/main162d4a6a6",
+  "sharedMechanism": "Node per-address connection attempt timeout for pinned Host HTTP/browser/TCP/WS plus separate owned npm bootstrap",
+  "scope": [
+    "packages/shared/src/networkDestination.ts",
+    "packages/shared/src/chromiumNetworkProxy.ts",
+    "packages/shared/src/pinnedHttpForward.ts",
+    "src/server/services/hostHttpTransport.ts",
+    "src/server/services/egressProxy.ts",
+    "packages/shared/src/npmInstaller.ts"
+  ],
+  "rpcStackDifference": "Modern packages/rpc/src/errors.ts:302 reads assigned stack directly, so data-only accessor omission is not the same mechanism. operationalErrorMetadata intentionally removed upstream; do not resurrect old classifiers/SQLite maintenance port. Separate untrusted getter execution in modern error graph observation remains open and is not claimed fixed by network policy.",
+  "production56": "immutable unchanged",
+  "actualControls": {
+    "unit": "vibe-modern-network-family-controls-20261126",
+    "passed": 184,
+    "files": 6,
+    "seconds": 13.75,
+    "peakMiB": 382.1,
+    "paidCalls": 0,
+    "actualNativeCelldServing": "not exercised; existing missing exact CellD binary remains blocker for full native modern runtime"
+  },
+  "syntaxLint": {
+    "unit": "vibe-modern-network-family-syntax-20261126",
+    "files": 10,
+    "errors": 0,
+    "warnings": 11,
+    "wholeModernTypecheck": false
+  }
+}

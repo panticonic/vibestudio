@@ -1,3 +1,4 @@
+import { networkFamilyAttemptTimeout } from "./networkFamilyAttempt.js";
 import { logVerbose, logWarn } from "@vibestudio/dev-log";
 import {
   DerivedCacheCoordinator,
@@ -132,6 +133,7 @@ async function installInOwnership(
   }
 ): Promise<void> {
   const ignoreScripts = options.ignoreScripts ?? true;
+  const familyAttemptMs = networkFamilyAttemptTimeout();
   const installRoot = fs.realpathSync(cwd);
   const utilityRoot = fs.realpathSync(await ownership.scratch(".delete-npm-"));
   const stateRoot = path.join(utilityRoot, "workspace");
@@ -188,6 +190,7 @@ async function installInOwnership(
     const fs = require('node:fs');
     const path = require('node:path');
     require('node:dns').setDefaultResultOrder(${JSON.stringify(options.dnsResultOrder ?? "ipv4first")});
+    ${familyAttemptMs === undefined ? "" : `require('node:net').setDefaultAutoSelectFamilyAttemptTimeout(${familyAttemptMs});`}
     const [reset, cli, ...args] = process.argv.slice(1);
     if (reset === '1') {
       fs.rmSync(path.join(process.cwd(), 'node_modules'), {recursive:true, force:true});

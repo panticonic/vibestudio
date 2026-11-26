@@ -3,6 +3,7 @@ import type { IncomingMessage, OutgoingHttpHeaders } from "node:http";
 import { EgressListener } from "./egressListener.js";
 import {
   resolveNetworkDestination,
+  pinnedConnectionOptions,
   parseConnectAuthority,
   type NetworkEndpointAuthority,
 } from "./networkDestination.js";
@@ -65,7 +66,7 @@ export class ChromiumNetworkProxy {
           const upstream = connect({
             host: destination.hostname,
             port: Number(target.port || 443),
-            lookup: destination.lookup,
+            ...pinnedConnectionOptions(destination),
             signal: cancel.signal,
           });
           consumeSocketErrorsUntilClose(upstream);
