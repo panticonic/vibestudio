@@ -1,0 +1,30 @@
+{
+  "inventoryBeforeEdits": true,
+  "symptom": "Independent canonical local npm installation fails requiring @number0/iroh-linux-x64-gnu after default3 runtime preparation/pack succeeded. Stage consumer could borrow ancestor Host installation.",
+  "packageSource": "acebd2d156344f10e0ef5afc6c8101c0a78670ae",
+  "platformDependency": {
+    "declaration": "root optional fixed URL iroh-native-1.1.0-cancel.2",
+    "installedName": "@panticonic/iroh-linux-x64-gnu",
+    "installedVersion": "1.1.0-cancel.2",
+    "binarySha256": "018c31f337fea79f6134e820c699ee8da1a80beb6b4f160897497d4789d40b81"
+  },
+  "sharedMechanism": "scripts/build-server-npm-package.mjs:stagePackageDependencies shares installed dependencies with root manifest declarations, including optional ones that npm may legitimately omit. Only required root dependencies are guaranteed to exist. Preserve installed child closure under owned vendored package for root-optional edges.",
+  "consumers": [
+    "stageHostPackages -> stagePackageDependencies",
+    "stagePinnedRootDependencies -> stagePackageDependencies",
+    "canonical npm stage -> local pack -> independent installation -> standalone Hub/server",
+    "desktop producer does not call this helper; its already installed root dependency tree is packaged through its separate existing dependency selection, no same root-optional sharing branch",
+    "Core/engine SDKs do not package host npm native binaries; no SDK source change"
+  ],
+  "scope": "All runtime child dependencies with optional root ancestors, not an Iroh-name special case. Keep root optional platform declarations for later installs; do not promote all platform binaries to required dependencies or fetch cold npm graphs.",
+  "status": "shared root-optional ancestor sharing corrected; actual44 Node controls passed",
+  "verification": {
+    "unit": "vibe-native-optional-closure-20261126a",
+    "tests": 44,
+    "actualNativeAddonLoadedFromIndependentClosure": true,
+    "peakMiB": 142,
+    "wallSeconds": 1.904,
+    "coldNpm": false,
+    "newModelRequests": 0
+  }
+}
