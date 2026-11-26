@@ -19,6 +19,7 @@ import {
   runInstalledRpcBatch,
   verifyPreparedReleaseUserland,
   developmentReleaseConsumerOptions,
+  releaseWorkspaceKinds,
   requestedStopExitedCleanly,
   withStandaloneReleaseSession,
   verifyAndPublishSchemaEvidence,
@@ -1406,4 +1407,47 @@ test("development serving verifier keeps the exact selected generation and infer
   assert.equal(options.environment.HOME,undefined);
   assert.equal(options.environment.SSH_AUTH_SOCK,undefined);
   assert.equal(options.environment.VIBESTUDIO_HOST_ARTIFACT_ROOT,undefined);
+});
+
+
+test("all eight manifest roles are verified through joined bounded sessions before one publication",async()=>{
+ const root=await fixture(),kinds=["base","system","personal","examples","google-workspace","news","spectrolite","system-testing"];
+ const records=kinds.map((workspace,index)=>({workspace,source:workspace+"/source",buildKey:(index+1).toString(16).padStart(64,"0"),builtAt:workspace}));
+ const context=await verificationFixture(root,records),templates=Object.fromEntries(kinds.slice(3).map(kind=>[kind,{url:"git+https://example.test/"+kind,ref:"refs/tags/v1",commit:"a".repeat(40)}]));
+ await fs.writeFile(path.join(context.resources,"userland-builds/release.json"),JSON.stringify({builds:records,templates}));
+ for(const record of records.slice(3)){const dir=path.join(context.env.VIBESTUDIO_INSTANCE_ROOT,"workspaces",record.workspace+"-workspace","state/builds",record.buildKey);await fs.mkdir(dir,{recursive:true});await fs.writeFile(path.join(dir,"metadata.json"),JSON.stringify({builtAt:record.builtAt}));}
+ const actualKinds=releaseWorkspaceKinds({templates}),completed=[],retired=[];let live=0,captures=0,selected;
+ await verifyAndPublishSchemaEvidence(async operation=>{
+  assert.equal(live,0);live++;
+  const cli=async args=>{if(args[1]==="select")selected=args[2].replace(/-workspace$/u,"");if(args[1]==="create-workspace")return{name:args[2].replace(/^release-/u,"")+"-workspace"};return{};};
+  try{await operation({...context,cli,runBuildBatch:async(sources,evidence)=>{
+   assert.equal(live,1);assert.deepEqual(sources,[selected+"/source"]);completed.push(selected);
+   if(evidence){captures++;assert.equal(completed.length,8);assert.equal(retired.length,7);await fs.writeFile(evidence.stagingPath,"test-owned completed staging bytes",{flag:"wx",mode:0o600});}
+   return{outcomes:sources.map(source=>({status:"fulfilled",source,buildKey:records.find(row=>row.source===source).buildKey})),schemaEvidenceStaging:evidence?.stagingPath};
+  }});assert.equal(await fs.stat(schemaProbeComponentPath(context.resources)).then(()=>true,()=>false),false);}
+  finally{retired.push(selected);live--;}
+ },{workspaceKinds:actualKinds});
+ assert.deepEqual(completed,actualKinds);assert.deepEqual(retired,actualKinds);assert.equal(live,0);assert.equal(captures,1);
+ assert.equal(await fs.readFile(schemaProbeComponentPath(context.resources),"utf8"),"test-owned completed staging bytes");
+});
+
+test("bounded serving plans reject duplicate and undeclared roles without publishing",async()=>{
+ await assert.rejects(verifyAndPublishSchemaEvidence(async()=>{throw Error("must not open");},{workspaceKinds:["base","base"]}),/distinct declared/);
+ const root=await fixture(),context=await verificationFixture(root,verificationRecords());
+ await assert.rejects(verifyPreparedReleaseUserland({...context,workspaceKinds:["foreign"],cli:async()=>{throw Error("must not create");},runBuildBatch:async()=>{throw Error("must not build");}}),/undeclared/);
+});
+
+test("bounded serving failure joins its owner and stops later sessions without publishing",async()=>{
+ const root=await fixture(),records=verificationRecords(),context=await verificationFixture(root,records),failure=new Error("actual native schema failure");
+ const opened=[],retired=[];let selected;
+ await assert.rejects(verifyAndPublishSchemaEvidence(async operation=>{
+  const index=opened.length;opened.push(index);
+  try{await operation({...context,cli:async args=>{if(args[1]==="create-workspace")return{name:"base-workspace"};if(args[1]==="select")selected=args[2].replace(/-workspace$/u,"");return{};},runBuildBatch:async sources=>{
+   if(selected==="system")throw failure;
+   return{outcomes:sources.map(source=>({status:"fulfilled",source,buildKey:records.find(row=>row.source===source).buildKey}))};
+  }});}finally{retired.push(index);}
+ },{workspaceKinds:["base","system","personal"]}),error=>error===failure);
+ assert.deepEqual(opened,[0,1]);assert.deepEqual(retired,[0,1]);
+ assert.equal(await fs.stat(schemaProbeComponentPath(context.resources)).then(()=>true,()=>false),false);
+ assert.deepEqual((await fs.readdir(context.resources)).filter(name=>name.startsWith("schema-evidence")),[]);
 });

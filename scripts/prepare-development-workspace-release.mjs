@@ -28,6 +28,9 @@ function requiredOption(name) {
 const output = requiredOption("--output");
 const scratch = requiredOption("--scratch");
 const explicitRoot = requiredOption("--template-checkouts");
+const schemaEvidenceOnly = args.includes("--schema-evidence-only");
+if(schemaEvidenceOnly && process.env["VIBESTUDIO_DEVELOPMENT_SCHEMA_EVIDENCE"] === "0")
+  throw new Error("--schema-evidence-only cannot disable its requested schema publication phase");
 const sourceEnv = { ...process.env, NODE_ENV: "development" };
 for (const [parent, child] of [
   [scratch, output],
@@ -85,6 +88,7 @@ await ownedEntry(async ({ ownership }) => {
       env,
       executable: process.execPath,
       entry: path.join(generation, "prepare-workspace-templates.mjs"),
+      scope: schemaEvidenceOnly ? "existing" : "release",
     });
     await preparation.completed;
     // The non-serving compiler cannot produce native schema facts. Retire it,
