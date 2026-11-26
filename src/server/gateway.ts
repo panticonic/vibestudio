@@ -148,7 +148,8 @@ export interface WorkerHostCodeProvider {
     source: string,
     className: string,
     version: string,
-    objectKey?: string
+    objectKey?: string,
+    retention?:"operation"|"shared"
   ): Promise<{
     version: string;
     egressIdentity: string | null;
@@ -440,13 +441,17 @@ export class Gateway {
         const className = decodeURIComponent(segs[1] ?? "");
         const version = requestUrl.searchParams.get("version");
         const objectKey = requestUrl.searchParams.get("objectKey") ?? undefined;
+        const retention=requestUrl.searchParams.get("retention")??"shared";
+        if(retention!=="shared"&&retention!=="operation"){
+          res.writeHead(400,{"Content-Type":"text/plain"});res.end("Invalid executable preparation lifetime");return;
+        }
         if (!source || !className || !version) {
           res.writeHead(400, { "Content-Type": "text/plain" });
           res.end("Missing DO source/class/version");
           return;
         }
         void host
-          .getDoCode(source, className, version, objectKey)
+          .getDoCode(source, className, version, objectKey,retention)
           .then((code) => {
             if (!code) {
               res.writeHead(404, { "Content-Type": "text/plain" });

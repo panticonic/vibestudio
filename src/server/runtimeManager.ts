@@ -707,7 +707,7 @@ export class RuntimeManager {
   private readonly latestExecutablePreparation = new Map<string, string>();
   private readonly preparingDoExecutables = new Map<
     string,
-    { image: RuntimeImageRecord; build: StoredBuildResult; version: string }
+    { image: RuntimeImageRecord; build: StoredBuildResult; version: string;className:string;retention:"operation"|"shared" }
   >();
   private readonly doCodeEgressCallers = new Map<
     string,
@@ -2396,7 +2396,8 @@ export class RuntimeManager {
     source: string,
     className: string,
     version: string,
-    objectKey?: string
+    objectKey?: string,
+    retention:"operation"|"shared"="shared"
   ): Promise<{
     version: string;
     /** Raw network attribution belongs to the sealed code unit, not an object. */
@@ -2431,8 +2432,9 @@ export class RuntimeManager {
     const serviceKey = doServiceKey(source, className);
     const svc = this.doServices.get(serviceKey);
     const prepared =
-      this.preparingDoExecutables.get(canonicalJson([source, className, version])) ??
-      this.preparedDoExecutables.get(serviceKey);
+      this.preparingDoExecutables.get(canonicalJson([source, className, version,retention])) ??
+      (retention==="shared"?this.preparedDoExecutables.get(serviceKey):undefined);
+    if(retention==="operation"&&!prepared)return null;
     const serviceImage = svc?.imageId ? this.runtimeImages.get(svc.imageId) : null;
     const objectEntry = [...this.doObjectBuilds.entries()].find(
       ([key, binding]) =>
@@ -2486,7 +2488,8 @@ export class RuntimeManager {
     addSharedRuntimeEnv(env, this.deps.getServerAliasUrls?.() ?? []);
     if (this.port) env["WORKERD_URL"] = `http://127.0.0.1:${this.port}`;
 
-    this.loadedDoCodeUnits.set(JSON.stringify([source, className, version]), {
+    // An anonymous validation load has no persistent named-isolate owner.
+    if(retention==="shared")this.loadedDoCodeUnits.set(JSON.stringify([source, className, version]), {
       source,
       className,
       version,
@@ -3240,19 +3243,19 @@ export class RuntimeManager {
 
   /** Executable-unit ownership follows actual admitted bindings, not object counts. */
   private reconcileDoCodeUnitOwnership(): void {
-    const owns = (source: string, className: string, version: string): boolean => {
+    const owns = (source: string, className: string, version: string,includeOperation=false): boolean => {
       const serviceKey = doServiceKey(source, className);
       const service = this.doServices.get(serviceKey);
       const image = service?.imageId ? this.runtimeImages.get(service.imageId) : null;
       if (image && runtimeExecutableVersion(image) === version) return true;
       const prepared = this.preparedDoExecutables.get(serviceKey);
       if (prepared && prepared.version === version) return true;
-      if (this.preparingDoExecutables.has(canonicalJson([source, className, version]))) return true;
+      if ([...this.preparingDoExecutables.values()].some(item=>item.image.source===source&&item.className===className&&item.version===version&&(includeOperation||item.retention==="shared"))) return true;
       const entityPrefix = canonicalEntityId({ kind: "do", source, className, key: "" });
       for (const [id, image] of this.sealedDoImages) {
         if (id.startsWith(entityPrefix) && runtimeExecutableVersion(image) === version) return true;
       }
-      if (this.executablePreparations.has(canonicalJson([source, className, version]))) return true;
+      if (this.executablePreparations.has(canonicalJson([source, className, version,"shared"]))||includeOperation&&this.executablePreparations.has(canonicalJson([source, className, version,"operation"]))) return true;
       for (const [key, binding] of this.doObjectBuilds) {
         if (!key.startsWith(`${serviceKey}/`)) continue;
         if (binding.admission.executableVersion === version) return true;
@@ -3266,7 +3269,7 @@ export class RuntimeManager {
     this.retiredDynamicIsolateGeneration =
       this.retiredDynamicIsolateIds.size > 0 ? this.bootGeneration : null;
     for (const [identity, unit] of this.doCodeEgressCallers) {
-      if (owns(unit.source, unit.className, unit.version)) continue;
+      if (owns(unit.source, unit.className, unit.version,true)) continue;
       this.deps.unregisterEgressCaller(identity);
       this.doCodeEgressCallers.delete(identity);
     }
@@ -3876,7 +3879,8 @@ export class RuntimeManager {
    * catalog view used to build it; schema admission shares the normal gate. */
   async prepareWorkerExecutable(
     build: StoredBuildResult,
-    classNames: readonly string[]
+    classNames: readonly string[],
+    options:{retention?:"operation"|"shared"}={}
   ): Promise<void> {
     if (build.metadata.kind !== "worker" || !build.metadata.sourcePath)
       throw new Error("Worker executable preparation requires an exact workspace worker build");
@@ -3887,15 +3891,16 @@ export class RuntimeManager {
       authority: assertPresent(build.metadata.authority),
     };
     if (this.shuttingDown) throw new Error("RuntimeManager is shutting down");
+    const retention=options.retention??"shared";
     for (const className of new Set(classNames)) {
-      const key = canonicalJson([image.source, className, runtimeExecutableVersion(image)]);
-      this.latestExecutablePreparation.set(doServiceKey(image.source, className), key);
+      const key = canonicalJson([image.source, className, runtimeExecutableVersion(image),retention]);
+      if(retention==="shared")this.latestExecutablePreparation.set(doServiceKey(image.source, className), key);
       const pending = this.executablePreparations.get(key);
       if (pending) {
         await pending;
         continue;
       }
-      const preparation = this.prepareDurableExecutable(image, build, className);
+      const preparation = this.prepareDurableExecutable(image, build, className,retention);
       this.executablePreparations.set(key, preparation);
       try {
         await preparation;
@@ -3910,25 +3915,16 @@ export class RuntimeManager {
   private async prepareDurableExecutable(
     image: RuntimeImageBinding,
     build: StoredBuildResult,
-    className: string
+    className: string,
+    retention:"operation"|"shared"
   ): Promise<void> {
     await this.admitDurableObjectSchema(image, className);
     const serviceKey = doServiceKey(image.source, className);
     const version = runtimeExecutableVersion(image);
-    const key = canonicalJson([image.source, className, version]);
-    const record = this.persistRuntimeImage(`do-preparation:${serviceKey}:${version}`, image);
-    const prepared = { image: record, build, version };
+    const key = canonicalJson([image.source, className, version,retention]);
+    const record = this.persistRuntimeImage(`do-preparation:${serviceKey}:${version}:${retention}`, image);
+    const prepared = { image: record, build, version,className,retention };
     this.preparingDoExecutables.set(key, prepared);
-    if (this.latestExecutablePreparation.get(serviceKey) === key) {
-      const previous = this.preparedDoExecutables.get(serviceKey);
-      this.preparedDoExecutables.set(serviceKey, prepared);
-      if (
-        previous &&
-        previous.image.id !== record.id &&
-        !this.preparingDoExecutables.has(canonicalJson([image.source, className, previous.version]))
-      )
-        this.runtimeImages.delete(previous.image.id);
-    }
     try {
       await this.ensureWorkerdRunning();
       const origin = `http://127.0.0.1:${assertPresent(this.port)}`;
@@ -3939,13 +3935,26 @@ export class RuntimeManager {
           "X-Vibestudio-Dispatch-Secret": this.dispatchSecret,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ source: image.source, className, version }),
+        body: JSON.stringify({ source: image.source, className, version,retention }),
+        signal:this.schemaAdmissionLifetime.signal,
         dispatcher: getWorkerdConnectionDispatcher(origin),
       } as RequestInit);
       if (response.status !== 204) {
         const failure = (await response.json()) as { error: unknown };
         throw deserializeRpcFailure(failure.error);
       }
+      // Only a successfully joined validation may publish a shared warm owner.
+      // Operation-owned startup loads remain available only through their active preparation.
+      if (retention==="shared"&&this.latestExecutablePreparation.get(serviceKey) === key) {
+      const previous = this.preparedDoExecutables.get(serviceKey);
+      this.preparedDoExecutables.set(serviceKey, prepared);
+      if (
+        previous &&
+        previous.image.id !== record.id &&
+        ![...this.preparingDoExecutables.values()].some(item=>item.image.id===previous.image.id)
+      )
+        this.runtimeImages.delete(previous.image.id);
+    }
     } finally {
       this.preparingDoExecutables.delete(key);
       if (this.preparedDoExecutables.get(serviceKey)?.image.id !== record.id)
@@ -4871,9 +4880,7 @@ export class RuntimeManager {
         this.preparedDoExecutables.delete(key);
         this.latestExecutablePreparation.delete(key);
         if (
-          !this.preparingDoExecutables.has(
-            canonicalJson([source, key.slice(source.length + 1), prepared.version])
-          )
+          ![...this.preparingDoExecutables.values()].some(item=>item.image.id===prepared.image.id)
         )
           this.runtimeImages.delete(prepared.image.id);
       }

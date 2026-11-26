@@ -822,7 +822,8 @@ async function createHarness(
             source,
             className,
             new URL(url, "http://gateway").searchParams.get("version") ?? "",
-            objectKey
+            objectKey,
+            new URL(url,"http://gateway").searchParams.get("retention")==="operation"?"operation":"shared"
           )
         )
         .then((code) => {
@@ -1058,6 +1059,21 @@ describe.skipIf(!celldBinary)("UniversalDO facet host (real celld)", () => {
     expect([...codeFetches.values()].reduce((sum, value) => sum + value, 0)).toBe(1);
   }, 30_000);
 
+  it("validates operation-owned code without retaining a named executable and keeps actual demand shared",async()=>{
+    const source="workers/operation-counter",build=doBuild(source,"ev-1"),artifact=runtimeArtifact(source,"main");
+    const preparedBuild:BuildResult={...build,buildKey:artifact.buildKey,metadata:{...build.metadata,buildKey:artifact.buildKey,execution:artifact,ev:artifact.sourceState.effectiveVersion,sourceState:artifact.sourceState.state}};
+    active=await createHarness({[source]:preparedBuild});const{manager,dispatch,codeFetches}=active;
+    await manager.prepareWorkerExecutable(storedBuildFixture(preparedBuild),["CounterDO"],{retention:"operation"});
+    expect(manager.getDoAdmission(source,"CounterDO","first")).toBeNull();
+    expect(manager.listRuntimeImages().some(image=>image.id.startsWith("do-preparation:"))).toBe(false);
+    const before=[...codeFetches.values()].reduce((sum,n)=>sum+n,0);
+    const first={source,className:"CounterDO",objectKey:"first"};await bindConfiguredObject(manager,first,{owner:"first"});
+    expect(await dispatch(first,"instance")).toMatchObject({unitConstructors:1,localCalls:1});
+    const after=[...codeFetches.values()].reduce((sum,n)=>sum+n,0);expect(after).toBe(before+1);
+    const second={source,className:"CounterDO",objectKey:"second"};await bindConfiguredObject(manager,second,{owner:"second"});
+    expect(await dispatch(second,"instance")).toMatchObject({unitConstructors:2,localCalls:1});
+    expect([...codeFetches.values()].reduce((sum,n)=>sum+n,0)).toBe(after);
+  },30000);
   it("prepares the actual unit without constructing an object and reuses it on first demand", async () => {
     const source = "workers/prepared-counter";
     const build = doBuild(source, "ev-1");

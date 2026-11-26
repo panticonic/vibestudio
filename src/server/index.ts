@@ -8668,7 +8668,7 @@ async function main() {
     const { prepareStartupWorkers } = await import("./startupWorkerPreparation.js");
     const result = await prepareStartupWorkers(
       assertPresent(buildSystemInstance),
-      (build, classes) => runtimeManager.prepareWorkerExecutable(build, classes),
+      (build, classes, options) => runtimeManager.prepareWorkerExecutable(build, classes, options),
       startupBackgroundLifetime.signal
     );
     console.info(

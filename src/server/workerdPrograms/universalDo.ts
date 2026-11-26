@@ -105,6 +105,7 @@ function loadExecutable(
     className: string;
     version: string;
     userKey?: string;
+    retention?:"operation"|"shared";
     /** Set when the class is hosted by another entity: its grants, and no code-host binding. */
     hosted?: HostedCodeGrants;
   }
@@ -114,7 +115,7 @@ function loadExecutable(
   // update selects another unit without replacing a sibling's assigned code.
   const unitKey = executableUnitKey(args.source, args.className, args.version, args.hosted);
   // Disposable schema admission must not retain a named executable cache unit.
-  const loaderName = args.version.endsWith(":schema-probe") ? null : unitKey;
+  const loaderName = args.version.endsWith(":schema-probe")||args.retention==="operation" ? null : unitKey;
   return env.LOADER.get(loaderName, async (): Promise<CelldWorkerCode> => {
     const startedAt = performance.now();
     const identity = `${args.source}:${args.className}`;
@@ -122,6 +123,7 @@ function loadExecutable(
       env,
       `/_docode/${encodeURIComponent(args.source)}/${encodeURIComponent(args.className)}` +
         `?version=${encodeURIComponent(args.version)}` +
+        (args.retention==="operation"?"&retention=operation":"") +
         (args.userKey ? `&objectKey=${encodeURIComponent(args.userKey)}` : "")
     );
     if (!codeResponse.ok) {
@@ -296,6 +298,7 @@ interface PreparationInput {
   source: string;
   className: string;
   version: string;
+  retention?:"operation"|"shared";
 }
 
 /** Marks a call from the script's own entrypoint; the router strips `x-internal-*`. */
@@ -852,6 +855,7 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
   }
 
   private async prepareExecutable(input: PreparationInput): Promise<Response> {
+    if(input.retention!==undefined&&input.retention!=="operation"&&input.retention!=="shared")throw new Error("Invalid executable preparation lifetime");
     const worker = loadExecutable(this.env, this.ctx, input);
     const receipt = await worker
       .getEntrypoint("VibestudioExecutable")

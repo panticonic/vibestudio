@@ -1033,6 +1033,69 @@ describe("RuntimeManager", () => {
       await manager.shutdown();
     });
 
+    it("joins operation-owned executable validation and releases only its transient image without a named owner",async()=>{
+      const deps=createMockDeps(),mgr=new RuntimeManager(deps);const image=await deps.bindRuntimeImage("workers/board","state:original");
+      const build=(await deps.getBuildByExecution(image.artifact.buildKey,image.artifact.executionDigest))!;
+      const probe=vi.spyOn(mgr,"probeDurableObjectSchema").mockResolvedValue(descriptor(1,"actual-schema"));
+      const ordinary=vi.mocked(fetch).getMockImplementation()!;let version="";let finish!:()=>void;const barrier=new Promise<void>(resolve=>{finish=resolve;});
+      let entered!:()=>void;const started=new Promise<void>(resolve=>{entered=resolve;});
+      vi.mocked(fetch).mockImplementation(async(input,init)=>{if(!String(input).endsWith("/_prepare_executable"))return ordinary(input,init);
+        const payload=JSON.parse(String(init?.body));version=payload.version;expect(payload.retention).toBe("operation");
+        const code=await mgr.getDoCode("workers/board","BoardDO",version,undefined,"operation");expect(code?.version).toBe(version);
+        expect(mgr.getDoAdmission("workers/board","BoardDO")).toBeNull();entered();await barrier;return new Response(null,{status:204});});
+      const work=mgr.prepareWorkerExecutable(build,["BoardDO"],{retention:"operation"});await started;
+      expect(probe).toHaveBeenCalledTimes(1);expect(mgr.listRuntimeImages().some(image=>image.id.startsWith("do-preparation:"))).toBe(true);
+      finish();await work;
+      expect(mgr.listRuntimeImages().some(image=>image.id.startsWith("do-preparation:"))).toBe(false);
+      expect(await mgr.getDoCode("workers/board","BoardDO",version,undefined,"operation")).toBeNull();
+      expect(await mgr.getDoCode("workers/board","BoardDO",version)).toBeNull();await mgr.shutdown();
+    });
+    it("publishes a prepared owner only after success and keeps the prior valid publication when replacement fails",async()=>{
+      const deps=createMockDeps(),mgr=new RuntimeManager(deps);const source="workers/board";
+      const old=await deps.bindRuntimeImage(source,"state:original"),next=await deps.bindRuntimeImage(source,"state:replacement");
+      vi.spyOn(mgr,"probeDurableObjectSchema").mockResolvedValue(descriptor(1,"actual-schema"));
+      const ordinary=vi.mocked(fetch).getMockImplementation()!;const versions:string[]=[];
+      vi.mocked(fetch).mockImplementation(async(input,init)=>{if(!String(input).endsWith("/_prepare_executable"))return ordinary(input,init);
+        const payload=JSON.parse(String(init?.body));versions.push(payload.version);if(versions.length>1)throw Error("Actual validation failed");return new Response(null,{status:204});});
+      await mgr.prepareWorkerExecutable((await deps.getBuildByExecution(old.artifact.buildKey,old.artifact.executionDigest))!,["BoardDO"]);
+      await expect(mgr.prepareWorkerExecutable((await deps.getBuildByExecution(next.artifact.buildKey,next.artifact.executionDigest))!,["BoardDO"])).rejects.toThrow("Actual validation failed");
+      expect((await mgr.getDoCode(source,"BoardDO",versions[0]!))?.version).toBe(versions[0]);
+      expect(await mgr.getDoCode(source,"BoardDO",versions[1]!)).toBeNull();
+      expect(mgr.listRuntimeImages().filter(image=>image.id.startsWith("do-preparation:"))).toHaveLength(1);await mgr.shutdown();
+    });
+    it("keeps a newer valid shared owner when an older validation fails late",async()=>{
+      const deps=createMockDeps(),mgr=new RuntimeManager(deps),source="workers/board";
+      const older=await deps.bindRuntimeImage(source,"state:older"),newer=await deps.bindRuntimeImage(source,"state:newer");
+      vi.spyOn(mgr,"probeDurableObjectSchema").mockResolvedValue(descriptor(1,"actual-schema"));
+      const ordinary=vi.mocked(fetch).getMockImplementation()!;let release!:()=>void;const barrier=new Promise<void>(resolve=>{release=resolve;});let enter!:()=>void;const started=new Promise<void>(resolve=>{enter=resolve;});const versions:string[]=[];
+      vi.mocked(fetch).mockImplementation(async(input,init)=>{if(!String(input).endsWith("/_prepare_executable"))return ordinary(input,init);const payload=JSON.parse(String(init?.body));versions.push(payload.version);if(versions.length===1){enter();await barrier;throw Error("Older failed late");}return new Response(null,{status:204});});
+      const pending=mgr.prepareWorkerExecutable((await deps.getBuildByExecution(older.artifact.buildKey,older.artifact.executionDigest))!,["BoardDO"]).catch(error=>error);
+      await started;await mgr.prepareWorkerExecutable((await deps.getBuildByExecution(newer.artifact.buildKey,newer.artifact.executionDigest))!,["BoardDO"]);
+      release();expect((await pending).message).toBe("Older failed late");
+      expect(await mgr.getDoCode(source,"BoardDO",versions[0]!)).toBeNull();expect((await mgr.getDoCode(source,"BoardDO",versions[1]!))?.version).toBe(versions[1]);
+      expect(mgr.listRuntimeImages().filter(image=>image.id.startsWith("do-preparation:"))).toHaveLength(1);await mgr.shutdown();
+    });
+    it("retires only its operation owner when equal shared preparation completes concurrently",async()=>{
+      const deps=createMockDeps(),mgr=new RuntimeManager(deps),source="workers/board",image=await deps.bindRuntimeImage(source,"state:original");
+      const build=(await deps.getBuildByExecution(image.artifact.buildKey,image.artifact.executionDigest))!;
+      vi.spyOn(mgr,"probeDurableObjectSchema").mockResolvedValue(descriptor(1,"actual-schema"));
+      const ordinary=vi.mocked(fetch).getMockImplementation()!;let release!:()=>void;const barrier=new Promise<void>(resolve=>{release=resolve;});let enter!:()=>void;const started=new Promise<void>(resolve=>{enter=resolve;});let version="";
+      vi.mocked(fetch).mockImplementation(async(input,init)=>{if(!String(input).endsWith("/_prepare_executable"))return ordinary(input,init);const payload=JSON.parse(String(init?.body));version=payload.version;if(payload.retention==="operation"){enter();await barrier;}return new Response(null,{status:204});});
+      const operation=mgr.prepareWorkerExecutable(build,["BoardDO"],{retention:"operation"});await started;
+      await mgr.prepareWorkerExecutable(build,["BoardDO"]);release();await operation;
+      expect(await mgr.getDoCode(source,"BoardDO",version,undefined,"operation")).toBeNull();expect((await mgr.getDoCode(source,"BoardDO",version))?.version).toBe(version);
+      expect(mgr.listRuntimeImages().filter(image=>image.id.startsWith("do-preparation:"))).toHaveLength(1);await mgr.shutdown();
+    });
+    it("joins cancelled operation validation before retiring its image on shutdown",async()=>{
+      const deps=createMockDeps(),mgr=new RuntimeManager(deps),image=await deps.bindRuntimeImage("workers/board","state:original");
+      const build=(await deps.getBuildByExecution(image.artifact.buildKey,image.artifact.executionDigest))!;
+      vi.spyOn(mgr,"probeDurableObjectSchema").mockResolvedValue(descriptor(1,"actual-schema"));
+      const ordinary=vi.mocked(fetch).getMockImplementation()!;let entered!:()=>void;const started=new Promise<void>(resolve=>{entered=resolve;});let cancelled=false;
+      vi.mocked(fetch).mockImplementation(async(input,init)=>{if(!String(input).endsWith("/_prepare_executable"))return ordinary(input,init);expect(init?.signal).toBeDefined();entered();return new Promise((_,reject)=>{init!.signal!.addEventListener("abort",()=>{cancelled=true;reject(init!.signal!.reason);},{once:true});});});
+      const pending=mgr.prepareWorkerExecutable(build,["BoardDO"],{retention:"operation"}).catch(error=>error);await started;
+      await mgr.shutdown();expect(await pending).toBeInstanceOf(Error);expect(cancelled).toBe(true);
+      expect(mgr.listRuntimeImages().some(image=>image.id.startsWith("do-preparation:"))).toBe(false);
+    });
     it("shares exact schema admission and retains its evidence without a publication", async () => {
       const mgr = new RuntimeManager(createMockDeps());
       let release!: () => void;

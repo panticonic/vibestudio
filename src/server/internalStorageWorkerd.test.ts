@@ -263,7 +263,8 @@ async function createWorkerdHarness(
           source,
           className,
           new URL(u, "http://fixture").searchParams.get("version") ?? "",
-          objectKey
+          objectKey,
+          new URL(u,"http://fixture").searchParams.get("retention")==="operation"?"operation":"shared"
         )
         .then((code) => {
           if (!code) {

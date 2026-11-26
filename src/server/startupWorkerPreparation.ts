@@ -3,15 +3,16 @@ import type { StoredBuildResult } from "./buildV2/buildStore.js";
 
 export type StartupWorkerBuilds = Pick<BuildSystemV2, "listBuildUnits" | "getStoredBuild">;
 
-/** Prepare executables and schema evidence from one immutable workspace view, without creating entities.
+/** Validate executables and prepare schema evidence from one immutable workspace view, without creating entities.
  * Demand joins the same content-addressed builds; speculative work yields to it.
  * Shutdown stops admission and joins the admitted build or schema operation. */
 export async function prepareStartupWorkers(
   builds: StartupWorkerBuilds,
-  prepareExecutable: (build: StoredBuildResult, classNames: readonly string[]) => Promise<void>,
+  prepareExecutable: (build: StoredBuildResult, classNames: readonly string[], options:{retention:"operation"|"shared"}) => Promise<void>,
   signal: AbortSignal
 ): Promise<{ sources: string[]; elapsedMs: number }> {
   const startedAt = performance.now();
+  const retention=process.env["VIBESTUDIO_STARTUP_RETAIN_WORKER_EXECUTABLES"]==="1"?"shared":"operation";
   signal.throwIfAborted();
   const units = await builds.listBuildUnits(undefined, ["worker"]);
   const sources: string[] = [];
@@ -25,7 +26,8 @@ export async function prepareStartupWorkers(
       signal.throwIfAborted();
       await prepareExecutable(
         build,
-        (unit.manifest.durable?.classes ?? []).map(({ className }) => className)
+        (unit.manifest.durable?.classes ?? []).map(({ className }) => className),
+        {retention}
       );
       sources.push(unit.unitPath);
     } catch (error) {
