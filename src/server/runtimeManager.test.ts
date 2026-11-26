@@ -1096,6 +1096,23 @@ describe("RuntimeManager", () => {
       await mgr.shutdown();expect(await pending).toBeInstanceOf(Error);expect(cancelled).toBe(true);
       expect(mgr.listRuntimeImages().some(image=>image.id.startsWith("do-preparation:"))).toBe(false);
     });
+    it("promotes speculative schema admission when actual entity demand joins its exact flight", async () => {
+      const deps=createMockDeps();const mgr=new RuntimeManager(deps);
+      const image=await deps.bindRuntimeImage("workers/board","main");
+      const build=(await deps.getBuildByExecution(image.artifact.buildKey,image.artifact.executionDigest))!;
+      let entered!:()=>void,release!:()=>void;
+      const started=new Promise<void>(r=>{entered=r;});const finished=new Promise<void>(r=>{release=r;});
+      let owner:import("./buildV2/builderLifetime.js").BuildPriorityOwner|undefined;
+      const probe=vi.spyOn(mgr,"probeDurableObjectSchema").mockImplementation(async(_s,_c,_b,priority)=>{
+        owner=priority;expect(owner?.priority).toBe("speculative");entered();await finished;return descriptor(1,"fresh-shape");
+      });
+      const preparation=mgr.prepareWorkerExecutable(build,["BoardDO"],{retention:"operation",priority:"speculative"});
+      await started;
+      const demand=mgr.ensureDurableObjectEntity({source:"workers/board",className:"BoardDO",key:"first",contextId:"fresh"});
+      await vi.waitFor(()=>expect(owner?.priority).toBe("interactive"));
+      release();await Promise.all([preparation,demand]);expect(probe).toHaveBeenCalledTimes(1);await mgr.shutdown();
+    });
+
     it("shares exact schema admission and retains its evidence without a publication", async () => {
       const mgr = new RuntimeManager(createMockDeps());
       let release!: () => void;

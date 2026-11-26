@@ -8,11 +8,12 @@ export type StartupWorkerBuilds = Pick<BuildSystemV2, "listBuildUnits" | "getSto
  * Shutdown stops admission and joins the admitted build or schema operation. */
 export async function prepareStartupWorkers(
   builds: StartupWorkerBuilds,
-  prepareExecutable: (build: StoredBuildResult, classNames: readonly string[], options:{retention:"operation"|"shared"}) => Promise<void>,
+  prepareExecutable: (build: StoredBuildResult, classNames: readonly string[], options:{retention:"operation"|"shared";priority:"interactive"|"speculative"}) => Promise<void>,
   signal: AbortSignal
 ): Promise<{ sources: string[]; elapsedMs: number }> {
   const startedAt = performance.now();
   const retention=process.env["VIBESTUDIO_STARTUP_RETAIN_WORKER_EXECUTABLES"]==="1"?"shared":"operation";
+  const priority=process.env["VIBESTUDIO_STARTUP_INTERACTIVE_SCHEMA_ADMISSION"]==="1"?"interactive":"speculative";
   signal.throwIfAborted();
   const units = await builds.listBuildUnits(undefined, ["worker"]);
   const sources: string[] = [];
@@ -27,7 +28,7 @@ export async function prepareStartupWorkers(
       await prepareExecutable(
         build,
         (unit.manifest.durable?.classes ?? []).map(({ className }) => className),
-        {retention}
+        {retention,priority}
       );
       sources.push(unit.unitPath);
     } catch (error) {

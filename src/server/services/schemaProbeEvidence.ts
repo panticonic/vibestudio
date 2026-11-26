@@ -36,6 +36,7 @@ export async function acquireSchemaProbeEvidence(
     readonly identity: SchemaProbeIdentity;
     readonly signal: AbortSignal;
     readonly installed?: InstalledSchemaProbeEvidence;
+    readonly priority?: BuildPriorityOwner;
   },
   probe: () => Promise<SchemaProbeDescriptor>
 ): Promise<SchemaProbeDescriptor> {
@@ -81,7 +82,7 @@ export async function acquireSchemaProbeEvidence(
       if (cached) return cached;
       const outcome = await activeCoordinator.run(
         key,
-        new BuildPriorityOwner("interactive"),
+        input.priority ?? new BuildPriorityOwner("interactive"),
         input.signal,
         async (priority) => {
           const published = await read();

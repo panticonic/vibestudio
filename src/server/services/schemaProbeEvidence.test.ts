@@ -1,3 +1,5 @@
+import { BuildPriorityOwner } from "../buildV2/builderLifetime.js";
+import { SharedBuildCoordinator } from "../buildV2/sharedBuildCoordinator.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -49,6 +51,20 @@ const published = async () =>
   (await fs.readdir(cacheRoot())).filter((entry) => !entry.startsWith("."));
 
 describe("immutable schema probe evidence", () => {
+  it("passes the exact promotable caller priority owner to shared schema cache admission", async () => {
+    const owner=new BuildPriorityOwner("speculative");
+    const run=vi.spyOn(SharedBuildCoordinator.prototype,"run");
+    try {
+      await expect(acquireSchemaProbeEvidence({identity,signal:new AbortController().signal,priority:owner},async()=>{
+        expect(run.mock.calls[0]?.[1]).toBe(owner);
+        owner.promote("interactive");
+        expect(run.mock.calls[0]?.[1].priority).toBe("interactive");
+        return descriptor;
+      })).resolves.toEqual(descriptor);
+      expect(run).toHaveBeenCalledTimes(1);
+    } finally {run.mockRestore();}
+  });
+
   const stage = async () => {
     const output = path.join(cacheRoot(), "..", "installed");
     await fs.mkdir(output, { recursive: true });
