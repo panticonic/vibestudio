@@ -381,3 +381,18 @@ test('panel migration binds current source compatibility separately from propose
  const swapped=structuredClone(proof);swapped.semanticReviewInput.actual.observations.nativeFacts.final.guide.text='Invented';assert.throws(()=>observedContentReviewInput(swapped,world));
  const missing=structuredClone(proof);missing.semanticReviewInput.actual.requestedReturn=null;assert.throws(()=>observedContentReviewInput(missing,world));
 });
+
+test('skill maintenance binds original versus current compiler witnesses and truthful actor observations',()=>{
+ for(const required of [true,false]){
+  const world={kind:'skillMaintenance',goal:'Use the actual retained skill check and preserve native authority.',requestedReturnRequired:required};
+  const original={path:'skills/owned',revision:'opening',satisfied:false,failures:['return:run/choose.nl'],runId:'old-run',runDigest:'old-run-digest',resultDigest:'old-value-digest'},current={...original,revision:'current',satisfied:true,failures:[],runId:'current-run',runDigest:'current-run-digest',resultDigest:'current-value-digest'};
+  const files=[{path:'run/choose.nl',text:'Actual typed source'}];
+  const journal=[{service:'skillMaintenanceEvidence',method:'inspect',args:['owned-card'],result:{revision:'opening'}},{service:'skillMaintenanceEvidence',method:'readback',args:['owned-card'],result:current}];
+  const proof={journal,observation:{revision:'opening',files,check:original},authoring:null,gate:null,proof:null,final:current,changedPaths:[],outcomeContract:{returnedValue:{required}},semanticReviewRequired:true,actualResult:{explanation:'The current list result passes; the original string result failed.',patch:null,check:current}};
+  proof.nativeFacts={opening:{revision:'opening',files:structuredClone(files),witness:structuredClone(original)},current:{revision:'current',files:structuredClone(files),check:structuredClone(current),measured:{path:'skills/owned',revision:'current',satisfied:true,failures:[]}},actorReadbacks:structuredClone(journal),actorObserved:{source:true,authoring:false,authority:false,readback:true},coeditApplied:false,protocol:'The original retained witness and current check are separate native facts; verifier reads are not actor reads.'};
+  const bind=p=>{const [fields,artifacts]=observedContentFields[world.kind];p.semanticReviewInput={actual:{goal:world.goal,observations:Object.fromEntries(fields.map(k=>[k,structuredClone(p[k]??null)])),artifacts:Object.fromEntries(artifacts.map(k=>[k,structuredClone(p[k]??null)])),requestedReturn:required?structuredClone(p.actualResult):null},expected:{goal:world.goal,requestedReturnRequired:required},rubric:'Judge actual requested source changes/findings against independent native roles.'};};bind(proof);assert.equal(observedContentNeedsReview(world),true);assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
+  for(const mutate of [p=>delete p.nativeFacts,p=>p.nativeFacts.opening.witness=p.final,p=>p.nativeFacts.current.check=p.observation.check,p=>p.nativeFacts.actorObserved.authoring=true,p=>p.nativeFacts.actorReadbacks.push({service:'authoringCompiler',method:'inspect'}),p=>p.nativeFacts.current.measured.satisfied=false,p=>p.nativeFacts.current.files[0].text=null]){const bad=structuredClone(proof);mutate(bad);bind(bad);assert.throws(()=>observedContentReviewInput(bad,world));}
+  const swapped=structuredClone(proof);swapped.semanticReviewInput.actual.observations.nativeFacts.current.files[0].text='Forged replacement';assert.throws(()=>observedContentReviewInput(swapped,world));
+  if(required){const missing=structuredClone(proof);missing.semanticReviewInput.actual.requestedReturn=null;assert.throws(()=>observedContentReviewInput(missing,world));}
+ }
+});
