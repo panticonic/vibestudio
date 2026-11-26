@@ -1,0 +1,51 @@
+{
+  "schema": "vibestudio.native-meaning-correction/1",
+  "baseline": "965065a80030c650afb39abc877d8978e0cf0d81",
+  "status": "component-checked",
+  "mechanism": "Whole-object private answer equality rejected equivalent requested recorded findings. Replace it with public shape/native-reference binding plus mandatory independent review of exact actual return against actual source observations.",
+  "goals": {
+    "count": 21,
+    "sha256": "8d2355fdc39e5ebe7a480f69812ce26f985a524f69aae6da692e3a47df449c44",
+    "unchanged": true
+  },
+  "inventory": {
+    "producer": "skills/system-testing/open-goal-provenance-question-managed.ts expectedReport/verifyNativeApplication/verify/qualify",
+    "publicContract": "Base skills/open-user-goal/reviewRecordedQuestion/contract.ts and entries.json resultType RecordedQuestionReport; no public API change in this batch",
+    "callers": "Base reviewRecordedQuestion.ts and answerRecordedQuestion.nl; Source43 old coordinator remains compatible",
+    "registration": "skills/system-testing/tests/web-brief-managed.ts provenance-question now requiresReview:true",
+    "reviewConsumer": "Host scripts/lib/observed-content-admission.mjs maps assignment,candidates,evidence,native,effects; common exporter actual-root/outcome binding remains authoritative",
+    "exclusions": "No Core/SDK/backend/effect changes: this mechanism is authored fixture admission and independent Host review, not model serving. Generic observed-content helper and its mandatory semantic policy reused."
+  },
+  "preserved": [
+    "Native caller/context ownership",
+    "actual native search and visible issued references",
+    "complete current native cohort and counteraction traversal",
+    "exact native counteraction-work joins",
+    "unchanged current local/main bytes and head",
+    "required actual returned findings",
+    "foreign affected/counteraction references rejected"
+  ],
+  "reviewInputs": {
+    "observations": [
+      "assignment",
+      "candidates",
+      "evidence",
+      "native",
+      "effects"
+    ],
+    "artifacts": [],
+    "privateExpectedAnswerExcluded": true
+  },
+  "validation": {
+    "unit": "vibe-recorded-native-meaning-20261126a",
+    "tests": 10,
+    "passed": 10,
+    "peakMiB": 89.5,
+    "scope": "4 public shape/native reference controls plus6 exact native/actual-answer Host review binding controls; no live native qualification or semantic model review claimed"
+  },
+  "open": [
+    "Original0073 missing actual limiting reason remains a genuine preserved failure, not retrospectively accepted.",
+    "Global latest-search/cohort bookkeeping and per-literal acquisition requirements require separate review before claiming unconstrained multi-query composition.",
+    "The new Desktop/Recorded natural roots have pending actual public loader controls and are not required by this compatible verifier correction."
+  ]
+}

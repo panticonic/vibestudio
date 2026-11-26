@@ -3,6 +3,7 @@ import {isDeepStrictEqual as equal} from "node:util";
 export const observedContentFields = {
   systemCandidateTriage: [["card","frontier","preview","gate","readback","journal"],["body"]],
   scaffoldReview: [["card","options","units","receipt","readback","journal"],[]],
+  "provenance-question": [["assignment","candidates","evidence","native","effects"], []],
   desktopReadiness: [["desk","window","updates","exactAdmission","journal"], []],
   preparedContentProject: [["nativeProjectEvidence"], []],
   phoneFirstRun: [["card","assignment","phases","build","journal"], []],
