@@ -14,7 +14,17 @@
     "src/dev/deviceExecutors.ts:91 sets owned terminal driver process mode1",
     "remoteDeployment.ts -> openOwnedDeploymentTarget inherits this mode and sets nested target mode1"
   ],
-  "actualTests": "pending vibe-native-package-consumer-policy-20261126a",
+  "actualTests": {
+    "unit": "vibe-native-package-consumer-policy-20261126a",
+    "passed": 36,
+    "seconds": 4.101,
+    "peakMiB": 82.2,
+    "boundary": "actual independently spawned Node server+CLI processes receive exact ceilings, with native mode unset/1 and isolated profile/cache",
+    "sourceIdenticalToSharedBranch": {
+      "scripts/prebuild-release-userland.mjs": "e8e7d7a3ba31c704bcadd4ab6266cb1525b9698fd820f64776ee84a441e7e671",
+      "scripts/prebuild-release-userland.test.mjs": "b4ea9a78257e5cef181db8ff3e85ddcbf799242a0e16e453c44b96d10a810165"
+    }
+  },
   "inferenceProbesPerformed": false,
   "forbiddenModelRequestsPerformed": false,
   "source43FrozenEdited": false,
