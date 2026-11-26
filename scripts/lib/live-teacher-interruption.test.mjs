@@ -93,3 +93,27 @@ test(
     );
   }
 );
+
+test("a soft runtime drain lets the live command finish and retains only unstarted cases",async(t)=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),"teacher-drain-"));t.after(()=>rm(root,{recursive:true,force:true}));
+ const drainPath=path.join(root,"stop-after-wave"),signals=new EventEmitter();
+ const owner=collectionInterruption({out:root,cases:["settled","unstarted"],processSignals:signals});t.after(()=>owner.dispose());
+ let admitted=0;
+ for(const name of ["settled","unstarted"]){
+  if(owner.drainAtBoundary(drainPath))break;
+  admitted++;
+  const result=await runTeacherCommand(process.execPath,["-e","require('node:fs').writeFileSync(process.argv[1],'source handoff');setTimeout(()=>console.log('actual settled command'),20)",drainPath],{stdio:["ignore","pipe","inherit"]},owner.signal);
+  assert.equal(result.status,0);assert.match(result.stdout,/actual settled command/);owner.complete([name]);
+ }
+ assert.equal(admitted,1);assert.equal(owner.requested,true);assert.equal(owner.signal.aborted,false);
+ const receipt=JSON.parse(await readFile(path.join(root,"collection-interruption.json"),"utf8"));
+ assert.equal(receipt.mode,"drain");assert.deepEqual(receipt.completedCases,["settled"]);assert.deepEqual(receipt.interruptedCases,["unstarted"]);
+});
+test("hard cancellation still aborts after a soft drain request",async(t)=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),"teacher-drain-hard-"));t.after(()=>rm(root,{recursive:true,force:true}));
+ const file=path.join(root,"stop"),signals=new EventEmitter(),owner=collectionInterruption({out:root,cases:["pending"],processSignals:signals});t.after(()=>owner.dispose());
+ await writeFile(file,"");assert.equal(owner.drainAtBoundary(file),true);assert.equal(owner.signal.aborted,false);
+ signals.emit("SIGTERM","SIGTERM");assert.equal(owner.signal.aborted,true);assert.equal(owner.signal.reason.signal,"SIGTERM");
+ const receipt=JSON.parse(await readFile(path.join(root,"collection-interruption.json"),"utf8"));assert.equal(receipt.mode,"interrupt");
+ await assert.rejects(runTeacherCommand(process.execPath,["-e","throw Error('must not admit')"],{},owner.signal));
+});

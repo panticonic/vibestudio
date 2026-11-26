@@ -59,11 +59,16 @@ export function collectionInterruption({ requestPath, out, cases, processSignals
       { mode: 0o600 }
     );
   };
-  const receive = (signal, reason) => {
-    if (request) return;
-    request = { requestedAt: new Date().toISOString(), ...(signal ? { signal } : {}), reason };
+  const receive = (signal, reason, abort = true) => {
+    if (controller.signal.aborted || request && !abort) return;
+    request = {
+      ...(request ?? { requestedAt: new Date().toISOString() }),
+      ...(signal ? { signal } : {}),
+      reason,
+      mode: abort ? "interrupt" : "drain",
+    };
     persist();
-    controller.abort(request);
+    if (abort) controller.abort(request);
   };
   let unixSignalReceived = false;
   const onSignal = (signal) => {
@@ -98,6 +103,12 @@ export function collectionInterruption({ requestPath, out, cases, processSignals
   }
   return {
     signal: controller.signal,
+    get requested() { return request !== undefined; },
+    drainAtBoundary(drainPath) {
+      if (!drainPath || !existsSync(drainPath)) return false;
+      receive(undefined, "Graceful runtime boundary drain requested", false);
+      return true;
+    },
     complete(names) {
       for (const name of names) if (cases.includes(name)) { completed.add(name); interruptedReasons.delete(name); }
       persist();

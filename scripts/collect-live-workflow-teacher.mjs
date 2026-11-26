@@ -59,6 +59,7 @@ const { values } = parseArgs({
     "open-goals": { type: "boolean" },
     assignments: { type: "boolean" },
     "checkpoint-request": { type: "string" },
+    "drain-request": { type: "string" },
   },
 });
 if(values.capabilities){
@@ -418,7 +419,7 @@ try {
   const unavailableScopes = new Set();
   for (const group of groups) {
     const { instance, workspace, workspaceBaseline, devices } = group;
-    if (interruption.signal.aborted) break;
+    if (interruption.signal.aborted || interruption.drainAtBoundary(values["drain-request"])) break;
     if (unavailableScopes.has(group.scope)) continue;
     const systemTest = (args, stdout, signal) =>
       command(systemTestArgs(group, args), stdout, signal);
@@ -461,7 +462,7 @@ try {
       });
       const runSize = concurrency === 1 ? 1 : ready.length;
       for (let offset = 0; offset < ready.length; offset += runSize) {
-        if (interruption.signal.aborted) break;
+        if (interruption.signal.aborted || interruption.drainAtBoundary(values["drain-request"])) break;
         const batch = ready.slice(offset, offset + runSize);
         const concurrent = batch.length > 1;
         const runOut = concurrent ? mkdtempSync(path.join(out, "managed-")) : batch[0].directory;
@@ -640,13 +641,13 @@ try {
     const folder=path.join(out,"native-reference-only");mkdirSync(folder,{recursive:true,mode:0o700});
     const summary=summarizeNativeReferences({workflows:nativeReferenceWorkflows,pinned,
       stateRoot:path.resolve(values["native-reference-state"]??path.join(path.dirname(out),"native-reference-qualification"))});
-    writeFileSync(path.join(folder,"coverage.json"),JSON.stringify({...summary,interrupted:interruption.signal.aborted,
+    writeFileSync(path.join(folder,"coverage.json"),JSON.stringify({...summary,interrupted:interruption.requested,
       unavailablePrerequisites:nativeDeploymentPackageAvailable?[]:[{kind:"native-reference-installed-package",reason:nativeDeploymentPackageProblem??"No native-reference-capable installed package was supplied",
         affectedNames:[...nativeReferenceWorkflows].filter(([,world])=>world.requiresDeploymentPackage).map(([name])=>"open-goal-oracle-"+name.slice("open-goal-".length))}]},null,2)+"\n",{flag:"wx",mode:0o600});
   }
   if (failures.length)
     throw new AggregateError(failures, `${failures.length} live teacher operation(s) failed`);
-  if (interruption.signal.aborted) process.exitCode = 130;
+  if (interruption.requested) process.exitCode = 130;
 } finally {
   interruption.dispose();
 }

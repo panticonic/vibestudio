@@ -11,4 +11,4 @@ export function collectionInterruption(input: {
   out: string;
   cases: string[];
   processSignals?: NodeJS.Process;
-}): { signal: AbortSignal; complete(names: string[]): void; defer(name: string, reason: string): void; dispose(): void };
+}): { signal: AbortSignal; readonly requested: boolean; drainAtBoundary(path?: string): boolean; complete(names: string[]): void; defer(name: string, reason: string): void; dispose(): void };
