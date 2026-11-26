@@ -1,6 +1,8 @@
 import {isDeepStrictEqual as equal} from "node:util";
 /** Per-domain actual native evidence; no expected answer vocabulary enters review. */
 export const observedContentFields = {
+  systemCandidateTriage: [["card","frontier","preview","gate","readback","journal"],["body"]],
+  scaffoldReview: [["card","options","units","receipt","readback","journal"],[]],
   desktopReadiness: [["desk","window","updates","exactAdmission","journal"], []],
   preparedContentProject: [["nativeProjectEvidence"], []],
   phoneFirstRun: [["card","assignment","phases","build","journal"], []],
@@ -311,6 +313,7 @@ export const observedContentFields = {
     [
       "docket",
       "view",
+      "current",
       "scope",
       "gate",
       "readback",
