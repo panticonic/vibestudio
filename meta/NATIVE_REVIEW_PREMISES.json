@@ -1,0 +1,513 @@
+{
+  "schema": "source-bound.native-review-premise-inventory/1",
+  "beforeEdits": true,
+  "source": {
+    "host": {
+      "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/source-v48-final/host",
+      "commit": "c28570ac70240d4680aee900d09607fe24713389"
+    },
+    "core": "e404b1a8150df340d920374f64d22ea05c259fed",
+    "templates": {
+      "examples": "28f6f93bd0563105a47c26c27855b751fd9a4881",
+      "personal": "a078720c52c2f087c1c04f20ab9b6c23240ea3fd",
+      "google-workspace": "abd610f2f7056c45ca22a8be94d6905ce547614a",
+      "spectrolite": "cef6db3b8995b9b6c1217347dabf2cc6181ed295",
+      "base": "52fc8c5640be640af4c4573946c8cc81a66e4bef",
+      "system": "5a63353a2f541e7e093db34890bc72598793c7e5",
+      "system-testing": "aaf475d427ce721ea09016924c78c8f271d242e5",
+      "news": "2403741840728f6801ca115406b8d974cf23e612"
+    },
+    "selection": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final",
+    "driver": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/driver-semantic-v48-e404b1a81",
+    "driverCommit": "e404b1a8150df340d920374f64d22ea05c259fed",
+    "releaseRoot": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/workspace-release-semantic-functions-v48",
+    "previousRelease": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/workspace-release-semantic-functions-v47",
+    "previousReleaseRoot": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/workspace-release-semantic-functions-v47",
+    "previousCatalogSha256": "bb5ad65411639207e88cfe5fbc9775af654e164af288fc0615522b1b21962a21",
+    "compilerABI": 4,
+    "preparedOn": "tick",
+    "teacherCalls": 0,
+    "modelCallsRequested": 0,
+    "scope": "1748 train / 2327 cases; preserve every goal ID and split; no collection limit",
+    "status": "Coherent model-owned domain composition, exact native meaning and separately bounded guest execution; full Luna queue",
+    "hostedModelRoute": {
+      "primary": "openai-codex:gpt-6-luna",
+      "fallback": null
+    },
+    "deploymentPackage": "/home/werg/vibe-native-web-cancellation-deployment-package/lib/node_modules/@panticonic/vibestudio-server",
+    "sourceReadySha256": "ea417299c4bb00cdca1f1065636f4241f9b666f89dbdc3f36f55e37bc1059550",
+    "preparedAt": 1795677673.9132102,
+    "catalogSha256": "73c821b9404a86bbf7712de6040db8c174a07913d0a17f0c4e91338c7dbdab86",
+    "expectedReviewCount": 1741
+  },
+  "sharedReviewConsumers": [
+    {
+      "template": "examples",
+      "commit": "28f6f93bd0563105a47c26c27855b751fd9a4881",
+      "files": []
+    },
+    {
+      "template": "personal",
+      "commit": "a078720c52c2f087c1c04f20ab9b6c23240ea3fd",
+      "files": [
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/personal/meta/OPEN_PERSONAL_GOAL_ADMISSION.md",
+          "sha256": "801ab1ac33ecc7eefd8f4786c2be38dd999322261d14ebc74b963e631ff50eaa"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/personal/skills/open-personal-history-runtime/managed.ts",
+          "sha256": "4780ef8a1c677eb0b0aa9e300bea7aec93375c51b9e72fc9a5b0b8abc261f220"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/personal/skills/open-personal-artifacts-runtime/managed.ts",
+          "sha256": "36d4855adcb47a0a6c8fd2d1513d32e8d4d0f5bdb5ad61d7340a90864c7a5edc"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/personal/skills/open-personal-automation-runtime/managed.ts",
+          "sha256": "43bd17d39860d62aee03146473ad162e21c16b2b05317300596a76a4e1c24b85"
+        }
+      ]
+    },
+    {
+      "template": "google-workspace",
+      "commit": "abd610f2f7056c45ca22a8be94d6905ce547614a",
+      "files": [
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/google-workspace/meta/GOOGLE_NATIVE_MEANING_REVIEW.md",
+          "sha256": "6c9ce2a9d006bcc9ac114d250ce321e9bd3fa81c7532f3b9d501e0651fd1ea7a"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/google-workspace/skills/open-calendar-goal/managed.ts",
+          "sha256": "cdf18b6aa296f159a9b120c86d1268076f467507cc7d97cd06094691a46a18a9"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/google-workspace/skills/google-drive/open-goal-drive.ts",
+          "sha256": "2801a8c02890c6b9107d4b22e22a585a8839171b31fb6a2ce330a046e46f0a13"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/google-workspace/skills/open-gmail-goal/managed.ts",
+          "sha256": "2ed500b46eb6a8323ca123ff43115cacdda19910b1edbe32a24d4a946e49ebba"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/google-workspace/skills/open-google-handoff-goal/managed.ts",
+          "sha256": "4335473a1f3e785add83660cb9333c260aa3a00fecb93676653692a7ad9b2a50"
+        }
+      ]
+    },
+    {
+      "template": "spectrolite",
+      "commit": "cef6db3b8995b9b6c1217347dabf2cc6181ed295",
+      "files": [
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/spectrolite/skills/spectrolite-review-fixtures/open-goal.ts",
+          "sha256": "3803cf875fbabc9991461a777088266cc4d9339a67abc5b1579e4e34467611e3"
+        }
+      ]
+    },
+    {
+      "template": "base",
+      "commit": "52fc8c5640be640af4c4573946c8cc81a66e4bef",
+      "files": [
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/base/meta/ASSET_REQUESTED_FINDINGS_INVENTORY.md",
+          "sha256": "71ad5a8f78e5527f71bf2227369dfe8058510b325ce1e4d1065f1f47836bb042"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/base/meta/LOCAL_REVIEW_NATIVE_OBLIGATIONS.md",
+          "sha256": "747ef7ef8e999e2fc59c3e01fc8526c8e5f4062c45203d706d0829d00d63f2f0"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/base/packages/application-outcomes/observed-content-review.test.ts",
+          "sha256": "ec5cd69a4dec83d1bdd02f6fae7b098f5d501eb42e0e84499d6a65d21ede82f1"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/base/packages/application-outcomes/observed-content-review.ts",
+          "sha256": "08c50793ec78b6e374a0f0d7d9c5bc72cb970fce5c694564b68cf78fb0e4cf07"
+        }
+      ]
+    },
+    {
+      "template": "system",
+      "commit": "5a63353a2f541e7e093db34890bc72598793c7e5",
+      "files": [
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system/skills/open-system-diagnostics-runtime/managed.ts",
+          "sha256": "c90d2cdcf63e16ca64739e19b301b84ad4b1654ccfaf7084b6befbbebdd0535f"
+        }
+      ]
+    },
+    {
+      "template": "system-testing",
+      "commit": "aaf475d427ce721ea09016924c78c8f271d242e5",
+      "files": [
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-examples-adoption-managed.ts",
+          "sha256": "80446cc1a3b3cb67cea8645e0b6126bbe1d904f4d0725d7f7a76337e54891cd1"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-extension-dossier-managed.ts",
+          "sha256": "8b377c672b1b972ce24cbe29ad0f36ce706a6b20b3fe40788ac563e1608322e7"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-provenance-question-managed.ts",
+          "sha256": "c27d186a01c91e8c6d0880546036d111df379069526c16fe4f0ecf24f5b03e49"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-image-candidate-managed.ts",
+          "sha256": "8507e5cfe6504bcaabd624c7ffb906d3f5a4d23f841fd23dc125e3e356e1580a"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-news-evidence-managed.ts",
+          "sha256": "708c46df0e03b86ea6f078944ed97385e5814e39f56c09d1d120aa23424b6873"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-dictation-managed.ts",
+          "sha256": "588f2d293c8ca2c73ba0484d48518b5cfecd5e6d159fa3a9817d7628ffe552af"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/prepared-content-project-outcome.test.ts",
+          "sha256": "feb93b8feb62b6ed2dcacb7a93f4ab6968e9a7d77e03a41496f48725d46b6400"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-gad-durable-question-managed.ts",
+          "sha256": "dfe932fc5c4981361a6c32d9e7d6e1a3f07a07c4d9a1e3e0d86f14dd07e0a51f"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-tendril-route-managed.ts",
+          "sha256": "4457cad59e8098c6dbda0652569bc84c7a991d229aa05f4f53cf70a989d181d8"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-regency-managed.ts",
+          "sha256": "46c31ed4f1dfe4a34e63c8ae734c38a07c66de594c55d4e8e196eebad6dcaf26"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-audience-response-managed.ts",
+          "sha256": "634fe5ebc8788490f7d539b05478446a6e32a759dacb7a9c6a9f48e48f69af87"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-publication-managed.ts",
+          "sha256": "c294ece7422cd6f3a3b5c68c88aed148a6f248f46e082d12a01540c657aae954"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-agent-capability-managed.ts",
+          "sha256": "f43d8150c2eed1a493ee50263e717605fccb8fe2a66be43525cee324046a2257"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-route-authority-managed.ts",
+          "sha256": "a781416c31e620e832d4f56b5fd994958602ca5c1e7be9a9e77324798498ccca"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/mobile-system-testing/open-continuity.ts",
+          "sha256": "bcc53bf6a612bfa8c0ae473abe7b6718d5850bbdd65129ea910f3f42d99701c1"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-product-owned-managed.ts",
+          "sha256": "22d10ae657e90fef5d5c2f7cf14095db27b9cf5befc2e205250a1fffbd060558"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-desktop-readiness-managed.ts",
+          "sha256": "457bce6eb9fa40331e981bbe1c0fa767166999651c0c692f6007357254252e1f"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/terminal-repair-return-evidence.ts",
+          "sha256": "474fe0400e509a2e6ea78f3f5463455df2a1bdd5612512ee061a906f0c510a60"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-scheduled-recovery-managed.ts",
+          "sha256": "4cac6517a6855f355ca15593019356707d83b90ca3f9185f3ed754f3048ec79e"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-program-run-managed.ts",
+          "sha256": "a3d812c6e2d5537ee4376f65a66fa0a8553102b4c0cc3fa0fb8b3a7a39007757"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-scaffold-managed.ts",
+          "sha256": "be181b0e2a40aaa4f227a5344572d057a6b5d8287e6a2b55d91badb9b6ff7dc5"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-local-width-managed.ts",
+          "sha256": "468cc67ed22041b3ef304b21f9adddfb339a8708324f040e0a6b3f273643752a"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-live-local-inventory-managed.ts",
+          "sha256": "49716d5b0b600f5ea57795a0c58b993ec35d01268da89849dad8005c181c64dc"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-notification-state-managed.ts",
+          "sha256": "4c167fbd40ff563425692d8bd40e74070c8345a3be4eb7a1a93d17615d2a29e3"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-terminal-managed.ts",
+          "sha256": "62b0640edf676ab24aa0db4216bb48a5201971d652e08faa550bb7f733e76201"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/vcs-delivery-managed.ts",
+          "sha256": "ed8dd80e05406a6677cf7409a71bc52350d9ba2af593b627ff17f973023e7cfd"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-template-migration-managed.ts",
+          "sha256": "9e568e49acac65a1fbe87eaad1b1d57fc3a86d876d71ffec360897d13db28d53"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-specialist-managed.ts",
+          "sha256": "dbb90e61b2648db249dfac1691dcffae21ae6b655aa4e2b29e5b97753fa8a0b8"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-unit-handoff-managed.ts",
+          "sha256": "96aae7f3e7962b815a4ecc0d1e2fd5d52accfc3ae56bbf3e0754a4bd2365c822"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-system-release-managed.ts",
+          "sha256": "714dec4ab8a85a73cbb0454f01a2f6c2b966851f119c37775feeb02e2590df44"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-recovery-managed.ts",
+          "sha256": "b4c57c1c0324a9d0c38b9e4d9ded825815dc0ea7e78f595d32fd463c8e146194"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-workspace-assembly-managed.ts",
+          "sha256": "8e05e805cc07b09ad13025b9d8e27dba85a31f20c3c2855de7f71aee141343a9"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-pdf-managed.ts",
+          "sha256": "13396d04b9691a91da1ffa0d7be7ce9fe275ee45343f8721f143456b2d6f642b"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-api-readiness-managed.ts",
+          "sha256": "eba51333b213e9c887c2ca7156e7092dc74889c65dcef936c8082757e62c9b27"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-asset-integrity-managed.ts",
+          "sha256": "472b04251abae2b44eeaa6278d13c910ab211b4340f4a9556e307854a74d29db"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-prepared-content-project-managed.ts",
+          "sha256": "7da1f573cd95fb67da51bc3cdae7679513b9e01932ad4fb5835bd16143878878"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/PRESENTATION_OUTCOME_INVENTORY.md",
+          "sha256": "6d741673a9e97a4350ed0793a2def0912badecc7270ed47a37a01d0530907e60"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/SPECIALIST_DELIVERY_NATIVE_MEANING.md",
+          "sha256": "8005ea2109aba44584afdc4c791a30d5163a0701dbc0759f7140fbb0670c63c7"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-panel-source-migration-managed.ts",
+          "sha256": "997076f6fe88b84f624212aa6dea146ec136a8a982878787c75a6c9831ade8ea"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-testkit-closeout-managed.ts",
+          "sha256": "891daf41a15eacb44d24113e9e2e5f7bda2522ebdf48e3627d2bb3b06ca64634"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/meta/LOCAL_REVIEW_NATIVE_OBLIGATIONS.md",
+          "sha256": "f1a967487700117e70bc1a9a021076d65bc390a0ea9dd398336fa9103ef7d65a"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-phone-first-run-managed.ts",
+          "sha256": "f8f517e860d522995858b7956d340d5de7311ab2266bae5f69e2283817147cf3"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-workspace-claims-managed.ts",
+          "sha256": "dddea5fcd1d8274116625632d528ff46bf582f93b30b287bac38663d98fb8638"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-grimoire-scene-managed.ts",
+          "sha256": "61007a59cc720fdb1713893a65f79389837422295dfc10c110d3f876d9217eac"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-owned-operations-managed.ts",
+          "sha256": "f89bf986bc12f2314ee4ba39b00b86b3c84e50300bc085bea986413248f8ab84"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-retained-memory-managed.ts",
+          "sha256": "66d59da892ec2a588021a99f56c76ef4afefa6b8aabdc40aa5a95a3338ee0dcf"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-local-delivery-managed.ts",
+          "sha256": "79358375073049bf5bb06badcf0d35b752aae081c95126b7eca0b557fa37ad0f"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/runner.ts",
+          "sha256": "6216565f5328d4b656fb3783d6f41659cd6e80c1835ee7a1df7ccb08b737b520"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-provider-handoff-managed.ts",
+          "sha256": "4a1711777e3275ff23cbb20e5f51afec4e37f31da54fb0a3e6206e0bcd6a53c6"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-webhook-admission-managed.ts",
+          "sha256": "115fb799d8afa03db12c1f322dbec4eb166b2092aa4ecbbd43d2fd96a806e761"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-reconciliation-managed.ts",
+          "sha256": "1bf6a045e08e0ca3609f905d2b38b061286e32452ff568ec66e6376ce7f85304"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-system-candidate-managed.ts",
+          "sha256": "0477608e7b24e28429952fc62afce455045d5b8f3e26d993e8b80cd166924e15"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/NATIVE_REVIEW_SEMANTICS.md",
+          "sha256": "6d1a7c7f1cd8175436f729dfa5675ea76a92f69b856699ed0f1988511e373d83"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-deployed-interface-managed.ts",
+          "sha256": "8342f84decc7381a22895292421f3535468b7ce334c1ccef508065308059647f"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-source-attribution-managed.ts",
+          "sha256": "62e456714665f0dec206dc127ed5f47433690b2a80bf2cbb6252a7224f554216"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-portfolio-managed.ts",
+          "sha256": "9dec260d1f6dc7d3f54be5442b6b0bb9c10728704576a9d16be2d4b34936bf06"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-installed-package-managed.ts",
+          "sha256": "8e23f167b9d20ad5ef50f957df44debabf79e673f454adccff68d91ffac4f53b"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-workspace-share-managed.ts",
+          "sha256": "f2a6c949adbb980b21b839005b626aa7dfbdf3bda78325661aefd7b3a53eebc1"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-launch-state-managed.ts",
+          "sha256": "3f0a178eeb60a87519999aafe3b41bd93c934e13aa89c97764bffdeb25e99ae8"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-owned-task-managed.ts",
+          "sha256": "95059e0b7dbeb8cc68d887a14e2548a920dd5bf36051bdcfc8f851e7b467fdbc"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-unit-rollout-managed.ts",
+          "sha256": "6b7d5669f54e2cb92bdcaf5f2b57cb694a12e2643ade0b225ada8b69ead43067"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-chat-continuity-managed.ts",
+          "sha256": "373b559fc80ae1d9a3baa831e43c0461d0962f166a533f3140f87c4ec9c14747"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-bridge-delivery-managed.ts",
+          "sha256": "65067cc4c2afc1a9fb43c1143a36e41aaa5dbf6bf63ad4cb8ade99371b4a59b3"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-capability-plan-managed.ts",
+          "sha256": "cefbd3fc28b1e19dfe18d05e454103f9515ee98be1c2ea3de2645588817f99f9"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-personal-welcome-managed.ts",
+          "sha256": "b60c4ce7c7e069aa8723ab2ab78d4f03fe306733aa4fbbcf8126f61d984090ba"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-intent-discovery-managed.ts",
+          "sha256": "1f499a6e82bd15f39b973add7a897c93fe1d2797e5b586781f2f158d4559f00e"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-local-presentation-managed.ts",
+          "sha256": "ed049e18199b465251d2f014b36c1f6c420010100c562d905531630f49e0dd7d"
+        },
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/system-testing/skills/system-testing/open-goal-workspace-config-managed.ts",
+          "sha256": "886f0a50c41b9f99bc4630d5db14fbe59fcff38bc77e630f6372b6ce58ee66af"
+        }
+      ]
+    },
+    {
+      "template": "news",
+      "commit": "2403741840728f6801ca115406b8d974cf23e612",
+      "files": [
+        {
+          "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/candidate/semantic-template-checkouts-v48-final/news/packages/news-live-evidence/open-goal.ts",
+          "sha256": "2319bae747965aa74c99d2d55ca8e3425337ec3f0cdce66d90f4343c912e798f"
+        }
+      ]
+    }
+  ],
+  "literalWorldCounts": {
+    "installed-package": 26,
+    "system-release": 30
+  },
+  "originals": [
+    {
+      "name": "open-goal-installed-package-image-recover-declared-suite-without-opening-renderer",
+      "review": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/waves/0082-capture/cases/open-goal-installed-package-image-recover-declared-suite-without-opening-renderer/verified.review.json",
+      "sha256": "77ac2113ff9b5911b2f7c9d9eb57567c8061660773a8db596df882b71cc7cff0",
+      "verdict": {
+        "accepted": false,
+        "verdict": "The restore was executed under an authorization scope bound to the pre-restore workingRevision/digest, but the resulting observation explicitly reports scopeMatches:false. Thus current authorization for the post-change local install is not established, so the conditional execution is not supported despite the suite being restored as native. The plan also identifies native without opening a panel or running a file."
+      },
+      "goal": "Recover the Image worker's missing approved test entry for the local install if current authorization covers it. Identify the suite in the result without opening a panel or running a file.",
+      "requestedReturnRequired": false,
+      "observationKeys": [
+        "effects",
+        "assignment",
+        "observed",
+        "plan",
+        "repair"
+      ],
+      "artifactKeys": []
+    },
+    {
+      "name": "open-goal-system-release-paper-delivered-late-needs-diagnostic",
+      "review": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/waves/0082-capture/cases/open-goal-system-release-paper-delivered-late-needs-diagnostic/verified.review.json",
+      "sha256": "ed4d80d3aee980f0ebbbc1416ac8a5166828f7ddaee5af73f1b97eb76317f433",
+      "verdict": {
+        "accepted": false,
+        "verdict": "The evidence only stages a diagnostics JSON artifact. It does not show any retained private explanation left for the release team (nor its audience/privacy or content). Thus the requested execution/artifact is missing despite accurately identifying DELIVERY_LATENCY."
+      },
+      "goal": "Paper intake appears to have returned a success message, but the current run says its delivery was late. Leave the release team a private explanation tied to actual delivery evidence.",
+      "requestedReturnRequired": false,
+      "observationKeys": [
+        "assignment",
+        "runs",
+        "cases",
+        "effects"
+      ],
+      "artifactKeys": [
+        "handoffText"
+      ]
+    }
+  ],
+  "mechanisms": [
+    {
+      "owner": "Base packages/application-outcomes/observed-content-review.ts",
+      "gap": "Global rubric lacks temporal authority and structured artifact protocol semantics; preserve factual requirements and reject unsupported claimed premises."
+    },
+    {
+      "owner": "SST open-goal-installed-package-managed.ts",
+      "facts": "scopeMatches describes matching this observation; restore checks exact pre-state authority twice, native write and readback change its revision/digest, so post-state mismatch does not undo prior authorized write.",
+      "gap": "Effect-success currently suppresses all required return values, including explicit suite identification; no per-literal requested-return declaration."
+    },
+    {
+      "owner": "SST open-goal-system-release-managed.ts",
+      "facts": "Actual canonical1124-byte JSON records retained run/build/context, DELIVERY_LATENCY and detail; writer uses context-resolved scratch fs, exact independent readback.",
+      "gap": "Review binds text but not private-handoff protocol/custody; structured content should be judged semantically. Native stage only accepts cases/enum, no model-authored explanation input."
+    },
+    {
+      "owner": "Host scripts/lib/observed-content-admission.mjs + exporter",
+      "facts": "Current field maps bind installed effects/assignment/observed/plan/repair and release assignment/runs/cases/effects +handoffText; common capture verifies actualResult."
+    }
+  ],
+  "unchecked": [
+    "No original review verdict overturned; no paid re-review or teacher replay.",
+    "Full live Native factory replay of all56 on successor not run; Native mutation/retention implementations unchanged except review projection and qualifier-only negatives.",
+    "Full model-owned Root conversion and remaining private route/case gates in these two families remain future work, not claimed closed.",
+    "Other shared review consumers inventoried; no global all-domain qualification claim."
+  ],
+  "implemented": {
+    "sharedReview": "Evaluate authority at actual action boundary; an authorized state change does not revoke its prior authority or authorize a new action. Structured JSON explanations are judged by requested meaning, with privacy/delivery grounded in native protocol.",
+    "installedPackage": "26 unchanged literals explicitly20 required returned findings/6 effect-only. Restoring no longer hides requested runner/suite. Added bound before/action/after authority facts; private decision enum is not requested meaning. Native baseline/CAS/effect/protected-state checks retained.",
+    "systemRelease": "30 unchanged literals explicitly15 required returned findings/15 artifact/conditional effect-only. Actual JSON bytes plus independently hash/byte/context-checked local scratch protocol bound; never claims external/team transmission. Private disposition/decisive-name return equality removed; native cases/run/build/actual artifact checks retained.",
+    "qualification": "Obsolete invented-enum negatives replaced by actual foreign-native-scope and conditional missing-requested-answer negatives; reference still must perform required native effects."
+  },
+  "checks": {
+    "actualOriginalProofsAndSharedHelper": "13controls PASS2.385s303.9MiB; two original source48 hashed native witnesses retained TEST-only, mandatory meaning review stays pending",
+    "host": "25 controls PASS incl swapped authorization, protocol, receipt and bytes",
+    "worldScope": "All56 original goal SHA/ID/sourceGroups/splits match per-literal audit",
+    "modules": "Both real Native factory modules import successfully with shared contracts",
+    "declarations": "Canonical380 --check ACTUALPASS5.243s360.9MiB; service signatures and generated files unchanged.",
+    "originalSourceIdentity": "Both caseSource repositories clean and exact Source48 tuples; each recorded validatorSHA equals exact frozen original module bytes. Original raw/review/source hashes retained."
+  }
+}
