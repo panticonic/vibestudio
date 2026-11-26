@@ -1,0 +1,19 @@
+{
+  "inventoryBeforeEdits": true,
+  "symptom": "Canonical optional package stage was explicitly cancelled for higher-priority teacher admission; React Native provider resolution caught ECANCELLED and falsely advised installing an unavailable extension.",
+  "sharedMechanism": {
+    "producer": "scripts/prepare-workspace-templates.ts:48 abort reason Error(code ECANCELLED)",
+    "owner": "src/server/buildV2/builder.ts BuildProcessOwner/shared lifetime and builder.sessions.test.ts:404 exact cancellation propagation",
+    "resolver": "src/server/buildV2/builder.ts:2490-2503 wraps every ensureBuildProvider/resolveBuildProvider exception as absence",
+    "actualAbsence": "src/server/buildV2/buildProviderRegistry.ts resolveBuildProvider owns missing-provider diagnosis",
+    "cleanup": "src/server/buildV2/buildProviderResources.ts retains actual operation/cleanup failures",
+    "publicConsumers": [
+      "src/server/buildV2/index.ts build reports",
+      "scripts/prepare-workspace-templates.ts owned release preparation",
+      "scripts/build-server-npm-package.mjs staged preparation",
+      "ordinary interactive/native client build requests"
+    ]
+  },
+  "design": "Propagate the original provider preparation exception, including its exact cancellation/error code, phase and cause. Preserve the registry actual-absence error; do not classify arbitrary preparation failures as missing dependencies. No timeout/grant/cancellation-lifetime change.",
+  "status": "inventory complete before correction; targeted actual builder controls pending"
+}

@@ -2489,17 +2489,11 @@ async function buildUnitStoredUnchecked(
   ) {
     // The provider is an input to the artifact, so resolve it before cache
     // lookup, coalescing, or taking a compilation slot.
-    try {
-      provider =
-        (await session.ensureBuildProvider?.("react-native")) ??
-        resolveBuildProvider("react-native");
-    } catch (error) {
-      throw new Error(
-        `React Native client ${node.name} cannot be built because its build provider is unavailable: ${error instanceof Error ? error.message : String(error)}. ` +
-          "Install and enable the extension that contributes the react-native build target, then push again.",
-        { cause: error }
-      );
-    }
+    // Provider preparation owns its failure identity. Cancellation, rejected
+    // activation and storage/transport errors do not establish absence.
+    provider =
+      (await session.ensureBuildProvider?.("react-native")) ??
+      resolveBuildProvider("react-native");
     buildKey = computeBuildKey(
       session.rootFingerprint,
       node.name,

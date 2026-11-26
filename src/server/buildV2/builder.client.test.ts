@@ -696,14 +696,28 @@ describe("buildUnit client and panel bundle builds", () => {
       ).rejects.toThrow(/primary artifact main\.hbc has no mobile platform/u);
     });
 
-    it("fails clearly when the React Native build provider is unavailable", async () => {
-      await expect(
-        buildMobileWith(async () => {
-          throw new Error("Required build extension is unavailable: extensions/rn-provider");
-        })
-      ).rejects.toThrow(
-        /React Native client @workspace-clients\/mobile-browser cannot be built because its build provider is unavailable: Required build extension is unavailable/u
-      );
+    it("preserves the React Native provider's actual unavailable diagnosis", async () => {
+      const unavailable = new Error("Required build extension is unavailable: extensions/rn-provider");
+      await expect(buildMobileWith(async () => { throw unavailable; })).rejects.toBe(unavailable);
+    });
+
+    it("propagates original provider cancellation, code, phase and cause", async () => {
+      const cause = new Error("The owned release producer was stopped");
+      const cancellation = Object.assign(new Error("Template preparation cancelled", { cause }), {
+        code: "ECANCELLED", phase: "preparation",
+      });
+      await expect(buildMobileWith(async () => { throw cancellation; })).rejects.toBe(cancellation);
+      expect(cancellation.cause).toBe(cause);
+      expect(cancellation.code).toBe("ECANCELLED");
+      expect(cancellation.phase).toBe("preparation");
+    });
+
+    it("preserves a provider storage failure without inventing a missing extension", async () => {
+      const cause = new Error("Native catalog read failed");
+      const failure = Object.assign(new Error("Provider preparation could not read its catalog", { cause }), {
+        code: "EIO", phase: "provider-catalog",
+      });
+      await expect(buildMobileWith(async () => { throw failure; })).rejects.toBe(failure);
     });
   });
 
