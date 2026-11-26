@@ -1,0 +1,39 @@
+{
+  "mechanism": "Per-case export failure diagnostics are discarded on ordinary failures",
+  "observation": "Wave0077 has7 export-rejected receipts with reason:null despite retained actual rejected Terra reviews and collector exceptions. Raw captures remain intact.",
+  "producers": [
+    {
+      "path": "Host scripts/collect-live-workflow-teacher.mjs:558-587",
+      "finding": "Ordinary export catch logs and appends AggregateError only; only interruption writes an unbound single export-rejection.json."
+    },
+    {
+      "path": "Host scripts/export-live-workflow-teacher.mjs",
+      "finding": "Throws actual native/evidence/review admission errors; verified.review.json retains actual independent grade."
+    }
+  ],
+  "consumers": [
+    {
+      "path": "Natlang scripts/neuralese_data/vibestudio_campaign.py:193-204",
+      "finding": "outcomes falls back to raw Native execution/test error; those are null when native testpassed but export/review rejects."
+    },
+    {
+      "path": "Campaign status/retry/history/archive receipts",
+      "finding": "Consume outcomes entries; diagnostic fix must not change acceptance, teacher exposure or classification of actual model action failures."
+    },
+    {
+      "path": "Collector cancellation",
+      "finding": "Pending review remains interrupted/deferred, not fabricated testfailure; genuine completed/partial manifests remain authoritative."
+    }
+  ],
+  "design": "Append per-run source/raw-hash-bound export failure records on all real exporter exceptions. Python outcome reader uses only exact matching diagnostic records, preserving malformed/stale diagnostics separately and original raw/test proof. Do not reclassify native passed+reviewrejected as native testfailure, or accept a capture because of a diagnostic.",
+  "exclusions": [
+    {
+      "component": "Runtime engines, IR schema and learner",
+      "reason": "This is Host CLI/Python campaign outcome diagnostics only. No generated model action, score, weights, capture/IR schema or training admission changes."
+    },
+    {
+      "component": "Existing archives",
+      "reason": "Immutable raw/review/receipts preserved. Historical diagnosis is a separate overlay/inspection; no silent rewriting."
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "beforeEdits": true,
+  "cause": "Native-only collector forbids teacher case flags but has no explicit native subset selection; cannot continue unaffected qualification while source-bound known defects remain pending without replay or invented progress.",
+  "inventory": [
+    {
+      "file": "scripts/collect-live-workflow-teacher.mjs:99",
+      "role": "rejects teacher --case under native-only; correct boundary retained"
+    },
+    {
+      "file": "scripts/collect-live-workflow-teacher.mjs:174",
+      "role": "constructs all native placements"
+    },
+    {
+      "file": "scripts/collect-live-workflow-teacher.mjs:604",
+      "role": "passes native workflow set to settled16-batch runner"
+    },
+    {
+      "file": "scripts/collect-live-workflow-teacher.mjs:644",
+      "role": "full-scope summary must retain all2327 pending, never selectedsubset false completion"
+    },
+    {
+      "file": "scripts/lib/native-reference-tail.mjs:158",
+      "role": "source-specific actual-evidence summary, no fabricated state rows"
+    },
+    {
+      "file": "scripts/lib/native-reference-tail.test.mjs",
+      "role": "actual packet/ownership/model-negative tests remain"
+    }
+  ],
+  "design": "Explicit native-only case selection validates known open-user-goal scenarios; placement and execution retain canonical owned no-model CLI. Full native workflow set remains the summary authority. Default all-scope behavior unchanged; teacher path cannot use this selection.",
+  "notChanged": [
+    "fixture goals/IDs/splits/nativechecks",
+    "paid collector case/model semantics",
+    "model-denial policy and immutable native-only process custody",
+    "actual-state inventory/capture validation",
+    "frozen47 source or active paid instance"
+  ],
+  "knownDeferred": [
+    "14 source46 migration stale qualifier originals pendingfuture48",
+    "5 actual source46 DuckDuckGo bot refusals pending environmental/provider change"
+  ],
+  "verification": {
+    "unit": "vibe-native-reference-selection-20261126a",
+    "passed": 17,
+    "kind": "7native selection/fullpending controls+10actualpacket/no-model/ownership/batch controls",
+    "canonicalCliSyntax": "PASS",
+    "actualNativeSelectedRuntime": "pending new owned qualification; not claimed from unit controls"
+  }
+}

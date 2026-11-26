@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { runNativeReferenceTail, waitForNativeContinuation, summarizeNativeReferences, nativeReferenceCapabilities } from "./lib/native-reference-tail.mjs";
+import {recordExportRejection} from "./lib/live-export-diagnostics.mjs";
+import { runNativeReferenceBatches, runNativeReferenceTail, waitForNativeContinuation, summarizeNativeReferences, nativeReferenceCapabilities, selectNativeReferenceWorkflows } from "./lib/native-reference-tail.mjs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -42,6 +43,7 @@ const { values } = parseArgs({
     case: { type: "string", multiple: true },
     capabilities: {type:"boolean"},
     "native-reference-only": {type:"boolean"},
+    "native-reference-case": {type:"string",multiple:true},
     "native-reference-completion-control": {type:"string"},
     "native-reference-drain-batch-size": {type:"string",default:"16"},
     list: { type: "boolean" },
@@ -112,6 +114,7 @@ const { checkouts } = requireDevelopmentTemplateCheckouts(host);
 const liveTeacherCases = await loadLiveTeacherCases(checkouts);
 // Reference coverage is independent of the selected teacher/assignment cohort.
 const nativeReferenceWorkflows = new Map(liveTeacherCases);
+const selectedNativeReferenceWorkflows = selectNativeReferenceWorkflows({workflows:nativeReferenceWorkflows,names:values["native-reference-case"]??[],nativeOnly});
 for (const [scenario, workflow] of liveTeacherCases) {
   if ((workflow.interaction === "open-user-goal") === Boolean(values.assignments)) {
     liveTeacherCases.delete(scenario);
@@ -170,7 +173,7 @@ if (unknown.length) {
   );
 }
 
-const nativePlacements=()=>groupLiveTeacherCases([...nativeReferenceWorkflows].filter(([name,world])=>name.startsWith("open-goal-")&&world.interaction==="open-user-goal").map(([name])=>name),nativeReferenceWorkflows,0)
+const nativePlacements=()=>groupLiveTeacherCases([...selectedNativeReferenceWorkflows].filter(([name,world])=>name.startsWith("open-goal-")&&world.interaction==="open-user-goal").map(([name])=>name),selectedNativeReferenceWorkflows,0)
   .map(group=>({...group,cases:[],referenceOnly:true}));
 const groups = nativeOnly ? nativePlacements() : groupLiveTeacherCases(scenarios, liveTeacherCases, preflight ? 0 : batchSize);
 
@@ -409,6 +412,7 @@ const interruption = collectionInterruption({
     : undefined,
   out,
   cases: scenarios,
+  ...(nativeOnly?{nativeReferenceSelection:{selected:[...selectedNativeReferenceWorkflows.keys()],planned:[...nativeReferenceWorkflows].filter(([,world])=>world.interaction==="open-user-goal").length}}:{}),
 });
 const admittedReview = review ? Object.assign((input, teacher) => {
   interruption.signal.throwIfAborted();
@@ -570,12 +574,13 @@ try {
               // checkpoint into an aggregate test failure. Keep its actual
               // exporter rejection visible and withhold admission for recovery.
               interruption.defer(scenario, "unverified-capture");
-              writeFileSync(path.join(directory, "export-rejection.json"), JSON.stringify({
-                scenario, runId, interrupted: true, error: String(error),
-              }, null, 2) + "\n", {mode:0o600,flag:"wx"});
+              await recordExportRejection({directory,scenario,runId,pins,
+                trajectory:path.join(directory,runId,`trajectory-${scenario}-full.json.gz`),error,interrupted:true});
               console.error(`Teacher evidence ${scenario} unverified after interruption: ${String(error)}`);
               continue;
             }
+            await recordExportRejection({directory,scenario,runId,pins,
+              trajectory:path.join(directory,runId,`trajectory-${scenario}-full.json.gz`),error});
             const label = "Teacher case";
             console.error(`${label} ${scenario} failed: ${String(error)}`);
             failures.push(error);
@@ -594,18 +599,18 @@ try {
         name.startsWith("open-goal-") && world.interaction === "open-user-goal" &&
         (world.workspace ?? "system") === workspace)) {
         try {
-          let references;
-          do {
+          await runNativeReferenceBatches({draining:drainNative,signal:interruption.signal,
+            drainAtBoundary:()=>interruption.drainAtBoundary(values["drain-request"]),
+            runBatch:async()=>{
             if(JSON.stringify(pinSources())!==JSON.stringify(pinned))throw new Error("Source pins changed before native reference tail");
             const referenceCatalog=await installedTests(group,interruption.signal);
-            references=await runNativeReferenceTail({group,workflows:nativeReferenceWorkflows,catalog:referenceCatalog,pinned,out,
+            return runNativeReferenceTail({group,workflows:selectedNativeReferenceWorkflows,catalog:referenceCatalog,pinned,out,
               stateRoot:path.resolve(values["native-reference-state"]??path.join(path.dirname(out),"native-reference-qualification")),
               limit:drainNative?nativeDrainBatchSize:nativeReferenceLimit,systemTest,signal:interruption.signal,
               assertPins:()=>{if(JSON.stringify(pinSources())!==JSON.stringify(pinned))throw new Error("Source pins changed during native reference tail");
                 if(nativeDeploymentPackageAvailable&&JSON.stringify(readNativeDeploymentPackageIdentity())!==JSON.stringify(nativeDeploymentPackageIdentity))throw new Error("Installed native-reference package changed during its owned qualification");},
               deploymentPackageAvailable:nativeDeploymentPackageAvailable,deploymentPackageIdentity:nativeDeploymentPackageIdentity});
-            console.log(JSON.stringify({nativeReferenceOnly:true,instance,references:references.length,passed:references.filter(row=>row.status==="passed").length,draining:drainNative}));
-          } while(drainNative&&references.length&&!interruption.signal.aborted);
+            },afterBatch:references=>console.log(JSON.stringify({nativeReferenceOnly:true,instance,references:references.length,passed:references.filter(row=>row.status==="passed").length,draining:drainNative}))});
         } catch(error) {
           console.error(`Native reference tail retained an incomplete attempt: ${String(error)}`);
         }

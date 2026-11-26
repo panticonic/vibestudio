@@ -37,6 +37,7 @@ test(
     for(const file of ["ownedProcessIdentity.mjs","darwinProcessObserver.mjs"])
       await copyFile(new URL("../packages/shared/src/"+file,import.meta.url),path.join(root,"packages/shared/src",file));
     await mkdir(path.join(root, "scripts/lib"));
+    await copyFile(new URL("lib/live-export-diagnostics.mjs",import.meta.url),path.join(root,"scripts/lib/live-export-diagnostics.mjs"));
     await copyFile(new URL("lib/native-reference-tail.mjs",import.meta.url),path.join(root,"scripts/lib/native-reference-tail.mjs"));
     await copyFile(
       new NodeURL("lib/live-teacher-groups.mjs", import.meta.url),
@@ -324,6 +325,10 @@ exit 0
     await assert.rejects(readFile(pathFor("failing", "verified/manifest.json")), {
       code: "ENOENT",
     });
+    const rejected=JSON.parse((await readFile(pathFor("failing",`${runId}/export-rejections.jsonl`),"utf8")).trim());
+    assert.equal(rejected.scenario,"failing");assert.equal(rejected.runId,runId);assert.match(rejected.error.message,/Fixture outcome failed/);
+    assert.equal(rejected.trajectory.sha256,createHash("sha256").update(await readFile(pathFor("failing",`${runId}/trajectory-failing-full.json.gz`))).digest("hex"));
+
 
     const parallelOut = path.join(root, "parallel");
     const parallel = spawnSync(
