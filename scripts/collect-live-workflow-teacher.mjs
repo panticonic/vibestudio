@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import {recordExportRejection} from "./lib/live-export-diagnostics.mjs";
 import { runNativeReferenceBatches, runNativeReferenceTail, waitForNativeContinuation, summarizeNativeReferences, nativeReferenceCapabilities } from "./lib/native-reference-tail.mjs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -570,12 +571,13 @@ try {
               // checkpoint into an aggregate test failure. Keep its actual
               // exporter rejection visible and withhold admission for recovery.
               interruption.defer(scenario, "unverified-capture");
-              writeFileSync(path.join(directory, "export-rejection.json"), JSON.stringify({
-                scenario, runId, interrupted: true, error: String(error),
-              }, null, 2) + "\n", {mode:0o600,flag:"wx"});
+              await recordExportRejection({directory,scenario,runId,pins,
+                trajectory:path.join(directory,runId,`trajectory-${scenario}-full.json.gz`),error,interrupted:true});
               console.error(`Teacher evidence ${scenario} unverified after interruption: ${String(error)}`);
               continue;
             }
+            await recordExportRejection({directory,scenario,runId,pins,
+              trajectory:path.join(directory,runId,`trajectory-${scenario}-full.json.gz`),error});
             const label = "Teacher case";
             console.error(`${label} ${scenario} failed: ${String(error)}`);
             failures.push(error);
