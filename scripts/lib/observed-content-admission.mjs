@@ -1,6 +1,7 @@
 import {isDeepStrictEqual as equal} from "node:util";
 /** Per-domain actual native evidence; no expected answer vocabulary enters review. */
 export const observedContentFields = {
+  desktopReadiness: [["desk","window","updates","exactAdmission","journal"], []],
   preparedContentProject: [["nativeProjectEvidence"], []],
   phoneFirstRun: [["card","assignment","phases","build","journal"], []],
   mobileContinuity: [["profile","observations","journal"], []],
