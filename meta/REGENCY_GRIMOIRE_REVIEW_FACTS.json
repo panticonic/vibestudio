@@ -1,0 +1,17 @@
+{
+  "schema": "vibestudio.native-review-facts/1",
+  "fields": {
+    "regency-briefing": "append nativeFacts to existing observations; actual ledger versus retained instruction/private note roles",
+    "grimoireScene": "append nativeFacts to existing observations; actual view freshness distinct from scope freshness"
+  },
+  "nativeTruth": "No acceptance/status verdict added. Hashes and permission/currentness relationships derive only from Native source observations and actual retained bytes.",
+  "validation": {
+    "nativeUnit": "vibe-regency-scene-native-facts-20261126c",
+    "nativePassed": 8,
+    "nativePeakMiB": 184.4,
+    "hostUnit": "vibe-regency-scene-facts-host-20261126a",
+    "hostPassed": 23
+  },
+  "noServiceSignatureChange": true,
+  "noOriginalMutation": true
+}

@@ -62,7 +62,8 @@ export const observedContentFields = {
       "frontiers",
       "forecasts",
       "witnesses",
-      "advance"
+      "advance",
+      "nativeFacts"
     ],
     [
       "artifact"
@@ -323,7 +324,8 @@ export const observedContentFields = {
       "scope",
       "gate",
       "readback",
-      "journal"
+      "journal",
+      "nativeFacts"
     ],
     [
       "body"
