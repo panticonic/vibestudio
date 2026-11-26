@@ -83,12 +83,16 @@ describe("Gateway lifecycle", () => {
       { headers }
     );
     expect(response.status).toBe(200);
-    expect(getDoCode).toHaveBeenCalledExactlyOnceWith("source", "Class", "sealed-version", "owner");
+    expect(getDoCode).toHaveBeenCalledExactlyOnceWith("source", "Class", "sealed-version", "owner","shared");
     const missingVersion = await fetch(`http://127.0.0.1:${port}/_docode/source/Class`, {
       headers,
     });
     expect(missingVersion.status).toBe(400);
     expect(getDoCode).toHaveBeenCalledTimes(1);
+    const transient=await fetch(`http://127.0.0.1:${port}/_docode/source/Class?version=sealed-version&retention=operation`,{headers});
+    expect(transient.status).toBe(200);expect(getDoCode).toHaveBeenLastCalledWith("source","Class","sealed-version",undefined,"operation");
+    const invalid=await fetch(`http://127.0.0.1:${port}/_docode/source/Class?version=sealed-version&retention=unknown`,{headers});
+    expect(invalid.status).toBe(400);expect(getDoCode).toHaveBeenCalledTimes(2);
   });
 
   it("loads exact object configuration only through the authenticated admission bridge", async () => {

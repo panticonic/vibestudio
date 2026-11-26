@@ -1,8 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach,describe, expect, it, vi } from "vitest";
 import type { BuildSystemV2, BuildUnitCatalogEntry } from "./buildV2/index.js";
 import type { StoredBuildResult } from "./buildV2/buildStore.js";
 import { prepareStartupWorkers, type StartupWorkerBuilds } from "./startupWorkerPreparation.js";
 
+afterEach(()=>vi.unstubAllEnvs());
 const units = ["workers/one", "workers/two"].map((unitPath) => ({
   unitPath,
   unitName: unitPath,
@@ -39,18 +40,24 @@ function setup() {
 
 function setupPreparation() {
   return vi
-    .fn<(build: StoredBuildResult, classes: readonly string[]) => Promise<void>>()
+    .fn<(build: StoredBuildResult, classes: readonly string[],options:{retention:"operation"|"shared"}) => Promise<void>>()
     .mockResolvedValue(undefined);
 }
 
 describe("startup worker preparation", () => {
+  it("keeps explicit diagnostic opt-out of operation-owned speculative preparation",async()=>{
+    vi.stubEnv("VIBESTUDIO_STARTUP_RETAIN_WORKER_EXECUTABLES","1");
+    const prepare=setupPreparation();await prepareStartupWorkers(setup(),prepare,new AbortController().signal);
+    expect(prepare.mock.calls.every(call=>call[2].retention==="shared")).toBe(true);
+  });
+
   it("prepares workers at the discovered immutable frontier with speculative priority", async () => {
     const builds = setup();
     const prepare = setupPreparation();
     await prepareStartupWorkers(builds, prepare, new AbortController().signal);
     expect(prepare.mock.calls).toEqual([
-      [builds.storedBuild, ["WorkerOwner"]],
-      [builds.storedBuild, ["WorkerOwner"]],
+      [builds.storedBuild, ["WorkerOwner"],{retention:"operation"}],
+      [builds.storedBuild, ["WorkerOwner"],{retention:"operation"}],
     ]);
     expect(builds.getStoredBuild.mock.calls).toEqual([
       ["workers/one", "state:original", { priority: "speculative" }],

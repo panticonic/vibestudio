@@ -76,7 +76,7 @@ function executableUnitKey(source: string, className: string, version: string): 
 function loadExecutable(
   ctx: { exports: Cloudflare.Exports },
   env: UniversalDoEnv,
-  args: { source: string; className: string; version: string; userKey?: string }
+  args: { source: string; className: string; version: string; userKey?: string; retention?:"operation"|"shared" }
 ): WorkerStub {
   // The loader owns one immutable executable unit per code and authority snapshot.
   // Objects still own separate facets, SQLite storage, and lifecycle; a live
@@ -85,7 +85,7 @@ function loadExecutable(
   // Schema admission uses a one-shot, no-egress executable. A named loader
   // entry retains its code after the disposable facet is retired; null uses
   // the same async loading protocol without adding a permanent cache owner.
-  const loaderName = args.version.endsWith(":schema-probe") ? null : unitKey;
+  const loaderName = args.version.endsWith(":schema-probe")||args.retention==="operation" ? null : unitKey;
   return env.LOADER.get(loaderName, async () => {
     const startedAt = performance.now();
     const identity = `${args.source}:${args.className}`;
@@ -94,6 +94,7 @@ function loadExecutable(
       new Request(
         `http://gateway/_docode/${encodeURIComponent(args.source)}/${encodeURIComponent(args.className)}` +
           `?version=${encodeURIComponent(args.version)}` +
+          (args.retention==="operation"?"&retention=operation":"") +
           (args.userKey ? `&objectKey=${encodeURIComponent(args.userKey)}` : ""),
         { headers: { "X-Vibestudio-Loader-Secret": env.WORKERD_LOADER_SECRET } }
       )
@@ -148,7 +149,9 @@ export class ExecutablePreparation extends WorkerEntrypoint<UniversalDoEnv> {
         source: string;
         className: string;
         version: string;
+        retention?:"operation"|"shared";
       };
+      if(input.retention!==undefined&&input.retention!=="operation"&&input.retention!=="shared")throw new Error("Invalid executable preparation lifetime");
       if (!input.source || !input.className || !input.version)
         throw new Error("Executable preparation requires a complete immutable identity");
       const worker = loadExecutable(this.ctx, this.env, input);
