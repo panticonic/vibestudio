@@ -313,6 +313,8 @@ export const evalLifecycleFailureCodes = {
   executionAdmissionLost: "eval_execution_admission_lost",
   /** cancelled: the caller's own opt-in deadline elapsed. */
   deadlineExceeded: "eval_deadline_exceeded",
+  /** cancelled: the separately admitted evaluated-source execution budget elapsed. */
+  executionDeadlineExceeded: "eval_execution_deadline_exceeded",
   /** cancelled: explicit owner/user cancellation. */
   cancelled: "eval_cancelled",
 } as const;
@@ -425,6 +427,19 @@ export function normalizeEvalAuthorityIntent(
   return evalAuthorityIntentSchema.parse(authority ?? {});
 }
 
+export function validEvalExecutionBudget(input: {
+  timeoutMs?: number;
+  executionTimeoutMs?: number;
+}): boolean {
+  return (
+    input.executionTimeoutMs === undefined ||
+    (Number.isSafeInteger(input.executionTimeoutMs) &&
+      input.executionTimeoutMs > 0 &&
+      Number.isSafeInteger(input.timeoutMs) &&
+      input.timeoutMs! >= input.executionTimeoutMs)
+  );
+}
+
 export const evalStartInputSchema = z
   .object({
     target: evalTargetSchema.optional(),
@@ -451,6 +466,15 @@ export const evalStartInputSchema = z
       .positive()
       .optional()
       .describe("Optional whole-run wall-clock deadline in milliseconds. Omit for no deadline."),
+    executionTimeoutMs: z
+      .number()
+      .int()
+      .positive()
+      .safe()
+      .optional()
+      .describe(
+        "Optional evaluated-source wall budget including async settlement, starting at the first module initializer or entry invocation after its initial preparation and compilation. Requires timeoutMs for whole-run/non-cooperative recovery."
+      ),
     /**
      * Per-run attenuation. This can only narrow the authority already admitted
      * by receiver declarations, sealed code, live grants, and relationships.
@@ -459,7 +483,11 @@ export const evalStartInputSchema = z
      */
     authority: evalAuthorityInputSchema.optional(),
   })
-  .strict();
+  .strict()
+  .refine(validEvalExecutionBudget, {
+    path: ["executionTimeoutMs"],
+    message: "An execution budget requires a whole-run timeoutMs at least as large",
+  });
 export type EvalStartInput = z.infer<typeof evalStartInputSchema>;
 
 export const evalKernelStatusSchema = z
@@ -1081,6 +1109,8 @@ export interface EvalExecutorOptions {
   ) => Promise<z.infer<typeof evalRunResultSchema>>;
   /** Test/embedding seam. Production callers use the latency-sensitive bounded backoff. */
   pollDelay?: (attempt: number) => Promise<void>;
+  /** Preserve bounded owner/source-bound lifecycle phases in a failed result. No source text is copied. */
+  captureFailureEvents?: boolean;
 }
 
 /**
@@ -1096,6 +1126,89 @@ export function createEvalExecutor(
   options: EvalExecutorOptions = {}
 ): (input: EvalStartInput) => Promise<z.infer<typeof evalRunResultSchema>> {
   return async (input) => {
+    const finish = async (result: z.infer<typeof evalRunResultSchema>) => {
+      if (result.success || !options.captureFailureEvents || !result.error) return result;
+      const sourceSha256 =
+        input.source.kind === "inline" ? sha256HexSyncText(input.source.code) : null;
+      let events: unknown[] = [],
+        unavailable: string | null = null,
+        truncated = false;
+      try {
+        const page = await call("eval.events", [
+          {
+            ...(input.target ? { target: input.target } : {}),
+            ...(input.scope ? { scopeKey: input.scope.key } : {}),
+            runId: input.runId,
+            after: 0,
+            limit: 32,
+          },
+        ]);
+        truncated = page.hasMore;
+        events = page.events.flatMap((event): unknown[] => {
+          const payload = event.payload as {
+            kind?: unknown;
+            phase?: unknown;
+            sourceDigest?: unknown;
+            status?: unknown;
+          } | null;
+          if (event.kind === "state" && typeof payload?.status === "string")
+            return [
+              { sequence: event.sequence, at: event.at, kind: event.kind, status: payload.status },
+            ];
+          if (
+            event.kind === "diagnostic" &&
+            payload?.kind === "eval-phase" &&
+            typeof payload.phase === "string" &&
+            [
+              "runtime-setup",
+              "runtime-ready",
+              "prepare",
+              "compile",
+              "execute",
+              "await",
+              "settle",
+              "complete",
+              "execution-deadline-exceeded",
+            ].includes(payload.phase) &&
+            (sourceSha256 === null || payload.sourceDigest === sourceSha256)
+          )
+            return [
+              {
+                sequence: event.sequence,
+                at: event.at,
+                kind: event.kind,
+                phase: payload.phase,
+                sourceDigest: payload.sourceDigest,
+              },
+            ];
+          return [];
+        });
+      } catch (error) {
+        unavailable = error instanceof Error ? error.name : "unavailable";
+      }
+      const original = result.error.errorData;
+      return {
+        ...result,
+        error: {
+          ...result.error,
+          errorData: {
+            ...(original && typeof original === "object" && !Array.isArray(original)
+              ? original
+              : { originalErrorData: original ?? null }),
+            nativeEvalDiagnostic: {
+              schema: "vibestudio.eval-failure-diagnostic/1",
+              runId: input.runId,
+              sourceSha256,
+              timeoutMs: input.timeoutMs ?? null,
+              executionTimeoutMs: input.executionTimeoutMs ?? null,
+              events,
+              truncated,
+              unavailable,
+            },
+          },
+        },
+      };
+    };
     const handle = createEvalRunHandle(call, input);
     let cancelled = false;
     const cancel = async (): Promise<never> => {
@@ -1110,7 +1223,7 @@ export function createEvalExecutor(
 
     const started = await handle.start(options.receiver);
     const immediate = settledResult(started.snapshot);
-    if (immediate) return immediate;
+    if (immediate) return finish(immediate);
 
     let receiverResult: z.infer<typeof evalRunResultSchema> | undefined;
     const poll = async (): Promise<z.infer<typeof evalRunResultSchema>> => {
@@ -1148,7 +1261,7 @@ export function createEvalExecutor(
         await (options.pollDelay ?? defaultEvalPollDelay)(attempt++);
       }
     };
-    if (!options.waitForReceiver) return poll();
+    if (!options.waitForReceiver) return finish(await poll());
     const receiver = options.waitForReceiver(input.runId, options.signal).then(
       (result) => {
         receiverResult = result;
@@ -1159,8 +1272,27 @@ export function createEvalExecutor(
       // leaving a rejected race with a live background poller.
       () => new Promise<never>(() => undefined)
     );
-    return Promise.race([receiver, poll()]);
+    return finish(await Promise.race([receiver, poll()]));
   };
+}
+
+/** Retire the exact finite owner without replacing a failed operation with cleanup failure. */
+export async function disposeEvalScope(
+  call: EvalCall,
+  scopeKey: string,
+  failure?: { error: unknown }
+): Promise<void> {
+  try {
+    await call("eval.dispose", [{ scopeKey }]);
+  } catch (cleanup) {
+    if (failure)
+      throw new AggregateError(
+        [failure.error, cleanup],
+        "Eval operation and scope cleanup failed",
+        { cause: failure.error }
+      );
+    throw cleanup;
+  }
 }
 
 export type DeferredEvalSettlement =

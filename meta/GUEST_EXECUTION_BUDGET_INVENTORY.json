@@ -1,0 +1,118 @@
+{
+  "schema": "vibestudio.guest-execution-budget-inventory/1",
+  "inputs": {
+    "host": "007c6087a360879ec0d9769b5488b71516d36621",
+    "base": "827197486a161dcb3ce9b8c4354a08e37fc25cf2",
+    "examples": "77a4d37112576a57e03681e88cba097d18eae0de"
+  },
+  "contract": {
+    "existingTimeoutMs": "whole-run wall clock from durable EvalDO acceptedAt; unchanged",
+    "newExecutionTimeoutMs": "opt-in elapsed wall execution beginning at first untrusted module initializer or entry invocation after its initial preparation/compilation; later guest-requested imports/async settlement consume same budget; requires unchanged whole-run watchdog",
+    "regency": "guest3000ms unchanged; separate whole-run30000ms includes infrastructure; explicit legacy-whole-run mode retained"
+  },
+  "consumers": [
+    {
+      "path": "Host packages/service-schemas/src/eval.ts",
+      "role": "strict public start input and durable lifecycle code; createEvalRunHandle/Executor preserve admitted input"
+    },
+    {
+      "path": "Host src/server/services/evalService.ts",
+      "role": "authority/intent digest and normalized RunArgs, whole-run isolate supervisor"
+    },
+    {
+      "path": "Host packages/builtin/src/eval-engine/EvalDO.ts",
+      "role": "persisted whole deadline, setup, sandbox options, typed existing diagnostic events; Node and Workerd use same class"
+    },
+    {
+      "path": "Base packages/eval/src/sandbox.ts",
+      "role": "source/dependency preparation, synchronous checkpoints, async settlement/abort and result encoding"
+    },
+    {
+      "path": "Base packages/eval/src/execute.ts",
+      "role": "confinement/compile-function seam before first guest invocation"
+    },
+    {
+      "path": "Base packages/eval/src/deadline.ts",
+      "role": "loop/function checkpoints, no policy wording or route logic"
+    },
+    {
+      "path": "Base packages/agentic-chat/hooks/useAgenticChat.ts:311",
+      "role": "browser direct sandbox caller; optional new budget omitted, default unchanged"
+    },
+    {
+      "path": "Base packages/agentic-chat/hooks/features/clientEval.ts:283",
+      "role": "browser injected sandbox caller; optional new budget omitted, default unchanged"
+    },
+    {
+      "path": "Examples workers/regency-realm/policy.ts",
+      "role": "finite policy caller, finite/no-capability Eval scope, bounded result readback, original structured errors and phase evidence before dispose"
+    },
+    {
+      "path": "Host packages/service-schemas/src/evalEngine.ts",
+      "role": "strict internal run/startRun schemas; same budget validation; public normalization cannot lose field"
+    },
+    {
+      "path": "Base packages/eval/src/sourceFiles.ts",
+      "role": "local source initializer shares current owner execution adapter"
+    },
+    {
+      "path": "Base packages/eval/src/sandbox.ts loadLibraryBundle/loadImports/installed lazy loader",
+      "role": "build-backed module initializer shares lazy owner clock; different-invocation retained checkpoint closures fail closed for explicit guest budget before effect"
+    },
+    {
+      "path": "Examples workers/adventure-world/evaluate.ts",
+      "role": "same finite no-capability 3000ms guest/30000ms whole budget, legacy whole-only optout"
+    },
+    {
+      "path": "Examples packages/living-canvas/src/execution.ts",
+      "role": "same finite no-capability budget and typed diagnostics, exact scope cleanup"
+    },
+    {
+      "path": "Examples panels/regency-fixture-player/index.tsx and SST skills/system-testing/regency-fixture-player.ts",
+      "role": "original typed native phase/source-hash failure survives worker-to-renderer JSON-to-fixture; historical string-only receipt compatibility"
+    },
+    {
+      "path": "Host scripts/build-server-npm-package.mjs",
+      "role": "future package manifest execution-budget version1; actual new installed package/Hub proof remains unchecked"
+    }
+  ],
+  "historicalEvidence": {
+    "policySourceSame41And42": true,
+    "hostEvalDOBothBlob": "fdab0fea01d0df40655a9d669c29379e12274bd4",
+    "baseSandboxBothBlob": "a3bc28488f00ced04d1b23d68aaeff17cea77867",
+    "actualGuestCpuVsSetup": "UNCHECKED; checkpoint timeout proves elapsed absolute deadline, not CPU time",
+    "originalInspect": {
+      "path": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/waves/0074-capture/managed-GhCcx3/st_d4f2748d53de4c668844931b038c9db1/failure-evidence/inspect-open-goal-demo-portfolio-unseen-neighbor-and-grounded-balance.json",
+      "sha256": "6f7545f888fc5988237387a59582a05d74d2373bc60adc3e9c1168c20abdd7b6",
+      "failure": {
+        "phase": "orchestration",
+        "error": {
+          "name": "Error",
+          "message": "Native Regency fixture action failed: eval timed out after 3000ms",
+          "errorKind": "application"
+        }
+      }
+    }
+  },
+  "unchecked": [
+    "exact historical guest policy source and phase events if absent from retained native DB",
+    "actual model-free replay of failed74 policy inputs",
+    "non-cooperative imported/native code remains bounded by unchanged whole-run watchdog, not claimed instrumentable by the cell checkpoint transform",
+    "model serving/training clocks are separate and unchanged; no claim of a model engine timeout redesign",
+    "Ordinary whole-run-only imported library bodies are not instrumented by existing source loader; shared whole-run process watchdog remains their recovery boundary. Retained module functions may capture inactive checkpoints from an earlier opt-in call; explicit new budget rejects reuse. Safe current-owner rebinding for general retained-library call paths remains OPEN and must preserve realm concurrency/function semantics.",
+    "Actual Workerd/EvalDO/native Regency replay of original failed74 inputs and canonical official Host declaration build not run by these controls; next coherent source producer is authoritative.",
+    "Generated default-three installed package/Hub with new execution-budget manifest/source not built yet; old007 payload superseded."
+  ],
+  "checks": {
+    "uniquePassedControls": 311,
+    "units": {
+      "vibe-guest-execution-budget-20261126g": "261 PASS; service suite collection blocked by initially incorrect artifact donor root, corrected separately",
+      "vibe-guest-execution-service-20261126b": "48 PASS; new digest assertion referenced reply runDigest instead of actual forwarded intentDigest; corrected separately",
+      "vibe-guest-execution-service-20261126c": "2 selected controls PASS incl corrected actual intentDigest and strict internal receiver",
+      "vibe-guest-execution-modules-20261126b": "104 PASS incl new retained-import fail-closed control and all existing sandbox/source-module controls"
+    },
+    "models": 0,
+    "frozenSourceWrites": false,
+    "historicalOutcomeReclassified": false
+  }
+}

@@ -565,3 +565,116 @@ describe("eval lifecycle contract", () => {
     });
   });
 });
+
+describe("explicit execution budget", () => {
+  const input = {
+    runId: "guest-budget",
+    source: { kind: "inline" as const, syntax: "javascript" as const, code: "return 1" },
+  };
+  it("requires a sufficient whole-run watchdog while preserving existing unbounded/whole-only inputs", () => {
+    expect(evalStartInputSchema.safeParse(input).success).toBe(true);
+    expect(evalStartInputSchema.safeParse({ ...input, timeoutMs: 3000 }).success).toBe(true);
+    expect(evalStartInputSchema.safeParse({ ...input, executionTimeoutMs: 3000 }).success).toBe(
+      false
+    );
+    expect(
+      evalStartInputSchema.safeParse({ ...input, timeoutMs: 2000, executionTimeoutMs: 3000 })
+        .success
+    ).toBe(false);
+    expect(
+      evalStartInputSchema.parse({ ...input, timeoutMs: 30000, executionTimeoutMs: 3000 })
+        .executionTimeoutMs
+    ).toBe(3000);
+  });
+  it("captures only independently read bounded phases bound to the exact source and preserves original failure data", async () => {
+    const error = serializeRpcFailure(
+      Object.assign(new Error("guest deadline"), {
+        code: "eval_execution_deadline_exceeded",
+        errorKind: "application",
+        errorData: { reason: "original" },
+      })
+    );
+    const { sha256HexSyncText } = await import("@vibestudio/content-addressing");
+    const sourceDigest = sha256HexSyncText(input.source.code);
+    const calls: string[] = [];
+    const call: EvalCall = async (method, args) => {
+      calls.push(method);
+      if (method === "eval.start")
+        return {
+          runId: input.runId,
+          status: "terminal",
+          runDigest: "digest",
+          authorityManifestDigest: "authority",
+          snapshot: {
+            runId: input.runId,
+            status: "done",
+            result: { success: false, console: "", error },
+          },
+        } as never;
+      if (method === "eval.events") {
+        expect(args[0]).toMatchObject({ runId: input.runId, scopeKey: "owned", limit: 32 });
+        return {
+          next: 3,
+          hasMore: false,
+          events: [
+            {
+              sequence: 1,
+              at: 1,
+              kind: "diagnostic",
+              payload: { kind: "eval-phase", phase: "prepare", sourceDigest },
+            },
+            {
+              sequence: 2,
+              at: 2,
+              kind: "diagnostic",
+              payload: { kind: "eval-phase", phase: "execute", sourceDigest: "forged" },
+            },
+            { sequence: 3, at: 3, kind: "console", payload: { text: "must not be copied" } },
+          ],
+        } as never;
+      }
+      throw Error(method);
+    };
+    const result = await createEvalExecutor(call, { captureFailureEvents: true })({
+      ...input,
+      scope: { key: "owned", lifecycle: "finite" },
+      timeoutMs: 30000,
+      executionTimeoutMs: 3000,
+    });
+    expect(calls).toEqual(["eval.start", "eval.events"]);
+    expect(result.error?.errorData).toMatchObject({
+      reason: "original",
+      nativeEvalDiagnostic: {
+        runId: input.runId,
+        sourceSha256: sourceDigest,
+        events: [{ sequence: 1, phase: "prepare" }],
+        truncated: false,
+        unavailable: null,
+      },
+    });
+    expect(JSON.stringify(result.error?.errorData)).not.toContain("must not be copied");
+  });
+  it("does not replace a primary failure when diagnostics are unavailable", async () => {
+    const error = serializeRpcFailure(new Error("original failure"));
+    const call: EvalCall = async (method) => {
+      if (method === "eval.start")
+        return {
+          runId: input.runId,
+          status: "terminal",
+          runDigest: "digest",
+          authorityManifestDigest: "authority",
+          snapshot: {
+            runId: input.runId,
+            status: "done",
+            result: { success: false, console: "", error },
+          },
+        } as never;
+      throw new TypeError("event read unavailable");
+    };
+    const result = await createEvalExecutor(call, { captureFailureEvents: true })(input);
+    expect(result.error?.message).toBe("original failure");
+    expect(result.error?.errorData).toMatchObject({
+      nativeEvalDiagnostic: { unavailable: "TypeError" },
+    });
+  });
+});

@@ -38,3 +38,12 @@ describe("eval engine run admission", () => {
     );
   });
 });
+
+it("preserves the separate guest budget across the actual strict internal receiver boundary",()=>{
+ const base={runId:"guest-budget",code:"return 42",gatewayToken:"owned-token"};
+ for(const method of [evalEngineMethods.run,evalEngineMethods.startRun]){
+  expect(method.args.parse([{...base,timeoutMs:30000,executionTimeoutMs:3000}])[0]).toMatchObject({timeoutMs:30000,executionTimeoutMs:3000});
+  expect(()=>method.args.parse([{...base,executionTimeoutMs:3000}])).toThrow();
+  expect(()=>method.args.parse([{...base,timeoutMs:2000,executionTimeoutMs:3000}])).toThrow();
+ }
+});

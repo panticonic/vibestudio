@@ -1,3 +1,6 @@
+import vm from "node:vm";
+import { tameRealmCodegen } from "@vibestudio/shared/evalConfinement";
+import { executeSandbox, EVAL_EXECUTION_BUDGET_VERSION } from "@workspace/eval";
 /**
  * Eval cancellation + forced recovery.
  *
@@ -4212,5 +4215,112 @@ describe("EvalDO cancellation + forced recovery", () => {
     // A cancelling run is never (re)attached to execution.
     await new Promise((resolve) => setTimeout(resolve, 5));
     expect(runLocked).not.toHaveBeenCalled();
+  });
+});
+
+describe("explicit guest execution budget with the actual sandbox engine", () => {
+  async function harness(setupMs = 0) {
+    const { instance, sql } = await createTestDO(EvalDO);
+    mockOwnedCall(instance, async () => null);
+    seedRuntimeUnitIdentity(instance);
+    const context = vm.createContext({});
+    tameRealmCodegen(vm.runInContext("globalThis", context));
+    (instance as unknown as { env: Record<string, unknown> }).env["UNSAFE_EVAL"] = {
+      newFunction: (body: string, _name: string, ...params: string[]) =>
+        vm.compileFunction(body, params, { parsingContext: context }),
+    };
+    setPriv(instance, "portableHelpers", { journal: { current: () => null } });
+    setPriv(instance, "ensureRuntimeSupport", async () => {
+      if (setupMs) await new Promise((resolve) => setTimeout(resolve, setupMs));
+      return {
+        createHostedRuntime: (host: Record<string, unknown>) => ({
+          rpc: host["rpc"],
+          fs: host["fs"],
+        }),
+        createPanelRuntime: () => ({ getPanelHandle: () => null }),
+        createRuntimeSelfHandle: () => ({}),
+        createRuntimeScopeRehydrators: () => ({}),
+        createGatewayFetch: () => () => {},
+        createRpcFs: () => ({}),
+        createRuntimeParentHandle: () => null,
+        createServicesProxy: () => ({}),
+        createAttachedHostsApi: () => ({}),
+        createWorkerdClient: () => ({}),
+      };
+    });
+    const engine = { EVAL_EXECUTION_BUDGET_VERSION, executeSandbox, SqlScopePersistence: class {} };
+    setPriv(instance, "engine", engine);
+    setPriv(instance, "ensureEngine", async () => engine);
+    setPriv(instance, "ensureScopeManager", async () => ({
+      current: {},
+      apiFrom: () => ({}),
+      enterEval: () => {},
+      exitEval: async () => {},
+      persist: async () => {},
+    }));
+    const start = (id: string, code: string, executionTimeoutMs = 30) => {
+      seedPendingRun(sql, id, {
+        code,
+        syntax: "javascript",
+        contextId: "ctx",
+        gatewayToken: "gateway-test",
+        sourceDigest: "a".repeat(64),
+        timeoutMs: 3000,
+        executionTimeoutMs,
+      });
+      sql.exec("UPDATE runs SET deadline_at = ? WHERE run_id = ?", Date.now() + 3000, id);
+      return priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(instance, id);
+    };
+    return { instance, sql, start, engine };
+  }
+  it("excludes real awaited runtime setup while preserving the whole-run clock", async () => {
+    const { start } = await harness(80);
+    expect(await start("slow-setup", "return 42", 30)).toMatchObject({
+      success: true,
+      returnValue: 42,
+    });
+  });
+  it("aborts the exact synchronous guest owner and joins cancellation cleanup before settling", async () => {
+    const { instance, start } = await harness();
+    let release!: () => void;
+    const cleanup = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const cleanupEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    priv<Map<string, Set<() => Promise<void>>>>(instance, "runCancelHandlers").set(
+      "guest-loop",
+      new Set([
+        async () => {
+          entered();
+          await cleanup;
+        },
+      ])
+    );
+    let settled = false;
+    const result = start("guest-loop", "while(true){}", 20).then((value) => {
+      settled = true;
+      return value;
+    });
+    await cleanupEntered;
+    expect(
+      priv<Map<string, AbortController>>(instance, "runAborts").get("guest-loop")?.signal.aborted
+    ).toBe(true);
+    expect(settled).toBe(false);
+    release();
+    expect(await result).toMatchObject({
+      success: false,
+      failureCode: "eval_execution_deadline_exceeded",
+    });
+    expect(await start("next-owner", "return 7")).toMatchObject({ success: true, returnValue: 7 });
+  });
+  it("fails closed before execution if the selected engine lacks the admitted budget ABI", async () => {
+    const { instance, start } = await harness();
+    const execute = vi.fn();
+    setPriv(instance, "ensureEngine", async () => ({ executeSandbox: execute }));
+    expect(await start("old-engine", "return 42")).toMatchObject({ success: false });
+    expect(execute).not.toHaveBeenCalled();
   });
 });

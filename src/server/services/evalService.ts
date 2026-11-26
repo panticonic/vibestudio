@@ -941,6 +941,9 @@ export function createEvalService(deps: {
         reset: runArgs.reset === true,
         imports: runArgs.imports ?? {},
         timeoutMs: runArgs.timeoutMs ?? null,
+        ...(runArgs.executionTimeoutMs === undefined
+          ? {}
+          : { executionTimeoutMs: runArgs.executionTimeoutMs }),
         authorityManifestDigest,
         attachedHost: ctx.attachedHost
           ? {
@@ -1016,6 +1019,9 @@ export function createEvalService(deps: {
           agentInvocationId: ctx.causalParent?.invocationId,
           parent,
           timeoutMs,
+          ...(runArgs.executionTimeoutMs === undefined
+            ? {}
+            : { executionTimeoutMs: runArgs.executionTimeoutMs }),
           readOnly: evalExecutor.authorityManifest.effects === "read-only",
           authorityManifestDigest,
           intentDigest: runDigest,

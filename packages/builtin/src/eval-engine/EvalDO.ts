@@ -56,6 +56,7 @@ import { externalOpenMethods } from "@vibestudio/service-schemas/externalOpen";
 import {
   EVAL_RESULT_RETURN_PREVIEW_CHARS,
   evalLifecycleFailureCodes,
+  validEvalExecutionBudget,
   evalImagePayloadSchema,
   captureEvalRpcFingerprint,
   finishEvalRpcFingerprint,
@@ -303,6 +304,7 @@ interface ScopeBlobBackendLike {
 }
 
 interface EvalEngine {
+  EVAL_EXECUTION_BUDGET_VERSION?: number;
   EVAL_ENGINE_HOST_CONTRACT_VERSION: number;
   executeSandbox(code: string, options: Record<string, unknown>): Promise<SandboxResult>;
   ScopeManager: new (opts: {
@@ -463,6 +465,8 @@ interface RunArgs {
   runId?: string;
   /** Opt-in deadline; the run is aborted after this many ms. Absent ⇒ unbounded. */
   timeoutMs?: number;
+  /** Separate evaluated-source wall budget, starting after explicit preparation/compilation. */
+  executionTimeoutMs?: number;
   /** Read-only containment: outbound service calls from this run are dispatched
    *  with ctx.readOnly, so the server refuses any non-`read` method. */
   readOnly?: boolean;
@@ -1407,6 +1411,7 @@ export class EvalDO extends DurableObjectBase {
     existing: boolean;
   }> {
     this.assertAdmissionOpen();
+    if (!validEvalExecutionBudget(args)) throw new Error("Invalid eval execution/whole-run budget");
     const runId = args.runId;
     const retained = this.retainedRunAdmission(args, schedule);
     if (retained) return retained;
@@ -1821,13 +1826,23 @@ export class EvalDO extends DurableObjectBase {
           console.error(`[EvalDO] cancellation cleanup failed for timed-out run ${runId}`, error);
         }
       }
-      if (controller.signal.aborted && deadlineAt !== null) {
+      const budgetCode = errorCodeInChain(controller.signal.reason);
+      if (
+        controller.signal.aborted &&
+        (budgetCode === "EEVALDEADLINE" || budgetCode === "eval_execution_deadline_exceeded")
+      ) {
+        const guest = budgetCode === "eval_execution_deadline_exceeded";
         result = {
           success: false,
           console: result.console,
-          error: aggregateRunFailures(`eval timed out after ${args.timeoutMs}ms`, [result.error]),
+          error: aggregateRunFailures(
+            guest
+              ? `eval execution timed out after ${args.executionTimeoutMs}ms`
+              : `eval timed out after ${args.timeoutMs}ms`,
+            [result.error]
+          ),
           failureKind: "cancelled",
-          failureCode: "eval_deadline_exceeded",
+          failureCode: guest ? "eval_execution_deadline_exceeded" : "eval_deadline_exceeded",
         };
       }
       if (cancellationCleanupError !== undefined) {
@@ -1846,8 +1861,13 @@ export class EvalDO extends DurableObjectBase {
         this.sql.exec(`SELECT status FROM runs WHERE run_id = ?`, runId).toArray()[0]?.["status"] ??
           ""
       );
-      const deadlineFired = deadlineAt !== null && controller.signal.aborted;
-      if (deadlineFired) {
+      const guestDeadlineFired =
+        controller.signal.aborted &&
+        errorCodeInChain(controller.signal.reason) === "eval_execution_deadline_exceeded";
+      const deadlineFired =
+        controller.signal.aborted &&
+        (errorCodeInChain(controller.signal.reason) === "EEVALDEADLINE" || guestDeadlineFired);
+      if (controller.signal.aborted && deadlineAt !== null) {
         if (
           this.runCancelExecutions.has(runId) ||
           (this.runCancelHandlers.get(runId)?.size ?? 0) > 0
@@ -1892,16 +1912,28 @@ export class EvalDO extends DurableObjectBase {
         ? {
             success: false,
             console: "",
-            error: aggregateRunFailures(`eval timed out after ${args.timeoutMs}ms`, [
-              serializeRpcFailure(
-                new Error(`eval timed out after ${args.timeoutMs}ms`, { cause: err })
-              ),
-              ...(cancellationCleanupError === undefined
-                ? []
-                : [serializeRpcFailure(cancellationCleanupError)]),
-            ]),
+            error: aggregateRunFailures(
+              guestDeadlineFired
+                ? `eval execution timed out after ${args.executionTimeoutMs}ms`
+                : `eval timed out after ${args.timeoutMs}ms`,
+              [
+                serializeRpcFailure(
+                  new Error(
+                    guestDeadlineFired
+                      ? `eval execution timed out after ${args.executionTimeoutMs}ms`
+                      : `eval timed out after ${args.timeoutMs}ms`,
+                    { cause: err }
+                  )
+                ),
+                ...(cancellationCleanupError === undefined
+                  ? []
+                  : [serializeRpcFailure(cancellationCleanupError)]),
+              ]
+            ),
             failureKind: "cancelled",
-            failureCode: "eval_deadline_exceeded",
+            failureCode: guestDeadlineFired
+              ? "eval_execution_deadline_exceeded"
+              : "eval_deadline_exceeded",
             kernel: kernel ?? this.kernelStatusForRun(),
           }
         : approvalWaitCancelled
@@ -3229,7 +3261,20 @@ export class EvalDO extends DurableObjectBase {
       ? AbortSignal.any([signal, evalNodeCallbackAbort.signal])
       : evalNodeCallbackAbort.signal;
     const execution = this.createExecutionContext({ ...args, runId }, signal, cleanupPhase);
+    const phase = (name: string) => {
+      if (runId && (args.timeoutMs !== undefined || args.executionTimeoutMs !== undefined))
+        this.appendRunEvent(runId, "diagnostic", {
+          kind: "eval-phase",
+          phase: name,
+          sourceDigest: args.sourceDigest ?? null,
+          timeoutMs: args.timeoutMs ?? null,
+          executionTimeoutMs: args.executionTimeoutMs ?? null,
+        });
+    };
+    phase("runtime-setup");
     const engine = await this.ensureEngine(execution);
+    if (args.executionTimeoutMs !== undefined && engine.EVAL_EXECUTION_BUDGET_VERSION !== 1)
+      throw new Error("The selected eval engine does not support the admitted execution budget");
     const support = await this.ensureRuntimeSupport(execution);
     const scopePersistence = this.createScopePersistence(engine, execution);
     const scopeManager = await this.ensureScopeManager(
@@ -3256,6 +3301,7 @@ export class EvalDO extends DurableObjectBase {
           ? await this.readSourceFile(args.path, execution)
           : "";
     const sourcePath = args.sourcePath ?? args.path;
+    phase("runtime-ready");
     // The provider is attached before bindings exist so a cell that mentions
     // `nl`/`natlang` sees them as ordinary ambient names (and the owner's
     // natlang instance sees the runtime it will be handed to).
@@ -3528,6 +3574,14 @@ export class EvalDO extends DurableObjectBase {
       const execute = () =>
         this.activeEvalExecution.run(execution, () =>
           engine.executeSandbox(code, {
+            ...(args.executionTimeoutMs === undefined
+              ? {}
+              : { executionTimeoutMs: args.executionTimeoutMs }),
+            onPhase: phase,
+            onExecutionTimeout: (reason: Error) => {
+              if (runId) this.runAborts.get(runId)?.abort(reason);
+              phase("execution-deadline-exceeded");
+            },
             operationJournal: execution.operationJournal,
             syntax: args.syntax ?? "tsx",
             imports: args.imports,

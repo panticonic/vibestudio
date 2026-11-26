@@ -1457,6 +1457,30 @@ describe("createEvalService", () => {
     expect(calls.some((c) => c.method === "startRun")).toBe(false);
   });
 
+  it("forwards the separately admitted guest budget and includes it in run identity", async () => {
+    const ownerId = "do:workers/agent-worker:AiChatWorker:abc";
+    async function admitted(executionTimeoutMs?: number) {
+      const { service, calls } = createHarness({ [ownerId]: "ctx_agent" });
+      const input = inlineEvalStart({
+        scopeKey: "chan_1",
+        runId: "run:guest-budget",
+        code: "return 1;",
+        timeoutMs: 12345,
+      });
+      await service.handler(activeInvocationContext(authenticatedCaller(ownerId, "do")), "start", [
+        { ...input, ...(executionTimeoutMs === undefined ? {} : { executionTimeoutMs }) },
+      ]);
+      return calls.find((c) => c.method === "startRun")?.args[0] as Record<string, unknown>;
+    }
+    const old = await admitted(),
+      first = await admitted(3000),
+      second = await admitted(2000);
+    expect(old).not.toHaveProperty("executionTimeoutMs");
+    expect(first).toMatchObject({ timeoutMs: 12345, executionTimeoutMs: 3000 });
+    expect(first["intentDigest"]).not.toBe(old["intentDigest"]);
+    expect(first["intentDigest"]).not.toBe(second["intentDigest"]);
+  });
+
   it("preserves an explicit agent eval deadline", async () => {
     const ownerId = "do:workers/agent-worker:AiChatWorker:abc";
     const { service, calls } = createHarness({ [ownerId]: "ctx_agent" });

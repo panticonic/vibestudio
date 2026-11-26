@@ -5,6 +5,7 @@ import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority
 import { executionArtifactRefSchema } from "./build.js";
 import { rpcFailureSchema } from "./rpcFailure.js";
 import {
+  validEvalExecutionBudget,
   evalEventsPageSchema,
   evalRunResultSchema,
   evalRunStatusSchema,
@@ -63,6 +64,7 @@ export const evalEngineRunArgsSchema = z
       .optional(),
     runId: z.string().min(1).optional(),
     timeoutMs: z.number().int().positive().optional(),
+    executionTimeoutMs: z.number().int().positive().safe().optional(),
     readOnly: z.boolean().optional(),
     authorityManifestDigest: z
       .string()
@@ -149,7 +151,7 @@ const rawEvalEngineMethods = defineServiceMethods({
       reason: "Execution engine control is internal to reviewed execution receivers.",
     } as const,
     ...managed("write"),
-    args: z.tuple([evalEngineRunArgsSchema]),
+    args: z.tuple([evalEngineRunArgsSchema.refine(validEvalExecutionBudget, {message:"Execution budget requires sufficient whole-run timeoutMs"})]),
     returns: evalRunResultSchema,
   },
   startRun: {
@@ -158,7 +160,7 @@ const rawEvalEngineMethods = defineServiceMethods({
       reason: "Execution engine control is internal to reviewed execution receivers.",
     } as const,
     ...managed("write"),
-    args: z.tuple([evalEngineRunArgsSchema.extend({ runId: runIdSchema })]),
+    args: z.tuple([evalEngineRunArgsSchema.extend({ runId: runIdSchema }).refine(validEvalExecutionBudget, {message:"Execution budget requires sufficient whole-run timeoutMs"})]),
     returns: z
       .object({
         runId: runIdSchema,
