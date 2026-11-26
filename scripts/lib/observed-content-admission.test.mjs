@@ -318,3 +318,11 @@ test('local width binds raw native inventory without inventing a preferred/execu
   if(observed){const bad=structuredClone(proof);bad.effects[0].result={preferred:'local:qwen',models:[],executor:{}};bad.nativeInventory.readbacks=structuredClone(bad.effects);bad.semanticReviewInput.actual.observations=Object.fromEntries(fields.map(k=>[k,structuredClone(bad[k]??null)]));assert.throws(()=>observedContentReviewInput(bad,world));}
  }
 });
+
+test("binds retained build interpretation to actual source, observations and retained bytes",()=>{
+ const world={kind:"build-incident",goal:"Explain the actual retained compiler failure"};
+ const proof={outcomeContract:{returnedValue:{required:true}},semanticReviewRequired:true,subject:{source:"panels/owned",revision:"current"},current:{id:"current-checkpoint"},baseline:null,metadata:[{key:"actual-key",retained:true}],effects:[{service:"buildPerformance",method:"observe",result:{status:"failed"}}],handoffText:null,actualResult:{disposition:{finding:"compiler",reason:"The current diagnostic names the malformed expression."}}};
+ proof.semanticReviewInput={actual:{goal:world.goal,observations:Object.fromEntries(observedContentFields[world.kind][0].map(k=>[k,proof[k]??null])),artifacts:{handoffText:null},requestedReturn:proof.actualResult},expected:{goal:world.goal,requestedReturnRequired:true},rubric:"Judge the requested meaning against actual source and retained native evidence"};
+ assert.equal(observedContentNeedsReview(world),true);assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
+ const changed=structuredClone(proof);changed.semanticReviewInput.actual.observations.effects=[];assert.throws(()=>observedContentReviewInput(changed,world));
+});

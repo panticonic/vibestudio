@@ -1,6 +1,7 @@
 import {isDeepStrictEqual as equal} from "node:util";
 /** Per-domain actual native evidence; no expected answer vocabulary enters review. */
 export const observedContentFields = {
+  "build-incident": [["subject","current","baseline","metadata","effects"],["handoffText"]],
   "workspace-smoke": [["assignment","source","selection","runtime","effects"],["receipt","retainedText"]],
   "delivery-wake": [["assignment","evidence","initial","current","nativeReceipt","effects"],[]],
   notificationState: [["journal","assigned","initial","refresh","current","ack","final","durable"], []],
