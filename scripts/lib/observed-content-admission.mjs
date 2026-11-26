@@ -196,7 +196,8 @@ export const observedContentFields = {
     [
       "effects",
       "survey",
-      "finding"
+      "finding",
+      "nativeInventory"
     ],
     [
       "handoffText"
@@ -370,6 +371,14 @@ export function observedContentReviewInput(proof,world){
      typeof facts.readProtocol!=="string"||!facts.readProtocol.trim()||typeof facts.evidenceProtocol!=="string"||!facts.evidenceProtocol.trim())throw Error("Phone meaning review requires actual actor observations and native workspace/protocol facts");
  }
 
+ if(world.kind==="local-width"){
+  const inventory=proof.nativeInventory;
+  const readbacks=Array.isArray(proof.effects)?proof.effects.filter(row=>row?.service==="localModels"):null;
+  if(!inventory||!Array.isArray(inventory.current)||inventory.current.some(row=>!row||typeof row.slug!=="string"||typeof row.state!=="string")||
+     !readbacks||typeof inventory.actorObserved!=="boolean"||inventory.actorObserved!==(readbacks.length>0)||
+     !equal(inventory.readbacks,readbacks)||readbacks.some(row=>row.method!=="listModels"||!equal(row.args,[])||!Array.isArray(row.result)||!equal(row.result,inventory.current)))
+    throw Error("Local width review requires exact native inventory wire readbacks, distinct from interpreted readiness");
+ }
  if(!fields||typeof required!=="boolean"||proof.semanticReviewRequired!==true||
     !equal(input?.actual,{goal:world.goal,observations:pick(fields[0]),artifacts:pick(fields[1]),requestedReturn:required?proof.actualResult??null:null})||
     !equal(input.expected,{goal:world.goal,requestedReturnRequired:required})||typeof input.rubric!=="string"||!input.rubric.trim())
