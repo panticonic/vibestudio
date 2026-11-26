@@ -1,10 +1,11 @@
 import test from 'node:test';
+import {collectionInterruption} from './live-teacher-interruption.mjs';
 import assert from 'node:assert/strict';
 import{mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync}from'node:fs';
 import{gzipSync}from'node:zlib';
 import{tmpdir}from'node:os';
 import path from'node:path';
-import{selectNativeReferences,inspectNativeReference,runNativeReferenceTail}from'./native-reference-tail.mjs';
+import{selectNativeReferences,inspectNativeReference,runNativeReferenceTail,runNativeReferenceBatches}from'./native-reference-tail.mjs';
 const scenario='open-goal-checked-note',name='open-goal-oracle-checked-note',goal='Retain the checked note';
 const world={workspace:'examples',assignment:{goal},interaction:'open-user-goal'};
 const group={workspace:'examples',instance:'TEST-owned-collector',devices:[]};
@@ -107,4 +108,21 @@ test('native failure retains canonical bounded inspect and honest CLI phase time
  assert.ok(rows[0].failureDiagnostic.sha256);assert.equal(calls.length,3);
  const diagnostic=JSON.parse(readFileSync(path.join(path.dirname(path.dirname(rows[0].artifact)),'run-diagnostic.json')));
  assert.equal(diagnostic.commandExit,1);assert.equal(diagnostic.phaseTimingAvailable,false);
+});
+
+test('native continuation finishes its active batch before the actual non-aborting owner drain',async()=>{
+ const root=mkdtempSync(path.join(tmpdir(),'native-boundary-')),drain=path.join(root,'drain.json');
+ const owner=collectionInterruption({out:root,cases:[]});let finish,entered;
+ const started=new Promise(resolve=>{entered=resolve;}),settled=new Promise(resolve=>{finish=resolve;});let calls=0;const preserved=[];
+ try {
+  const running=runNativeReferenceBatches({draining:true,signal:owner.signal,drainAtBoundary:()=>owner.drainAtBoundary(drain),runBatch:async()=>{calls++;entered();await settled;return[{name:'native-original',status:'passed'}];},afterBatch:records=>preserved.push(...records)});
+  await started;writeFileSync(drain,'{}');assert.equal(owner.signal.aborted,false);assert.equal(calls,1);assert.equal(preserved.length,0);
+  finish();assert.deepEqual(await running,{batches:1,observed:1});assert.equal(owner.signal.aborted,false);assert.equal(owner.requested,true);assert.equal(calls,1);assert.deepEqual(preserved,[{name:'native-original',status:'passed'}]);
+ } finally {owner.dispose();rmSync(root,{recursive:true,force:true});}
+});
+test('native full scope continues across bounded batches until exhausted and tail mode runs only one',async()=>{
+ for(const draining of [false,true]){let calls=0;const returned=await runNativeReferenceBatches({draining,signal:new AbortController().signal,runBatch:async()=>++calls<=2?[{name:'actual-'+calls}]:[]});assert.equal(calls,draining?3:1);assert.deepEqual(returned,{batches:calls,observed:draining?2:1});}
+});
+test('a prior drain or cancellation admits no new native batch',async()=>{
+ for(const cancelled of [false,true]){const controller=new AbortController();if(cancelled)controller.abort();let calls=0;assert.deepEqual(await runNativeReferenceBatches({draining:true,signal:controller.signal,drainAtBoundary:()=>true,runBatch:async()=>{calls++;return[];}}),{batches:0,observed:0});assert.equal(calls,0);}
 });

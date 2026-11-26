@@ -116,6 +116,19 @@ export async function runNativeReferenceTail({group,workflows,catalog,pinned,out
  return records;
 }
 
+/** Honor the same non-aborting owner boundary for native-only continuation.
+ * A drain is observed only between fully settled, retained batches. */
+export async function runNativeReferenceBatches({draining,signal,drainAtBoundary=()=>false,runBatch,afterBatch=()=>{}}) {
+ let batches=0,observed=0;
+ while(!signal.aborted&&!drainAtBoundary()) {
+  const records=await runBatch();
+  batches++;observed+=records.length;
+  await afterBatch(records);
+  if(!draining||!records.length)break;
+ }
+ return {batches,observed};
+}
+
 export const nativeReferenceCapabilities=Object.freeze({schema:'vibestudio.native-reference-capabilities/1',completionControl:1,nativeOnly:true});
 /** The existing parent collector owner decides from actual paid receipts. A
  * source/nonce-bound decision is never inferred from elapsed time or exit text.
