@@ -25,7 +25,10 @@ export const observedContentFields = {
   "google-handoff": [["threads", "reviews", "providerRequests", "freshness"], ["handoffText"]],
   news: [["initial", "latest", "observations", "reads", "attempts", "concurrentReceipt"], []],
   spectrolite: [["observations", "hops", "receipts", "final"], []],
-  "agent-capability": [["effects", "assignment", "evidence", "decision", "continuation"], []],
+  "content-archive": [["assignment", "observation", "working", "receipt", "effects"], []],
+  "cli-route": [["docket", "observed", "selected", "scope", "available", "protocol"], []],
+  "same-turn-eval": [["assignment", "evidence", "recovery", "effects"], []],
+  "agent-capability": [["effects", "assignment", "evidence", "decision", "continuation", "notebookState"], []],
   "board-migration": [["available","rendered","basis","targetObservations","final"], []],
   "bridge-delivery": [["index", "scope", "operations", "bridgeRead", "fileReads", "commit", "nativeFiles"], ["artifact"]],
   "deployed-interface": [["effects", "survey", "observation", "architecture", "decision"], ["handoffText"]],
@@ -355,6 +358,9 @@ export function observedContentReviewInput(proof,world){
  const pick=keys=>Object.fromEntries(keys.map(key=>[key,proof[key]??null]));
  const required=proof.outcomeContract?.returnedValue?.required;
  for(const field of ["requestedReturnRequired","requestedAnswerRequired"])if(Object.hasOwn(world,field)&&(typeof world[field]!=="boolean"||world[field]!==required))throw Error("Goal return obligation differs from its authored literal contract");
+ const recoveryShapes={"cli-route":{objects:["docket","observed","selected","protocol"],arrays:["available"]},"same-turn-eval":{objects:["assignment","evidence"],arrays:["effects"]},"content-archive":{objects:["assignment","observation"],arrays:["working","effects"]},"agent-capability":{objects:["assignment","evidence","notebookState"],arrays:["effects"]}};
+ const recovery=recoveryShapes[world.kind];
+ if(recovery&&(recovery.objects.some(key=>!proof[key]||typeof proof[key]!=="object"||Array.isArray(proof[key]))||recovery.arrays.some(key=>!Array.isArray(proof[key]))))throw Error("Recovery meaning review requires actual native identity, observations and operation evidence");
  if(world.kind==="phoneFirstRun"&&(!Array.isArray(proof.refusedOperations)||proof.refusedOperations.some(row=>!row||typeof row.service!=="string"||typeof row.method!=="string"||typeof row.reason!=="string")))throw Error("Phone meaning review requires actual native refusal observations");
  if(world.kind==="phoneFirstRun"){
   const facts=proof.nativeFacts,roles={assignment:["phoneFirstRun","inspect"],startup:["phoneFirstRun","phases"],provider:["phoneFirstRun","provider"],resume:["phoneSetupRead","readiness"]};

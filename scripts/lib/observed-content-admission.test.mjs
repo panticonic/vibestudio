@@ -91,7 +91,7 @@ test("every newly admitted open domain binds native goal effects independently o
   const world={kind,goal:"Perform only the requested owned operation; do not invent a report requirement."};
   const [observations,artifacts]=observedContentFields[kind];
   const proof={outcomeContract:{returnedValue:{required:false}},semanticReviewRequired:true,actualResult:{unrequested:"incidental"}};
-  for(const field of observations)proof[field]=kind==="phoneFirstRun"&&field==="refusedOperations"?[]:{source:"actual-owned-native",field};
+  for(const field of observations)proof[field]=kind==="agent-capability"&&field==="effects"?[]:kind==="phoneFirstRun"&&field==="refusedOperations"?[]:{source:"actual-owned-native",field};
   for(const field of artifacts)proof[field]="Actual native retained bytes";
   const pick=keys=>Object.fromEntries(keys.map(key=>[key,proof[key]??null]));
   proof.semanticReviewInput={actual:{goal:world.goal,observations:pick(observations),artifacts:pick(artifacts),requestedReturn:null},expected:{goal:world.goal,requestedReturnRequired:false},rubric:"Judge actual requested effects and retained bytes; do not require an unrequested return."};
@@ -290,5 +290,17 @@ test("installed authority chronology and local release protocol remain bound to 
   for(const key of kind==='installed-package'?['authorization']:['handoffProtocol']){const bad=structuredClone(proof);bad.semanticReviewInput.actual.observations[key]={forged:true};assert.throws(()=>observedContentReviewInput(bad,world));}
   for(const key of artifacts){const bad=structuredClone(proof);bad.semanticReviewInput.actual.artifacts[key]='Forged artifact';assert.throws(()=>observedContentReviewInput(bad,world));}
 
+ }
+});
+
+test('all native recovery findings bind actual native evidence and literal answer obligations',()=>{
+ const shapes={"cli-route":{arrays:["available"]},"same-turn-eval":{arrays:["effects"]},"content-archive":{arrays:["working","effects"]},"agent-capability":{arrays:["effects"]}};
+ for(const[kind,shape]of Object.entries(shapes))for(const required of [true,false]){
+  const world={kind,goal:'Recover the requested actual value or explicitly explain the native barrier.',requestedReturnRequired:required},[keys,artifacts]=observedContentFields[kind];const proof={semanticReviewRequired:true,outcomeContract:{returnedValue:{required}},actualResult:{explanation:'A real domain answer',result:{count:8,detail:'one exception'}}};for(const key of keys)proof[key]=shape.arrays.includes(key)?[]:{native:key};
+  const review=()=>({actual:{goal:world.goal,observations:Object.fromEntries(keys.map(k=>[k,proof[k]??null])),artifacts:Object.fromEntries(artifacts.map(k=>[k,proof[k]??null])),requestedReturn:required?proof.actualResult:null},expected:{goal:world.goal,requestedReturnRequired:required},rubric:'Judge requested actual facts, not private route/status echoes.'});proof.semanticReviewInput=review();assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
+  for(const key of keys){const changed=structuredClone(proof);changed.semanticReviewInput.actual.observations[key]={forged:true};assert.throws(()=>observedContentReviewInput(changed,world));}
+  const missing=structuredClone(proof);delete missing[keys[0]];missing.semanticReviewInput.actual.observations[keys[0]]=null;assert.throws(()=>observedContentReviewInput(missing,world));
+  const role=structuredClone(proof);role.outcomeContract.returnedValue.required=!required;role.semanticReviewInput.expected.requestedReturnRequired=!required;role.semanticReviewInput.actual.requestedReturn=required?null:role.actualResult;assert.throws(()=>observedContentReviewInput(role,world));
+  if(required){const wrong=structuredClone(proof);wrong.semanticReviewInput.actual.requestedReturn={explanation:'A different result'};assert.throws(()=>observedContentReviewInput(wrong,world));}
  }
 });

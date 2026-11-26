@@ -1,0 +1,1218 @@
+{
+  "schema": "vibestudio.native-recovery-composition-inventory/1",
+  "status": "implemented and component validated; no paid calls or physical native qualification",
+  "sourceRefs": {
+    "/home/werg/vibe-model-owned-native-recovery": "e7dab7f0f5a2e38bfe7ddc174cfa3b9080929efe",
+    "/home/werg/vibe-native-recovery-goal-meaning": "d9cfdfd27811dd6a9f66bf2b37c4d256845fab49",
+    "/home/werg/vibe-native-recovery-review-bindings": "8c102bed0969539d45c4f395ad15ccc4b6ff4c30"
+  },
+  "families": [
+    {
+      "kind": "cli-route",
+      "root": "skills/open-user-goal/recoverCliRoute.ts",
+      "sources": [
+        {
+          "path": "skills/open-user-goal/recoverCliRoute.ts",
+          "sha256": "ce2a22a3c31f5be21c152a14fd65ef27e8bafff38e789ce5eda8aa9ac938c96c"
+        },
+        {
+          "path": "skills/open-user-goal/recoverCliRoute/selectCliDocket.nl",
+          "sha256": "9b9af63432215896ed5577e95654b2f5ac5479558df892925f5472c10a63e261"
+        },
+        {
+          "path": "skills/open-user-goal/recoverCliRoute/types.ts",
+          "sha256": "c672c9c6cdd141a3b425ae26a3efddf4603579a9c0d2e5a1b961f8d7e567ccf4"
+        },
+        {
+          "path": "skills/system-testing/open-goal-cli-route-managed.ts",
+          "sha256": "ce76afcf366a1d94ccac38a418c5b8e0a711c9ad2801ddf144af81187e03a52d"
+        },
+        {
+          "path": "skills/system-testing/open-goal-cli-route-worlds.ts",
+          "sha256": "538871e89b4fb58b52325f7abf54fabddc4dbfb3e6592611daf0a983bd2a1d0e"
+        }
+      ],
+      "rootMeaning": "Existing TS fixes evidence and continuation choices; inspect exact current domain and literal goals before moving choice to hierarchy.",
+      "nativeStatus": "All per-literal gates/returns/effects/call routes and authority to be classified before edits.",
+      "actualConsumers": [
+        "skills/open-user-goal/entries.json:133:    \"program\": \"skills/open-user-goal/recoverCliRoute.ts\",",
+        "skills/open-user-goal/entries.json:134:    \"callable\": \"recoverCliRoute\",",
+        "skills/open-user-goal/natlang.json:52:      \"recoverCliRoute/selectCliDocket.nl\"",
+        "skills/open-user-goal/natlang.json:208:    \"recoverCliRoute\": {",
+        "skills/open-user-goal/natlang.json:210:        \"recoverCliRoute/remote\"",
+        "skills/open-user-goal/natlang.json:597:    \"recoverCliRoute/remote\": \"skills/remote-access\",",
+        "skills/open-user-goal/services.d.ts:81:    list(): Promise<import(\"./recoverCliRoute/types.js\").CliDocket[]>;",
+        "skills/open-user-goal/services.d.ts:82:    read(id: string, revision: string): Promise<import(\"./recoverCliRoute/types.js\").CliDocketEvidence>;",
+        "skills/open-user-goal/entriesGenerated.ts:134:    \"program\": \"skills/open-user-goal/recoverCliRoute.ts\",",
+        "skills/open-user-goal/entriesGenerated.ts:135:    \"callable\": \"recoverCliRoute\",",
+        "skills/open-user-goal/recoverCliRoute.ts:1:import selectCliDocket from \"./recoverCliRoute/selectCliDocket.nl\";",
+        "skills/open-user-goal/recoverCliRoute.ts:2:import reviewRemoteRoute from \"./recoverCliRoute/remote/reviewRemoteRoute.nl\";",
+        "skills/open-user-goal/recoverCliRoute.ts:3:import planCliContinuation from \"./recoverCliRoute/remote/planCliContinuation.nl\";",
+        "skills/open-user-goal/recoverCliRoute.ts:4:import type {CliRouteOutcome} from \"./recoverCliRoute/types.js\";",
+        "skills/open-user-goal/recoverCliRoute.ts:7:export default async function recoverCliRoute(goal:string):Promise<CliRouteOutcome>{"
+      ],
+      "nativeCandidates": [
+        "2:import {assessObservedApplicationOutcome,type ApplicationReturnContribution} from \"@workspace/application-outcomes/observed-application-outcome\";",
+        "4:import { isDeepStrictEqual } from \"node:util\";",
+        "32:  status: NonNullable<CliRouteWorld[\"expected\"]>[2];",
+        "62:      ...(source === \"session\" || source === \"binding\" || source === \"default\"",
+        "88:    if (stored.length > 8192 || sha256HexSyncText(stored) !== chosen.revision)",
+        "109:          throw new Error(\"Verify the gateway of the exact selected invocation once\");",
+        "127:  function expectedRoute(native: Gateway): Route {",
+        "134:  function expectedContinuation(native: Gateway): Continuation | null {",
+        "135:    if (!world.expected) return null;",
+        "136:    const [source, position, status] = world.expected;",
+        "149:    const contributions=authored.filter(binding=>{",
+        "151:      for(const key of binding.rootPath){",
+        "157:    const assessed=await assessObservedApplicationOutcome(proof,proof.outcomeContract,value,invocation,contributions);",
+        "171:    const expected = expectedContinuation(native);",
+        "172:    const scopeBound = scope ? isDeepStrictEqual(scope, { gateway: native, selectors: current.selectors,",
+        "175:      independentlyObservedCurrentCliDocket: isDeepStrictEqual(selected, { docket, request }) &&",
+        "176:        isDeepStrictEqual(current, basis) && isDeepStrictEqual(storedRetired, history),",
+        "177:      exactAuthenticatedCliGateway: isDeepStrictEqual(observed, native) && isDeepStrictEqual(assignedGateway, native) &&",
+        "178:        isDeepStrictEqual(outcome?.gateway, expectedRoute(native)),",
+        "179:      boundAuthorizedCliContinuation: expected ? scopeBound && isDeepStrictEqual(outcome?.continuation, expected) :",
+        "181:      preservedReadOnlyContinuation: isDeepStrictEqual(initial.workingHead, final.workingHead) && initial.mainEventId === final.mainEventId,",
+        "182:      matchedCliRouteDisposition: outcome?.status === (expected ? \"reviewed\" : \"held\") &&",
+        "183:        typeof outcome.reason === \"string\" && outcome.reason.trim().length > 0,",
+        "187:        returnedValue:{checks:[\"exactAuthenticatedCliGateway\", \"boundAuthorizedCliContinuation\", \"matchedCliRouteDisposition\"],required:true,rationale:\"A requested query answer is required; a redundant result copy is optional after its requested native effect is established.\"},",
+        "191:      passed: Object.values(checks).every(Boolean), checks, docket, observed, selected, scope, expected,",
+        "200:    const route = expectedRoute(native);",
+        "205:      continuation: expectedContinuation(native), reason: \"Checked the retained invocation against the authenticated gateway.\","
+      ]
+    },
+    {
+      "kind": "same-turn-eval",
+      "root": "skills/open-user-goal/recoverSameTurnEval.ts",
+      "sources": [
+        {
+          "path": "skills/open-user-goal/recoverSameTurnEval.ts",
+          "sha256": "209b38131ec3ac06c7528a19c67686a78940b05360041dcf492c5723728b3bf2"
+        },
+        {
+          "path": "skills/open-user-goal/recoverSameTurnEval/DECOMPOSITION.md",
+          "sha256": "e675355d65b0eaf860ca24a9d2d31c2a571a4f2a13578b6edf8f5ab4fa785953"
+        },
+        {
+          "path": "skills/open-user-goal/recoverSameTurnEval/chooseSameTurnRecovery/examineEvalCandidates.nl",
+          "sha256": "93778f164df9954e8ec5c1b71eaf9167419235ab7e85c168fb2a58843791261f"
+        },
+        {
+          "path": "skills/open-user-goal/recoverSameTurnEval/chooseSameTurnRecovery.nl",
+          "sha256": "84691dd267f7286ec2c168dbda140f0c0abcf090ace8d6d2984d9c6a47777eef"
+        },
+        {
+          "path": "skills/open-user-goal/recoverSameTurnEval/contract.ts",
+          "sha256": "86ff1562ca907849e0facbf58e1f98e35247aa2536f6df63a8c22ad84264059b"
+        },
+        {
+          "path": "skills/open-user-goal/recoverSameTurnEval/discoverSameTurnEval.ts",
+          "sha256": "8ba237260cc6551bb15822ade65bdcb710191eda643c09ac2a741ac2674eb679"
+        },
+        {
+          "path": "skills/open-user-goal/recoverSameTurnEval/inspectSameTurnEval/readNativeEvalState.ts",
+          "sha256": "7dd51dca25a08175bdd48498b049a2506758d8450578e6606653e7af566d2cc2"
+        },
+        {
+          "path": "skills/open-user-goal/recoverSameTurnEval/inspectSameTurnEval.nl",
+          "sha256": "0efa5db84a99c059d384b5eb4dfa6d72a2571ae14ce307d35a3c983fb9ef557f"
+        },
+        {
+          "path": "skills/open-user-goal/recoverSameTurnEval/resolveSameTurnEval.ts",
+          "sha256": "9921253ca63f00c7c334ffff5f6e0d46bb806225603baf6e6641dda8788f5181"
+        },
+        {
+          "path": "skills/open-user-goal/recoverSameTurnEval/types.ts",
+          "sha256": "07480618432fe5c5ed124b5809b7ed36d3d40a284e3ccb71cbd7d16de6c44605"
+        },
+        {
+          "path": "skills/system-testing/open-goal-same-turn-eval-managed.ts",
+          "sha256": "2b8157c96032875f81a177bae8fb92ab33204ab8409c2e8a394dd5c7c538cf92"
+        },
+        {
+          "path": "skills/system-testing/open-goal-same-turn-eval-worlds.ts",
+          "sha256": "1e71694190d76eae76246df0c2d568b053810cf7726983f61b232dd0d33670be"
+        }
+      ],
+      "rootMeaning": "Existing TS fixes evidence and continuation choices; inspect exact current domain and literal goals before moving choice to hierarchy.",
+      "nativeStatus": "All per-literal gates/returns/effects/call routes and authority to be classified before edits.",
+      "actualConsumers": [
+        "skills/open-user-goal/entries.json:483:    \"program\": \"skills/open-user-goal/recoverSameTurnEval.ts\",",
+        "skills/open-user-goal/entries.json:484:    \"callable\": \"recoverSameTurnEval\",",
+        "skills/open-user-goal/recoverSameTurnEval.ts:1:import discoverSameTurnEval from \"./recoverSameTurnEval/discoverSameTurnEval.js\";",
+        "skills/open-user-goal/recoverSameTurnEval.ts:2:import resolveSameTurnEval from \"./recoverSameTurnEval/resolveSameTurnEval.js\";",
+        "skills/open-user-goal/recoverSameTurnEval.ts:3:import inspectSameTurnEval from \"./recoverSameTurnEval/inspectSameTurnEval.nl\";",
+        "skills/open-user-goal/recoverSameTurnEval.ts:4:import chooseSameTurnRecovery from \"./recoverSameTurnEval/chooseSameTurnRecovery.nl\";",
+        "skills/open-user-goal/recoverSameTurnEval.ts:5:import type {SameTurnEvalOutcome} from \"./recoverSameTurnEval/types.js\";",
+        "skills/open-user-goal/recoverSameTurnEval.ts:8:export default async function recoverSameTurnEval(goal:string):Promise<SameTurnEvalOutcome>{",
+        "skills/open-user-goal/services.d.ts:245:    discover(): Promise<import(\"./recoverSameTurnEval/contract.js\").EvalAssignment>;",
+        "skills/open-user-goal/services.d.ts:246:    observe(id: string): Promise<import(\"./recoverSameTurnEval/contract.js\").EvalCellEvidence>;",
+        "skills/open-user-goal/services.d.ts:249:    resolve(id: string, runId: string, decision: import(\"./recoverSameTurnEval/contract.js\").EvalPick[\"decision\"]):",
+        "skills/open-user-goal/services.d.ts:250:      Promise<import(\"./recoverSameTurnEval/contract.js\").EvalRecoveryReceipt>;",
+        "skills/open-user-goal/types.ts:483:export * from \"./recoverSameTurnEval/contract.js\";",
+        "skills/open-user-goal/entriesGenerated.ts:484:    \"program\": \"skills/open-user-goal/recoverSameTurnEval.ts\",",
+        "skills/open-user-goal/entriesGenerated.ts:485:    \"callable\": \"recoverSameTurnEval\","
+      ],
+      "nativeCandidates": [
+        "2:import {assessObservedApplicationOutcome,type ApplicationReturnContribution} from \"@workspace/application-outcomes/observed-application-outcome\";",
+        "5:import { isDeepStrictEqual } from \"node:util\";",
+        "72:  let closed = false, scopeOpened = false, discovered = false, inspecting = false, resolving = false;",
+        "106:      receipt.runId !== runId || !isDeepStrictEqual(receipt.result, state.result)) throw new Error(\"Native EvalDO terminal receipt disagrees with current status\");",
+        "113:    if (!receipt || !isDeepStrictEqual(visible, receipt.result)) throw new Error(\"Eval action lost its terminal receipt\");",
+        "117:    let offset = 0, length: number | undefined;",
+        "121:      if (page.encoding !== \"utf16le-base64\" || !Number.isSafeInteger(page.length) || page.length < 0 || page.length > maxText ||",
+        "122:        length !== undefined && length !== page.length) throw new Error(\"Owned recovery text changed length or exceeded its byte window\");",
+        "123:      length = page.length;",
+        "125:      if (bytes.length !== 2 * Math.min(PAGE, length - offset)) throw new Error(\"Owned scope page was incomplete\");",
+        "126:      offset += bytes.length / 2;",
+        "128:    } while (offset < length);",
+        "129:    return { data: Buffer.concat(chunks).toString(\"utf16le\"), pages: chunks.length };",
+        "181:        if (id !== assignment.id || inspecting) throw new Error(\"Read the admitted owned same-turn evidence once\");",
+        "182:        inspecting = true;",
+        "184:        finally { inspecting = false; }",
+        "227:    const contributions=authored.filter(binding=>{",
+        "229:      for(const key of binding.rootPath){",
+        "235:    const assessed=await assessObservedApplicationOutcome(proof,proof.outcomeContract,value,invocation,contributions);",
+        "245:    const outcome = report, pick = world.expected, native = admittedAttempt?.result;",
+        "246:    const expectedStatus: Status = world.mode === \"invalid\" ? \"unadmitted\" : world.mode === \"timeout\" ? \"timed-out\" :",
+        "248:    const expectedWindow = world.mode === \"wide\" ? candidate(initial) :",
+        "250:    const expectedPageCount = pick.decision === \"window\" ? Math.ceil(JSON.stringify({ head: \"a\".repeat(HEADER),",
+        "251:      packet: initial, tail: \"z\".repeat(TAIL) }, null, 2).length / PAGE) : pick.decision === \"checkpoint\" ? 1 : 0;",
+        "252:    const expectedRecovery = pick.decision === \"held\" ? null : { observation: wanted, scopeId,",
+        "253:      resultDigest: hash(wanted), recoveryRun: pick.decision === \"narrow\" ? runIds.recover : null, pages: expectedPageCount };",
+        "259:      isDeepStrictEqual(admittedDiagnostic, await retained(runIds.diagnostic));",
+        "260:    const failureVisible = expectedStatus === \"completed\" ? native?.success === true :",
+        "261:      typeof evidence?.diagnostic === \"string\" && evidence.diagnostic.length > 0 &&",
+        "262:      (expectedStatus === \"unadmitted\" ? evidence.failureCode === \"invalid_tool_arguments\" :",
+        "263:        native?.success === false && (expectedStatus !== \"timed-out\" || evidence.failureCode === \"eval_deadline_exceeded\"));",
+        "267:        isDeepStrictEqual(admittedAttempt, currentReceipt) && evidence.status === expectedStatus && failureVisible,",
+        "268:      verifiedRetainedCheckpointAndWindow: !!evidence && isDeepStrictEqual(evidence.checkpoint, candidate(checkpoint)) &&",
+        "269:        isDeepStrictEqual(evidence.window, expectedWindow) && isDeepStrictEqual(evidence.compact, world.mode === \"compact\" ? candidate(initial) : null) &&",
+        "270:        evidence.returnKind === (expectedWindow ? \"window\" : world.mode === \"compact\" ? \"compact\" : \"none\"),",
+        "271:      matchedAuthorizedSameTurnRecovery: isDeepStrictEqual(outcome?.pick,pick)&&isDeepStrictEqual(outcome?.recovery,expectedRecovery),",
+        "272:      verifiedUsefulResultAndBoundedRetry: isDeepStrictEqual(delivery, expectedRecovery) && isDeepStrictEqual(recovery, actualRecovery) &&",
+        "279:        returnedValue:{checks:[\"matchedAuthorizedSameTurnRecovery\"],required:pick.decision===\"held\",rationale:\"A requested query answer is required; a redundant result copy is optional after its requested native effect is established.\"},",
+        "283:      assignment, evidence, pick, recovery: expectedRecovery, effects: structuredClone(effects) };",
+        "291:    const pick = world.expected;",
+        "297:    const rejectedWrongRevision = !(await verify({ ...report, recovery: {...(recovery??{}),scopeId:\"other-scope\"} })).outcomeDimensions.returnedValue.passed;"
+      ]
+    },
+    {
+      "kind": "content-archive",
+      "root": "skills/open-user-goal/recoverContentArchive.ts",
+      "sources": [
+        {
+          "path": "skills/open-user-goal/recoverContentArchive.ts",
+          "sha256": "3ac26fd42e02a7f9db1590a1dc9023a6478e19934a155299e3ccb74df6bccac3"
+        },
+        {
+          "path": "skills/open-user-goal/recoverContentArchive/DECOMPOSITION.md",
+          "sha256": "ab9ae83284c79dd40b2f78d957e84ca06a1a039b92135e316a6babbf12c4535f"
+        },
+        {
+          "path": "skills/open-user-goal/recoverContentArchive/applyArchive.ts",
+          "sha256": "b9412c38b5d868a2a492fe1170791e6a86fc1b463b13fff3a5b32e076f89cc40"
+        },
+        {
+          "path": "skills/open-user-goal/recoverContentArchive/chooseEdition.nl",
+          "sha256": "018ffcdb6b52658a0c2a7241887e47d48f7a3f4e46f4b445f7cfd3992ab67b31"
+        },
+        {
+          "path": "skills/open-user-goal/recoverContentArchive/contract.ts",
+          "sha256": "d5a576d9f873ca7f513fcc514cf19af62f25b9b1bb44d9046e9243089dd080a4"
+        },
+        {
+          "path": "skills/open-user-goal/recoverContentArchive/discoverArchive.ts",
+          "sha256": "c22e25f0e61c179a1d6e82d873b420158a2f706262330377e2792645bda8f0a7"
+        },
+        {
+          "path": "skills/open-user-goal/recoverContentArchive/inspectArchive/readArchiveEvidence.ts",
+          "sha256": "ecdb45bbc7955829782903b595becf93abd3cbc730c8a9e53f2a2d1d87972e37"
+        },
+        {
+          "path": "skills/open-user-goal/recoverContentArchive/inspectArchive.nl",
+          "sha256": "ed36c283c0b0b0b91ea18da1619af0cd990124459094fb7c0e7ad42b7e310004"
+        },
+        {
+          "path": "skills/open-user-goal/recoverContentArchive/planRestoration/analyzeWorking.nl",
+          "sha256": "4ed7742868a86e10a734656cd94ad37cea0df219d40d1db4d1819c839075613f"
+        },
+        {
+          "path": "skills/open-user-goal/recoverContentArchive/planRestoration.nl",
+          "sha256": "8b418e4937692cbd39ac85b29d693951fe0df42ec57421ff808da6e4bdc31386"
+        },
+        {
+          "path": "skills/open-user-goal/recoverContentArchive/types.ts",
+          "sha256": "b25d047d2118ca282f38d4b97196c0e344f8c29eea7dd27174f3879e58b9429b"
+        },
+        {
+          "path": "skills/system-testing/open-goal-content-archive-managed.ts",
+          "sha256": "fd812bd9c56ef4dfe1964074e44c8636eaaed6eaf05ba99a59ba3a8360377da3"
+        },
+        {
+          "path": "skills/system-testing/open-goal-content-archive-worlds.ts",
+          "sha256": "e49f98f993e21be11cc73bbadd0f74f717b307948663e7d1110b4ee9abb8a081"
+        }
+      ],
+      "rootMeaning": "Existing TS fixes evidence and continuation choices; inspect exact current domain and literal goals before moving choice to hierarchy.",
+      "nativeStatus": "All per-literal gates/returns/effects/call routes and authority to be classified before edits.",
+      "actualConsumers": [
+        "skills/open-user-goal/entries.json:523:    \"program\": \"skills/open-user-goal/recoverContentArchive.ts\",",
+        "skills/open-user-goal/entries.json:524:    \"callable\": \"recoverContentArchive\",",
+        "skills/open-user-goal/recoverContentArchive.ts:1:import discoverArchive from \"./recoverContentArchive/discoverArchive.js\";",
+        "skills/open-user-goal/recoverContentArchive.ts:2:import applyArchive from \"./recoverContentArchive/applyArchive.js\";",
+        "skills/open-user-goal/recoverContentArchive.ts:3:import inspectArchive from \"./recoverContentArchive/inspectArchive.nl\";",
+        "skills/open-user-goal/recoverContentArchive.ts:4:import chooseEdition from \"./recoverContentArchive/chooseEdition.nl\";",
+        "skills/open-user-goal/recoverContentArchive.ts:5:import planRestoration from \"./recoverContentArchive/planRestoration.nl\";",
+        "skills/open-user-goal/recoverContentArchive.ts:6:import type {ContentArchiveOutcome} from \"./recoverContentArchive/types.js\";",
+        "skills/open-user-goal/recoverContentArchive.ts:9:export default async function recoverContentArchive(goal:string):Promise<ContentArchiveOutcome>{",
+        "skills/open-user-goal/services.d.ts:285:    discover(): Promise<import(\"./recoverContentArchive/contract.js\").ContentArchiveAssignment>;",
+        "skills/open-user-goal/services.d.ts:286:    inspect(id: string): Promise<import(\"./recoverContentArchive/contract.js\").ContentArchiveObservation>;",
+        "skills/open-user-goal/services.d.ts:290:      Promise<import(\"./recoverContentArchive/contract.js\").ContentArchiveReceipt>;",
+        "skills/open-user-goal/types.ts:488:export * from \"./recoverContentArchive/contract.js\";",
+        "skills/open-user-goal/entriesGenerated.ts:524:    \"program\": \"skills/open-user-goal/recoverContentArchive.ts\",",
+        "skills/open-user-goal/entriesGenerated.ts:525:    \"callable\": \"recoverContentArchive\","
+      ],
+      "nativeCandidates": [
+        "1:import {assessObservedApplicationOutcome,type ApplicationReturnContribution} from \"@workspace/application-outcomes/observed-application-outcome\";",
+        "4:import { isDeepStrictEqual } from \"node:util\";",
+        "18:type Plan = { action: World[\"expected\"][\"action\"]; paths: string[]; reason: string };",
+        "67:  await client.edit({ contextId: owner, commandId: \"archive-seed-\" + token, expectedWorkingHead: initial.workingHead,",
+        "115:    if (page.repositoryId !== id || !isDeepStrictEqual(page.state, state) || page.nextCursor !== null)",
+        "129:          root && root !== page.basis.rootTreeHash || page.entries.length > 2)",
+        "139:      if (cursor === page.nextCursor || !page.entries.length) throw new Error(\"Archive paging did not advance\");",
+        "148:    if (!bytes || bytes.length > 10000 || sha256Hex(bytes) !== index.contentHash) return visible;",
+        "151:      Array.isArray(manifest.files) && manifest.files.length === paths.length &&",
+        "152:      isDeepStrictEqual(manifest.files.map(item => item.path), paths) &&",
+        "153:      manifest.files.every(item => item.mode === approvedMode && isDeepStrictEqual(item, listing.get(item.path)));",
+        "159:      return retained !== null && retained.length <= 20000 && sha256Hex(retained) === member.contentHash;",
+        "208:    if (!edits.length) return hold(\"keep-current\");",
+        "235:        if (approvedPlan.action !== \"restore\" || !isDeepStrictEqual(approvedPlan.paths, selected))",
+        "252:            await client.edit({ contextId: owner, commandId: crypto.randomUUID(), expectedWorkingHead: checkpoint.workingHead,",
+        "264:            if (!bytes || bytes.length > 20000 || sha256Hex(bytes) !== member.contentHash)",
+        "273:            applied = await client.edit({ contextId: owner, commandId: crypto.randomUUID(), expectedWorkingHead: checkpoint.workingHead,",
+        "280:          if (applied.changeIds.length !== selected.length) throw new Error(\"The archive edit did not commit the exact scoped set\");",
+        "294:    const contributions=authored.filter(binding=>{",
+        "296:      for(const key of binding.rootPath){",
+        "302:    const assessed=await assessObservedApplicationOutcome(proof,proof.outcomeContract,report,invocation,contributions);",
+        "318:    const restored = world.expected.restored.map(index => paths[index]);",
+        "319:    const intended = world.expected.action === \"restore\" ? world.scope.filter(index => world.working[index] !== \"current\").map(index => paths[index]) : [];",
+        "320:    const expectedRef = world.expected.edition ? assignment[world.expected.edition] : null;",
+        "324:    const expectedRestore = world.expected.action === \"restore\";",
+        "325:    const counts = !!storedReceipt?.application?.id && storedReceipt.application.changes.length === restored.length;",
+        "330:      exactArchiveTreesAndBasis: observed !== null && isDeepStrictEqual(observed.primary, first) &&",
+        "331:        isDeepStrictEqual(observed.previous, second),",
+        "332:      matchedApprovedEdition: !!observed&&choose(observed)===expectedRef,",
+        "333:      matchedScopedLocalPlan: out?.action===world.expected.action&&typeof out?.reason===\"string\"&&!!out.reason.trim()&&isDeepStrictEqual(out?.receipt,storedReceipt),",
+        "345:      verifiedAtomicReceipt: (expectedRestore ? world.race ?",
+        "348:        (!storedReceipt || storedReceipt.workingRevision === revision(checkpoint.workingHead) && isDeepStrictEqual(storedReceipt.files, final)) &&",
+        "349:        sameEvidenceMembers(effects.map(item => item.method), expectedRestore ? [\"discover\", \"inspect\", \"restore\"] : [\"discover\", \"inspect\"]),",
+        "350:      preservedWorkingProjectAndNeighbor: exactRepo?.repositoryId === repository && isDeepStrictEqual(stable, corresponding) &&",
+        "351:        isDeepStrictEqual(neighboring, initialNeighbor) && checkpoint.mainEventId === initial.mainEventId &&",
+        "353:        (expectedRestore ? revision(checkpoint.workingHead) !== revision(seeded.workingHead) : revision(checkpoint.workingHead) === revision(seeded.workingHead)),",
+        "357:        returnedValue:{checks:[\"matchedScopedLocalPlan\"],required:world.expected.action!==\"restore\",rationale:\"A requested domain answer is required; an extra result copy is optional after the requested native mutation or artifact is independently established.\"},"
+      ]
+    },
+    {
+      "kind": "agent-capability",
+      "root": "skills/open-user-goal/recoverAgentCapability.ts",
+      "sources": [
+        {
+          "path": "skills/open-user-goal/recoverAgentCapability.ts",
+          "sha256": "71eeac553bf5e00343870d5974ef0d7277aacbdf5e8221e925a67dddbf53b595"
+        },
+        {
+          "path": "skills/open-user-goal/recoverAgentCapability/DECOMPOSITION.md",
+          "sha256": "99a12f0f1242ec1eab931a48348d9a6fdd8c179a941b9481f61ebe0f6e3f5e36"
+        },
+        {
+          "path": "skills/open-user-goal/recoverAgentCapability/continueCapability.ts",
+          "sha256": "1aaa376ae041f8796813e45da0616855e6d1868bc24837760a5cbe2b83dd59fc"
+        },
+        {
+          "path": "skills/open-user-goal/recoverAgentCapability/contract.ts",
+          "sha256": "6c79b391dfbe6d87f404f38cab8f36770ebea4411ecfbaad06f71bc2f09f48b1"
+        },
+        {
+          "path": "skills/open-user-goal/recoverAgentCapability/decideContinuation.nl",
+          "sha256": "c65300328af9f319c61bf3cd9cb10b080a06d1bebbfe9edf54fce88af6b4554c"
+        },
+        {
+          "path": "skills/open-user-goal/recoverAgentCapability/discoverAttempts.ts",
+          "sha256": "d568f9e62534ed076dafe6de4ac7e757d50e78a590f7f7ae3398717caf672ef7"
+        },
+        {
+          "path": "skills/open-user-goal/recoverAgentCapability/inspectAttempt/readNativeAttempt.ts",
+          "sha256": "7ae46d7392b1a68728f1ac84698b235ed6c3c762e53a8d41753b93458ee5c676"
+        },
+        {
+          "path": "skills/open-user-goal/recoverAgentCapability/inspectAttempt.nl",
+          "sha256": "eeb8d89c668c09f91f4cb694fc09d5c398980dda47c18fe88abeec7c30aec257"
+        },
+        {
+          "path": "skills/open-user-goal/recoverAgentCapability/types.ts",
+          "sha256": "cd6add7b878d00a896e2811b042a708410fd93216ff12f8a91364b93a6dd5e2a"
+        },
+        {
+          "path": "skills/system-testing/open-goal-agent-capability-managed.ts",
+          "sha256": "f43d8150c2eed1a493ee50263e717605fccb8fe2a66be43525cee324046a2257"
+        },
+        {
+          "path": "skills/system-testing/open-goal-agent-capability-worlds.ts",
+          "sha256": "ccfc8fd0cb8dd12b5610e02a5bab06aaf1ec7224f630c017b5c6ea774dfbd1d5"
+        }
+      ],
+      "rootMeaning": "Existing TS fixes evidence and continuation choices; inspect exact current domain and literal goals before moving choice to hierarchy.",
+      "nativeStatus": "All per-literal gates/returns/effects/call routes and authority to be classified before edits.",
+      "actualConsumers": [
+        "skills/open-user-goal/entries.json:563:    \"program\": \"skills/open-user-goal/recoverAgentCapability.ts\",",
+        "skills/open-user-goal/entries.json:564:    \"callable\": \"recoverAgentCapability\",",
+        "skills/open-user-goal/recoverAgentCapability.ts:1:import discoverAttempts from \"./recoverAgentCapability/discoverAttempts.js\";",
+        "skills/open-user-goal/recoverAgentCapability.ts:2:import continueCapability from \"./recoverAgentCapability/continueCapability.js\";",
+        "skills/open-user-goal/recoverAgentCapability.ts:3:import inspectAttempt from \"./recoverAgentCapability/inspectAttempt.nl\";",
+        "skills/open-user-goal/recoverAgentCapability.ts:4:import decideContinuation from \"./recoverAgentCapability/decideContinuation.nl\";",
+        "skills/open-user-goal/recoverAgentCapability.ts:5:import type {AgentCapabilityOutcome} from \"./recoverAgentCapability/types.js\";",
+        "skills/open-user-goal/recoverAgentCapability.ts:8:export default async function recoverAgentCapability(goal:string):Promise<AgentCapabilityOutcome>{",
+        "skills/open-user-goal/types.ts:492:export type { AgentCapabilityOutcome } from \"./recoverAgentCapability/types.js\";",
+        "skills/open-user-goal/services.d.ts:321:    discover(): Promise<import(\"./recoverAgentCapability/contract.js\").ActionAssignment>;",
+        "skills/open-user-goal/services.d.ts:322:    inspect(id: string): Promise<import(\"./recoverAgentCapability/contract.js\").ActionEvidence>;",
+        "skills/open-user-goal/services.d.ts:326:      decision: import(\"./recoverAgentCapability/contract.js\").CapabilityDecision):",
+        "skills/open-user-goal/services.d.ts:327:      Promise<import(\"./recoverAgentCapability/contract.js\").Continuation | null>;",
+        "skills/open-user-goal/entriesGenerated.ts:564:    \"program\": \"skills/open-user-goal/recoverAgentCapability.ts\",",
+        "skills/open-user-goal/entriesGenerated.ts:565:    \"callable\": \"recoverAgentCapability\","
+      ],
+      "nativeCandidates": [
+        "4:const assessObservedApplicationOutcome = bindObservedContentReview([\"effects\", \"assignment\", \"evidence\", \"decision\", \"continuation\"], []);",
+        "6:import { isDeepStrictEqual } from \"node:util\";",
+        "163:    if (!isDeepStrictEqual(receipt, step.native.receipt)) throw new Error(\"The immutable native action receipt changed\");",
+        "175:        receipt.result.console.length > 12000 && chunks.some(chunk => chunk.includes(\"$lastLargeConsole\"))) };",
+        "240:          if (!isDeepStrictEqual(fresh, previouslyObserved) || decisionFor(fresh) !== decision)",
+        "268:    const contributions=authored.filter(binding=>{",
+        "270:      for(const key of binding.rootPath){",
+        "276:    const assessed=await assessObservedApplicationOutcome(proof,proof.outcomeContract,input,invocation,contributions);",
+        "291:    const mayContinue = decision === \"confirm-continuation\" || decision === \"retry-exact-step\";",
+        "293:    let exactEffect = !mayContinue && continued === null && isDeepStrictEqual(after[0], originalValues[0]);",
+        "294:    if (mayContinue && continued) {",
+        "296:      const expected = decision === \"retry-exact-step\"",
+        "299:      exactEffect = after[0]![notebookKey] === expected && continued.receipt.runId !== current.native.runId &&",
+        "304:          isDeepStrictEqual(receipt.result.returnValue, { revision: currentView.notebook.revision, saved: true }));",
+        "307:      selectedExactOwnedAttempts: viewed.size === 2 && !!observed && viewed.has(prior.card.id)&&isDeepStrictEqual(viewed.get(current.card.id),observed),",
+        "310:        isDeepStrictEqual(viewed.get(prior.card.id), earlier),",
+        "311:      verifiedConsoleAndNotebookEvidence: isDeepStrictEqual(observed?.console, currentView.console) &&",
+        "314:      respectedRecoveryDecision: isDeepStrictEqual(outcome?.continuation,continued?.receipt??null)&&outcome?.finding?.decision === decision && typeof outcome.finding.reason === \"string\" &&",
+        "315:        outcome.finding.reason.trim().length > 0,",
+        "317:        effects.filter(effect => effect.service === \"agentCapabilityContinue\").length === (mayContinue ? 1 : 0),",
+        "318:      preservedOtherState: keys.every(key => after[0]![key] === originalValues[0]![key]) && isDeepStrictEqual(after.slice(1), originalValues.slice(1)) &&",
+        "319:        initial.mainEventId === head.mainEventId && isDeepStrictEqual(initial.workingHead, head.workingHead),",
+        "324:        returnedValue:{checks:[\"respectedRecoveryDecision\"],required:!mayContinue,rationale:\"The requested analysis is application data; a redundant result copy is optional once the requested native artifact or operation exists.\"},",
+        "339:    const rejectedInventedApplicationValue = !(await verify({...result,finding:{decision:\"invented\",reason:\"invented\"}})).outcomeDimensions.returnedValue.passed;"
+      ]
+    }
+  ],
+  "sharedMechanism": "High-level semantic recovery/evidence/continuation remains fixed in TS while private NL judgments and exact native effect services already exist. Inventory public value obligations separately from native authority and bookkeeping.",
+  "excludedRelays": [
+    {
+      "path": "skills/open-user-goal/recoverOperatingHandoff.ts:1",
+      "reason": "Thin typed relay invokes two existing semantic NL roots and forwards actual checked result; no semantic routing performed."
+    }
+  ],
+  "engineScope": {
+    "change": "Shared authored program/native fixture boundaries, consumed by joint ProgramLoader; no Core engine/compiler/runtime feature or SDK changes proposed.",
+    "evidence": [
+      "Base packages/natlang/src/programs.ts shared ProgramLoader.load compiles actual authored source with selected vendored workerdPlatform",
+      "All selected natural root programs use same compiler/evaluator path; no separate managed-llama/Python/SGLang dispatch added by template authoring. Native services remain exact effect authorities."
+    ],
+    "checked": "Source-level program/caller/fixture inventory",
+    "unchecked": "Concrete engine adaptations not proposed; official real public loader controls will verify actual selected Workerd compiler/runtime."
+  },
+  "systemSuccessor": {
+    "path": "/home/werg/vibe-cli-native-scope-system",
+    "before": "5a63353a2f541e7e093db34890bc72598793c7e5",
+    "paths": [
+      "skills/remote-access/types.ts",
+      "skills/remote-access/planCliContinuation.nl",
+      "skills/remote-access/planCliContinuation/chooseCliAction.nl",
+      "six actually compiler-generated .d.nl.ts",
+      "skills/remote-access/DECOMPOSITION.md"
+    ],
+    "canonicalAuthorityEvidence": [
+      "Host src/cli/agent/sessionContext.ts:205 selector precedence and bound agent context",
+      "Host src/cli/agent/evalCommand.ts:148 explicitly supports agent-token path",
+      "Host src/server/services/evalService.ts:463 resolves exact agent entity/context, not blanket parent-only execution"
+    ],
+    "correction": "Scope compatibility is not execution permission. Delete unsupported parent-only inference and public action echo; retain exact scope value and actual native admission."
+  },
+  "validation": {
+    "publicFourDomains": {
+      "passed": 4,
+      "unit": "vibe-native-recovery-cohort-public-20261126a",
+      "preemption": "First attempt legitimately LOW-preempted by free-memory floor; same unit resumed and all4 passed217.89s/2.9GiB."
+    },
+    "publicInstalledSystemScope": {
+      "passed": 1,
+      "unit": "vibe-cli-system-public-20261126a"
+    },
+    "nativeControls": {
+      "passed": 110,
+      "units": [
+        "vibe-recovery-native-host-parity-20261126b",
+        "vibe-turn-recovery-idempotent-20261126a",
+        "vibe-cli-scope-policy-parity-20261126a"
+      ]
+    },
+    "hostBindings": {
+      "passed": 30,
+      "unit": "vibe-recovery-final-host-20261126a"
+    },
+    "canonicalEntriesAnd380": {
+      "passed": true,
+      "unit": "vibe-recovery-final-declarations-20261126a"
+    },
+    "systemSixDeclarations": {
+      "passed": true,
+      "unit": "vibe-cli-system-declarations-20261126b",
+      "artifactProof": {
+        "generator": "Actual selected Workerd compileProgram/readProjectFiles, no handwritten declarations",
+        "unit": "vibe-cli-system-declarations-20261126b",
+        "files": [
+          {
+            "file": "skills/remote-access/commissionRemoteWorkspace.d.nl.ts",
+            "sha256": "70a2e1841e5ff709475a470524312da36f59914b920b3b4341b8000428a18e98"
+          },
+          {
+            "file": "skills/remote-access/deployRemoteServer.d.nl.ts",
+            "sha256": "82019fc06f1482bfd7d81978eb5a0dccfa2c543819d24030e5d53e52bb1154e1"
+          },
+          {
+            "file": "skills/remote-access/openRemoteWorkspace.d.nl.ts",
+            "sha256": "ffab938a3ade1ee7455a936b4cd9bd678621f0d6426dfc737ce3fd611d8a5571"
+          },
+          {
+            "file": "skills/remote-access/planCliContinuation.d.nl.ts",
+            "sha256": "230311385fbab5af17bb88ec334deacce792d582e63c641aacc4261dc9decea1"
+          },
+          {
+            "file": "skills/remote-access/remoteLayer.d.nl.ts",
+            "sha256": "e896667a7e5f8e9f32394999ca2c191df1ec5b716877e9fea9a9a16a9c677b5b"
+          },
+          {
+            "file": "skills/remote-access/reviewRemoteRoute.d.nl.ts",
+            "sha256": "443146b903ed35c8df4a9e992313ea59b5e008b5ce913a5d8a43d2c12027735c"
+          }
+        ]
+      }
+    }
+  },
+  "literalContracts": [
+    {
+      "kind": "cli-route",
+      "path": "/home/werg/vibe-native-recovery-goal-meaning/skills/system-testing/open-goal-cli-route-worlds.ts",
+      "sha256": "778af62672b4b547525d78c80dbb7146c7e8b2072fdcec859bb6224af8330883",
+      "worlds": 24,
+      "required": 24,
+      "cases": [
+        {
+          "id": "cli-route-event-poster-named-session",
+          "goal": "Before I inspect Event poster proof, recover the saved CLI invocation's exact workspace target. The named session came from the print operator and the context flag points at our rehearsal. Which one actually determines the read?",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "cli-route-capstan-agent-local-edit",
+          "goal": "The linked worker picked up Capstan briefing and wants to amend its source. Check the active CLI context and tell us whether the amendment stays with the worker or needs the parent.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "cli-route-map-mirror-wrong-workspace",
+          "goal": "I nearly ran the Map index review from a folder copied from another workspace. The saved personal default looks plausible. Check the reachable identity and say which saved location needs correction.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "cli-route-staged-welcome-missing-scope",
+          "goal": "We've opened the gateway for Staged welcome cards but lost the invocation's context during an interrupted setup. Establish exactly what is still missing before suggesting we run its inspection.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "cli-route-counter-archive-stale-session",
+          "goal": "Counter archive is still attached to the shift lead's named CLI session. The folder has a working binding. Check whether the earlier session can be used with this gateway or needs repair before anyone reads it.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "cli-route-closing-registry-agent-read",
+          "goal": "Can the linked agent read Closing registry from its current CLI launch? Establish which current context it would use and whether the requested inspection needs a parent.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "cli-route-poster-variants-owned-device-edit",
+          "goal": "I'd like a quick scope check on the saved Poster variants CLI amendment. The current folder was deliberately bound for the revision, while the default session was kept for draft comparisons.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "cli-route-late-shift-agent-context-collision",
+          "goal": "For Late shift ledger, check whether the explicitly chosen CLI context remains within the linked worker's scope. A stale ambient value resolves somewhere else. Give the exact repair decision without trying the command.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "cli-route-seat-map-default-owner",
+          "goal": "Recover the intended CLI execution scope for Seat map approval. It was saved as the default session before the operator closed the original shell, and the current invocation has no explicit flags.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "cli-route-steward-review-env-wins",
+          "goal": "The Steward review was launched by an owned workspace window. Check whether its active context survives our folder's older binding before I inspect the evidence file.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "cli-route-parts-list-agent-eval",
+          "goal": "Work out how to resume the Parts list report's retained evaluation. Its named session is still reachable, and a linked agent is holding it. Say who can continue after checking the exact scope.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "cli-route-vessel-card-agent-default-retired",
+          "goal": "Check the saved Vessel card inspection after its original agent was replaced. The default session still names the former context. Explain the scope problem before anyone tries to reuse that invocation.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "cli-route-route-appendix-old-workspace",
+          "goal": "The Route appendix launch opened a gateway, but the workspace name is shared by the archived dashboard. Check the actual workspace identity and decide which route needs refreshing before continuing the old command.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "cli-route-marquee-review-reassigned-server",
+          "goal": "The help desk moved Marquee review to a new host. Compare the currently authenticated server with the saved assignment and say what needs confirmation before relying on its old CLI session.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "cli-route-public-archive-local-eval",
+          "goal": "Check whether the archive index rehearsal's saved CLI evaluation can resume under the workspace device identity. The shell still carries a context from a retired comparison.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "cli-route-training-window-ambient-foreign",
+          "goal": "Before we inspect Training window, work out why the linked agent's inherited launch context differs from its own role. The folder entry has been corrected. Check which coordinate is effective.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "cli-route-river-observation-current-default",
+          "goal": "The River observation review kept only a default CLI invocation from last week. Confirm whether its server and workspace coordinates still belong to this gateway.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "cli-route-freight-inventory-role-aware",
+          "goal": "Our Freight inventory clerk needs to know if the linked worker can amend the notes from the recorded folder binding. Check the command's exact context and return the appropriate handoff.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "cli-route-cabinet-closeout-pinned-other-context",
+          "goal": "The Cabinet closeout invocation names the audit context on purpose. Check whether the device-led inspection keeps that target when the folder still belongs to the preparation context.",
+          "split": "test",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "cli-route-museum-label-session-workspace-move",
+          "goal": "Find out whether Museum label's named session may be reused after the receiving workspace changed. A matching context flag was added later. Tell me which active binding needs repair.",
+          "split": "test",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "cli-route-balance-sheet-wait-for-parent",
+          "goal": "I want the Balance sheet handover to say whether its linked recorder can perform the saved evaluation. Its inherited context was approved locally. Verify who should take it from here.",
+          "split": "test",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "cli-route-archive-corner-routing-repair",
+          "goal": "The Archive corner CLI launch came up after a workspace relocation. Check the gateway's actual workspace before carrying forward any cursor from the saved route.",
+          "split": "test",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "cli-route-crew-coordinator-origin-hold",
+          "goal": "Resolve the Crew coordinator launch's original server before favoring its similar-looking workspace label. I need the safe local disposition for the saved review.",
+          "split": "test",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "cli-route-ownerless-bindings-agent",
+          "goal": "The linked agent wants to inspect Ownerless notes after its saved workspace invocation was cleared. Check what the CLI can actually select and tell me what must be restored.",
+          "split": "test",
+          "requestedReturnRequired": true
+        }
+      ]
+    },
+    {
+      "kind": "same-turn-eval",
+      "path": "/home/werg/vibe-native-recovery-goal-meaning/skills/system-testing/open-goal-same-turn-eval-worlds.ts",
+      "sha256": "33e17f45578f163a5fcf1397fa23092fc57d9411fa1e42ca9d79483dafaa406b",
+      "worlds": 26,
+      "required": 26,
+      "cases": [
+        {
+          "id": "same-turn-eval-retained-count-after-throw",
+          "goal": "The parcel summary tool reported a formatting fault. Recover the already accepted total from this turn if it reached a durable checkpoint.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "same-turn-eval-syntax-retry-with-small-projection",
+          "goal": "The Hall roster run stopped before making a usable summary. Please still give me the current staffed-desk count and the outstanding assignment.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "same-turn-eval-malformed-request-does-not-create-result",
+          "goal": "My initial Locker audit request used the wrong input format. I still need the current number of usable lockers and any row the data excludes.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "same-turn-eval-timeout-after-exact-checkpoint",
+          "goal": "The badge review exceeded its tool deadline. If this exact revision's approved totals were saved before the timeout, recover them without running the calculation again.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "same-turn-eval-timeout-with-incomplete-mark",
+          "goal": "I need to know whether the Hall lamps review left a usable inspection total after it timed out. Do not repeat the work if the retained evidence is incomplete.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "same-turn-eval-partial-write-needs-independent-review",
+          "goal": "Our Relay box tool left a half-written range count. Give me the current verified total using the local source if the partial checkpoint can't answer it.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "same-turn-eval-missing-details-use-existing-checkpoint",
+          "goal": "The Workshop seat report could not open its decorative appendix. Recover the seat result already accepted for my current plan.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "same-turn-eval-missing-source-checkpoint-from-previous-edition",
+          "goal": "The Service schedule comparison lost its optional supplement. I only want today's exact plan. Tell me if the saved number came from an older edition.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "same-turn-eval-wide-return-lossless-pages",
+          "goal": "The briefing tool gave me a short preview of a large result. Recover the exact number of active rooms and the key exception from the retained report without rerunning it.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "same-turn-eval-large-return-after-small-inspector",
+          "goal": "I asked for a tiny diagnostic after the Caption register result was shortened. Can you still recover the exact original row count and its locale note?",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "same-turn-eval-large-result-replaced-by-unrelated-spill",
+          "goal": "The large Evening delivery summary and another oversized diagnostic shared one turn. If the retained result now belongs to the other request, return the useful answer with a bounded local check.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "same-turn-eval-replacement-window-no-authorized-retry",
+          "goal": "The Course census preview was cropped and a colleague ran a different oversized check next. Verify whether the exact old result survives. Leave the count unsettled when it doesn't.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "same-turn-eval-clean-small-return-after-earlier-residue",
+          "goal": "The earlier Drawing manifest scratch had provisional counts. I need the current compact return from this turn, with its signed revision and attachment note.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "same-turn-eval-exact-checkpoint-has-precedence-over-rerun",
+          "goal": "The Water sample intake tool stopped before answering. Preserve the useful accepted total from this exact request when you can; use a bounded read only if it is missing.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "same-turn-eval-lookalike-current-output-with-restricted-use",
+          "goal": "The Membership renewal tool returned a big result, but I asked to use the officially reviewed checkpoint only. Please retain its exact count and exception.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "same-turn-eval-source-access-not-approved-after-deadline",
+          "goal": "Can I trust any current completion number from the timed-out wayfinding inspection? I haven't authorized a second inspection.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "same-turn-eval-stale-checkpoint-then-independent-tool",
+          "goal": "The first Catering pickup cell read last week's total and then failed. Give me the current count from a narrow read of today's assignment if necessary.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "same-turn-eval-correct-request-missing-admission-with-held-scope",
+          "goal": "My Event map request had an invalid field. The previous run's note may still be on-screen. Tell me what belongs to today's request without running another check.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "same-turn-eval-held-saved-range-selected-after-caller-updated-request",
+          "goal": "For Museum tickets, use the revised evening allocation I just supplied. If the tool stopped before accepting it, recover only information that belongs to the revised request.",
+          "split": "test",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "same-turn-eval-held-unicode-output-cut-after-early-window",
+          "goal": "Recover the note for our Bilingual notice board from the original tool output. The summary preview lost text near the language switch and I need the exact original wording.",
+          "split": "test",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "same-turn-eval-held-timeout-after-old-checkpoint",
+          "goal": "The Workshop delivery pass timed out. The saved total may belong to an earlier day. Verify the current job before using it and leave a hold when all we have is old data.",
+          "split": "test",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "same-turn-eval-held-optional-appendix-missing-after-preparation",
+          "goal": "The Supply desk tool missed one appendix. Keep the current month's approved stock number if it survived as a completed checkpoint and distinguish it from the missing attachment.",
+          "split": "test",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "same-turn-eval-held-partial-state-without-permission",
+          "goal": "I only want to know whether the Lost property inventory already has a valid current count. The interrupted tool may have left some data. Please keep it as it is.",
+          "split": "test",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "same-turn-eval-held-replaced-large-window-with-valid-earlier-checkpoint",
+          "goal": "The Invoice window may now show a large staging diagnostic. Recover the accepted result for this turn from whatever current information actually survived.",
+          "split": "test",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "same-turn-eval-held-compact-success-vs-prior-partial",
+          "goal": "My first Study room attempt reported a provisional value. Check the current result and give me only today's complete count and exception.",
+          "split": "test",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "same-turn-eval-held-malformed-admission-after-saved-proof",
+          "goal": "The Event display request returned a validation error. If the exact approved registration information was saved before that, recover it instead of resubmitting the broken request.",
+          "split": "test",
+          "requestedReturnRequired": true
+        }
+      ]
+    },
+    {
+      "kind": "content-archive",
+      "path": "/home/werg/vibe-native-recovery-goal-meaning/skills/system-testing/open-goal-content-archive-worlds.ts",
+      "sha256": "cb899d8f938c7b44919563c3beac66081f4b2153499c459ba627418b841befd8",
+      "worlds": 30,
+      "required": 12,
+      "cases": [
+        {
+          "id": "content-archive-museum-durable-bundle-recovery",
+          "goal": "The Museum exhibits project lost part of its reviewed handover. Restore the authorized edition so the project guide and supporting material agree again.",
+          "split": "train",
+          "requestedReturnRequired": false
+        },
+        {
+          "id": "content-archive-catalog-preserve-live-cover-note",
+          "goal": "Fix the stale Resource catalog appendix from our reviewed archive, keeping the current cover and the collaborator\u2019s recent browse note.",
+          "split": "train",
+          "requestedReturnRequired": false
+        },
+        {
+          "id": "content-archive-observatory-restore-exact-data-attachment",
+          "goal": "The current Night measurements notes belong to the approved edition, but the downloadable measurement attachment may still be from the old bundle. Repair that attachment only.",
+          "split": "train",
+          "requestedReturnRequired": false
+        },
+        {
+          "id": "content-archive-same-current-edition-does-not-create-edit",
+          "goal": "Check that the reviewed Supply routes archive is already represented by the current project before making any new local change.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "content-archive-workshop-skip-sibling-without-permission",
+          "goal": "The Workshop guide index and appendix both look out of date. Fix the publicly reviewed index in this workspace and leave the appendix for its owner.",
+          "split": "train",
+          "requestedReturnRequired": false
+        },
+        {
+          "id": "content-archive-field-log-recover-deleted-appendix",
+          "goal": "Recover the deleted Field inspection appendix from the archived edition, retaining the approved current cover and working attachment.",
+          "split": "train",
+          "requestedReturnRequired": false
+        },
+        {
+          "id": "content-archive-relocated-effort-collision-keeps-subtree",
+          "goal": "I think a missing Equipment return note could be restored, but another editor may have started a collection at that location. Can this exact approved edit safely proceed?",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "content-archive-marker-review-annotation-blocks-whole-bundle",
+          "goal": "Apply the reviewed Marker corrections as one local bundle if the current files are still safe to replace. Preserve any new note from the reviewer.",
+          "split": "train",
+          "requestedReturnRequired": false
+        },
+        {
+          "id": "content-archive-clinic-readable-archive-only",
+          "goal": "Review how Clinic guide differs from its approved archive and tell me what can be recovered. This request is only for inspection.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "content-archive-handover-owner-mismatch",
+          "goal": "Someone filed a Board handover restoration approval under another project. Check if it actually applies before changing the current guide.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "content-archive-seeded-approval-stale-at-start",
+          "goal": "We need to recover the reviewed Service interval notes, but the approval may predate the current working version. Hold any change outside the reviewed basis.",
+          "split": "train",
+          "requestedReturnRequired": false
+        },
+        {
+          "id": "content-archive-calendar-restore-protect-mid-review-coeditor",
+          "goal": "Recover the reviewed Quarterly calendar files together if the workspace stays on the reviewed revision. A new working note should take precedence.",
+          "split": "train",
+          "requestedReturnRequired": false
+        },
+        {
+          "id": "content-archive-tide-guide-not-from-earlier-edition",
+          "goal": "Tide guide\u2019s retained bundle has a familiar name. Before adopting it, check that it is the scope-approved edition for this project.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "content-archive-port-absent-nominated-object-can-use-exact-copy",
+          "goal": "The nominated Port map archive won\u2019t open. You can use the separately retained copy if it proves the same reviewed edition of this project.",
+          "split": "train",
+          "requestedReturnRequired": false
+        },
+        {
+          "id": "content-archive-manual-missing-current-no-approval-for-previous",
+          "goal": "Locate the admitted Starter manual archive and restore the correction only from that archive. Please leave the project unchanged if the nominated evidence is lost.",
+          "split": "train",
+          "requestedReturnRequired": false
+        },
+        {
+          "id": "content-archive-attendance-check-wrong-project-tree",
+          "goal": "The attached Attendance workflow tree contains the usual files, but I'm uncertain which project it came from. Verify the binding before altering our working notes.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "content-archive-community-archive-unlisted-bundle-member",
+          "goal": "Please restore the approved Community rota bundle only if its retained snapshot contains every reviewed member of the working set.",
+          "split": "train",
+          "requestedReturnRequired": false
+        },
+        {
+          "id": "content-archive-quality-index-content-hash-changed",
+          "goal": "The Quality brief archive came with a reviewed index. Determine whether the retained bytes support that index before writing corrections.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "content-archive-handbook-retained-archive-kind-mismatch",
+          "goal": "I only want to recover the New starter handbook files as reviewed text and data. Check the nominated archive's file modes before applying it.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "content-archive-translation-case-only-path-is-different",
+          "goal": "A different path spelling shows up in the Translation packet archive listing. Recover this edition only if the exact original paths and bytes are retained.",
+          "split": "train",
+          "requestedReturnRequired": false
+        },
+        {
+          "id": "content-archive-coedited-outside-write-scope",
+          "goal": "Replace the stale Kitchen allocation index with the approved edition. Preserve the new steps in the reviewer's appendix and all attachments.",
+          "split": "train",
+          "requestedReturnRequired": false
+        },
+        {
+          "id": "content-archive-correct-bytes-but-local-mode-changed",
+          "goal": "The Teaching packet\u2019s attachment reads correctly but has an unexpected file mode. Restore the exact approved attachment without touching the project notes.",
+          "split": "train",
+          "requestedReturnRequired": false
+        },
+        {
+          "id": "content-archive-held-two-missing-with-independent-navigation",
+          "goal": "Recover what is missing from the School showcase project using its reviewed bundle. Keep the working notes from the other curator.",
+          "split": "test",
+          "requestedReturnRequired": false
+        },
+        {
+          "id": "content-archive-held-previous-copy-of-wrong-repository",
+          "goal": "Housing handbook's chosen archive is missing. A retained alternative is allowed only if it is for the exact reviewed housing project. Verify the alternative before restoring anything.",
+          "split": "test",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "content-archive-held-content-alias-cannot-replace-landing-page",
+          "goal": "The Campaign library archive contains familiar text under another path. Its approved handover requires exact links into the library. Hold restoration if those archived paths don't match.",
+          "split": "test",
+          "requestedReturnRequired": false
+        },
+        {
+          "id": "content-archive-held-mode-repair-and-new-independent-note",
+          "goal": "Repair both authorized Science fair packet files using the same approved archive, preserving the note another editor already added outside the packet.",
+          "split": "test",
+          "requestedReturnRequired": false
+        },
+        {
+          "id": "content-archive-held-award-copy-clean-old-head-permission",
+          "goal": "I reviewed an earlier Awards guide version and want to know whether that approval still permits restoring a missing file in the current local project.",
+          "split": "test",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "content-archive-held-review-read-only-with-blocked-subtree",
+          "goal": "Compare the approved Transport check tree and the current project, where an expected note may now be a nested collection. Don't make a local edit during this review.",
+          "split": "test",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "content-archive-held-confirm-atomic-stop-after-working-edit",
+          "goal": "Restore the reviewed Farm census guide and attachment together when they still match my authorization. Another editor is updating the workspace during review.",
+          "split": "test",
+          "requestedReturnRequired": false
+        },
+        {
+          "id": "content-archive-held-review-approved-previous-no-op",
+          "goal": "The Rainfall ledger\u2019s initial archive disappeared. A verified copy of the same edition can support this review. Preserve the current files if they already match it.",
+          "split": "test",
+          "requestedReturnRequired": true
+        }
+      ]
+    },
+    {
+      "kind": "agent-capability",
+      "path": "/home/werg/vibe-native-recovery-goal-meaning/skills/system-testing/open-goal-agent-capability-worlds.ts",
+      "sha256": "372fa9f5cf180c03394c955c4bd3165e4abc7706edccc396395f5583a8af8bbd",
+      "worlds": 26,
+      "required": 21,
+      "cases": [
+        {
+          "id": "agent-capability-routing-receipt-saved-before-exception",
+          "goal": "The latest route-card cell stopped with an error after I edited the maintenance record. Can we keep going with the saved card instead of making a second one?",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "agent-capability-music-queue-error-before-change",
+          "goal": "The rehearsal queue error looked like it happened early. Find out whether this notebook actually changed and whether the cell can be recovered without quietly rerunning it.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "agent-capability-calendar-report-prerequisite-repaired",
+          "goal": "The calendar reconciliation failed when my local prerequisite was missing. I have fixed it. Retry that step if the same revision and retained scope still support it.",
+          "split": "train",
+          "requestedReturnRequired": false
+        },
+        {
+          "id": "agent-capability-work-order-still-waiting-prerequisite",
+          "goal": "The workshop dispatch cell had a missing prerequisite. Please recover it only if there is current evidence the dependency is ready. Keep the first observation if we still have to wait.",
+          "split": "train",
+          "requestedReturnRequired": false
+        },
+        {
+          "id": "agent-capability-lab-console-after-last-line-question",
+          "goal": "The console card for the lab digest showed only a preview. Check what the actual latest run retained and whether it reached the final note. Don't run the digest again.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "agent-capability-library-listing-read-exact-large-output",
+          "goal": "The library holdings cell returned a lot of output. Continue using the stored value if it really belongs to this revision, while preserving the other notebook work.",
+          "split": "train",
+          "requestedReturnRequired": false
+        },
+        {
+          "id": "agent-capability-voucher-preview-from-another-notebook",
+          "goal": "My continuation note mentions this voucher checkpoint, but it may belong to another notebook with the same label. Check the exact action and do not act outside the review.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "agent-capability-harbor-console-does-not-prove-commit",
+          "goal": "The harbor allocation printed a progress note before it failed. Determine whether it actually changed the current record. I don't want to duplicate a saved effect.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "agent-capability-survey-confirm-existing-scope-siblings",
+          "goal": "Use the current survey register if the three independently retained notebook values are still there. Preserve the pending sibling work and verify the exact existing record.",
+          "split": "train",
+          "requestedReturnRequired": false
+        },
+        {
+          "id": "agent-capability-plant-sale-revisions-share-rehearsal-name",
+          "goal": "Two label rehearsals have the same name. Tell me which revision finished the actual label step and separate that from the earlier run's evidence.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "agent-capability-toolbox-cancelled-before-admission",
+          "goal": "Check whether the cancelled toolbox step was actually admitted or produced anything. Leave its notebook and cancellation in place.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "agent-capability-dance-rehearsal-old-approval-new-scope",
+          "goal": "A choreographer approved retrying a cell before this rehearsal sheet revision. Verify whether that authorization applies to the actual current action.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "agent-capability-permit-digest-readable-without-write-grant",
+          "goal": "Can you reconcile the permit notebook's long retained output with the active action? The local review can read the result but does not authorize a continuation.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "agent-capability-orchard-failure-with-silent-console",
+          "goal": "The orchard packing step left no console preview. Decide what the original terminal result actually says and whether there is an owned value to recover.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "agent-capability-gallery-revised-after-original-success",
+          "goal": "The gallery notebook was edited after the original successful humidity check. Check whether that old step still backs the current record before continuing.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "agent-capability-sports-fixture-corrected-prerequisite-read-only",
+          "goal": "Look into the failed sports fixture check and whether the prerequisite is now fixed. I want the evidence only and do not want to start another attempt.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "agent-capability-invoicing-follow-up-uses-canonical-failed-output",
+          "goal": "The expense cell reported an exception. Check whether it still committed the expected reviewed local value before deciding whether to reuse it. Leave other reviewers\u2019 records untouched.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "agent-capability-trail-console-and-stale-run-distinguished",
+          "goal": "The trail inventory preview shows a late final line, but another revision ran successfully too. Verify which admitted cell produced the current console and avoid changing the notebook.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "agent-capability-makerspace-scope-saved-value-audit",
+          "goal": "Compare the current makerspace queue with what the preceding sandbox action actually retained. Keep the other scope values unchanged and explain any missing action evidence.",
+          "split": "train",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "agent-capability-radio-shift-stored-side-effect-blocks-rerun",
+          "goal": "Try recovering the interrupted radio shift cell only if it did not already save the expected log. Avoid another attempt if the value already exists.",
+          "split": "train",
+          "requestedReturnRequired": false
+        },
+        {
+          "id": "agent-capability-held-theatre-approval-withdrawn",
+          "goal": "I withdrew the theatre cue retry after the prerequisite changed. Check what is left in the current action and leave it as it stands.",
+          "split": "test",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "agent-capability-held-travel-output-from-foreign-notebook",
+          "goal": "A copied travel receipt reference points at a similar notebook. Inspect the admitted current output before attributing or continuing it under that reference.",
+          "split": "test",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "agent-capability-held-compliance-superseded-revision",
+          "goal": "The compliance worksheet advanced since a failed cell saved a value. Don't carry the older value forward until there is evidence the new revision still includes it.",
+          "split": "test",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "agent-capability-held-greenhouse-cancel-not-retry-authority",
+          "goal": "Check whether the cancelled greenhouse cell left a reliable effect. The note to try again was from the previous revision.",
+          "split": "test",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "agent-capability-held-language-lab-no-code-retry",
+          "goal": "The rollup didn't produce a saved result. Tell me whether repeating the failed action would be reliable with today's evidence and leave the notebook if the cause is unresolved.",
+          "split": "test",
+          "requestedReturnRequired": true
+        },
+        {
+          "id": "agent-capability-held-archives-console-preview-withdrawn",
+          "goal": "The archive batch preview is cropped. Find the exact original evidence, but the review was withdrawn before any follow-up could be applied.",
+          "split": "test",
+          "requestedReturnRequired": true
+        }
+      ]
+    }
+  ],
+  "worldPreservation": [
+    {
+      "family": "cli-route",
+      "allOriginalWorldLiteralsPreserved": true,
+      "beforeSha256": "538871e89b4fb58b52325f7abf54fabddc4dbfb3e6592611daf0a983bd2a1d0e",
+      "afterSha256": "778af62672b4b547525d78c80dbb7146c7e8b2072fdcec859bb6224af8330883"
+    },
+    {
+      "family": "same-turn-eval",
+      "allOriginalWorldLiteralsPreserved": true,
+      "beforeSha256": "1e71694190d76eae76246df0c2d568b053810cf7726983f61b232dd0d33670be",
+      "afterSha256": "33e17f45578f163a5fcf1397fa23092fc57d9411fa1e42ca9d79483dafaa406b"
+    },
+    {
+      "family": "content-archive",
+      "allOriginalWorldLiteralsPreserved": true,
+      "beforeSha256": "e49f98f993e21be11cc73bbadd0f74f717b307948663e7d1110b4ee9abb8a081",
+      "afterSha256": "cb899d8f938c7b44919563c3beac66081f4b2153499c459ba627418b841befd8"
+    },
+    {
+      "family": "agent-capability",
+      "allOriginalWorldLiteralsPreserved": true,
+      "beforeSha256": "ccfc8fd0cb8dd12b5610e02a5bab06aaf1ec7224f630c017b5c6ea774dfbd1d5",
+      "afterSha256": "372fa9f5cf180c03394c955c4bd3165e4abc7706edccc396395f5583a8af8bbd"
+    }
+  ],
+  "boundaries": {
+    "native": "Fixtures independently validate actual generated-code execution, immutable byte/tree/VCS snapshots, original/current notebook state, scoped identity/grants, protected state and real effect receipts. Test native ports are controlled component adapters, not physical EvalDO/VCS qualification.",
+    "review": "Always mandatory and exact native bound. Reference .passed means native qualification only; no independent model-free goal verdict is fabricated. Reference-caller projection explicitly supplies its actual reference return at the existing capture boundary.",
+    "scope": "All4 public argument names remain goal; IDs/goals/splits unchanged. Whole named families106 worlds,83 genuinely requested answers,23 execution-only optional returns. No runtime goal regex, golden prose/status/ID echoes, mandated extra read sets or new SDK bytes.",
+    "optOut": "Prior immutable49 source pins remain the explicit source-selection opt-out; no legacy alias/shim or hidden grade fallback."
+  },
+  "unchecked": [
+    "Physical live native qualification",
+    "HistoricalSameTurn query answer audit in progress:18 existing verified tasks located, no invalidation without actual captured missing/wrong value",
+    "Remaining coordinator/oracle census beyond these four remains open"
+  ],
+  "historyAudit": "/home/werg/vibe-native-recovery-composition-ops/historical-same-turn-index.json"
+}
