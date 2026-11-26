@@ -155,7 +155,8 @@
     "./socketBridge": "./src/socketBridge.ts",
     "./chromiumNetworkProxy": "./src/chromiumNetworkProxy.ts",
     "./pinnedHttpForward": "./src/pinnedHttpForward.ts",
-    "./kernelRealm": "./src/kernelRealm.ts"
+    "./kernelRealm": "./src/kernelRealm.ts",
+    "./fsReadLimits": "./src/fsReadLimits.ts"
   },
   "scripts": {
     "test": "cd ../.. && vitest run packages/shared/src"

@@ -15,6 +15,7 @@
  */
 
 import { z } from "zod";
+import { READ_TEXT_MAX_BYTES, READ_BYTES_MAX_LIMIT } from "@vibestudio/shared/fsReadLimits";
 import { ByteArraySchema } from "@vibestudio/shared/binary";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import {
@@ -56,7 +57,7 @@ const readTextOptionsSchema = z.object({
     .number()
     .int()
     .min(1)
-    .max(1024 * 1024)
+    .max(READ_TEXT_MAX_BYTES)
     .optional()
     .describe("Maximum UTF-8 bytes to return (default 50 KiB; maximum 1 MiB)."),
 });
@@ -87,7 +88,7 @@ const readBytesOptionsSchema = z.object({
     .number()
     .int()
     .min(1)
-    .max(1024 * 1024)
+    .max(READ_BYTES_MAX_LIMIT)
     .optional()
     .describe("Maximum raw bytes to return (default 50 KiB; maximum 1 MiB)."),
 });
