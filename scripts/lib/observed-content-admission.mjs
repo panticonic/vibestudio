@@ -110,6 +110,7 @@ export const observedContentFields = {
     ],
     []
   ],
+  "publication": [["selected","observations","artifact","renderer","journal","reads"],[]],
   "unit-rollout": [
     [
       "discoveries",

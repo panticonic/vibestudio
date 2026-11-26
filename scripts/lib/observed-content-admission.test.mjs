@@ -190,3 +190,14 @@ for(const [kind,native,artifacts,answer] of [
  const optional=structuredClone(proof);optional.actualResult={status:"irrelevant"};optional.outcomeContract.returnedValue.required=false;optional.semanticReviewInput.actual.requestedReturn=null;optional.semanticReviewInput.expected.requestedReturnRequired=false;
  assert.equal(observedContentNeedsReview(world),true);assert.equal(observedContentReviewInput(optional,world),optional.semanticReviewInput);
 });
+
+test("publication review binds actual selected target, native packages and actual requested return",()=>{
+ const world={kind:"publication",goal:"Compare this preview with the retained review"};
+ const actual={status:"reviewed",choice:{targetId:"owned",preflight:"prepare",compareRevision:true},preflight:null,revision:null};
+ const proof={actualResult:actual,outcomeContract:{returnedValue:{required:true}},semanticReviewRequired:true,selected:actual.choice,observations:{preflight:null,revision:{candidate:{artifactDigest:"current"},reviewed:{artifactDigest:"prior"}}},artifact:{current:"current",prior:"prior"},renderer:{attemptId:"native"},journal:[],reads:{preflight:0,revision:1}};
+ const pick=keys=>Object.fromEntries(keys.map(key=>[key,proof[key]??null]));
+ proof.semanticReviewInput={actual:{goal:world.goal,observations:pick(observedContentFields.publication[0]),artifacts:{},requestedReturn:actual},expected:{goal:world.goal,requestedReturnRequired:true},rubric:"Judge requested meaning against actual native observations"};
+ assert.equal(observedContentNeedsReview(world),true);
+ assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
+ for(const mutate of [p=>p.semanticReviewInput.actual.observations.artifact.current="forged",p=>p.semanticReviewInput.actual.observations.selected.targetId="other",p=>p.actualResult={...actual,choice:{...actual.choice,targetId:"other"}},p=>p.semanticReviewRequired=false]){const p=JSON.parse(JSON.stringify(proof));mutate(p);assert.throws(()=>observedContentReviewInput(p,world));}
+});

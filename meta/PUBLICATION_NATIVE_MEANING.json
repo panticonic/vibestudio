@@ -1,0 +1,23 @@
+{
+  "schema": "vibestudio.publication-native-meaning/1",
+  "fields": {
+    "publication": [
+      [
+        "selected",
+        "observations",
+        "artifact",
+        "renderer",
+        "journal",
+        "reads"
+      ],
+      []
+    ]
+  },
+  "requestedReturn": "all14 literal publication questions genuinely require their actual answer; canonical proof.actualResult equality preserved",
+  "nativeTruth": "actual choice/observations/package digests/rendered/journal/protected-head evidence, no private expected choice",
+  "tests": {
+    "unit": "vibe-publication-host-binding-20261126b",
+    "passed": 19
+  },
+  "noModels": true
+}
