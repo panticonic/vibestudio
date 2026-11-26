@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import fs from "node:fs/promises";
 import { developmentTemplateSetEnv } from "./lib/development-template-set.mjs";
 import { resolveDevelopmentTemplates } from "./cli/lib/smoke-remote-server.mjs";
+import { verifyDevelopmentReleaseUserland } from "./prebuild-release-userland.mjs";
 import { prepareWorkspaceRelease } from "./prepare-workspace-release.mjs";
 import { hasOwnershipFailure } from "./lib/owned-cleanup.mjs";
 import { ownedEntry } from "./lib/owned-entry.mjs";
@@ -86,6 +87,15 @@ await ownedEntry(async ({ ownership }) => {
       entry: path.join(generation, "prepare-workspace-templates.mjs"),
     });
     await preparation.completed;
+    // The non-serving compiler cannot produce native schema facts. Retire it,
+    // then use the existing owned serving verifier against this exact source generation.
+    await preparation.stop();
+    preparation = undefined;
+    if (process.env["VIBESTUDIO_DEVELOPMENT_SCHEMA_EVIDENCE"] !== "0")
+      await verifyDevelopmentReleaseUserland({
+        appRoot: repoRoot, resources: output, generation, ownership,
+        scratchParent: scratch, executable: process.execPath, env,
+      });
   } catch (error) {
     failures.push(error);
   } finally {

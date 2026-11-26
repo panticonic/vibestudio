@@ -100,7 +100,8 @@ describe("release verifier RPC batch", () => {
     const sources = Array.from({ length: 9 }, (_, index) => `base/source-${index}`);
     let active = 0;
     let maximumActive = 0;
-    const getBuild = async (source: string) => {
+    const getBuild = async (source: string, options: {verifyWorkerSchemas:true}) => {
+      expect(options).toEqual({verifyWorkerSchemas:true});
       active++;
       maximumActive = Math.max(maximumActive, active);
       await new Promise((resolve) => setTimeout(resolve, 1));

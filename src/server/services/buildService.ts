@@ -56,6 +56,7 @@ const SKILLS_PACKAGE_SCOPE = (() => {
 
 export function createBuildService(deps: {
   buildSystem: BuildSystemV2;
+  prepareWorkerExecutable?: (build: StoredBuildResult, classNames: readonly string[]) => Promise<void>;
   compileProduct?: (input: {
     bundle: string;
     format: "cjs" | "async-cjs";
@@ -84,17 +85,22 @@ export function createBuildService(deps: {
     methods: buildMethods,
     handler: defineServiceHandler("build", buildMethods, {
       listUnits: () => deps.listUnits(),
-      getBuild: (_ctx, [unit, ref, options]) => {
+      getBuild: async (_ctx, [unit, ref, options]) => {
+        const { verifyWorkerSchemas, ...compilerOptions } = options ?? {};
         const bs = deps.buildSystem;
-        return options?.library
-          ? bs.getBuild(unit, ref, {
-              ...options,
-              library: true,
-            })
-          : bs.getBuild(unit, ref, {
-              ...options,
-              library: false,
-            });
+        if (compilerOptions.library)
+          return bs.getBuild(unit, ref, { ...compilerOptions, library: true });
+        const build = await bs.getBuild(unit, ref, { ...compilerOptions, library: false });
+        if (verifyWorkerSchemas && build.metadata.kind === "worker") {
+          if (!deps.prepareWorkerExecutable)
+            throw new Error("Native worker schema validation owner is unavailable");
+          if (!build.sourceStateHash) throw new Error("Worker schema validation requires an immutable source state");
+          const units = await bs.listBuildUnits(build.sourceStateHash, ["worker"]);
+          const exact = units.find(candidate => candidate.unitPath === build.metadata.sourcePath && candidate.stateHash === build.sourceStateHash);
+          if (!exact) throw new Error("Worker schema validation requires the exact built source catalog");
+          await deps.prepareWorkerExecutable(build, (exact.manifest.durable?.classes ?? []).map(({className}) => className));
+        }
+        return build;
       },
       compileProduct: async (_ctx, [source, execution, input]) => {
         if (process.env["VIBESTUDIO_OFFLOAD_NATLANG_COMPILER"] === "0")

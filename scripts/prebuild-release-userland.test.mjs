@@ -18,6 +18,7 @@ import {
   importPrebuiltWorkspaceRelease,
   runInstalledRpcBatch,
   verifyPreparedReleaseUserland,
+  developmentReleaseConsumerOptions,
   requestedStopExitedCleanly,
   withStandaloneReleaseSession,
   verifyAndPublishSchemaEvidence,
@@ -1374,14 +1375,11 @@ test("fresh verification creates optional workspaces from exact prepared pins an
   await verifyPreparedReleaseUserland({
     ...context,
     cli,
-    runBuildBatch: async (sources) => ({
-      outcomes: sources.map((source) => ({
-        status: "fulfilled",
-        source,
-        buildKey: records.find((row) => row.source === source).buildKey,
-      })),
-    }),
-  });
+    runBuildBatch: async (sources,evidence) => {
+      assert.equal(Boolean(evidence),sources.includes("panels/news"));
+      return {outcomes: sources.map(source=>({status:"fulfilled",source,buildKey:records.find(row=>row.source===source).buildKey})),schemaEvidenceStaging:evidence?.stagingPath};
+    },
+  }, {resources:context.resources,stagingPath:"last-role-proof"});
   assert.deepEqual(
     commands.find((args) => args[2] === "release-news"),
     [
@@ -1402,4 +1400,19 @@ test("fresh verification creates optional workspaces from exact prepared pins an
     commands.filter((args) => args[1] === "select").map((args) => args[2]),
     ["base-workspace", "system-workspace", "personal-workspace", "news-workspace"]
   );
+});
+
+
+test("development serving verifier keeps the exact selected generation and inference ceiling",()=>{
+  const options=developmentReleaseConsumerOptions({appRoot:"/source",resources:"/release",generation:"/generation/exact",scratchParent:"/scratch",ownership:{},env:{HOME:"/foreign-private-home",SSH_AUTH_SOCK:"/private-agent",VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES:"selected",VIBESTUDIO_HOST_ARTIFACT_ROOT:"/wrong",VIBESTUDIO_NATIVE_REFERENCE_ONLY:"0"}});
+  assert.equal(options.hostArtifactRoot,"/generation/exact");
+  assert.equal(options.serverEntry,"/generation/exact/server.mjs");
+  assert.equal(options.cliEntry,"/generation/exact/cli/client.mjs");
+  assert.equal(options.environment.NODE_ENV,"development");
+  assert.equal(options.environment.VIBESTUDIO_WORKSPACE_RELEASE_ROOT,"/release");
+  assert.equal(options.environment.VIBESTUDIO_NATIVE_REFERENCE_ONLY,"1");
+  assert.equal(options.environment.VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES,"selected");
+  assert.equal(options.environment.HOME,undefined);
+  assert.equal(options.environment.SSH_AUTH_SOCK,undefined);
+  assert.equal(options.environment.VIBESTUDIO_HOST_ARTIFACT_ROOT,undefined);
 });
