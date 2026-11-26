@@ -9,6 +9,7 @@
  * - workerd child process management (start, restart, stop)
  */
 
+import { BuildFlight, type BuildPriorityOwner, type BuildPriority } from "./buildV2/builderLifetime.js";
 import type { WorkerExecutableAdmission } from "./workerExecutableDispatch.js";
 import type { WorkspaceReleaseIdentity } from "./preparedWorkspaceRelease.js";
 import {
@@ -835,7 +836,7 @@ export class WorkerdManager {
     new Error("WorkerdManager is shutting down"),
     { code: "ECANCELLED" }
   );
-  private readonly schemaAdmissions = new Map<string, Promise<void>>();
+  private readonly schemaAdmissions = new Map<string, BuildFlight<void>>();
   private readonly doMaintenanceChains = new Map<string, Promise<unknown>>();
   private readonly doMaintenanceRecovery: Promise<void>;
   /** A graceful `stop` ran with live services: the next start owes a
@@ -4180,7 +4181,7 @@ export class WorkerdManager {
   async prepareWorkerExecutable(
     build: StoredBuildResult,
     classNames: readonly string[],
-    options:{retention?:"operation"|"shared"}={}
+    options:{retention?:"operation"|"shared";priority?:BuildPriority}={}
   ): Promise<void> {
     if (build.metadata.kind !== "worker" || !build.metadata.sourcePath)
       throw new Error("Worker executable preparation requires an exact workspace worker build");
@@ -4193,6 +4194,7 @@ export class WorkerdManager {
     if (this.shuttingDown) throw new Error("WorkerdManager is shutting down");
     const retention=options.retention??"shared";
     for (const className of new Set(classNames)) {
+      await this.admitDurableObjectSchema(image, className, options.priority);
       const key = canonicalJson([image.source, className, runtimeExecutableVersion(image),retention]);
       if(retention==="shared")this.latestExecutablePreparation.set(doServiceKey(image.source, className), key);
       const pending = this.executablePreparations.get(key);
@@ -4218,7 +4220,6 @@ export class WorkerdManager {
     className: string,
     retention:"operation"|"shared"
   ): Promise<void> {
-    await this.admitDurableObjectSchema(image, className);
     const serviceKey = doServiceKey(image.source, className);
     const version = runtimeExecutableVersion(image);
     const key = canonicalJson([image.source, className, version,retention]);
@@ -4266,7 +4267,8 @@ export class WorkerdManager {
   /** Admit the schema of the exact executable before its first entity activation. */
   private async admitDurableObjectSchema(
     image: RuntimeImageBinding,
-    className: string
+    className: string,
+    priority: BuildPriority = "interactive"
   ): Promise<void> {
     // Internal classes are the exact product bundle. The class's own kernel
     // creates and validates its database; host schema admission is for loaded
@@ -4274,7 +4276,7 @@ export class WorkerdManager {
     if (isInternalDOSource(image.source)) return;
     const key = canonicalJson([image.source, image.artifact.executionDigest, className]);
     const pending = this.schemaAdmissions.get(key);
-    if (pending) return pending;
+    if (pending) return pending.adopt(priority);
     if (
       this.doSchemaDescriptorDb
         .prepare(
@@ -4283,7 +4285,7 @@ export class WorkerdManager {
         .get(image.source, image.artifact.executionDigest, className)
     )
       return;
-    const admission = (async () => {
+    const admission = new BuildFlight<void>(priority, async (owner) => {
       if (isInternalDOSource(image.source)) {
         const bundle = this.internalDOPrograms().get(className);
         const identity = bundle.identity;
@@ -4326,17 +4328,17 @@ export class WorkerdManager {
           `Durable Object ${image.source}:${className} schema executable failed sealed identity verification`
         );
       }
-      const descriptor = await this.probeDurableObjectSchema(image.source, className, build);
+      const descriptor = await this.probeDurableObjectSchema(image.source, className, build, owner);
       this.recordDurableObjectSchema({
         source: image.source,
         effectiveVersion: image.artifact.sourceState.effectiveVersion,
         executionDigest: image.artifact.executionDigest,
         descriptor,
       });
-    })();
+    });
     this.schemaAdmissions.set(key, admission);
     try {
-      await admission;
+      await admission.promise;
     } finally {
       this.schemaAdmissions.delete(key);
     }
@@ -4459,7 +4461,8 @@ export class WorkerdManager {
   async probeDurableObjectSchema(
     source: string,
     className: string,
-    build: StoredBuildResult
+    build: StoredBuildResult,
+    priority?: BuildPriorityOwner
   ): Promise<DurableObjectPublishedSchemaDescriptor> {
     this.schemaAdmissionLifetime.signal.throwIfAborted();
     const operation = (async () => {
@@ -4484,6 +4487,7 @@ export class WorkerdManager {
             compatibility: USER_CODE_COMPATIBILITY,
           },
           installed: await this.installedSchemaEvidence,
+          priority,
           signal: this.schemaAdmissionLifetime.signal,
         },
         async () => {
@@ -5397,7 +5401,7 @@ export class WorkerdManager {
       });
     }
     const schemaResults = await Promise.allSettled([
-      ...this.schemaAdmissions.values(),
+      ...[...this.schemaAdmissions.values()].map(flight => flight.promise),
       ...this.schemaProbeOperations,
     ]);
     for (const result of schemaResults) {

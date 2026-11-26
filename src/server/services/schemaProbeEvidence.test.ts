@@ -1,3 +1,5 @@
+import { BuildPriorityOwner } from "../buildV2/builderLifetime.js";
+import { SharedBuildCoordinator } from "../buildV2/sharedBuildCoordinator.js";
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
@@ -62,6 +64,20 @@ describe("immutable schema probe evidence", () => {
     });
     return { output, publication };
   };
+
+  it("passes the exact promotable caller priority owner to shared schema cache admission", async () => {
+    const owner=new BuildPriorityOwner("speculative");
+    const run=vi.spyOn(SharedBuildCoordinator.prototype,"run");
+    try {
+      await expect(acquireSchemaProbeEvidence({identity,signal:new AbortController().signal,priority:owner},async()=>{
+        expect(run.mock.calls[0]?.[1]).toBe(owner);
+        owner.promote("interactive");
+        expect(run.mock.calls[0]?.[1].priority).toBe("interactive");
+        return descriptor;
+      })).resolves.toEqual(descriptor);
+      expect(run).toHaveBeenCalledTimes(1);
+    } finally {run.mockRestore();}
+  });
 
   it("reads exact warm evidence without requesting a watcher even when watcher admission is exhausted", async () => {
     await acquire(async () => descriptor);

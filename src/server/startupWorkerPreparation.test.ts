@@ -40,7 +40,7 @@ function setup() {
 
 function setupPreparation() {
   return vi
-    .fn<(build: StoredBuildResult, classes: readonly string[],options:{retention:"operation"|"shared"}) => Promise<void>>()
+    .fn<(build: StoredBuildResult, classes: readonly string[],options:{retention:"operation"|"shared";priority:"interactive"|"speculative"}) => Promise<void>>()
     .mockResolvedValue(undefined);
 }
 
@@ -51,13 +51,20 @@ describe("startup worker preparation", () => {
     expect(prepare.mock.calls.every(call=>call[2].retention==="shared")).toBe(true);
   });
 
+  it("supports the explicit interactive schema admission opt-out without retaining executables", async () => {
+    vi.stubEnv("VIBESTUDIO_STARTUP_INTERACTIVE_SCHEMA_ADMISSION", "1");
+    const prepare=setupPreparation();
+    await prepareStartupWorkers(setup(),prepare,new AbortController().signal);
+    expect(prepare.mock.calls.every(call=>call[2].priority==="interactive" && call[2].retention==="operation")).toBe(true);
+  });
+
   it("prepares workers at the discovered immutable frontier with speculative priority", async () => {
     const builds = setup();
     const prepare = setupPreparation();
     await prepareStartupWorkers(builds, prepare, new AbortController().signal);
     expect(prepare.mock.calls).toEqual([
-      [builds.storedBuild, ["WorkerOwner"],{retention:"operation"}],
-      [builds.storedBuild, ["WorkerOwner"],{retention:"operation"}],
+      [builds.storedBuild, ["WorkerOwner"],{retention:"operation",priority:"speculative"}],
+      [builds.storedBuild, ["WorkerOwner"],{retention:"operation",priority:"speculative"}],
     ]);
     expect(builds.getStoredBuild.mock.calls).toEqual([
       ["workers/one", "state:original", { priority: "speculative" }],
