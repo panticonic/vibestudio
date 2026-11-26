@@ -1,3 +1,4 @@
+import {referenceReviewInput} from "./review-evidence-roles.mjs";
 import {test} from "node:test";
 import assert from "node:assert/strict";
 import {createHash} from "node:crypto";
@@ -110,6 +111,18 @@ test("every newly admitted open domain binds native goal effects independently o
   const changed=JSON.parse(JSON.stringify(proof));changed.semanticReviewInput.actual.observations[observations[0]]={source:"foreign"};
   assert.throws(()=>observedContentReviewInput(changed,world),undefined,kind);
   const missing=structuredClone(proof);missing.semanticReviewRequired=false;assert.throws(()=>observedContentReviewInput(missing,world),undefined,kind);
+  if(kind==="examplesAdoption"){
+   const legacy=structuredClone(proof.semanticReviewInput);
+   proof.outcomeContract.returnedValue.required=true;
+   proof.actualResult="The requested adoption finding remains a candidate answer.";
+   legacy.actual.requestedReturn=proof.actualResult;legacy.expected.requestedReturnRequired=true;
+   proof.semanticReviewInput=referenceReviewInput(legacy);
+   assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
+   assert.equal(proof.semanticReviewInput.actual.requestedReturn,proof.actualResult);
+   assert.equal(proof.semanticReviewInput.actual.artifacts.noteText,proof.noteText);
+   assert.equal(proof.semanticReviewInput.expected.observations.journal[1].args,undefined);
+   assert.equal(proof.semanticReviewInput.actual.attemptedArguments[1].arguments[2].finding,"Actual evidence");
+  }
  }
  assert.equal(observedContentNeedsReview({kind:"unregistered-function-contract"}),false);
 });
