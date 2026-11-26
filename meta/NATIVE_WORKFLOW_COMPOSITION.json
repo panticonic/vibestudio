@@ -1,0 +1,92 @@
+{
+  "schema": "vibestudio.native-workflow-correction-checkpoint/1",
+  "status": "Tested source chunk; full five-family conversion remains in progress. Not semantic teacher qualification.",
+  "parentSources": {
+    "base": "a5b6f31e8176186d299e90fd68117dbfbe2729fd",
+    "systemTesting": "234c4825afb4273357a44b184d0d296fb86985b8",
+    "host": "1a8cff6331b8a85d2c86fec5659019a964439c04"
+  },
+  "inventoryBeforeEdits": "/home/werg/vibe-native-workflow-composition-ops/pre-edit-inventory.json",
+  "mechanisms": {
+    "unitIdentity": {
+      "producer": "skills/workspace-dev/natlang/prepareUnitIdentity.nl",
+      "callers": [
+        "skills/workspace-dev/natlang/natlang.ts:generateIcon (unchanged purpose-only iconIntent)",
+        "skills/open-user-goal/reviewUnitHandoffGoal/reviewIdentity.nl (actual goal separate from unchanged unit)"
+      ],
+      "change": "Private goal-aware interpreter preserves explicit family/term before real native catalog resolution. Unavailable terms cannot be silently replaced. Native stage authority unchanged.",
+      "declaration": "Actual compileProgram-generated prepareUnitIdentity.d.nl.ts; no handwritten contract."
+    },
+    "sourceAttribution": {
+      "change": "Existing NL hierarchy preserved; proper explanation field for requested answer and unavailable evidence, distinct from exact native fragment/span/root identities. Native grounding never accepts invented IDs. Actual returned value and persisted JSON remain mandatory-bound meaning review.",
+      "originals": "Missing-retired-book original prose in native IDs remains invalid; no retrospective repair."
+    },
+    "extensionDossier": {
+      "change": "NL coordinator + private native investigation hierarchy replaces unconditional decision-category-to-write TS macro. Public requested explanation + actual optional receipt replace private finding echo. Refused-null attempts stay in recorded effects/review but are not persisted writes or forbidden routes. Actual owner/current tree/runtime/package/history/CAS/readback/protected-state checks retained.",
+      "literalRoles": {
+        "worlds": 20,
+        "requiredAnswers": 18,
+        "dossierOnlyOptionalRoot": 2
+      },
+      "qualification": "Reference-only required-effect assertion referenceArtifact ensures a failed intended native write cannot qualify vacuously. It is not a teacher route requirement."
+    },
+    "localWidth": {
+      "change": "Correct raw listModels wire producer/consumer mismatch: old verifier applied interpreted {preferred,executor,models} Readiness parser to raw arrays, an unsatisfiable check. Shared exact inventoryProjection now used for recording/current readback equality. No interpreted model output is claimed as native effect. Native inventory proof declares actorObserved honestly and binds actual readbacks.",
+      "open": "Remaining full public findings/semantic coordinator, all-witness equality, reference-best finding equality, mixed-return roles are still under audit; not closed by this narrow fix."
+    }
+  },
+  "validation": {
+    "publicIdentity": {
+      "unit": "vibe-unit-identity-goal-public-20261126d",
+      "passed": 5,
+      "seconds": 13.9,
+      "peakGiB": 2.4
+    },
+    "publicDossier": {
+      "unit": "vibe-native-workflow-public-20261126a",
+      "passed": 1,
+      "seconds": 133.75,
+      "peakGiB": 2.6,
+      "mechanism": "Actual public ProgramLoader/gateway Root NL -> inquiry NL -> installed extension source/runtime NL + exact TS ports; no unrequested write."
+    },
+    "sourceAttributionNative": {
+      "unit": "vibe-source-answer-native-20261126a",
+      "passed": 18
+    },
+    "dossierNative": {
+      "unit": "vibe-dossier-all-native-20261126b",
+      "passed": 23,
+      "worlds": 20
+    },
+    "widthNative": {
+      "unit": "vibe-width-raw-inventory-20261126b",
+      "passed": 22,
+      "worlds": 20
+    },
+    "hostBinding": {
+      "unit": "vibe-workflow-native-host-binding-20261126a",
+      "passed": 31
+    },
+    "canonicalDeclarations": {
+      "unit": "vibe-workflow-chunk-declarations-20261126a",
+      "entryGenerator": "PASS generate and --check",
+      "serviceGenerator": "PASS actual380 generate and --check",
+      "seconds": 19.397,
+      "peakMiB": 340.8
+    },
+    "dossierGoalIdSplitLiterals": "Equal before/after (all20); no originals changed"
+  },
+  "excluded": {
+    "CoreEngines": "No compiler/runtime/model transport or backend change. This is shared workspace program + Native fixture/report admission; all engine consumers receive the same program sources/service contracts. Core e404 and five SDK bytes unchanged.",
+    "paidQualification": "No model/provider call, live native factory qualification, new review or original acceptance claimed.",
+    "frozenSources": "49/48 and all selected pins remain untouched."
+  },
+  "remaining": [
+    "Whole UnitHandoff coordinator/native optional reads and private echoed DTO boundaries",
+    "Whole LocalWidth coordinator/public findings, appropriate selected-witness grounding and literal obligations",
+    "LocalReconciliation thin-relay/literal/native-effect review",
+    "Historical18 SameTurn exact required-answer adequacy audit (source-hashed originals only)",
+    "Bounded0083 and panel0084 original outcome audit; interrupted is not failed",
+    "Remaining116-family and45-native-gate census remains open"
+  ]
+}

@@ -304,3 +304,17 @@ test('all native recovery findings bind actual native evidence and literal answe
   if(required){const wrong=structuredClone(proof);wrong.semanticReviewInput.actual.requestedReturn={explanation:'A different result'};assert.throws(()=>observedContentReviewInput(wrong,world));}
  }
 });
+
+test('local width binds raw native inventory without inventing a preferred/executor report or actor inspection',()=>{
+ for(const observed of [false,true]){
+  const world={kind:'local-width',goal:'Can this selected provider carry two 16K tool branches?',requestedReturnRequired:true};
+  const current=[{slug:'qwen3.8-27b',state:'ready',displayName:'Qwen',fit:{fit:'cpu-only',estTokensPerSec:null},download:null,errorMessage:null}];
+  const effects=observed?[{service:'localModels',method:'listModels',args:[],result:structuredClone(current)}]:[];
+  const proof={effects,survey:{scope:{machine:'owned',boot:'current',configuration:'current'}},finding:{disposition:'incompatible'},nativeInventory:{current,actorObserved:observed,readbacks:structuredClone(effects)},handoffText:null,actualResult:{finding:{reason:'The selected provider context is 8192, below the requested 16384.'},handoff:null},outcomeContract:{returnedValue:{required:true}},semanticReviewRequired:true};
+  const[fields,artifacts]=observedContentFields[world.kind];const pick=keys=>Object.fromEntries(keys.map(k=>[k,structuredClone(proof[k]??null)]));
+  proof.semanticReviewInput={actual:{goal:world.goal,observations:pick(fields),artifacts:pick(artifacts),requestedReturn:structuredClone(proof.actualResult)},expected:{goal:world.goal,requestedReturnRequired:true},rubric:'Judge the requested provider answer against actual retained current native evidence.'};
+  assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
+  for(const mutate of [p=>{delete p.nativeInventory;p.semanticReviewInput.actual.observations.nativeInventory=null;},p=>p.nativeInventory.actorObserved=!observed,p=>p.nativeInventory.current[0].state='error',p=>p.semanticReviewInput.actual.observations.nativeInventory.current[0].slug='other-model',p=>p.semanticReviewInput.actual.requestedReturn={finding:{reason:'A different answer'}}]){const bad=structuredClone(proof);mutate(bad);assert.throws(()=>observedContentReviewInput(bad,world));}
+  if(observed){const bad=structuredClone(proof);bad.effects[0].result={preferred:'local:qwen',models:[],executor:{}};bad.nativeInventory.readbacks=structuredClone(bad.effects);bad.semanticReviewInput.actual.observations=Object.fromEntries(fields.map(k=>[k,structuredClone(bad[k]??null)]));assert.throws(()=>observedContentReviewInput(bad,world));}
+ }
+});
