@@ -190,3 +190,13 @@ for(const [kind,native,artifacts,answer] of [
  const optional=structuredClone(proof);optional.actualResult={status:"irrelevant"};optional.outcomeContract.returnedValue.required=false;optional.semanticReviewInput.actual.requestedReturn=null;optional.semanticReviewInput.expected.requestedReturnRequired=false;
  assert.equal(observedContentNeedsReview(world),true);assert.equal(observedContentReviewInput(optional,world),optional.semanticReviewInput);
 });
+
+
+test("notification answers and native lifecycle evidence are independently bound",()=>{
+ const world={kind:"notificationState",goal:"Was the old read receipt removed? Keep the current note."};
+ const proof={outcomeContract:{returnedValue:{required:true}},semanticReviewRequired:true,journal:[{method:"read",result:{id:"old"}}],assigned:{id:"ours"},initial:{retained:[{id:"old"}]},refresh:{producerReceipt:"removed"},current:{attention:[{id:"current"}],retained:[]},ack:null,final:{attention:[{id:"current"}],retained:[]},durable:{rows:[{id:"current"}]},actualResult:{finding:{state:"missing",id:"old",revision:1},explanation:"The old receipt was removed; the current note is retained.",acknowledgment:null}};
+ const [keys,artifacts]=observedContentFields.notificationState;
+ proof.semanticReviewInput={actual:{goal:world.goal,observations:Object.fromEntries(keys.map(key=>[key,proof[key]??null])),artifacts:{},requestedReturn:structuredClone(proof.actualResult)},expected:{goal:world.goal,requestedReturnRequired:true},rubric:"Judge supported notification meaning from native facts; internal IDs are not reference answer gates."};
+ assert.deepEqual(artifacts,[]);assert.equal(observedContentNeedsReview(world),true);assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
+ for(const alter of [p=>p.semanticReviewInput.actual.observations.current=null,p=>p.semanticReviewInput.actual.requestedReturn.explanation="It is still present",p=>p.semanticReviewRequired=false]){const changed=structuredClone(proof);alter(changed);assert.throws(()=>observedContentReviewInput(changed,world));}
+});
