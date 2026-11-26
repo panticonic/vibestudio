@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import {recordExportRejection} from "./lib/live-export-diagnostics.mjs";
-import { runNativeReferenceBatches, runNativeReferenceTail, waitForNativeContinuation, summarizeNativeReferences, nativeReferenceCapabilities } from "./lib/native-reference-tail.mjs";
+import { runNativeReferenceBatches, runNativeReferenceTail, waitForNativeContinuation, summarizeNativeReferences, nativeReferenceCapabilities, selectNativeReferenceWorkflows } from "./lib/native-reference-tail.mjs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -43,6 +43,7 @@ const { values } = parseArgs({
     case: { type: "string", multiple: true },
     capabilities: {type:"boolean"},
     "native-reference-only": {type:"boolean"},
+    "native-reference-case": {type:"string",multiple:true},
     "native-reference-completion-control": {type:"string"},
     "native-reference-drain-batch-size": {type:"string",default:"16"},
     list: { type: "boolean" },
@@ -113,6 +114,7 @@ const { checkouts } = requireDevelopmentTemplateCheckouts(host);
 const liveTeacherCases = await loadLiveTeacherCases(checkouts);
 // Reference coverage is independent of the selected teacher/assignment cohort.
 const nativeReferenceWorkflows = new Map(liveTeacherCases);
+const selectedNativeReferenceWorkflows = selectNativeReferenceWorkflows({workflows:nativeReferenceWorkflows,names:values["native-reference-case"]??[],nativeOnly});
 for (const [scenario, workflow] of liveTeacherCases) {
   if ((workflow.interaction === "open-user-goal") === Boolean(values.assignments)) {
     liveTeacherCases.delete(scenario);
@@ -171,7 +173,7 @@ if (unknown.length) {
   );
 }
 
-const nativePlacements=()=>groupLiveTeacherCases([...nativeReferenceWorkflows].filter(([name,world])=>name.startsWith("open-goal-")&&world.interaction==="open-user-goal").map(([name])=>name),nativeReferenceWorkflows,0)
+const nativePlacements=()=>groupLiveTeacherCases([...selectedNativeReferenceWorkflows].filter(([name,world])=>name.startsWith("open-goal-")&&world.interaction==="open-user-goal").map(([name])=>name),selectedNativeReferenceWorkflows,0)
   .map(group=>({...group,cases:[],referenceOnly:true}));
 const groups = nativeOnly ? nativePlacements() : groupLiveTeacherCases(scenarios, liveTeacherCases, preflight ? 0 : batchSize);
 
@@ -410,6 +412,7 @@ const interruption = collectionInterruption({
     : undefined,
   out,
   cases: scenarios,
+  ...(nativeOnly?{nativeReferenceSelection:{selected:[...selectedNativeReferenceWorkflows.keys()],planned:[...nativeReferenceWorkflows].filter(([,world])=>world.interaction==="open-user-goal").length}}:{}),
 });
 const admittedReview = review ? Object.assign((input, teacher) => {
   interruption.signal.throwIfAborted();
@@ -601,7 +604,7 @@ try {
             runBatch:async()=>{
             if(JSON.stringify(pinSources())!==JSON.stringify(pinned))throw new Error("Source pins changed before native reference tail");
             const referenceCatalog=await installedTests(group,interruption.signal);
-            return runNativeReferenceTail({group,workflows:nativeReferenceWorkflows,catalog:referenceCatalog,pinned,out,
+            return runNativeReferenceTail({group,workflows:selectedNativeReferenceWorkflows,catalog:referenceCatalog,pinned,out,
               stateRoot:path.resolve(values["native-reference-state"]??path.join(path.dirname(out),"native-reference-qualification")),
               limit:drainNative?nativeDrainBatchSize:nativeReferenceLimit,systemTest,signal:interruption.signal,
               assertPins:()=>{if(JSON.stringify(pinSources())!==JSON.stringify(pinned))throw new Error("Source pins changed during native reference tail");

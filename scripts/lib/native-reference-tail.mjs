@@ -6,6 +6,15 @@ import path from 'node:path';
 
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const placement=world=>JSON.stringify([world.workspace??'system',world.workspaceBaseline??null,[...new Set(world.devices??[])].sort()]);
+/** Select qualification work without weakening the full coverage obligation or its evidence index. */
+export function selectNativeReferenceWorkflows({workflows,names=[],nativeOnly=false}) {
+ assert.ok(Array.isArray(names),'Native reference selection must be a list');
+ assert.ok(!names.length||nativeOnly,'Native reference cases require native-only mode');
+ assert.equal(new Set(names).size,names.length,'Duplicate native reference case');
+ for(const name of names)assert.ok(typeof name==='string'&&name.startsWith('open-goal-')&&workflows.get(name)?.interaction==='open-user-goal',`Unknown native reference case: ${name}`);
+ const selected=new Set(names);
+ return new Map([...workflows].filter(([name])=>!selected.size||selected.has(name)));
+}
 export function selectNativeReferences({group,workflows,catalog,completed={},limit,deploymentPackageAvailable}) {
  assert.ok(Number.isSafeInteger(limit)&&limit>=0);
  const selected=[];
@@ -129,7 +138,7 @@ export async function runNativeReferenceBatches({draining,signal,drainAtBoundary
  return {batches,observed};
 }
 
-export const nativeReferenceCapabilities=Object.freeze({schema:'vibestudio.native-reference-capabilities/1',completionControl:1,nativeOnly:true});
+export const nativeReferenceCapabilities=Object.freeze({schema:'vibestudio.native-reference-capabilities/1',completionControl:1,nativeOnly:true,selection:1});
 /** The existing parent collector owner decides from actual paid receipts. A
  * source/nonce-bound decision is never inferred from elapsed time or exit text.
  */
