@@ -231,3 +231,21 @@ test("terminal ordering review binds the actual completed-operation chronology",
 test("Regency and Grimoire Native fact roles bind to independent proof rather than a desired decision",()=>{
  for(const kind of ["regency-briefing","grimoireScene"]){const world={kind,goal:"Judge the requested current Native evidence"};const value={finding:"Actual observations"};const proof={actualResult:value,outcomeContract:{returnedValue:{required:true}},semanticReviewRequired:true,nativeFacts:{sourceCurrent:false,retainedArtifact:null}};const pick=keys=>Object.fromEntries(keys.map(key=>[key,proof[key]??null]));proof.semanticReviewInput={actual:{goal:world.goal,observations:pick(observedContentFields[kind][0]),artifacts:pick(observedContentFields[kind][1]),requestedReturn:value},expected:{goal:world.goal,requestedReturnRequired:true},rubric:"Judge requested meaning using independent Native facts"};assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);const swapped=JSON.parse(JSON.stringify(proof));swapped.semanticReviewInput.actual.observations.nativeFacts.sourceCurrent=true;assert.throws(()=>observedContentReviewInput(swapped,world));}
 });
+
+test("Smoke and Wake bind actual findings, native evidence and retained bytes independently of old enums",()=>{
+ for(const kind of ["workspace-smoke","delivery-wake"]){
+  for(const required of [true,false]){
+   const world={kind,goal:"Explain the native result and retain only the requested authorized effect"};
+   const [observations,artifacts]=observedContentFields[kind];
+   const proof={outcomeContract:{returnedValue:{required}},semanticReviewRequired:true,actualResult:"A domain finding with no disposition or receipt echo"};
+   for(const key of [...observations,...artifacts])proof[key]=key==="retainedText"?"Actual independently read bytes":{owned:key};
+   const pick=keys=>Object.fromEntries(keys.map(key=>[key,structuredClone(proof[key])]));
+   proof.semanticReviewInput={actual:{goal:world.goal,requestedReturn:required?proof.actualResult:null,observations:pick(observations),artifacts:pick(artifacts)},expected:{goal:world.goal,requestedReturnRequired:required},rubric:"Judge requested meaning against actual native effects"};
+   assert.equal(observedContentNeedsReview(world),true);assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
+   for(const key of observations){const changed=structuredClone(proof);changed.semanticReviewInput.actual.observations[key]={forged:true};assert.throws(()=>observedContentReviewInput(changed,world));}
+   for(const key of artifacts){const changed=structuredClone(proof);changed.semanticReviewInput.actual.artifacts[key]="Forged retained bytes";assert.throws(()=>observedContentReviewInput(changed,world));}
+   const changed=structuredClone(proof);changed.semanticReviewRequired=false;assert.throws(()=>observedContentReviewInput(changed,world));
+   if(required){const swapped=structuredClone(proof);swapped.semanticReviewInput.actual.requestedReturn="Another finding";assert.throws(()=>observedContentReviewInput(swapped,world));}
+  }
+ }
+});
