@@ -1,0 +1,153 @@
+{
+  "schema": "vibestudio.semantic-composition-inventory/1",
+  "base": "827197486a161dcb3ce9b8c4354a08e37fc25cf2",
+  "families": {
+    "provider-handoff": {
+      "entry": "skills/open-user-goal/workOnProviderHandoffGoal.ts",
+      "semanticChildren": [
+        "chooseProviderConversation",
+        "reviewRetainedApproval",
+        "chooseRetainedResult",
+        "reviewRetainedDelivery",
+        "decideProviderHandoff",
+        "shouldStageProviderHandoff"
+      ],
+      "nativeOwner": "skills/open-provider-handoff",
+      "binding": "open-user-goal workspaceModules mounted native IO; explicit serviceBinding in native package",
+      "closedBoundaries": [
+        "owned channel identity",
+        "latest host-attributed full request grant",
+        "original committed result digest/bytes",
+        "current frontier",
+        "private staged bytes/native receipt",
+        "protected workspace"
+      ],
+      "pairedVerifier": "skills/system-testing/open-goal-provider-handoff-managed.ts",
+      "addressedNativeAdmissionDefects": [
+        "read cache saturates at2",
+        "output/stage require2reads even stable",
+        "exact2read verifier",
+        "golden plan reason/disposition and result echo",
+        "existing standard mandatory goal-meaning review preserved"
+      ]
+    },
+    "editorial-packet": {
+      "entry": "skills/open-user-goal/workOnEditorialPacket.ts",
+      "semanticChildren": [
+        "chooseEditorialMission",
+        "reviewPacketSource/chooseAttachmentPages",
+        "proposeEditorialRevision",
+        "reconcileEditorialRevision",
+        "decideEditorialHandoff"
+      ],
+      "nativeOwner": "skills/open-editorial-packet",
+      "binding": "workspaceBranches + native explicit scopes; PDF restricted to bindPacketPdf",
+      "closedBoundaries": [
+        "owned mission",
+        "approved original PDF native citations",
+        "field edit scope",
+        "current CAS version",
+        "independent stored document",
+        "protected source/private handoff bytes"
+      ],
+      "pairedVerifier": "skills/system-testing/open-goal-editorial-managed.ts",
+      "addressedNativeAdmissionDefects": [
+        "snapshot cache max2",
+        "exact snapshot/PDF proof counts",
+        "golden disposition echo",
+        "requested answer optional merely because written attempts"
+      ]
+    },
+    "recovery": {
+      "entry": "skills/open-session-recovery/program/recoverSessionGoal.ts",
+      "semanticChildren": [
+        "chooseRecoverySources",
+        "readRecoveryWindows",
+        "interpretRecovery/selectRecoveryCitations",
+        "shouldRetainRecovery",
+        "stageRecoveryHandoff"
+      ],
+      "nativeOwner": "recoverySessions/recoveryReplay/recoveryHandoff services in system-testing/open-goal-recovery-managed.ts",
+      "binding": "explicit per-file serviceScopes in open-session-recovery/program/natlang.json",
+      "closedBoundaries": [
+        "native source/cursor/coverage",
+        "foreign/future/partial replay truth",
+        "snapshot frontier excludes late tail",
+        "exact source/sequence/citation text",
+        "native private handoff hash/readback"
+      ],
+      "legitimateCache": "resume(source) returns same bounded saved-cursor window; snapshot frontier is explicit protocol rather than retry freshness",
+      "addressedNativeAdmissionDefects": [
+        "ordered exact expected read set",
+        "golden decision/citation array",
+        "mutation-based answer optionality"
+      ]
+    }
+  },
+  "sharedConsumers": [
+    "skills/open-user-goal/entries.json",
+    "skills/open-user-goal/entriesGenerated.ts",
+    "packages/natlang/scripts/generate-semantic-entries.mjs",
+    "packages/natlang/src/domainGoalComposition.test.ts",
+    "Host scripts/lib/source-claim-admission.mjs",
+    "Host source-exporter observed goal review/admission"
+  ],
+  "platformScope": "NL programs execute through shared official ef3 SDK in Node/Workerd. Native IO and service authority unchanged; no engine protocol or SDK changes. No Python/browser model inference involved in these source changes.",
+  "unchecked": [
+    "actual paid/model-authored executions: deliberately no model probes",
+    "full live Node/Workerd platform deployment and all2327 native references; unit/native-port seams are not the complete live sweep"
+  ],
+  "exclusions": [
+    "parent SpecialistHandoff/localDelivery/capability/content",
+    "sibling local-review roots/Desktop/Recorded provenance",
+    "all frozen source42 inputs"
+  ],
+  "compositionChanges": {
+    "provider": "NL root plus private observation callback keeps native read capability lexical; added explicit workspace branch ownership and ProviderResult export",
+    "editorial": "NL root owns mission, evidence, revision/CAS reconsideration and actual private note; existing nested PDF and revision policy remain scoped",
+    "recovery": "NL root owns comparison/coverage judgment/retention, existing replay/citation children remain service-scoped"
+  },
+  "testAttempt": {
+    "unit": "vibe-retained-handoff-composition-20261126a",
+    "status": "stopped; no verdict",
+    "wallSeconds": 229.95,
+    "peakGiB": 2.8,
+    "reason": "CPU-heavy first loader; provider branch declaration omitted in first conversion. Corrected branch availability/type surface; performance cause still requires actual rerun, not established by this attempt."
+  },
+  "checks": {
+    "publicProgramLoaderGateway": {
+      "unit": "vibe-retained-handoff-composition-20261126b",
+      "actualPublicControlsPassed": 5,
+      "wholeUnitStatus": "failed one stale generated registry hash assertion; canonical generator and3 registry controls passed in later native units",
+      "seconds": 116.6,
+      "peakGiB": 2.6
+    },
+    "nativeFixturesAndRegistry": {
+      "unit": "vibe-retained-handoff-native-20261126d",
+      "actualTestsPassed": 113,
+      "seconds": 9.765,
+      "peakMiB": 424.7,
+      "hostBinderTestsPassed": 4
+    },
+    "postAuditNativeGuards": {
+      "unit": "vibe-retained-handoff-native-20261126e",
+      "existingTestsPassed": 113,
+      "addedTestStatus": "fixture supplied an invalid undefined JSON observer; corrected with a real plan/handoff value"
+    },
+    "newNativeAndObserverControls": {
+      "unit": "vibe-retained-handoff-native-20261126h",
+      "actualTestsPassed": 2,
+      "seconds": 6.717,
+      "peakMiB": 328.2
+    },
+    "models": 0,
+    "teacherRegistryWrites": 0
+  },
+  "additionalMechanismFixes": [
+    "Provider stage admission recomputes actual exact host consent/current frontier/committed output digest and issued readback; unrequested disposition/reason cannot veto permitted artifact",
+    "Editorial native private note is independently grounded and read back; unrequested copied decision.write/status no longer gate its admission or proof",
+    "Qualification-only observer refuses absent/unserializable return witnesses rather than hashing invalid JSON text; actual portable value/provenance checks unchanged",
+    "Scoped multi-field editorial writes allow multiple real native commits with current CAS and protected-copy guards; no one-write trajectory prescription",
+    "Declared workspace branches expose needed native units/types but do not claim to prune all linked workspace IO"
+  ]
+}
