@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { providerAdmissionStop } from "./lib/provider-admission-stop.mjs";
 import {recordExportRejection} from "./lib/live-export-diagnostics.mjs";
 import { runNativeReferenceBatches, runNativeReferenceTail, waitForNativeContinuation, summarizeNativeReferences, nativeReferenceCapabilities, selectNativeReferenceWorkflows } from "./lib/native-reference-tail.mjs";
 import { execFileSync } from "node:child_process";
@@ -423,7 +424,7 @@ try {
   const unavailableScopes = new Set();
   for (const group of groups) {
     const { instance, workspace, workspaceBaseline, devices } = group;
-    if (interruption.signal.aborted || interruption.drainAtBoundary(values["drain-request"])) break;
+    if (interruption.signal.aborted || interruption.requested || interruption.drainAtBoundary(values["drain-request"])) break;
     if (unavailableScopes.has(group.scope)) continue;
     const systemTest = (args, stdout, signal) =>
       command(systemTestArgs(group, args), stdout, signal);
@@ -466,7 +467,7 @@ try {
       });
       const runSize = concurrency === 1 ? 1 : ready.length;
       for (let offset = 0; offset < ready.length; offset += runSize) {
-        if (interruption.signal.aborted || interruption.drainAtBoundary(values["drain-request"])) break;
+        if (interruption.signal.aborted || interruption.requested || interruption.drainAtBoundary(values["drain-request"])) break;
         const batch = ready.slice(offset, offset + runSize);
         const concurrent = batch.length > 1;
         const runOut = concurrent ? mkdtempSync(path.join(out, "managed-")) : batch[0].directory;
@@ -519,7 +520,20 @@ try {
         if (summary.status === "completed")
           for (const row of batch) terminalCases.add(row.scenario);
         interruption.complete([...terminalCases]);
+        const providerStop = providerAdmissionStop(summary, batch.map(row => row.scenario));
+        const unadmitted = providerStop?.queuedTests ?? new Set();
+        if (providerStop) {
+          interruption.stopAdmission("Native provider transport outage stopped admission");
+          writePins(path.join(runOut, runId, "provider-admission-stop.json"), summary.admissionStopped);
+          interruption.complete(providerStop.completedTests);
+          for (const scenario of unadmitted) {
+            if (!batch.some(row => row.scenario === scenario) || terminalCases.has(scenario))
+              throw new Error("Provider admission stop contradicts the exact queued batch");
+            interruption.defer(scenario, "provider-outage-unstarted");
+          }
+        }
         for (const { scenario, directory, pins, caseSource } of batch) {
+          if (unadmitted.has(scenario)) continue;
           try {
             writePins(pins, { ...caseSource, run_id: runId });
             const filename = `trajectory-${scenario}-full.json.gz`;
@@ -587,7 +601,7 @@ try {
           }
         }
       }
-      if (!drainNative && group===groups.at(-1) && !interruption.signal.aborted && values["native-reference-completion-control"]) {
+      if (!drainNative && group===groups.at(-1) && !interruption.signal.aborted && !interruption.requested && values["native-reference-completion-control"]) {
         drainNative=await waitForNativeContinuation({control:path.resolve(values["native-reference-completion-control"]),out,pinned,signal:interruption.signal,
           ownerIdentity:nativeController,ownerAlive:identity=>controllerIdentity.observeProcessStart(identity)==="live"});
         if(drainNative){
@@ -595,7 +609,7 @@ try {
           groups.push(...nativePlacements().filter(row=>JSON.stringify([row.workspace,row.workspaceBaseline??null,[...row.devices].sort()])!==current));
         }
       }
-      if ((drainNative || nativeReferenceLimit > 0) && !interruption.signal.aborted && [...nativeReferenceWorkflows].some(([name,world]) =>
+      if ((drainNative || nativeReferenceLimit > 0) && !interruption.signal.aborted && !interruption.requested && [...nativeReferenceWorkflows].some(([name,world]) =>
         name.startsWith("open-goal-") && world.interaction === "open-user-goal" &&
         (world.workspace ?? "system") === workspace)) {
         try {

@@ -109,6 +109,9 @@ export function collectionInterruption({ requestPath, out, cases, processSignals
       receive(undefined, "Graceful runtime boundary drain requested", false);
       return true;
     },
+    stopAdmission(reason) {
+      receive(undefined, reason, false);
+    },
     complete(names) {
       for (const name of names) if (cases.includes(name)) { completed.add(name); interruptedReasons.delete(name); }
       persist();
