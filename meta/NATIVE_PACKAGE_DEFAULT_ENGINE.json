@@ -1,0 +1,39 @@
+{
+  "schema": "vibestudio.native-package-default-engine/1",
+  "previousBase": {
+    "url": "git+https://github.com/panticonic/vibestudio-base.git",
+    "ref": "refs/tags/v0.3.97",
+    "commit": "8dd1110dbb957de55e9c97c8a3b21189fd34f783"
+  },
+  "selectedBase": {
+    "url": "git+https://github.com/panticonic/vibestudio-base.git",
+    "ref": "refs/heads/fix/published-default-eval-budget",
+    "commit": "e4a56c7e69d637880b952f973c63910dc4c44444"
+  },
+  "selectedPersonal": {
+    "url": "git+https://github.com/panticonic/vibestudio-personal.git",
+    "ref": "refs/tags/v0.3.74",
+    "commit": "22f600d86129c4b2bcc2b1796f7e194d3cd3182a"
+  },
+  "selectedSystem": {
+    "url": "git+https://github.com/panticonic/vibestudio-system.git",
+    "ref": "refs/tags/v0.3.101",
+    "commit": "9fca74ccdf0c78279b84725adc26f5e3d7987bc5"
+  },
+  "sourceScope": "only a minimal engine successor from actual publishedBase8dd, no private campaign profile/root/SDK substitution",
+  "publicPublicationPerformed": false,
+  "publicationReceiptFabricated": false,
+  "engineSourceControls": {
+    "unit": "vibe-default-base-execution-budget-20261126a",
+    "passed": 105,
+    "actualPeakMiB": 361.9
+  },
+  "remainingChecks": [
+    "ordinary merge exact final coherent43 Host before package build",
+    "read-only same-source43 compiled artifact donor identity",
+    "canonical default3 producer and fresh installed consumer",
+    "actual loaded engine budgetABI1 and cancellation",
+    "actual owned Hub native inference denial",
+    "full2327/13Android native continuation"
+  ]
+}
