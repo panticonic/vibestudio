@@ -330,3 +330,10 @@ test('agent retained content binds admitted current reads, explicit non-returnin
  for(const change of [p=>{delete p.retainedValueReads;},p=>{p.retainedValueReads[1].values[0].content='Invented';},p=>{p.retainedValueReads[1].values[0].attempt.notebook='foreign';},p=>{p.retainedValueReads[0].returned=true;},p=>{delete p.retainedValueReads[0].refusal;},p=>{p.retainedValueReads[1].resultDigest='other-result';},p=>{p.retainedValueReads[1].values[0].observedAfterContinuation='unissued-run';}]){const bad=structuredClone(proof);change(bad);bind(bad);assert.throws(()=>observedContentReviewInput(bad,world));}
  const swapped=structuredClone(proof);swapped.semanticReviewInput.actual.requestedReturn.retainedValues[0].content='Another output';assert.throws(()=>observedContentReviewInput(swapped,world));
 });
+test("binds retained build interpretation to actual source, observations and retained bytes",()=>{
+ const world={kind:"build-incident",goal:"Explain the actual retained compiler failure"};
+ const proof={outcomeContract:{returnedValue:{required:true}},semanticReviewRequired:true,subject:{source:"panels/owned",revision:"current"},current:{id:"current-checkpoint"},baseline:null,metadata:[{key:"actual-key",retained:true}],effects:[{service:"buildPerformance",method:"observe",result:{status:"failed"}}],handoffText:null,actualResult:{disposition:{finding:"compiler",reason:"The current diagnostic names the malformed expression."}}};
+ proof.semanticReviewInput={actual:{goal:world.goal,observations:Object.fromEntries(observedContentFields[world.kind][0].map(k=>[k,proof[k]??null])),artifacts:{handoffText:null},requestedReturn:proof.actualResult},expected:{goal:world.goal,requestedReturnRequired:true},rubric:"Judge the requested meaning against actual source and retained native evidence"};
+ assert.equal(observedContentNeedsReview(world),true);assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
+ const changed=structuredClone(proof);changed.semanticReviewInput.actual.observations.effects=[];assert.throws(()=>observedContentReviewInput(changed,world));
+});
