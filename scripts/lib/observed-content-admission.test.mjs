@@ -1,6 +1,7 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
 import {observedContentFields,observedContentNeedsReview,observedContentReviewInput} from "./observed-content-admission.mjs";
+function phoneFacts(journal=[]){const roles={assignment:["phoneFirstRun","inspect"],startup:["phoneFirstRun","phases"],provider:["phoneFirstRun","provider"],resume:["phoneSetupRead","readiness"]};return {actorObserved:Object.fromEntries(Object.entries(roles).map(([role,[service,method]])=>[role,journal.some(row=>row.service===service&&row.method===method)])),workspaceBefore:{mainEventId:"owned-main"},workspaceAfter:{mainEventId:"owned-main"},readProtocol:"A refused read is no installation or pairing effect.",evidenceProtocol:"Trusted verifier facts and actual actor observations are distinct."};}
 function example(required=true){
  const world={kind:"image-candidate",goal:"Explain whether the source is available"};
  const proof={outcomeContract:{returnedValue:{required}},semanticReviewRequired:true,index:{id:"owned"},snapshots:[{revision:2}],reads:[{status:"missing"}],artifact:required?null:"Actual retained prose",actualResult:{reason:"The original was removed"}};
@@ -175,7 +176,7 @@ test("program-run meaning review binds actual catalog, causal native attempts an
 });
 
 for(const [kind,native,artifacts,answer] of [
- ["phoneFirstRun",{card:{device:"paired-target"},assignment:{debugAllowed:false},phases:[{phase:"readback",desktopAvailable:true}],build:{id:"native-build"},journal:[{operation:"inspect"}],refusedOperations:[]},{},"The paired target has the native build, while the requested debug capability is absent"],
+ ["phoneFirstRun",{card:{device:"paired-target"},assignment:{debugAllowed:false},phases:[{phase:"readback",desktopAvailable:true}],build:{id:"native-build"},journal:[{operation:"inspect"}],refusedOperations:[],nativeFacts:phoneFacts()},{},"The paired target has the native build, while the requested debug capability is absent"],
  ["mobileContinuity",{profile:{id:"owned-profile"},observations:[{buildId:"actual-build",cacheKey:"owned-cache",transport:"native"}],journal:[{operation:"observe",profileId:"owned-profile"}]},{},"The current owned profile retains its native build and transport"],
  ["source-attribution",{assignment:{unitId:"owned-unit"},files:[{path:"owned.ts",revision:"current-head",text:"actual source"}],evidence:[{path:"owned.ts",fact:"native declaration"}],effects:[{kind:"retained-note"}],native:{readback:{revision:"current-head"},protectedMain:"unchanged"}},{receipt:{path:"private/receipt.md",sha256:"native-retained-text-hash"},retainedText:"Actual source attribution"},{conclusion:"The actual source owns the native declaration",receipt:{path:"private/receipt.md"}}],
 ])test(`${kind} requires native-bound meaning review independent of optional status copies`,()=>{
@@ -233,9 +234,30 @@ test("Regency and Grimoire Native fact roles bind to independent proof rather th
 });
 
 test("phone meaning review binds actual refused operations without inventing a successful effect",()=>{
- const world={kind:"phoneFirstRun",goal:"Explain readiness without reinstalling."},proof={outcomeContract:{returnedValue:{required:true}},semanticReviewRequired:true,card:{id:"phone"},assignment:{pairing:null},phases:[],build:null,journal:[],refusedOperations:[{service:"phoneSetupRead",method:"start",reason:"No owned pairing"}],actualResult:{answer:"Only the shell marker is observed; no setup was started."}};
+ const world={kind:"phoneFirstRun",goal:"Explain readiness without reinstalling."},proof={outcomeContract:{returnedValue:{required:true}},semanticReviewRequired:true,card:{id:"phone"},assignment:{pairing:null},phases:[],build:null,journal:[],refusedOperations:[{service:"phoneSetupRead",method:"start",reason:"No owned pairing"}],nativeFacts:phoneFacts(),actualResult:{answer:"Only the shell marker is observed; no setup was started."}};
  const pick=keys=>Object.fromEntries(keys.map(key=>[key,proof[key]??null]));const [observations,artifacts]=observedContentFields.phoneFirstRun;
  proof.semanticReviewInput={actual:{goal:world.goal,observations:pick(observations),artifacts:pick(artifacts),requestedReturn:proof.actualResult},expected:{goal:world.goal,requestedReturnRequired:true},rubric:"Judge actual attempts and actual effects against the literal goal."};
  assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
  for(const alter of [p=>p.semanticReviewInput.actual.observations.refusedOperations=[],p=>{delete p.refusedOperations;p.semanticReviewInput.actual.observations.refusedOperations=null;},p=>p.refusedOperations=[{...p.refusedOperations[0],method:"reinstall"}]]){const changed=structuredClone(proof);alter(changed);assert.throws(()=>observedContentReviewInput(changed,world));}
+});
+
+test("board migration binds the actual rendered source, authority history and retained target independently of a disposition label",()=>{
+ const world={kind:"board-migration",goal:"Which checklist travelled?"};
+ const proof={semanticReviewRequired:true,available:[{id:"native-board"}],rendered:{cards:[{id:"slipway",checklist:["Mark approach"]}]},basis:{target:"dock"},targetObservations:[],final:{target:"dock",cards:[{id:"slipway",checklist:["Mark approach"]}]},actualResult:{disposition:"held",receipt:null,reason:"The existing Slipway copy carries Mark approach."},outcomeContract:{returnedValue:{required:true}}};
+ const fields=observedContentFields[world.kind];proof.semanticReviewInput={actual:{goal:world.goal,observations:Object.fromEntries(fields[0].map(key=>[key,proof[key]??null])),artifacts:{},requestedReturn:proof.actualResult},expected:{goal:world.goal,requestedReturnRequired:true},rubric:"Judge requested native facts and effects without imposing a private disposition."};
+ assert.equal(observedContentNeedsReview(world),true);assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
+ for(const mutate of [p=>p.semanticReviewRequired=false,p=>p.semanticReviewInput.actual.observations.rendered={cards:[]},p=>p.semanticReviewInput.actual.requestedReturn={reason:"Different answer"},p=>p.final={target:"foreign"}]){const changed=structuredClone(proof);mutate(changed);assert.throws(()=>observedContentReviewInput(changed,world));}
+});
+
+test("authored literal answer obligations cannot be removed or invented by a self-consistent native proof",()=>{
+ for(const field of ['requestedReturnRequired','requestedAnswerRequired']){
+  const required=example(true);required.world[field]=true;assert.doesNotThrow(()=>observedContentReviewInput(required.proof,required.world));
+  required.proof.outcomeContract.returnedValue.required=false;required.proof.semanticReviewInput.actual.requestedReturn=null;required.proof.semanticReviewInput.expected.requestedReturnRequired=false;assert.throws(()=>observedContentReviewInput(required.proof,required.world));
+  const optional=example(false);optional.world[field]=false;assert.doesNotThrow(()=>observedContentReviewInput(optional.proof,optional.world));optional.world[field]=true;assert.throws(()=>observedContentReviewInput(optional.proof,optional.world));optional.world[field]='false';assert.throws(()=>observedContentReviewInput(optional.proof,optional.world));
+ }
+});
+
+test("phone native facts bind actual inspected roles and workspace/protocol evidence instead of treating unread as unavailable",()=>{
+ const world={kind:"phoneFirstRun",goal:"Inspect the actual startup marker only."};const journal=[{service:"phoneFirstRun",method:"inspect"},{service:"phoneFirstRun",method:"phases"}];const proof={outcomeContract:{returnedValue:{required:true}},semanticReviewRequired:true,journal,nativeFacts:phoneFacts(journal),refusedOperations:[],actualResult:{answer:"Only startup was inspected; provider readiness remains uninspected."}};const [fields,artifacts]=observedContentFields.phoneFirstRun;const pick=keys=>Object.fromEntries(keys.map(key=>[key,proof[key]??null]));proof.semanticReviewInput={actual:{goal:world.goal,observations:pick(fields),artifacts:pick(artifacts),requestedReturn:proof.actualResult},expected:{goal:world.goal,requestedReturnRequired:true},rubric:"Judge the actual goal from trusted facts without inventing unread observations."};assert.doesNotThrow(()=>observedContentReviewInput(proof,world));
+ for(const alter of [p=>p.semanticReviewInput.actual.observations.nativeFacts={...p.nativeFacts,workspaceAfter:{mainEventId:"other"}},p=>{delete p.nativeFacts;p.semanticReviewInput.actual.observations.nativeFacts=null;},p=>{p.nativeFacts={...p.nativeFacts,actorObserved:{...p.nativeFacts.actorObserved,provider:true}};p.semanticReviewInput.actual.observations.nativeFacts=p.nativeFacts;},p=>{p.nativeFacts={...p.nativeFacts,readProtocol:""};p.semanticReviewInput.actual.observations.nativeFacts=p.nativeFacts;}]){const changed=structuredClone(proof);alter(changed);assert.throws(()=>observedContentReviewInput(changed,world));}
 });

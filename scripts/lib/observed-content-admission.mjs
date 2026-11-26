@@ -7,7 +7,7 @@ export const observedContentFields = {
   "provenance-question": [["assignment","candidates","evidence","native","effects"], []],
   desktopReadiness: [["desk","window","updates","exactAdmission","journal"], []],
   preparedContentProject: [["nativeProjectEvidence"], []],
-  phoneFirstRun: [["card","assignment","phases","build","journal","refusedOperations"], []],
+  phoneFirstRun: [["card","assignment","phases","build","journal","refusedOperations","nativeFacts"], []],
   mobileContinuity: [["profile","observations","journal"], []],
   "source-attribution": [["assignment","files","evidence","effects","native"], ["receipt","retainedText"]],
   "program-run": [["catalog","inspections","attempts","observations"], ["signedText"]],
@@ -24,7 +24,8 @@ export const observedContentFields = {
   news: [["initial", "latest", "observations", "reads", "attempts", "concurrentReceipt"], []],
   spectrolite: [["observations", "hops", "receipts", "final"], []],
   "agent-capability": [["effects", "assignment", "evidence", "decision", "continuation"], []],
-  "bridge-delivery": [["index", "scope", "operations", "bridgeRead", "fileReads", "commit"], ["artifact"]],
+  "board-migration": [["available","rendered","basis","targetObservations","final"], []],
+  "bridge-delivery": [["index", "scope", "operations", "bridgeRead", "fileReads", "commit", "nativeFiles"], ["artifact"]],
   "deployed-interface": [["effects", "survey", "observation", "architecture", "decision"], ["handoffText"]],
   "extension-dossier": [["assignment", "review", "candidate", "history", "decision", "effects"], ["dossierText"]],
   "installed-package": [["effects", "assignment", "observed", "plan", "repair"], []],
@@ -32,7 +33,7 @@ export const observedContentFields = {
   "launch-state": [["index", "frames", "readback", "request", "witness", "effect", "companionReadbacks", "protectedCompanion"], ["artifact"]],
   "panel-source-migration": [["assignment", "observed", "current", "move", "identity", "consumers", "effects"], []],
   "retained-memory": [["brief", "plan", "evidence"], ["artifact"]],
-  "route-authority": [["offer", "snapshots", "authority", "choice", "readback"], ["artifact"]],
+  "route-authority": [["offer", "snapshots", "authority", "choice", "readback", "routeReadbacks"], ["artifact"]],
   "system-release": [["assignment", "runs", "cases", "effects"], ["handoffText"]],
   "testkit-closeout": [["pair", "actual", "readReceipts", "staged", "rejectedForeign"], ["artifact"]],
   "webhook-admission": [["assignment", "evidence", "binding", "effects"], ["handoffText"]],
@@ -351,7 +352,16 @@ export function observedContentReviewInput(proof,world){
  const fields=observedContentFields[world.kind],input=proof.semanticReviewInput;
  const pick=keys=>Object.fromEntries(keys.map(key=>[key,proof[key]??null]));
  const required=proof.outcomeContract?.returnedValue?.required;
+ for(const field of ["requestedReturnRequired","requestedAnswerRequired"])if(Object.hasOwn(world,field)&&(typeof world[field]!=="boolean"||world[field]!==required))throw Error("Goal return obligation differs from its authored literal contract");
  if(world.kind==="phoneFirstRun"&&(!Array.isArray(proof.refusedOperations)||proof.refusedOperations.some(row=>!row||typeof row.service!=="string"||typeof row.method!=="string"||typeof row.reason!=="string")))throw Error("Phone meaning review requires actual native refusal observations");
+ if(world.kind==="phoneFirstRun"){
+  const facts=proof.nativeFacts,roles={assignment:["phoneFirstRun","inspect"],startup:["phoneFirstRun","phases"],provider:["phoneFirstRun","provider"],resume:["phoneSetupRead","readiness"]};
+  if(!facts||typeof facts!=="object"||!Array.isArray(proof.journal)||!facts.actorObserved||
+     Object.entries(roles).some(([role,[service,method]])=>typeof facts.actorObserved[role]!=="boolean"||facts.actorObserved[role]!==proof.journal.some(row=>row?.service===service&&row?.method===method))||
+     !facts.workspaceBefore||typeof facts.workspaceBefore!=="object"||!facts.workspaceAfter||typeof facts.workspaceAfter!=="object"||
+     typeof facts.readProtocol!=="string"||!facts.readProtocol.trim()||typeof facts.evidenceProtocol!=="string"||!facts.evidenceProtocol.trim())throw Error("Phone meaning review requires actual actor observations and native workspace/protocol facts");
+ }
+
  if(!fields||typeof required!=="boolean"||proof.semanticReviewRequired!==true||
     !equal(input?.actual,{goal:world.goal,observations:pick(fields[0]),artifacts:pick(fields[1]),requestedReturn:required?proof.actualResult??null:null})||
     !equal(input.expected,{goal:world.goal,requestedReturnRequired:required})||typeof input.rubric!=="string"||!input.rubric.trim())

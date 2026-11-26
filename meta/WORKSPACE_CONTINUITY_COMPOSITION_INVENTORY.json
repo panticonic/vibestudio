@@ -1,0 +1,312 @@
+{
+  "schema": "vibestudio.multi-family-composition-inventory/1",
+  "status": "implemented; actual public composition and native component controls passed; final coherent merge and generated declarations pending",
+  "baseBefore": "613ada268f243727a7966c3ac03e0c74ab5f6a4b",
+  "core": "e404b1a81",
+  "families": [
+    {
+      "kind": "intent-discovery",
+      "root": "skills/open-user-goal/discoverScopedIntent.ts",
+      "rootSha256": "771bf324fd6b477e001faecb1a2cb7706bcc4f724a3ed9a264b1ea111bcbe2ef",
+      "privateNaturalFunctions": [
+        "skills/open-user-goal/discoverScopedIntent/concludeIntentReview.nl",
+        "skills/open-user-goal/discoverScopedIntent/searchRelevantIntent.nl",
+        "skills/open-user-goal/discoverScopedIntent/chooseIntentActions.nl"
+      ],
+      "native": "skills/system-testing/open-goal-intent-discovery-managed.ts",
+      "nativeSha256": "1f499a6e82bd15f39b973add7a897c93fe1d2797e5b586781f2f158d4559f00e",
+      "classification": "High-level TS fixes a semantic discovery/evidence/decision/conditional-action continuation, not thin glue. Exact native I/O/pure closed computations remain TS.",
+      "pairedNativeStatus": "Native reference/negative controls passed; mandatory meaning review remains required, not synthesized by component references.",
+      "implementedMechanisms": [
+        "Model-owned root/inquiry/native contract discovery and installed evidence semantics",
+        "Allow authentic extra owned observations and known contracts without required catalog-description or exact method-count route",
+        "Literal findings remain required even when a private note is retained; actual note bytes remain independently required when requested"
+      ]
+    },
+    {
+      "kind": "workspace-config",
+      "root": "skills/open-user-goal/reconcileWorkspaceConfig.ts",
+      "rootSha256": "3b07b2ec7e7e8e76424766eb8cf917f015f23b06a53bd7d383323c7b1ce5ed4e",
+      "privateNaturalFunctions": [
+        "skills/open-user-goal/reconcileWorkspaceConfig/selectConfigLens.nl",
+        "skills/open-user-goal/reconcileWorkspaceConfig/reviewConfigDisposition.nl",
+        "skills/open-user-goal/reconcileWorkspaceConfig/shouldRetainConfigDisposition.nl"
+      ],
+      "native": "skills/system-testing/open-goal-workspace-config-managed.ts",
+      "nativeSha256": "886f0a50c41b9f99bc4630d5db14fbe59fcff38bc77e630f6372b6ce58ee66af",
+      "classification": "High-level TS fixes a semantic discovery/evidence/decision/conditional-action continuation, not thin glue. Exact native I/O/pure closed computations remain TS.",
+      "pairedNativeStatus": "Native reference/negative controls passed; mandatory meaning review remains required, not synthesized by component references.",
+      "implementedMechanisms": [
+        "Model-owned scope/evidence/interpretation/continuation",
+        "Distinct field identity instead of question-order equality; compose separate valid field reads and refresh current observations",
+        "Source differences join by question identity; actual setting/source/dependency facts retain closed truthful classifications"
+      ]
+    },
+    {
+      "kind": "route-authority",
+      "root": "skills/open-user-goal/chooseAuthorizedEvidenceRoute.ts",
+      "rootSha256": "b24a4a5183ecdaf8a87a5143328de68b3d06ecc6ff8fdd901e97444c0186d093",
+      "privateNaturalFunctions": [
+        "skills/open-user-goal/chooseAuthorizedEvidenceRoute/selectEvidenceRoute.nl",
+        "skills/open-user-goal/chooseAuthorizedEvidenceRoute/concludeEvidenceRoute.nl"
+      ],
+      "native": "skills/system-testing/open-goal-route-authority-managed.ts",
+      "nativeSha256": "a781416c31e620e832d4f56b5fd994958602ca5c1e7be9a9e77324798498ccca",
+      "classification": "High-level TS fixes a semantic discovery/evidence/decision/conditional-action continuation, not thin glue. Exact native I/O/pure closed computations remain TS.",
+      "pairedNativeStatus": "Native reference/negative controls passed; mandatory meaning review remains required, not synthesized by component references.",
+      "implementedMechanisms": [
+        "Model-owned route and exact authority hierarchy",
+        "Authenticated independent local reads may compose a comparison; any extra scoped read is preserved",
+        "Canonical origins, actual preflight, protected basis and requested temporal value remain strict; no external operation is executed"
+      ]
+    },
+    {
+      "kind": "workspace-claims",
+      "root": "skills/open-user-goal/reviewWorkspaceClaims.ts",
+      "rootSha256": "7fc78f80fce82039da4bb629d7a035d6d9e74589b47d5fd7b9c9a641e98fc477",
+      "privateNaturalFunctions": [
+        "skills/open-user-goal/reviewWorkspaceClaims/selectClaimPacket.nl",
+        "skills/open-user-goal/reviewWorkspaceClaims/summarizeClaimReview.nl"
+      ],
+      "native": "skills/system-testing/open-goal-workspace-claims-managed.ts",
+      "nativeSha256": "dddea5fcd1d8274116625632d528ff46bf582f93b30b287bac38663d98fb8638",
+      "classification": "High-level TS fixes a semantic discovery/evidence/decision/conditional-action continuation, not thin glue. Exact native I/O/pure closed computations remain TS.",
+      "pairedNativeStatus": "Native reference/negative controls passed; mandatory meaning review remains required, not synthesized by component references.",
+      "implementedMechanisms": [
+        "Model-owned current-packet/evidence/interpretation coordination",
+        "Original requirement wording and actual TestKit/revision/authority truth retained; supported/missing sets need no private order",
+        "Native note binds backend packet/evidence rather than requiring copied choice/packet/evidence echoes"
+      ]
+    },
+    {
+      "kind": "chat-continuity",
+      "root": "skills/open-user-goal/workOnChatContinuity.ts",
+      "rootSha256": "88591bc4c84cd872f38e2fcdb73f4e46d2e91b91dc218ef8d69589125384e1a6",
+      "privateNaturalFunctions": [
+        "skills/open-user-goal/workOnChatContinuity/chooseChatContinuity.nl",
+        "skills/open-user-goal/workOnChatContinuity/decideChatContinuity.nl"
+      ],
+      "native": "skills/system-testing/open-goal-chat-continuity-managed.ts",
+      "nativeSha256": "373b559fc80ae1d9a3baa831e43c0461d0962f166a533f3140f87c4ec9c14747",
+      "classification": "High-level TS fixes a semantic discovery/evidence/decision/conditional-action continuation, not thin glue. Exact native I/O/pure closed computations remain TS.",
+      "pairedNativeStatus": "Native reference/negative controls passed; mandatory meaning review remains required, not synthesized by component references.",
+      "implementedMechanisms": [
+        "Model-owned chat/worker/delivery investigation and refinement with actual prior observations",
+        "Remove fixed two-read count and frozen second snapshot; native fixture transition occurs once",
+        "Retain exact original message/sender/channel, real worker relationship history, current stock consumer projection and requested private bytes"
+      ]
+    },
+    {
+      "kind": "board-migration",
+      "root": "skills/open-user-goal/reviewBoardMigration.ts",
+      "rootSha256": "e2ace21ae0ed02675d72c069e1e7b76a312f808861bc3eb8902e12408ca9350e",
+      "privateNaturalFunctions": [
+        "skills/open-user-goal/reviewBoardMigration/chooseMigrationScope.nl",
+        "skills/open-user-goal/reviewBoardMigration/locateSource.nl",
+        "skills/open-user-goal/reviewBoardMigration/decideMigration.nl"
+      ],
+      "native": "skills/system-testing/open-goal-board-migration-managed.ts",
+      "nativeSha256": "13e587fabb19bd506939e27ea31b05ef6eccc3e5342e970414908148b50001be",
+      "classification": "High-level TS fixes a semantic discovery/evidence/decision/conditional-action continuation, not thin glue. Exact native I/O/pure closed computations remain TS.",
+      "pairedNativeStatus": "Native reference/negative controls passed; mandatory meaning review remains required, not synthesized by component references.",
+      "implementedMechanisms": [
+        "Model-owned selection and source/target acquisition",
+        "Mandatory native-bound meaning review replaces private disposition equality; per-literal13 required answers/11 effects-only requests",
+        "Source-only question requires no target read; native approval/current CAS/card/checklist/attachment/protected data remain strict"
+      ]
+    },
+    {
+      "kind": "bridge-delivery",
+      "root": "skills/open-user-goal/workOnBridgeDelivery.ts",
+      "rootSha256": "db9647ec39f044342fa8305abce6ec514b68ce03b1c4556f8751714f1b4d28d7",
+      "privateNaturalFunctions": [
+        "skills/open-user-goal/workOnBridgeDelivery/chooseBridgeScope.nl",
+        "skills/open-user-goal/workOnBridgeDelivery/decideLocalDelivery.nl",
+        "skills/open-user-goal/workOnBridgeDelivery/assessRetainedBranch.nl"
+      ],
+      "native": "skills/system-testing/open-goal-bridge-delivery-managed.ts",
+      "nativeSha256": "65067cc4c2afc1a9fb43c1143a36e41aaa5dbf6bf63ad4cb8ade99371b4a59b3",
+      "classification": "High-level TS fixes a semantic discovery/evidence/decision/conditional-action continuation, not thin glue. Exact native I/O/pure closed computations remain TS.",
+      "pairedNativeStatus": "Native reference/negative controls passed; mandatory meaning review remains required, not synthesized by component references.",
+      "implementedMechanisms": [
+        "Model-owned retained/local/semantic-file inquiry and nullable uninspected evidence",
+        "No forced all-file/Git review for a question resolved by an earlier actual gap; extra authentic independent backend file facts remain bound",
+        "Local commit still needs actual current compatible pair, retained authority, CAS and unchanged protected main"
+      ]
+    },
+    {
+      "kind": "personal-welcome",
+      "root": "skills/open-user-goal/workOnPersonalWelcomeGoal.ts",
+      "rootSha256": "bd36fbece0a0e6e0a3d218efd1bac3612b1e56c7135ca59b4102eeaf48f8bc28",
+      "privateNaturalFunctions": [
+        "skills/open-user-goal/workOnPersonalWelcomeGoal/chooseWelcomeResource.nl",
+        "skills/open-user-goal/workOnPersonalWelcomeGoal/reconcileWelcomeEvidence.nl",
+        "skills/open-user-goal/workOnPersonalWelcomeGoal/decideWelcomeNextStep.nl",
+        "skills/open-user-goal/workOnPersonalWelcomeGoal/reconcileWelcomeEvidence/chooseCurrentReceipt.nl",
+        "skills/open-user-goal/workOnPersonalWelcomeGoal/reconcileWelcomeEvidence/reviewWelcomeAuthority.nl"
+      ],
+      "native": "skills/system-testing/open-goal-personal-welcome-managed.ts",
+      "nativeSha256": "b60c4ce7c7e069aa8723ab2ab78d4f03fe306733aa4fbbcf8126f61d984090ba",
+      "classification": "High-level TS fixes a semantic discovery/evidence/decision/conditional-action continuation, not thin glue. Exact native I/O/pure closed computations remain TS.",
+      "pairedNativeStatus": "Native reference/negative controls passed; mandatory meaning review remains required, not synthesized by component references.",
+      "implementedMechanisms": [
+        "Model-owned resource/owner/tour/probe interpretation with actual earlier evidence",
+        "Remove frozen second snapshot, one-shot observation guards and private all-plan/reason/action equality",
+        "Literal17 required query returns/4 optional effects or conditional requests;4 required notes, actual permitted original-probe execution/bytes/readback/cleanup remain strict; provided closed witnesses are authenticated incidentally"
+      ]
+    }
+  ],
+  "preservedThinGlue": [
+    "recoverOperatingHandoff.ts composes two already-natural domain roots with one real typed dependency; no semantic route in TS.",
+    "inspectExactRouteAuthority.ts forwards one typed request to existing natural authority reviewer; retained."
+  ],
+  "nativePrinciple": "Actual owned identities/current frontiers/CAS/atomic actions/literal-copy/negative writes remain exact. Private reference statuses, all-helper read routes/counts or report-ID echoes are not user obligations. Requested answer/artifact roles are per literal goal, not inferred from whether mutation happened.",
+  "validation": "No paid probes. Actual public ProgramLoader/scripted gateway plus native factory reference/negative controls and strict Host binding; reference-only crisp qualification is not semantic goal acceptance.",
+  "unchangedGoalProof": [
+    {
+      "family": "intent-discovery",
+      "allAuthoredWorldLiteralsPreserved": true,
+      "originalQuotedLiteralCount": 195,
+      "previousSourceSha256": "73e480cad075b17c6084e1fe43006e8df6199b3f4cb1ad01f48f2a42b0a7a792",
+      "currentSourceSha256": "4954ed69f8ad4e2352ede6e50c6e20a5cc0256b9c475d0886a83404f2d4575e2"
+    },
+    {
+      "family": "workspace-config",
+      "allAuthoredWorldLiteralsPreserved": true,
+      "originalQuotedLiteralCount": 162,
+      "previousSourceSha256": "c9b6f3283bb2540eaf3e3d2ccb2ccfe32f47e3609687abe5e91d806f388521a0",
+      "currentSourceSha256": "c9b6f3283bb2540eaf3e3d2ccb2ccfe32f47e3609687abe5e91d806f388521a0"
+    },
+    {
+      "family": "route-authority",
+      "allAuthoredWorldLiteralsPreserved": true,
+      "originalQuotedLiteralCount": 304,
+      "previousSourceSha256": "f8b58a148acd648a68886c17d18063bdc8e7e5ca02c8e2f22e3a032faffc87d8",
+      "currentSourceSha256": "f8b58a148acd648a68886c17d18063bdc8e7e5ca02c8e2f22e3a032faffc87d8"
+    },
+    {
+      "family": "workspace-claims",
+      "allAuthoredWorldLiteralsPreserved": true,
+      "originalQuotedLiteralCount": 258,
+      "previousSourceSha256": "1878d5aeae790d9326ebb03e351ebae8c8c982ec5f8e57028138bb1043612350",
+      "currentSourceSha256": "1878d5aeae790d9326ebb03e351ebae8c8c982ec5f8e57028138bb1043612350"
+    },
+    {
+      "family": "chat-continuity",
+      "allAuthoredWorldLiteralsPreserved": true,
+      "originalQuotedLiteralCount": 259,
+      "previousSourceSha256": "50a2fbbe84258f7acba3e58d96743fd4574e7b75fcb1fa8135bbc82d7f309d5d",
+      "currentSourceSha256": "50a2fbbe84258f7acba3e58d96743fd4574e7b75fcb1fa8135bbc82d7f309d5d"
+    },
+    {
+      "family": "board-migration",
+      "allAuthoredWorldLiteralsPreserved": true,
+      "originalQuotedLiteralCount": 184,
+      "previousSourceSha256": "e73b2ab7cef56b349cac3e3a78c9ae637ffd6579ba83ab240a4c3207f276ed3a",
+      "currentSourceSha256": "1a9fa1ca706859880a46a676ec52e69a67f2e8f3eb18a893d34ba5220a06c9d7"
+    },
+    {
+      "family": "bridge-delivery",
+      "allAuthoredWorldLiteralsPreserved": true,
+      "originalQuotedLiteralCount": 286,
+      "previousSourceSha256": "345498a3a233775e0fae3d2656474cf0e5ab21ac1c4c583d13620b8e0422b38e",
+      "currentSourceSha256": "345498a3a233775e0fae3d2656474cf0e5ab21ac1c4c583d13620b8e0422b38e"
+    },
+    {
+      "family": "personal-welcome",
+      "allAuthoredWorldLiteralsPreserved": true,
+      "originalQuotedLiteralCount": 244,
+      "previousSourceSha256": "16b8063e3996a398fdcc6f25fd17b614c61a19a5188ddeff50a2be18000be653",
+      "currentSourceSha256": "2013fc099749f0a74655b6e1c9aebeacded0d7da806daed7d2c6b194f0610dce"
+    }
+  ],
+  "actualControls": {
+    "publicComposition": {
+      "count": 8,
+      "unit": "vibe-workspace-continuity-composition-20261126a",
+      "seconds": 354.76,
+      "peakGiB": 2.8
+    },
+    "entryClosures": {
+      "count": 8,
+      "units": [
+        "vibe-workspace-continuity-public-20261126d",
+        "vibe-workspace-continuity-welcome-public-20261126a"
+      ],
+      "initialFailure": "Welcome TEST union lacked Personal; corrected actual projection, no product workaround."
+    },
+    "nativeReferences": {
+      "count": 207,
+      "families": 8,
+      "units": [
+        "vibe-board-migration-meaning-20261126a",
+        "vibe-bridge-native-obligations-20261126b",
+        "vibe-chat-continuity-native-20261126b",
+        "vibe-continuity-remaining-native-20261126b",
+        "vibe-workspace-claims-native-20261126b",
+        "vibe-personal-welcome-native-20261126c",
+        "vibe-route-authority-worlds-20261126a"
+      ]
+    },
+    "hostBinding": {
+      "count": 52,
+      "unit": "vibe-workspace-continuity-binding-20261126b"
+    }
+  },
+  "excludedMechanisms": [
+    {
+      "path": "skills/open-user-goal/recoverOperatingHandoff.ts",
+      "reason": "Thin typed composition of two existing semantic roots, no high-level semantic selection or evidence decision."
+    },
+    {
+      "path": "skills/open-user-goal/chooseAuthorizedEvidenceRoute/inspectExactRouteAuthority.ts",
+      "reason": "One-call typed relay to installed reviewAuthority; preserved."
+    },
+    {
+      "path": "skills/open-user-goal/reviewWorkspaceClaims/verifyClaimSupport.ts",
+      "reason": "Typed relay to installed closed checkSupport contract; original strings must be partitioned exactly once, set ordering is incidental."
+    },
+    {
+      "path": "skills/open-user-goal/reconcileWorkspaceConfig/collectConfigEvidence.ts",
+      "reason": "Exact typed collector directed by model-selected lens; native comparisons and source identities remain mechanical."
+    }
+  ],
+  "engines": {
+    "applies": "Joint-codebase source and Native domain fixtures are engine-independent. Public evaluator exercised exact Coree404 Workerd SDK; no Core inference mechanism changed. Existing five SDKs remain byte-identical.",
+    "notClaimed": [
+      "new physical native qualification",
+      "paid-model autonomy or performance",
+      "completion of all remaining112-family or45-gate inventories"
+    ]
+  },
+  "open": [
+    "Final ordinary merges of ready48 and sibling49 sources",
+    "Final canonical entry/declaration generation and combined controls",
+    "Continue remaining coordinator/native-oracle census beyond these eight families"
+  ],
+  "selectionCapability": {
+    "changed": [
+      "skills/open-workspace-claims/types.ts: ClaimReviewChoice.id",
+      "skills/open-route-authority/types.ts: RouteChoice.routeId",
+      "skills/open-bridge-delivery/types.ts: BridgePlan.id"
+    ],
+    "contract": "Selectors can return null for a genuinely unavailable/ambiguous scope without inventing an identifier. Native read/write methods still require actual owned nonnull identifiers. Public goal entry arguments and result aliases are unchanged.",
+    "consumers": "rg inventory covered each domain types/services, root private helpers and paired Native fixtures; public controls guard null before Native callbacks. No compatibility alias."
+  },
+  "hostReviewProtocol": {
+    "newKind": "board-migration",
+    "addedNativeObservations": {
+      "route-authority": [
+        "routeReadbacks"
+      ],
+      "bridge-delivery": [
+        "nativeFiles"
+      ],
+      "phoneFirstRun": [
+        "nativeFacts"
+      ]
+    },
+    "literalObligationBinding": "Existing requestedReturnRequired/requestedAnswerRequired annotations must equal the Native proof clause; no new role is inferred when no literal annotation exists.",
+    "phoneFactCustody": "actorObserved assignment/startup/provider/resume are independently recomputed from actual Native journal service/method entries; workspace/protocol fields must exist and the complete projection is deeply bound. Paired Phone source owned by Runtime parent, not part of this eight-family implementation."
+  }
+}
