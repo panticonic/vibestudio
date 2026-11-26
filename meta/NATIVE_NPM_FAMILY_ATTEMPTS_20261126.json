@@ -1,0 +1,25 @@
+{
+  "observation": "Owned npm bootstrap uses separate Node process; parent Node default and Host pinned dispatcher do not reach it. Installed @npmcli/agent/lib/agents.js preserves options.family but has no per-address attempt override.",
+  "sharedMechanism": "networkFamilyAttemptTimeout pure policy shared with pinnedConnectionOptions; numeric value embedded by Host into sterile owned bootstrap, never ambient NODE_OPTIONS",
+  "callers": [
+    "src/server/buildV2/externalDeps.ts:1537",
+    "packages/shared/src/npmInstaller.ts:469",
+    "packages/shared/src/npmInstaller.integration.test.ts:52"
+  ],
+  "exclusions": {
+    "modelNode": "Core15df configures own Node Pi/chat dispatchers",
+    "browserWorkerd": "Host pinned adapters already3ce",
+    "arbitraryNativeUserPrograms": "own platform transports, not an npm bootstrap owned by Host; no argument or environment widening",
+    "pythonNativeSglang": "not Node net clients"
+  },
+  "source56": "immutable unchanged",
+  "teacherCalls": 0,
+  "verification": {
+    "unit": "vibe-native-npm-family-controls-20261126b",
+    "actualPassed": 37,
+    "seconds": 10.389,
+    "peakMiB": 184.7,
+    "boundaries": "Actual owned npm-shaped Node subprocesses across resolve/ci, opt-out250ms, explicit2100ms, sterile NODE_OPTIONS denial, existing cache/scope/cancellation controls; compiledNativeLaunch enforcement mocked and unchanged",
+    "firstCheck": "Failed missing exact installed Node test artifact before all npm tests; corrected source-identical immutable distribution donor, not product change"
+  }
+}

@@ -83,6 +83,24 @@ describe("runNpmInstall", () => {
     expect(JSON.parse(fs.readFileSync(path.join(fixture.installDir, "dns-orders.json"), "utf8"))).toEqual(["verbatim", "verbatim"]);
   });
 
+  it("configures actual owned npm processes without importing ambient Node options", async () => {
+    const fixture = createFakeNpmFixture();
+    vi.stubEnv("NODE_OPTIONS", "--network-family-autoselection-attempt-timeout=3500");
+    await runNpmInstall(fixture.installDir, { appRoot: fixture.appRoot });
+    expect(JSON.parse(fs.readFileSync(path.join(fixture.installDir, "connection-policy.json"), "utf8"))).toEqual([
+      {milliseconds:1500,nodeOptions:null}, {milliseconds:1500,nodeOptions:null},
+    ]);
+  });
+
+  it.each([["0",250],["2100",2100]])("honors connection policy %s in both actual npm phases", async (configured, milliseconds) => {
+    const fixture = createFakeNpmFixture();
+    vi.stubEnv("VIBESTUDIO_NETWORK_FAMILY_ATTEMPT_TIMEOUT_MS", String(configured));
+    await runNpmInstall(fixture.installDir, { appRoot: fixture.appRoot });
+    expect(JSON.parse(fs.readFileSync(path.join(fixture.installDir, "connection-policy.json"), "utf8"))).toEqual([
+      {milliseconds,nodeOptions:null}, {milliseconds,nodeOptions:null},
+    ]);
+  });
+
   it("enables npm update checks only when explicitly requested", async () => {
     const fixture = createFakeNpmFixture();
     await runNpmInstall(fixture.installDir, { appRoot: fixture.appRoot, updateNotifier: true });
@@ -439,6 +457,10 @@ const dnsOrdersPath = path.join(process.cwd(), "dns-orders.json");
 const dnsOrders = fs.existsSync(dnsOrdersPath) ? JSON.parse(fs.readFileSync(dnsOrdersPath, "utf8")) : [];
 dnsOrders.push(require("node:dns").getDefaultResultOrder());
 fs.writeFileSync(dnsOrdersPath, JSON.stringify(dnsOrders));
+const connectionPolicyPath = path.join(process.cwd(), "connection-policy.json");
+const connectionPolicies = fs.existsSync(connectionPolicyPath) ? JSON.parse(fs.readFileSync(connectionPolicyPath, "utf8")) : [];
+connectionPolicies.push({milliseconds:require("node:net").getDefaultAutoSelectFamilyAttemptTimeout(),nodeOptions:process.env.NODE_OPTIONS ?? null});
+fs.writeFileSync(connectionPolicyPath, JSON.stringify(connectionPolicies));
 if (control.VIBESTUDIO_NPM_INSTALLER_TEST_CHILD) {
   const child = require("node:child_process").spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);"], {stdio:"inherit"});
   fs.writeFileSync(path.join(process.cwd(), "child.json"), JSON.stringify(child.pid));
