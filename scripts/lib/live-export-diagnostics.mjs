@@ -11,6 +11,14 @@ async function appendExportRejection({directory,scenario,runId,pins,trajectory,e
   pinsSha256:existsSync(pins)?createHash('sha256').update(readFileSync(pins)).digest('hex'):null,
   error:{name:error instanceof Error?error.name:'Error',message:String(error)},at:Date.now()};
  if(typeof error?.code==='string')receipt.error.code=error.code;
+ const review=error?.reviewCapture;
+ if(review?.schema==='natlang.live-workflow-review-failure/1' && error.reviewCapturePath){
+  const capturedPath=path.relative(directory,error.reviewCapturePath);
+  if(!path.isAbsolute(capturedPath)&&capturedPath!=='..'&&!capturedPath.startsWith('../'))
+   receipt.reviewFailure={schema:review.schema,model:review.model,teacher:review.teacher,failure:review.failure,
+    capture:{path:capturedPath,sha256:await fileHash(error.reviewCapturePath)}};
+ }
+
  appendFileSync(path.join(folder,'export-rejections.jsonl'),JSON.stringify(receipt)+'\n',{mode:0o600});
  return receipt;
 }

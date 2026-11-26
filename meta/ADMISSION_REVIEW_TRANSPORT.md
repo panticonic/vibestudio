@@ -1,0 +1,13 @@
+# Admission-review transport inventory (2026-11-26)
+
+Source53 actual0088: all first8 native outcomes passed; five separate Terra admission requests failed with `fetch failed`. Original packets and source pins remain immutable. Same-source re-export later yielded3 accepted and2 actual semantic rejections; transport failure grants no correctness.
+
+- `scripts/review-live-workflow-teacher.mjs`: shared provider preparation/turn/judge lifecycle; used by collector and standalone exporter, public-claim branch too. Previously only abort captured incomplete input/exchanges. A transport failure must retain exact request/input/model/teacher/error and permit a bounded retry of that terminated review request, never a new teacher execution or a rejected semantic verdict.
+- `scripts/export-live-workflow-teacher.mjs`: exact source/native/root binding precedes review; binds failure capture bytes in a sibling sidecar before rethrow. Successful manifests still require actual accepted review.
+- `scripts/lib/live-export-diagnostics.mjs`: source/packet-hashed diagnostic owner; adds captured review-failure identity, never admission authority.
+- `scripts/collect-live-workflow-teacher.mjs`: retries only the independent review through the shared wrapper; exhausted captured transport failure defers the existing packet as pending-review, does not make a teacher failure or cancel active cases.
+- Python `live_export_diagnostics.py`, `vibestudio_campaign.py`: verify failure sidecar custody and canonical native-passed packet, expose pending-review separately from semantic rejection. Preserve actual teacher exposure, exclude this operational review failure from goal retry count/selection. Unknown historical fetch text stays conservative.
+- Python live_campaign_ingest/live_teacher_sources and Node observed-workspace/native-materializer: only admitted manifests enter these paths; no review-failure admission or format change. Existing immutable raw and all failed attempts retained.
+- Core provider/runtime engines (Node/Workerd/browser/Python/SGLang): this mechanism is Host-owned independent offline admission review, not application inference; wrapper uses canonical selected Core Node provider. No engine permission/model policy/capture protocol changes.
+
+No blanket timeout, cancellation or semantic-verdict retry. Default at most1 retry after an actual terminated provider transport failure; `VIBESTUDIO_REVIEW_TRANSPORT_RETRIES=0` opts out. All attempts retain evidence and close their owned backend before the next attempt. Persistent failures await canonical source-bound re-export; never rerun the teacher to recover a reviewer outage.

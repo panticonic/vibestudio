@@ -11433,7 +11433,8 @@ export async function exportLiveTeacherWorkflow({
       catch(error){
         if(error?.reviewCapture){
           const bytes=`${JSON.stringify(error.reviewCapture,null,2)}\n`;
-          const capturedPath=`${reviewPath}.interrupted-${hash(bytes)}.json`;
+          const suffix=error.reviewCapture.schema==="natlang.live-workflow-review-failure/1"?"failed":"interrupted";
+          const capturedPath=`${reviewPath}.${suffix}-${hash(bytes)}.json`;
           try{await writeFile(capturedPath,bytes,{mode:0o600,flag:"wx"});}catch(writeError){if(writeError.code!=="EEXIST")throw writeError;}
           error.reviewCapturePath=capturedPath;
         }

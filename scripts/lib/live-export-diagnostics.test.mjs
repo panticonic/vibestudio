@@ -22,3 +22,11 @@ test('records retrieval errors without claiming a missing packet exists',async()
 test('an auxiliary diagnostic I/O failure never replaces the original exporter failure',async()=>{
  const directory=mkdtempSync(path.join(tmpdir(),'vibe-export-diagnostic-'));const log=console.error;let message='';try{writeFileSync(path.join(directory,'st_owned'),'not a directory');console.error=value=>{message=String(value)};const row=await recordExportRejection({directory,scenario:'case',runId:'st_owned',pins:path.join(directory,'source.json'),trajectory:path.join(directory,'absent.gz'),error:new Error('original admission failure')});assert.equal(row,null);assert.match(message,/original admission failure/);assert.match(message,/ENOTDIR|EEXIST/);}finally{console.error=log;rmSync(directory,{recursive:true,force:true})}
 });
+
+test('review transport diagnostic binds retained failure capture bytes without granting admission',async()=>{
+ const directory=mkdtempSync(path.join(tmpdir(),'vibe-review-failure-'));try{
+ const pins=path.join(directory,'source.json'),trajectory=path.join(directory,'raw.gz'),capturePath=path.join(directory,'verified.review.json.failed-proof.json');writeFileSync(pins,'{}');writeFileSync(trajectory,'original');
+ const capture={schema:'natlang.live-workflow-review-failure/1',model:'test-only:reviewer',teacher:'test-only:teacher',input:{actual:'original'},complete:false,failure:{kind:'provider-transport',phase:'provider-turn',error:{name:'Error',message:'fetch failed'}}};writeFileSync(capturePath,JSON.stringify(capture));
+ const row=await recordExportRejection({directory,scenario:'case',runId:'st_owned',pins,trajectory,error:Object.assign(Error('fetch failed'),{reviewCapture:capture,reviewCapturePath:capturePath})});assert.equal(row.reviewFailure.capture.path,path.basename(capturePath));assert.equal(row.reviewFailure.capture.sha256,createHash('sha256').update(readFileSync(capturePath)).digest('hex'));assert.equal(row.reviewFailure.failure.kind,'provider-transport');assert.equal(row.passed,undefined);
+ }finally{rmSync(directory,{recursive:true,force:true})}
+});

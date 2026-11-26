@@ -575,6 +575,14 @@ try {
             interruption.complete([scenario]);
             console.log(path.join(destination, "manifest.json"));
           } catch (error) {
+            if(error?.reviewCapture?.schema==="natlang.live-workflow-review-failure/1" &&
+                error.reviewCapture.failure?.kind==="provider-transport" && !interruption.signal.aborted){
+              interruption.defer(scenario,"pending-review");
+              await recordExportRejection({directory,scenario,runId,pins,
+                trajectory:path.join(directory,runId,`trajectory-${scenario}-full.json.gz`),error});
+              console.error(`Teacher case ${scenario} pending independent review; original packet retained: ${String(error)}`);
+              continue;
+            }
             if (interruption.signal.aborted &&
                 (error === interruption.signal.reason ||
                   error?.reviewCapture?.schema === "natlang.live-workflow-review-interrupted/1") &&
