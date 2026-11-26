@@ -448,7 +448,11 @@ export function stagePackageDependencies(source, destination, ancestors = new Ma
   for (const [name, range] of Object.entries(declarations)) {
     if (range.startsWith("workspace:")) continue;
     const rootRange = rootPkg.optionalDependencies?.[name] ?? rootPkg.dependencies?.[name];
+    // Optional root packages can be absent in a legitimate installation. They
+    // cannot satisfy the installed graph owned by a vendored runtime package.
+    const rootRequired = Object.hasOwn(rootPkg.dependencies ?? {}, name);
     if (
+      rootRequired &&
       rootRange &&
       semver.validRange(rootRange) &&
       semver.validRange(range) &&
@@ -476,7 +480,7 @@ export function stagePackageDependencies(source, destination, ancestors = new Ma
     // Fixed-source declarations reproduce one exact installed package. Share
     // it when this consumer already resolves those same bytes at the root;
     // this also preserves the root's installed dependency overrides.
-    if (rootRange && !semver.validRange(rootRange)) {
+    if (rootRequired && rootRange && !semver.validRange(rootRange)) {
       const rootDirectory = installedPackageDirectory(name, repoRoot);
       if (directory === rootDirectory) continue;
     }
