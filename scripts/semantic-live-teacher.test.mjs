@@ -82,21 +82,21 @@ test("editorial content review binds retained copy, current mission and exact ap
  const goal="Correct the opening hours from the approved PDF.",original={path:"candidate.md",version:"before",text:"Old hours"},stored={path:"candidate.md",version:"current",text:"Approved hours"},mission={id:"owned",description:"Approved attachment: current.pdf."};
  const pdf={digest:"pdf-sha",citations:[{page:1,line:0,quote:"Hours: 09:00"}]};
  const proof={semanticReviewRequired:true,stored,snapshots:[{candidate:original,mission}],plan:{operation:"revise"},attempts:[{result:{status:"written"}}],sources:[{request:{document:"current.pdf"},pdf}],artifact:null};
- proof.semanticReviewInput={actual:{goal,retainedDocument:stored,originalDocument:original,currentObservation:original,currentMission:mission,approvedTextSources:[{document:"current.pdf",...pdf}],retainedHandoff:null},expected:{goal,fields:["Hours"],literalApprovedWording:false,operation:"revise",returnedDecisionRequired:false,retainedHandoffRequired:false},rubric:"Judge actual field facts, not example wording."};
- const world={kind:"editorial-packet",goal,fields:[{label:"Hours"}]};
+ proof.semanticReviewInput={actual:{goal,retainedDocument:stored,originalDocument:original,currentObservation:original,currentMission:mission,approvedTextSources:[{document:"current.pdf",...pdf}],retainedHandoff:null,decision:null},expected:{goal,fields:["Hours"],literalApprovedWording:false,operation:"revise",returnedDecisionRequired:false,retainedHandoffRequired:false},rubric:"Judge actual field facts, not example wording."};
+ const world={kind:"editorial-packet",goal,requestedReturnRequired:false,fields:[{label:"Hours"}]};
  assert.equal(editorialReviewInput(proof,world),proof.semanticReviewInput);
  proof.semanticReviewInput.actual.retainedDocument={...stored,text:"Unobserved text"};
  assert.throws(()=>editorialReviewInput(proof,world),/actual stored copy/);
 });
 
 test("coordinated review binds exact atomic readback and signed source observations",()=>{
- const goal="Correct both door notes.",files=[{path:"a.md",text:"North door",version:"a"},{path:"approved.md",text:"Use north door",version:"source"}];
- const proof={semanticReviewRequired:true,attempts:[{receipt:{status:"applied"}}],snapshots:[{scope:{files}}],documents:files,nativeReadback:{files},reviewScope:files,report:{status:"updated"}};
- proof.semanticReviewInput={actual:{goal,documents:files,originalDocuments:files,currentObservedDocuments:files,returnedDecision:null},expected:{goal,editablePaths:["a.md"],returnedDecisionRequired:false},rubric:"Judge actual content against signed authority."};
- const world={kind:"coordinated-revision",goal,changes:[{path:"a.md"}]};
- assert.equal(coordinatedRevisionReviewInput(proof,world),proof.semanticReviewInput);
+ const goal="Correct both door notes.",files=[{path:"a.md",text:"North door",version:"a"},{path:"approved.md",text:"Use north door",version:"source"}],result={answer:null,documents:[]};
+ const proof={semanticReviewRequired:true,requestedAnswerRequired:false,attempts:[{receipt:{status:"applied"}}],snapshots:[{scope:{files}}],documents:files,nativeReadback:{files},reviewScope:files,report:result};
+ proof.semanticReviewInput={actual:{goal,documents:files,originalDocuments:files,currentObservedDocuments:files,requestedAnswer:null},expected:{goal,editablePaths:["a.md"],requestedAnswerRequired:false},rubric:"Judge actual content against signed authority."};
+ const world={kind:"coordinated-revision",goal,requestedReturnRequired:false,changes:[{path:"a.md"}]};
+ assert.equal(coordinatedRevisionReviewInput(proof,world,result),proof.semanticReviewInput);
  proof.semanticReviewInput.actual.documents=[{...files[0],text:"Invented retained value"}];
- assert.throws(()=>coordinatedRevisionReviewInput(proof,world),/exact native batch/);
+ assert.throws(()=>coordinatedRevisionReviewInput(proof,world,result),/native batch/);
 });
 
 test("workspace outcome review binds requested answers or actual scoped edits",()=>{
@@ -184,7 +184,7 @@ test("actual native-pass capture retains its declared nonvoid entry type", async
  assert.equal(captured.exercise.entry.resultType,"OpenProblemOutcome");
  assert.deepEqual(applicationEntryBinding(captured.workflow.entry),captured.execution.diagnostics.openGoalVerification.entry);
  assert.deepEqual(applicationEntryBinding(captured.workflow.entry),captured.exercise.entry);
- assert.equal(openOutcomeGoalEvidence(captured.execution,captured.exercise,"actual",captured.workflow).checks,captured.execution.diagnostics.openGoalVerification.checks);
+ assert.deepEqual(openOutcomeGoalEvidence(captured.execution,captured.exercise,"actual",captured.workflow).checks,captured.execution.diagnostics.openGoalVerification.checks);
  for(const target of ["proof","capture"]){
   const changed=structuredClone(captured);
   (target==="proof"?changed.execution.diagnostics.openGoalVerification.entry:changed.exercise.entry).resultType="UnobservedReturn";

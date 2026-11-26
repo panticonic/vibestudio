@@ -56,17 +56,19 @@ export function editorialReviewInput(proof,world,applicationResult){
   return input;
 }
 
-export function coordinatedRevisionReviewInput(proof,world){
-  const input=proof.semanticReviewInput;
-  const applied=proof.attempts?.some(attempt=>attempt.receipt?.status==="applied");
-  const original=proof.snapshots?.[0]?.scope?.files??[];
-  const observed=proof.reviewScope;
-  requireFact(world.kind==="coordinated-revision"&&proof.semanticReviewRequired===true&&input?.actual?.goal===world.goal&&
-    input.expected?.goal===world.goal&&input.expected.returnedDecisionRequired===!applied&&
-    equal(input.expected.editablePaths,world.changes.map(change=>change.path))&&equal(input.actual.documents,proof.documents)&&
-    equal(input.actual.originalDocuments,original)&&equal(input.actual.currentObservedDocuments,observed)&&proof.snapshots?.some(snapshot=>equal(snapshot.scope.files,observed))&&
-    equal(input.actual.returnedDecision,applied?null:proof.report)&&equal(proof.nativeReadback?.files,proof.documents)&&
-    typeof input.rubric==="string"&&input.rubric.trim(),"Coordinated revision review differs from the exact native batch and signed authority");
+export function coordinatedRevisionReviewInput(proof,world,applicationResult){
+  const input=proof.semanticReviewInput,required=world.requestedReturnRequired;
+  const original=proof.snapshots?.[0]?.scope?.files??[],observed=proof.reviewScope;
+  const answer=required?applicationResult?.answer??null:null;
+  requireFact(world.kind==="coordinated-revision"&&typeof required==="boolean"&&proof.requestedAnswerRequired===required&&
+    proof.semanticReviewRequired===true&&input?.actual?.goal===world.goal&&input.expected?.goal===world.goal&&
+    input.expected.requestedAnswerRequired===required&&(!required||typeof answer==="string"&&answer.trim())&&
+    equal(proof.report,applicationResult??null)&&equal(input.expected.editablePaths,world.changes.map(change=>change.path))&&
+    equal(input.actual.documents,proof.documents)&&equal(input.actual.originalDocuments,original)&&
+    equal(input.actual.currentObservedDocuments,observed)&&
+    (proof.snapshots?.some(snapshot=>equal(snapshot.scope.files,observed))||proof.nativeRaceState&&equal(proof.nativeRaceReadback,observed))&&
+    equal(input.actual.requestedAnswer,answer)&&equal(proof.nativeReadback?.files,proof.documents)&&
+    typeof input.rubric==="string"&&input.rubric.trim(),"Coordinated revision review differs from actual captured findings, native batch or signed authority");
   return input;
 }
 

@@ -7270,7 +7270,7 @@ export function openOutcomeGoalEvidence(execution, exercise, _scenario, workflow
   }
   if(world.kind==="coordinated-revision"){
     requireEvidence(workflow.requiresReview===true,"Coordinated revision content review must be declared before teacher execution");
-    return {world:worldBinding,checks:{...checks},evidence,reviewInput:coordinatedRevisionReviewInput(proof,world)};
+    return {world:worldBinding,checks:{...checks},evidence,reviewInput:coordinatedRevisionReviewInput(proof,world,exercise.applicationResult)};
   }
   if(world.kind==="editorial-packet"){
     requireEvidence(workflow.requiresReview===true,"Editorial content review must be declared before teacher execution");

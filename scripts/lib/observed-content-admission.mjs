@@ -7,7 +7,7 @@ export const observedContentFields = {
   "provenance-question": [["assignment","candidates","evidence","native","effects"], []],
   desktopReadiness: [["desk","window","updates","exactAdmission","journal"], []],
   preparedContentProject: [["nativeProjectEvidence"], []],
-  phoneFirstRun: [["card","assignment","phases","build","journal"], []],
+  phoneFirstRun: [["card","assignment","phases","build","journal","refusedOperations"], []],
   mobileContinuity: [["profile","observations","journal"], []],
   "source-attribution": [["assignment","files","evidence","effects","native"], ["receipt","retainedText"]],
   "program-run": [["catalog","inspections","attempts","observations"], ["signedText"]],
@@ -351,6 +351,7 @@ export function observedContentReviewInput(proof,world){
  const fields=observedContentFields[world.kind],input=proof.semanticReviewInput;
  const pick=keys=>Object.fromEntries(keys.map(key=>[key,proof[key]??null]));
  const required=proof.outcomeContract?.returnedValue?.required;
+ if(world.kind==="phoneFirstRun"&&(!Array.isArray(proof.refusedOperations)||proof.refusedOperations.some(row=>!row||typeof row.service!=="string"||typeof row.method!=="string"||typeof row.reason!=="string")))throw Error("Phone meaning review requires actual native refusal observations");
  if(!fields||typeof required!=="boolean"||proof.semanticReviewRequired!==true||
     !equal(input?.actual,{goal:world.goal,observations:pick(fields[0]),artifacts:pick(fields[1]),requestedReturn:required?proof.actualResult??null:null})||
     !equal(input.expected,{goal:world.goal,requestedReturnRequired:required})||typeof input.rubric!=="string"||!input.rubric.trim())
