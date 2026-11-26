@@ -38,14 +38,16 @@ export function workspaceEditReviewInput(proof,world){
   return input;
 }
 
-export function editorialReviewInput(proof,world){
+export function editorialReviewInput(proof,world,applicationResult){
   const input=proof.semanticReviewInput;
   const approved=proof.sources?.flatMap(source=>source.pdf?[{document:source.request?.document,digest:source.pdf.digest,citations:source.pdf.citations}]:[]);
   const handoff=proof.artifact?JSON.parse(proof.artifact):null;
   const note=world.note??"none",needsHandoff=note==="diagnostic"||note==="ready-only"&&["ready","already-current"].includes(world.end);
   requireFact(world.kind==="editorial-packet"&&proof.semanticReviewRequired===true&&input?.actual?.goal===world.goal&&
     input.expected?.goal===world.goal&&input.expected.literalApprovedWording===(world.literalApprovedWording??false)&&
-    input.expected.operation===proof.plan?.operation&&input.expected.returnedDecisionRequired===!proof.attempts?.some(attempt=>attempt.result?.status==="written")&&
+    input.expected.operation===proof.plan?.operation&&input.expected.returnedDecisionRequired===world.requestedReturnRequired&&
+    typeof world.requestedReturnRequired==="boolean"&&
+    equal(input.actual.decision,world.requestedReturnRequired?applicationResult?.decision??null:null)&&
     input.expected.retainedHandoffRequired===needsHandoff&&equal(input.actual.retainedHandoff,handoff)&&
     equal(input.expected.fields,world.fields.map(field=>field.label))&&equal(input.actual.retainedDocument,proof.stored)&&
     equal(input.actual.originalDocument,proof.snapshots?.[0]?.candidate)&&equal(input.actual.approvedTextSources,approved)&&

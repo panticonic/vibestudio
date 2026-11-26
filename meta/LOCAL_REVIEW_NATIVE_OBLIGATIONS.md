@@ -1,0 +1,15 @@
+# Local review native obligations (pre-edit inventory)
+
+Baseline SST 1c9596850fd763ce939c170d25718a3c95fb15f5; paired model-owned roots Base 5bfa4184f3a8d01bf9384bbd536b3d809263c487 are component-tested, not activated.
+
+All 72 literal goals were read before editing: 24 System candidate, 24 Grimoire scene, 24 Scaffold. Their unchanged literal goal inventory is `/home/werg/vibe-broad-outcome-inventory-ops/local-review-literal-goals.json`.
+
+Consumers: each `open-goal-{system-candidate,grimoire-scene,scaffold}-{worlds,managed}.ts`; shared Base `bindObservedContentReview`/`assessObservedApplicationOutcome`; `tests/web-brief-managed.ts` registry; Host `observed-content-admission.mjs` field and required-review bindings. Exact TS native authority methods remain in these managed fixtures; authored NL plans and roots consume their typed service declarations. Closed unit-test fixtures are excluded: this changes the open user-goal fixtures only, not compiler/runtime semantics or closed typed function scoring.
+
+Confirmed mechanisms: System read-only review requires an actor `confirm` call despite independent current event/source readback; System handoff proof demands exact ordered private digest list rather than validating supplied actual source evidence. System output decision and Grimoire output action are compared to private reference enums. Grimoire requires actor confirmation for read-only evidence; scene anchor boundary caps valid owned anchors at four although native scope exposes five. Grimoire also demands rewriting an already valid description and an unused planner finding even when only annotations are requested. Scaffold's blanket `!staging` return obligation misses the mobile starter's explicitly requested authority answer. Conditional note/scene holds do not inherently request a separate returned completion report.
+
+Scope: declare requested-return and artifact obligations per literal goal; preserve actual current-head, authoring permission, source/owner, native preview, write-lease, persisted bytes/readback, protected state and invalid/foreign/duplicate anchor refusal. Mandatory independent meaning review judges requested semantic answers/artifact contents, without private reference status/anchor counts. Read-only query can be established from actual native observations without an unrequested write lease. No captured history or original verdict is rewritten.
+
+Status: inventory only. Source changes and meaningful positive/negative tests must precede any readiness claim; all physical native runtime qualification remains separate from component controls.
+
+Host-only ready checkpoint: new System candidate and Scaffold bindings, plus Grimoire's independent final current view. `vibe-local-review-host-bindings-20261126a` actually passed 42 Node controls (18 new local-review controls plus 24 desktop/shared controls), exit 0. Includes absent review, swapped native facts, changed/missing requested return and optional-return exclusion while mandatory native meaning review remains. Base/SST runtime controls are still pending; this Host checkpoint is not a complete source activation claim.

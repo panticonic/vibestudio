@@ -1,0 +1,14 @@
+{
+  "schema": "authored-service-generation-diff/1",
+  "services": 380,
+  "syntaxChangedServices": [
+    "nativeIntentHandoff",
+    "launchStateRead",
+    "launchStateWrite",
+    "programRunCatalog",
+    "programExecution",
+    "authoringDiscovery",
+    "recordedQuestionGraph",
+    "testkitCloseout"
+  ]
+}
