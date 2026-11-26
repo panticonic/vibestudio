@@ -261,3 +261,20 @@ test("phone native facts bind actual inspected roles and workspace/protocol evid
  const world={kind:"phoneFirstRun",goal:"Inspect the actual startup marker only."};const journal=[{service:"phoneFirstRun",method:"inspect"},{service:"phoneFirstRun",method:"phases"}];const proof={outcomeContract:{returnedValue:{required:true}},semanticReviewRequired:true,journal,nativeFacts:phoneFacts(journal),refusedOperations:[],actualResult:{answer:"Only startup was inspected; provider readiness remains uninspected."}};const [fields,artifacts]=observedContentFields.phoneFirstRun;const pick=keys=>Object.fromEntries(keys.map(key=>[key,proof[key]??null]));proof.semanticReviewInput={actual:{goal:world.goal,observations:pick(fields),artifacts:pick(artifacts),requestedReturn:proof.actualResult},expected:{goal:world.goal,requestedReturnRequired:true},rubric:"Judge the actual goal from trusted facts without inventing unread observations."};assert.doesNotThrow(()=>observedContentReviewInput(proof,world));
  for(const alter of [p=>p.semanticReviewInput.actual.observations.nativeFacts={...p.nativeFacts,workspaceAfter:{mainEventId:"other"}},p=>{delete p.nativeFacts;p.semanticReviewInput.actual.observations.nativeFacts=null;},p=>{p.nativeFacts={...p.nativeFacts,actorObserved:{...p.nativeFacts.actorObserved,provider:true}};p.semanticReviewInput.actual.observations.nativeFacts=p.nativeFacts;},p=>{p.nativeFacts={...p.nativeFacts,readProtocol:""};p.semanticReviewInput.actual.observations.nativeFacts=p.nativeFacts;}]){const changed=structuredClone(proof);alter(changed);assert.throws(()=>observedContentReviewInput(changed,world));}
 });
+test("Smoke and Wake bind actual findings, native evidence and retained bytes independently of old enums",()=>{
+ for(const kind of ["workspace-smoke","delivery-wake"]){
+  for(const required of [true,false]){
+   const world={kind,goal:"Explain the native result and retain only the requested authorized effect"};
+   const [observations,artifacts]=observedContentFields[kind];
+   const proof={outcomeContract:{returnedValue:{required}},semanticReviewRequired:true,actualResult:"A domain finding with no disposition or receipt echo"};
+   for(const key of [...observations,...artifacts])proof[key]=key==="retainedText"?"Actual independently read bytes":{owned:key};
+   const pick=keys=>Object.fromEntries(keys.map(key=>[key,structuredClone(proof[key])]));
+   proof.semanticReviewInput={actual:{goal:world.goal,requestedReturn:required?proof.actualResult:null,observations:pick(observations),artifacts:pick(artifacts)},expected:{goal:world.goal,requestedReturnRequired:required},rubric:"Judge requested meaning against actual native effects"};
+   assert.equal(observedContentNeedsReview(world),true);assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
+   for(const key of observations){const changed=structuredClone(proof);changed.semanticReviewInput.actual.observations[key]={forged:true};assert.throws(()=>observedContentReviewInput(changed,world));}
+   for(const key of artifacts){const changed=structuredClone(proof);changed.semanticReviewInput.actual.artifacts[key]="Forged retained bytes";assert.throws(()=>observedContentReviewInput(changed,world));}
+   const changed=structuredClone(proof);changed.semanticReviewRequired=false;assert.throws(()=>observedContentReviewInput(changed,world));
+   if(required){const swapped=structuredClone(proof);swapped.semanticReviewInput.actual.requestedReturn="Another finding";assert.throws(()=>observedContentReviewInput(swapped,world));}
+  }
+ }
+});

@@ -1,0 +1,608 @@
+{
+  "beforeEdits": true,
+  "sourceBase": "d718971d8aa3a7b480308a4867640f34c1a5eede",
+  "sourceSST": "64a31fa21df774d68648f0dd625b59b47030c4f9",
+  "sourceHost": "3f7efe7e9a186435bf806ca7969e2a27b302b645",
+  "literalGoals": [
+    {
+      "family": "smoke",
+      "id": "workspace-smoke-approve-move-alias-with-resolved-enum",
+      "goal": "Can we sign off the local panel movement shortcut after the alias update? Find the approved test and keep an acceptance note only if it still chooses the intended side.",
+      "goalSha256": "9a4dab2f1ddeb40a8e29aa4965760159a2e33210ffe4c134442cabdc8006f68e",
+      "split": "train",
+      "requestedAnswerRequired": true,
+      "noteRequest": "if-accepted",
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "smoke",
+      "id": "workspace-smoke-free-text-not-just-first-token",
+      "goal": "Check the installed Ask teammate shortcut against our current test. I need to know whether it keeps the full question before we record a local pass.",
+      "goalSha256": "1ae9ab5fe8336296d6f6fff081d15cf7e954eac624e2e12756a323fe87a36822",
+      "split": "train",
+      "requestedAnswerRequired": true,
+      "noteRequest": "none",
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "smoke",
+      "id": "workspace-smoke-short-prefix-should-stay-in-ranking",
+      "goal": "The Sidebar test expects a partial typed command to stay in suggestions instead of consuming an argument. Verify the current package against the approved note.",
+      "goalSha256": "e759a58feae1e927a2e36812278fb90dc50b3e3824fbfeeba623cad2ef310df9",
+      "split": "train",
+      "requestedAnswerRequired": true,
+      "noteRequest": "none",
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "smoke",
+      "id": "workspace-smoke-invalid-direction-preserves-query",
+      "goal": "Our Desk navigation review was held because an invalid direction could disappear. Check whether the installed shortcut keeps the unrecognized input.",
+      "goalSha256": "205ad1a75841e51fffa005882a906b7385e41e3866c972ecc8e1ad9a7cd958db",
+      "split": "train",
+      "requestedAnswerRequired": true,
+      "noteRequest": "none",
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "smoke",
+      "id": "workspace-smoke-longest-accepted-command-wins",
+      "goal": "The Main deck has a general move command and a focused panel command. Run the accepted check before filing a pass for the exact operation.",
+      "goalSha256": "45fd9e3478152cdac73b7fbbf0013bffb01c1f0fc32a9987a410580ee9cd2bbb",
+      "split": "train",
+      "requestedAnswerRequired": false,
+      "noteRequest": "if-accepted",
+      "justification": "The literal requests a native pass note or conditional recovery; no additional returned finding is imposed."
+    },
+    {
+      "family": "smoke",
+      "id": "workspace-smoke-bare-command-does-not-start-inline-args",
+      "goal": "Someone thinks typing the bare Desk label command immediately resolves its arguments. Verify the current installed behavior and point out any conflict with the accepted note.",
+      "goalSha256": "e705baf31ec4e28064ffb1defc9f8323914489cb8875aeabc451800b11542b4c",
+      "split": "train",
+      "requestedAnswerRequired": true,
+      "noteRequest": "none",
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "smoke",
+      "id": "workspace-smoke-optional-argument-skipped-without-empty-value",
+      "goal": "Before we use Review notes for shift handoff, check what happens when the reviewer supplies the lane and deliberately skips the optional note.",
+      "goalSha256": "6a33254a06bf47bf9f6887417078a6e805fa83fc45b0219107f956a9d4f26bf2",
+      "split": "train",
+      "requestedAnswerRequired": true,
+      "noteRequest": "none",
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "smoke",
+      "id": "workspace-smoke-missing-required-keeps-prompt-open",
+      "goal": "Please check the Badge handoff prompt when the operator submits an empty required field. Keep the project unchanged.",
+      "goalSha256": "7c9956b13605ee5df3aaf4d7c1af7c02fca4b2dabf1d221bb3ad3c4795d6ae76",
+      "split": "train",
+      "requestedAnswerRequired": true,
+      "noteRequest": "none",
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "smoke",
+      "id": "workspace-smoke-backspace-reopens-last-chip",
+      "goal": "The Cabinet review operator needs to correct the earlier lane selection without losing it from the prompt. Validate the accepted correction scenario locally.",
+      "goalSha256": "a2b207bcf23c4670600cffbaf7e617df621a04672f8c7c839afaa76299e56b11",
+      "split": "train",
+      "requestedAnswerRequired": true,
+      "noteRequest": "none",
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "smoke",
+      "id": "workspace-smoke-escape-restores-nominated-query",
+      "goal": "Does backing out of the Reading room tag prompt leave the original search exactly as the operator typed it? File a pass only if the installed reducer confirms it.",
+      "goalSha256": "1b785cbc37f115095847df05f51b6072ec0f9ae05e79d0ada4416454de96efe1",
+      "split": "train",
+      "requestedAnswerRequired": true,
+      "noteRequest": "if-accepted",
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "smoke",
+      "id": "workspace-smoke-invalid-number-then-correction",
+      "goal": "Check whether the Supply queue control can recover from an invalid slot and preserve the corrected number when the operator skips its optional label.",
+      "goalSha256": "b9924561b83e69e789e4dfd6c6f5b3fa00f68b174ad78395ba3686c50cc9dc1c",
+      "split": "train",
+      "requestedAnswerRequired": true,
+      "noteRequest": "none",
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "smoke",
+      "id": "workspace-smoke-contradictory-document-on-backspace",
+      "goal": "The current Collection review note says Backspace drops the old value permanently. Verify that exact claim against the installed package before signing off.",
+      "goalSha256": "87261169c5129ebf6c5e34f1a9eea5018f40768c8febe9daf81fb0a3a6d21563",
+      "split": "train",
+      "requestedAnswerRequired": true,
+      "noteRequest": "none",
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "smoke",
+      "id": "workspace-smoke-hidden-command-not-present",
+      "goal": "Verify the approved Archive export check that hides a command outside this surface while leaving the available one discoverable.",
+      "goalSha256": "34479e0384f2e6f2b2b4343e6ed054d6050f85ce4047e5221e94c5b137042e85",
+      "split": "train",
+      "requestedAnswerRequired": true,
+      "noteRequest": "none",
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "smoke",
+      "id": "workspace-smoke-disabled-command-visible-below-ready",
+      "goal": "The Library review distinguishes a disabled command from a hidden one. Check order and state in the current package before accepting the local result.",
+      "goalSha256": "408616d92e4cd9cca48ab9e2f02492ed894bd4f418a7234da0b5b6dbdcc8c14e",
+      "split": "train",
+      "requestedAnswerRequired": true,
+      "noteRequest": "none",
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "smoke",
+      "id": "workspace-smoke-keyword-weak-match-with-limit",
+      "goal": "The approved Documentation check keeps one result. Verify that a title match keeps its place above a keyword-only alternative.",
+      "goalSha256": "307bff646566dfbd46ee6341072e9c7dce9fb48050a237b8d3680369b7322147",
+      "split": "train",
+      "requestedAnswerRequired": true,
+      "noteRequest": "none",
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "smoke",
+      "id": "workspace-smoke-completion-without-duplicating-scheme",
+      "goal": "The handbook address was saved with a full URL, but the operator types only the host. Check the exact suggested completion against our latest local test.",
+      "goalSha256": "b5878d691d1583596f466bf71de9c7cbefb944e584c964e7acbfba042b4c826b",
+      "split": "train",
+      "requestedAnswerRequired": true,
+      "noteRequest": "none",
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "smoke",
+      "id": "workspace-smoke-completion-unmatched-query",
+      "goal": "Check whether the Calendar shortcut test suppresses unrelated address completions instead of changing an expression the operator typed.",
+      "goalSha256": "48eee2f08d6511c5d60cb9b60250ebd749ed49261c782b4dd5812abd86830447",
+      "split": "train",
+      "requestedAnswerRequired": true,
+      "noteRequest": "none",
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "smoke",
+      "id": "workspace-smoke-launcher-chat-scope-trims-separator",
+      "goal": "The Utility shortcut should enter the chat scope and keep the rest of the typed message while dropping the separator. Find and witness the approved test.",
+      "goalSha256": "036b941b33577dc2ceee07ed42abac6f3ca6857540661de4b21286890bf82575",
+      "split": "train",
+      "requestedAnswerRequired": true,
+      "noteRequest": "none",
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "smoke",
+      "id": "workspace-smoke-listed-document-not-current-approved",
+      "goal": "The Archive note smoke may only survive in a previous release. Confirm whether the current accepted plan can still be found before loading anything.",
+      "goalSha256": "fac36755e0d5dbd59bf1ebbc8f69d4efc8cfaacf02459d3a6ae365b1a5fc2348",
+      "split": "test",
+      "requestedAnswerRequired": true,
+      "noteRequest": "none",
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "smoke",
+      "id": "workspace-smoke-two-current-conflicting-docs",
+      "goal": "We may have accidentally approved two Intake launcher smoke notes. Find the current authoritative test before compiling a QA receipt.",
+      "goalSha256": "56fd55f5fa74c84a548c898cf9fe63cc3a1f8c17a617264bd21b2de43ad17419",
+      "split": "test",
+      "requestedAnswerRequired": true,
+      "noteRequest": "none",
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "smoke",
+      "id": "workspace-smoke-no-discovered-current-spec-from-neighbor",
+      "goal": "Recover the accepted Review panel smoke for this revision. If only a lookalike neighboring note survives, keep the run on hold.",
+      "goalSha256": "2bf3e896d15b68255a547c24ac649d0baaa2f2ff40def8e32eafafcc39a6fedb",
+      "split": "test",
+      "requestedAnswerRequired": true,
+      "noteRequest": "none",
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "smoke",
+      "id": "workspace-smoke-removed-export-is-visible-runtime-hold",
+      "goal": "The setup acceptance note still names an export that may have disappeared. Inspect what is actually available in the installed package before giving a pass.",
+      "goalSha256": "c6420f1cbeaa9c5b2f95d8d538aea13a177aa4efccb412bceadf4a279131b993",
+      "split": "test",
+      "requestedAnswerRequired": true,
+      "noteRequest": "none",
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "smoke",
+      "id": "workspace-smoke-fresh-input-clears-required-error",
+      "goal": "Verify that starting to correct an empty Range check prompt clears its warning while leaving it open. Report the actual current behavior.",
+      "goalSha256": "9e4eea6361ab28c411f9dfafa9b36a02fb6cb9e75597e0dd0c41415c6f3e9c6b",
+      "split": "test",
+      "requestedAnswerRequired": true,
+      "noteRequest": "none",
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "smoke",
+      "id": "workspace-smoke-no-scheme-search-not-an-address",
+      "goal": "Run the current Permit tracker completion regression. Operators deliberately type an unrelated identifier and expect the saved route not to replace it.",
+      "goalSha256": "131a4af3f5593830a9725b83c0ba1e7160e5b0e1b9e0cd107fd352eb95b36f90",
+      "split": "test",
+      "requestedAnswerRequired": true,
+      "noteRequest": "none",
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "smoke",
+      "id": "workspace-smoke-held-ui-ranking-slate-claimed-too-many",
+      "goal": "The accepted Shift shortcuts plan says this query shows both options. Check whether the installed suggestion limit actually permits that before writing any smoke receipt.",
+      "goalSha256": "f570e3409eae81c6cac4f47cd43c49dec53a67117f68bda2bd546e0ec8b2acf6",
+      "split": "test",
+      "requestedAnswerRequired": true,
+      "noteRequest": "none",
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "smoke",
+      "id": "workspace-smoke-held-inline-tail-not-discarded",
+      "goal": "The Parcel shortcut has one reviewed direction option. Check whether extra words are retained as input needing review instead of silently accepting the move.",
+      "goalSha256": "b95b4adea2420b9f8aaf3019e629ec556b6c05db11efe30990c0169a80321810",
+      "split": "test",
+      "requestedAnswerRequired": true,
+      "noteRequest": "none",
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "wake",
+      "id": "delivery-wake-rejected-first-join-backlog-once",
+      "goal": "The Dispatch notices tab rejected my first connection. Check whether the current terminal can safely recover the missed notice and keep it as one delivery.",
+      "goalSha256": "83f29b3eb06bcbf6686cbc44a29fbff57300102f913e31637af1d9439d271a26",
+      "split": "train",
+      "requestedAnswerRequired": true,
+      "recoveryRequested": true,
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "wake",
+      "id": "delivery-wake-no-ready-surface-hold-mailbox",
+      "goal": "I haven't been able to reconnect to Workshop bookings. Verify readiness before touching the held reservation notice.",
+      "goalSha256": "fec4dba167441b0742cc11d11f6a3e6333c0f8da48c2978d8440b899ac89a85a",
+      "split": "train",
+      "requestedAnswerRequired": true,
+      "recoveryRequested": false,
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "wake",
+      "id": "delivery-wake-one-original-terminal-after-wake",
+      "goal": "The rota assistant woke up while its original approval was still outstanding. Recover the actual completed approval for that receiver and avoid another delivery.",
+      "goalSha256": "14e994bf4b9aea55dc007fee7a0cbc66fc535d56d35e787c6a9332620da010f8",
+      "split": "train",
+      "requestedAnswerRequired": false,
+      "recoveryRequested": true,
+      "justification": "The literal requests a native pass note or conditional recovery; no additional returned finding is imposed."
+    },
+    {
+      "family": "wake",
+      "id": "delivery-wake-pre-wake-progress-is-no-terminal",
+      "goal": "The rehearsal assistant reported progress before disconnecting. Check for the real completed preparation result before accepting a wake continuation.",
+      "goalSha256": "837bf94c10cd7cc04a4dd49103c74739d3669cfdc72c069385666cfa8d3c5691",
+      "split": "train",
+      "requestedAnswerRequired": true,
+      "recoveryRequested": false,
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "wake",
+      "id": "delivery-wake-redrive-already-settled",
+      "goal": "The Supply cupboard notice may already have been recovered during wake. Confirm it on the exact receipt without adding another entry.",
+      "goalSha256": "cab799ed08271ad5d6493d3ecce4ae247688e107b006779ed773643050eb9f29",
+      "split": "train",
+      "requestedAnswerRequired": true,
+      "recoveryRequested": false,
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "wake",
+      "id": "delivery-wake-saved-point-too-early-after-progress",
+      "goal": "My saved Cart reservation pointer may predate the part that already resumed. Check it against the retained receiver before making any change.",
+      "goalSha256": "aa3c3c7dfa12f96a2336b0d0d294d4df8bca4b44150df7a752b7ccb4d7e86ffb",
+      "split": "train",
+      "requestedAnswerRequired": true,
+      "recoveryRequested": false,
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "wake",
+      "id": "delivery-wake-saved-point-too-far-forward",
+      "goal": "I was told to resume Lock changes from the position shown in the other browser. Verify that it doesn't skip an undelivered entry before resuming.",
+      "goalSha256": "18fd7049fed6907f5818f9189b31f701f247d231a9b7be51baf25e7c134f38ad",
+      "split": "train",
+      "requestedAnswerRequired": true,
+      "recoveryRequested": false,
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "wake",
+      "id": "delivery-wake-current-lease-not-previous-revision",
+      "goal": "The Venue keys notice was addressed to an earlier subscription. Check the current recipient revision before continuing from the old checkpoint.",
+      "goalSha256": "52da6be0a064b72934c602454e71a42c0cb5e7838e724bf2c003a51c3345c870",
+      "split": "train",
+      "requestedAnswerRequired": true,
+      "recoveryRequested": false,
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "wake",
+      "id": "delivery-wake-detach-no-live-reattach",
+      "goal": "The Book returns receiver disconnected before the return reminder. Establish whether its current subscription actually reattached before trying to recover it.",
+      "goalSha256": "7241506ba51ecd20bd22ebf8f0102eda7afd120603f1d9e8dd1b3bcd14e9e7db",
+      "split": "train",
+      "requestedAnswerRequired": true,
+      "recoveryRequested": false,
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "wake",
+      "id": "delivery-wake-original-recipient-departed",
+      "goal": "The badge handoff's original recipient may have left. Verify whether their exact delivery is available before trying to resume it.",
+      "goalSha256": "fdd043cc07497acda4c4855146707d6405109092d32b0887903cff72ce452815",
+      "split": "train",
+      "requestedAnswerRequired": true,
+      "recoveryRequested": false,
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "wake",
+      "id": "delivery-wake-confirmed-even-after-first-rejected",
+      "goal": "The first Caf\u00e9 log connection failed, but the change may already be in the right mailbox. Verify the recovered view and leave the existing entry alone.",
+      "goalSha256": "6d3df55d643178c925539e7cea5eddd0f54fc2e9ac93b0b57d33c584b4fbd325",
+      "split": "train",
+      "requestedAnswerRequired": true,
+      "recoveryRequested": false,
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "wake",
+      "id": "delivery-wake-context-one-for-two-receivers",
+      "goal": "The Hall opening notice went to two owned recipients before one woke. Recover the missed copy for the returning receiver and keep the original context shared.",
+      "goalSha256": "32a0c875d0c8bf16ac02526e5008ef081448318d8f20b1731c7ac692bb86f380",
+      "split": "train",
+      "requestedAnswerRequired": false,
+      "recoveryRequested": true,
+      "justification": "The literal requests a native pass note or conditional recovery; no additional returned finding is imposed."
+    },
+    {
+      "family": "wake",
+      "id": "delivery-wake-wrong-subscriber-even-same-terminal",
+      "goal": "There are similar terminal replies in the Space plan. Verify whether the named receiver is the active owner before continuing any delivery.",
+      "goalSha256": "f6fdb60a096c8e07deaf3f21f5a5ce54928119f77fc3d00ec7f888875794b326",
+      "split": "train",
+      "requestedAnswerRequired": true,
+      "recoveryRequested": false,
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "wake",
+      "id": "delivery-wake-gapped-range-before-valid-terminal",
+      "goal": "The Library lending completion looks correct, but a portion of the missed range may be missing. Only continue if the full original range is still available.",
+      "goalSha256": "71c29e9702e83d66c31c7e31b8f2ab6de66938d8ad7e8bd1b28e4b15a5f47a08",
+      "split": "train",
+      "requestedAnswerRequired": false,
+      "recoveryRequested": true,
+      "justification": "The literal requests a native pass note or conditional recovery; no additional returned finding is imposed."
+    },
+    {
+      "family": "wake",
+      "id": "delivery-wake-explicit-hold-despite-complete-backfill-source",
+      "goal": "Check whether the Audio cue handoff can recover from the saved state. The operator wants a report only while the booth is live.",
+      "goalSha256": "b40d8e0d541a1f292a154f86755b6c7891e2535b19225a12529014aed4265125",
+      "split": "train",
+      "requestedAnswerRequired": true,
+      "recoveryRequested": false,
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "wake",
+      "id": "delivery-wake-current-failed-terminal-is-a-result",
+      "goal": "The Rollers test stopped with a failure, and the receiver restarted. Recover that exact failure acknowledgement so it can be investigated.",
+      "goalSha256": "67f2a0e918a7075c2dcab5722e3de806524a1a21f71949809c286b4a835d4887",
+      "split": "train",
+      "requestedAnswerRequired": false,
+      "recoveryRequested": true,
+      "justification": "The literal requests a native pass note or conditional recovery; no additional returned finding is imposed."
+    },
+    {
+      "family": "wake",
+      "id": "delivery-wake-same-lookalike-completion-different-recipient",
+      "goal": "Find whether the Safety signs result belongs to the returning receiver before continuing. The other corridor has a completion with the same label.",
+      "goalSha256": "7922ceddccfe91cd82c249d107ecbf9f5c09cee0436119601ca4f4f0f8badd15",
+      "split": "train",
+      "requestedAnswerRequired": true,
+      "recoveryRequested": false,
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "wake",
+      "id": "delivery-wake-resume-after-retained-half",
+      "goal": "The Index cards wake might have already finished the first part of the missing range. Continue from the exact saved place and preserve what is already retained.",
+      "goalSha256": "996aaf207915e3ac16eb4dd629dbca996e2ff5f6e093fc126887155e6dbceb12",
+      "split": "train",
+      "requestedAnswerRequired": false,
+      "recoveryRequested": true,
+      "justification": "The literal requests a native pass note or conditional recovery; no additional returned finding is imposed."
+    },
+    {
+      "family": "wake",
+      "id": "delivery-wake-owned-event-shared-text-different-address",
+      "goal": "Two Guest access roll calls used the same wording. Confirm the original addressed receiver's receipt and keep it intact.",
+      "goalSha256": "6dd1f5c520c90fc519ef926e8d3e1238cc0cb0647d3ec97fa754ba9f088e6ed8",
+      "split": "train",
+      "requestedAnswerRequired": true,
+      "recoveryRequested": false,
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "wake",
+      "id": "delivery-wake-same-recipient-two-distinct-terminal-envelopes",
+      "goal": "The Dock confirmation receiver sees two completion lines under the same display label. Recover only the exact original outcome when it can be identified from the retained channel.",
+      "goalSha256": "66f74cc997d31db74b9f9f591159847e6852fcf9ae393da2fe7d264d2ea040b2",
+      "split": "train",
+      "requestedAnswerRequired": false,
+      "recoveryRequested": true,
+      "justification": "The literal requests a native pass note or conditional recovery; no additional returned finding is imposed."
+    },
+    {
+      "family": "wake",
+      "id": "delivery-wake-held-first-rejected-old-revision",
+      "goal": "I eventually reconnected to Warehouse directory. Verify whether today's receipt belongs to the subscription I bookmarked. Leave delivery pending if it doesn't.",
+      "goalSha256": "f24637963ff42fae804e902f5753c2f8be2b6a1439c28085d0644cc729523693",
+      "split": "test",
+      "requestedAnswerRequired": true,
+      "recoveryRequested": false,
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "wake",
+      "id": "delivery-wake-held-replay-advance-with-neighbor-terminal",
+      "goal": "The Field staff receiver missed interviews while it woke. Another receiver finished its own approval. Resume only the current recipient's surviving request.",
+      "goalSha256": "6d90afbde03679eeb02239302d33e5c6ac6a792aed2319e2eb83ca7df4007466",
+      "split": "test",
+      "requestedAnswerRequired": false,
+      "recoveryRequested": true,
+      "justification": "The literal requests a native pass note or conditional recovery; no additional returned finding is imposed."
+    },
+    {
+      "family": "wake",
+      "id": "delivery-wake-held-similar-ready-with-terminal-missing",
+      "goal": "An old Room access turn shows a closing result. Check if the newly connected conversation can actually prove the same original terminal.",
+      "goalSha256": "db95391439b405203a9209b88b3c64f156242af88e42211d5606a0ece7c4a4e1",
+      "split": "test",
+      "requestedAnswerRequired": true,
+      "recoveryRequested": false,
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "wake",
+      "id": "delivery-wake-held-loss-in-late-source-row",
+      "goal": "The Bike locker receiver woke after the active shift. Verify the whole outstanding range before doing anything even if the earlier message is available.",
+      "goalSha256": "563152025f9aeab56832d1f262323bf8b43c550392beffb7c8479e5b0f5ba487",
+      "split": "test",
+      "requestedAnswerRequired": true,
+      "recoveryRequested": false,
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "wake",
+      "id": "delivery-wake-held-no-owner-ready-even-if-settled",
+      "goal": "I need the Clinic supply receipt after reconnecting. The stored status alone isn't enough to hand it off while the original conversation still won't open.",
+      "goalSha256": "bfc56f6ed048d80f35b9bf96d734b2c9e3feeadaf4a6e9f6784616b64e4e3aab",
+      "split": "test",
+      "requestedAnswerRequired": true,
+      "recoveryRequested": false,
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "wake",
+      "id": "delivery-wake-held-completed-two-receivers-one-context",
+      "goal": "Please verify that the original Guide route receipt remained intact through reconnect and that the two intended recipients didn't get duplicate context copies.",
+      "goalSha256": "8c8598c9a20cb5ae0c5776105ea793ab9f888b16d4d5dc2420dfc04bfbd4575f",
+      "split": "test",
+      "requestedAnswerRequired": true,
+      "recoveryRequested": false,
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    },
+    {
+      "family": "wake",
+      "id": "delivery-wake-held-wake-failed-outcome-exactly-once",
+      "goal": "The Archive return tool didn't complete successfully but a terminal receipt may have survived wake. Recover that exact failure so the operator can decide what to do.",
+      "goalSha256": "869396a55954e2f87d87c154fe5c006898d6d96168e5db25010b54416276dc36",
+      "split": "test",
+      "requestedAnswerRequired": false,
+      "recoveryRequested": true,
+      "justification": "The literal requests a native pass note or conditional recovery; no additional returned finding is imposed."
+    },
+    {
+      "family": "wake",
+      "id": "delivery-wake-held-other-scope-cursor-is-not-current",
+      "goal": "The Late visitor list has an otherwise valid stored receipt. I copied a resume position from a newer view. Verify it against the original lane before advancing anything.",
+      "goalSha256": "82ee8ab6169fcc1bed86ccb2a423954ab77191e5e73e7d18e80362b3a688336f",
+      "split": "test",
+      "requestedAnswerRequired": true,
+      "recoveryRequested": false,
+      "justification": "The literal asks for current findings/verification, independently of any optional native artifact or recovery."
+    }
+  ],
+  "callers": [
+    "Base skills/open-user-goal entries.json/entriesGenerated.ts, entrypoints.ts and exported contract types",
+    "Base reviewWorkspaceSmoke/reviewDeliveryWake TS semantic coordinators and private scoped helpers",
+    "Base open-user-goal/services.d.ts + natlang-services authored service catalog/generated380declarations",
+    "SST open-goal-{workspace-smoke,delivery-wake}-worlds.ts/managed.ts, shared case registration/canonicalqualify",
+    "Host scripts/lib/observed-content-admission.mjs generic mandatory review registry/binding +exporter and automaticcatalog metadata",
+    "Python/Node training uses unchanged common observed outcome contracts; public return becomes domainFinding string with explicit required flags, actual Native receipts stay captured evidence"
+  ],
+  "nativeMechanisms": [
+    {
+      "smoke": "Exact assigned context/revision/subject and byte-hashed owned plan; actual safe installed export/input/retained Eval receipt; approved data comparison, source protection, bounded authorized private note/readback. Never require actual result to match a private world.runtime prediction."
+    },
+    {
+      "wake": "Actual first subscription evidence, current receiver/revision/saved cursor, complete original addressed range, normalized mailbox/context uniqueness, exact original failed/terminal event, idempotent actual receipt/readback, neighboring state unchanged."
+    }
+  ],
+  "confirmedDefects": [
+    "TS Roots own semantic scheduling, public DTOs lack requested findings",
+    "artifact/wake existence optionalizes explicitly requested answers",
+    "generic returned decision/choice/receipt equality gates user meaning",
+    "permission mayStage treated as request to retain a note",
+    "private world.expected/world.runtime prediction overrides accurate native regression reporting",
+    "cached before-only reads and write-once route guards prevent truthful redundant/grouped investigation"
+  ],
+  "design": "Public domainFinding strings; model-owned NL Roots/private investigation; typed native IO and comparison facts; explicit per-literal answer/effect annotations; mandatory source-bound meaning review of actual Native states and artifact bytes. Original packets untouched, no retrospectivewaivers.",
+  "portableComparison": "Closed approved plan/accepted values are serialized JSON source files; actual Native eval returns wire JSON. Reuse existing getter-safe cross-realm nativeWireEqual in existing NatlangServices owner via a pure exported subpath for SST only. No Nodeutil or harness runtime import into Natlang library.",
+  "implementation": {
+    "publicFindings": [
+      "WorkspaceSmokeFinding = string",
+      "DeliveryWakeFinding = string"
+    ],
+    "nativeSmokeEquality": "Pure @workspace/natlang-services/nativeWireEqual export; exact closed JSON native eval result versus parsed approved input; no Node util in Natlang library",
+    "smokeNotes": "Only three per-literal if-accepted requests; permission alone never requires retention",
+    "wakeRecovery": "Nine explicit per-literal requests, gated by actual receiver/revision/cursor/range/connection/event authority",
+    "requestedAnswers": {
+      "smoke": 25,
+      "wake": 20,
+      "total": 45,
+      "optional": 9
+    },
+    "worlds": 54,
+    "held": 16,
+    "train": 38,
+    "review": "Mandatory bound actual goal/native evidence and retained bytes for all54; actualResult binds original root value",
+    "qualification": "Reference independently executes required native effects; missing retained note/recovery fails native checks. No teacher gold choice checks.",
+    "repetition": "Fresh reads; same native effect acknowledgment is idempotent and preserves one execution/delivery",
+    "closedSmoke": "Closed actor refuses fresh reads/runs; cleanup remains retryable until owned evaluator disposal succeeds"
+  },
+  "checked": {
+    "native": "60 actual controls PASS incl all54 unchanged worlds, actual installed Omnibox + public authenticated root RPC to SQL-backed DeliveryWakeFixtureDO",
+    "public": "4 actual joint-compiler/scripted gateway hierarchy controls PASS, zero provider; private investigations cannot access parent writers",
+    "host": "24 actual node binding controls PASS incl swapped answer/observations/retained bytes",
+    "generated": "Canonical380 service declarations generated and --check PASS; generated DTO adds native matchesAccepted bool; entry registry regenerated",
+    "scope": "54 literal ID/goal SHA/split/sourceGroups preserved by actual test"
+  },
+  "unchecked": [
+    "Full Workerd qualification of changed families pending separate actual source selection; no original failure retrospectively passed",
+    "Actual provider behavior not probed",
+    "Mandatory semantic reviews for new generated teacher outputs remain actual admission work, not waived by component tests"
+  ]
+}
