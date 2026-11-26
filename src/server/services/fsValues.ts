@@ -1,5 +1,7 @@
 /** Pure bounded filesystem values shared by semantic reads and the native disk worker. */
 import path from "node:path";
+import { READ_TEXT_DEFAULT_BYTES, READ_TEXT_MAX_BYTES, READ_BYTES_DEFAULT_LIMIT, READ_BYTES_MAX_LIMIT } from "@vibestudio/shared/fsReadLimits";
+export { READ_TEXT_DEFAULT_BYTES, READ_TEXT_MAX_BYTES, READ_BYTES_DEFAULT_LIMIT, READ_BYTES_MAX_LIMIT } from "@vibestudio/shared/fsReadLimits";
 
 export interface GrepOptions {
   /** Directory (or single file) to search, relative to the context root. */
@@ -94,14 +96,6 @@ export interface ReadBytesResult {
 export const READ_TEXT_DEFAULT_LINES = 2_000;
 
 export const READ_TEXT_MAX_LINES = 10_000;
-
-export const READ_TEXT_DEFAULT_BYTES = 50 * 1024;
-
-export const READ_TEXT_MAX_BYTES = 1024 * 1024;
-
-export const READ_BYTES_DEFAULT_LIMIT = 50 * 1024;
-
-export const READ_BYTES_MAX_LIMIT = 1024 * 1024;
 
 export function normalizedReadBytesOptions(
   options: ReadBytesOptions = {}

@@ -155,7 +155,8 @@
     "./egressListener": "./src/egressListener.ts",
     "./socketBridge": "./src/socketBridge.ts",
     "./chromiumNetworkProxy": "./src/chromiumNetworkProxy.ts",
-    "./pinnedHttpForward": "./src/pinnedHttpForward.ts"
+    "./pinnedHttpForward": "./src/pinnedHttpForward.ts",
+    "./fsReadLimits": "./src/fsReadLimits.ts"
   },
   "scripts": {
     "test": "cd ../.. && vitest run packages/shared/src"

@@ -1,0 +1,11 @@
+# Owned operations: semantic composition and native custody
+
+The public coordinator now returns an actually requested finding (`string | null`) through a model-owned investigation hierarchy. The private investigator can use the existing incident/release skills, preserve actual previous evidence, and return real cleanup/refusal feedback. Native permission does not prescribe an operation or a dossier. All24 original goal/ID/split/world fields are unchanged;20 require findings and6 conditionally request a dossier.
+
+The native verifier retains exact issued-owner identity, real checkpoint revisions/history, current authority, protected workspace state and persisted bytes. It no longer requires the first unrelated before-cleanup snapshot, every private evidence ID, a fixed actor read/close route, or an unrequested16KiB dossier ceiling. Reference qualification now exercises the same admitted wrapper ports and separately proves the actual reference effect. A pending meaning review is never a model-free goal pass.
+
+Shared custody joins each actual issued Native owner using descriptor-safe fields, and matches concurrent restart snapshots by owner/history rather than completion order. `matchRestartsByOwner:false` retains the old diagnostic comparison. Complete file readback uses the real range/continuation/hash protocol; explicit `maxBytes` remains available. Host schemas and implementations share unchanged limits in `@vibestudio/shared/fsReadLimits`.
+
+Validation:3 actual public ProgramLoader/joint-gateway controls passed206.65s/2.7GiB;56 native/Oracle/byte-reader controls passed;39 Host binding controls passed;4 filesystem wire/implementation controls passed. Canonical entry/service declaration generation and true checks passed. Native controls use controlled ports and canonical composition/real byte handling, not live Native DO qualification. No paid model calls or historical outcome changes.
+
+Inventory/proofs: `/home/werg/vibe-owned-operations-composition-ops/{inventory.json,world-preservation.json,coordinator-census.json}`. Remaining54 bounded readback callers and indirect semantic value flows are explicitly unexamined. The confirmed successful-goal optional format-only target gap is owned by the sibling shared reader/helper fix; this source does not claim it solved.

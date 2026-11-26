@@ -17,7 +17,7 @@ export const observedContentFields = {
   "program-run": [["catalog","inspections","attempts","observations"], ["signedText"]],
   terminalAppRepair: [["journal","proof"], []],
   "live-local-inventory": [["docket","inventoryReadback"], []],
-  "owned-operations": [["docket","effects","audit"], ["dossierReadback"]],
+  "owned-operations": [["docket","effects","audit","nativeFacts"], ["dossierReadback"]],
   "personal-automation": [["initial","latest","observations","independent","attempts","requests"], []],
   "personal-artifacts": [["libraryFirst","collectionFirst","independentLibrary","independentCollection","libraryWrites","collectionWrites","links","refreshes"], []],
   "personal-history": [["catalogEvent","repositoryId","milestones","discovery","operations","reads"], []],
@@ -375,6 +375,22 @@ export function observedContentReviewInput(proof,world){
      typeof facts.readProtocol!=="string"||!facts.readProtocol.trim()||typeof facts.evidenceProtocol!=="string"||!facts.evidenceProtocol.trim())throw Error("Phone meaning review requires actual actor observations and native workspace/protocol facts");
  }
 
+ if(world.kind==="owned-operations"){
+  const facts=proof.nativeFacts,effects=proof.effects;
+  if(!facts||typeof facts!=="object"||!effects||!Array.isArray(effects.reads)||!Array.isArray(effects.list)||!Array.isArray(effects.dossiers)||!proof.audit||
+    !equal(facts.currentDocket?.docket,proof.docket)||facts.currentDocket?.request?.kind!==proof.docket?.kind||
+    facts.retiredDocket?.id===proof.docket?.id||facts.retiredDocket?.edition!=="retired"||
+    !facts.workspaceBefore||!facts.workspaceAfter||typeof facts.actorObserved?.listed!=="boolean"||typeof facts.actorObserved?.read!=="boolean"||
+    facts.actorObserved.listed!==(effects.list.length>0)||facts.actorObserved.read!==effects.reads.some(row=>equal(row,facts.currentDocket))||
+    effects.list.some(rows=>!equal(rows,[facts.retiredDocket,proof.docket]))||
+    typeof facts.protocol!=="string"||!facts.protocol.trim()||
+    (proof.artifact===null?(facts.artifact!==null||proof.dossierReadback!==null||effects.dossiers.length!==0):
+      !equal(facts.artifact?.receipt,proof.artifact)||!equal(facts.artifact?.readback,proof.dossierReadback)||
+      typeof proof.dossierReadback!=="string"||proof.artifact?.digest!==createHash("sha256").update(proof.dossierReadback).digest("hex")||
+      !effects.dossiers.some(row=>equal(row.result,proof.artifact)&&equal(row.report,facts.artifact?.report)&&row.record===proof.dossierReadback))||
+    (required&&(typeof proof.actualResult!=="string"||!proof.actualResult.trim())))
+   throw Error("Owned operations review requires actual docket/actor roles, native custody and exact retained bytes");
+ }
  if(world.kind==="examplesAdoption"){
   const facts=proof.nativeFacts,roles={installed:"installed",composition:"compose",frontier:"confirm",readback:"readback"};
   if(!facts||typeof facts!=="object"||!proof.card||!proof.composition||!proof.readback||!Array.isArray(proof.journal)||
