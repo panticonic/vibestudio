@@ -41,7 +41,7 @@ export const observedContentFields = {
   "retained-memory": [["brief", "plan", "evidence"], ["artifact"]],
   "route-authority": [["offer", "snapshots", "authority", "choice", "readback", "routeReadbacks"], ["artifact"]],
   "system-release": [["assignment", "runs", "cases", "effects", "handoffProtocol"], ["handoff", "handoffText"]],
-  "testkit-closeout": [["pair", "actual", "readReceipts", "staged", "rejectedForeign"], ["artifact"]],
+  "testkit-closeout": [["pair", "actual", "readReceipts", "staged", "rejectedForeign", "nativeFacts"], ["artifact"]],
   "webhook-admission": [["assignment", "evidence", "binding", "effects"], ["handoffText"]],
   "workspace-claims": [["index", "packet", "choice", "evidence", "support", "test", "authority", "guideRevision"], ["artifact"]],
   "workspace-config": [["brief", "lens", "evidence"], ["artifact"]],
@@ -370,6 +370,16 @@ export function observedContentReviewInput(proof,world){
      Object.entries(roles).some(([role,[service,method]])=>typeof facts.actorObserved[role]!=="boolean"||facts.actorObserved[role]!==proof.journal.some(row=>row?.service===service&&row?.method===method))||
      !facts.workspaceBefore||typeof facts.workspaceBefore!=="object"||!facts.workspaceAfter||typeof facts.workspaceAfter!=="object"||
      typeof facts.readProtocol!=="string"||!facts.readProtocol.trim()||typeof facts.evidenceProtocol!=="string"||!facts.evidenceProtocol.trim())throw Error("Phone meaning review requires actual actor observations and native workspace/protocol facts");
+ }
+
+ if(world.kind==="testkit-closeout"){
+  const facts=proof.nativeFacts;
+  if(!facts||!Array.isArray(proof.actual)||proof.actual.length!==2||!Array.isArray(proof.readReceipts)||
+     !["off","clear","any"].includes(facts.privateNotePermission)||typeof facts.protocol!=="string"||!facts.protocol.trim()||
+     ["current","prior"].some((role,index)=>!facts[role]||typeof facts[role].receipt!=="string"||facts[role].receipt!==proof.pair?.[role]?.receipt||
+       facts[role].evidence?.receipt!==facts[role].receipt||!equal(facts[role].evidence,proof.actual[index])||
+       typeof facts[role].actorInspected!=="boolean"||facts[role].actorInspected!==proof.readReceipts.includes(facts[role].receipt))||
+     facts.current.receipt===facts.prior.receipt)throw Error("Testkit review requires exact current/prior native attempt roles and truthful inspection custody");
  }
 
  if(world.kind==="local-width"){
