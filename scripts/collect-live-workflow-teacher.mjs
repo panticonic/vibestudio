@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { runNativeReferenceTail, waitForNativeContinuation, summarizeNativeReferences, nativeReferenceCapabilities } from "./lib/native-reference-tail.mjs";
+import { runNativeReferenceBatches, runNativeReferenceTail, waitForNativeContinuation, summarizeNativeReferences, nativeReferenceCapabilities } from "./lib/native-reference-tail.mjs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -594,18 +594,18 @@ try {
         name.startsWith("open-goal-") && world.interaction === "open-user-goal" &&
         (world.workspace ?? "system") === workspace)) {
         try {
-          let references;
-          do {
+          await runNativeReferenceBatches({draining:drainNative,signal:interruption.signal,
+            drainAtBoundary:()=>interruption.drainAtBoundary(values["drain-request"]),
+            runBatch:async()=>{
             if(JSON.stringify(pinSources())!==JSON.stringify(pinned))throw new Error("Source pins changed before native reference tail");
             const referenceCatalog=await installedTests(group,interruption.signal);
-            references=await runNativeReferenceTail({group,workflows:nativeReferenceWorkflows,catalog:referenceCatalog,pinned,out,
+            return runNativeReferenceTail({group,workflows:nativeReferenceWorkflows,catalog:referenceCatalog,pinned,out,
               stateRoot:path.resolve(values["native-reference-state"]??path.join(path.dirname(out),"native-reference-qualification")),
               limit:drainNative?nativeDrainBatchSize:nativeReferenceLimit,systemTest,signal:interruption.signal,
               assertPins:()=>{if(JSON.stringify(pinSources())!==JSON.stringify(pinned))throw new Error("Source pins changed during native reference tail");
                 if(nativeDeploymentPackageAvailable&&JSON.stringify(readNativeDeploymentPackageIdentity())!==JSON.stringify(nativeDeploymentPackageIdentity))throw new Error("Installed native-reference package changed during its owned qualification");},
               deploymentPackageAvailable:nativeDeploymentPackageAvailable,deploymentPackageIdentity:nativeDeploymentPackageIdentity});
-            console.log(JSON.stringify({nativeReferenceOnly:true,instance,references:references.length,passed:references.filter(row=>row.status==="passed").length,draining:drainNative}));
-          } while(drainNative&&references.length&&!interruption.signal.aborted);
+            },afterBatch:references=>console.log(JSON.stringify({nativeReferenceOnly:true,instance,references:references.length,passed:references.filter(row=>row.status==="passed").length,draining:drainNative}))});
         } catch(error) {
           console.error(`Native reference tail retained an incomplete attempt: ${String(error)}`);
         }
