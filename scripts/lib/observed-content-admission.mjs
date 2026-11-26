@@ -38,6 +38,7 @@ export const observedContentFields = {
   "installed-package": [["effects", "assignment", "observed", "plan", "repair", "authorization"], []],
   "intent-discovery": [["notice", "capabilities", "evidence"], ["artifact"]],
   "launch-state": [["index", "frames", "readback", "request", "witness", "effect", "companionReadbacks", "protectedCompanion"], ["artifact"]],
+  skillMaintenance: [["journal","observation","authoring","gate","proof","final","changedPaths","nativeFacts"], []],
   "panel-source-migration": [["assignment", "observed", "current", "move", "identity", "consumers", "effects", "nativeFacts"], []],
   "retained-memory": [["brief", "plan", "evidence"], ["artifact"]],
   "route-authority": [["offer", "snapshots", "authority", "choice", "readback", "routeReadbacks"], ["artifact"]],
@@ -374,6 +375,18 @@ export function observedContentReviewInput(proof,world){
      typeof facts.readProtocol!=="string"||!facts.readProtocol.trim()||typeof facts.evidenceProtocol!=="string"||!facts.evidenceProtocol.trim())throw Error("Phone meaning review requires actual actor observations and native workspace/protocol facts");
  }
 
+ if(world.kind==="skillMaintenance"){
+  const facts=proof.nativeFacts,roles={source:["skillMaintenanceEvidence","inspect"],authoring:["authoringCompiler",null],authority:["skillMaintenanceEvidence","confirm"],readback:["skillMaintenanceEvidence","readback"]};
+  if(!facts||typeof facts!=="object"||!Array.isArray(proof.journal)||!proof.observation||!proof.final||
+     facts.opening?.revision!==proof.observation.revision||!equal(facts.opening?.files,proof.observation.files)||!equal(facts.opening?.witness,proof.observation.check)||
+     facts.current?.revision!==proof.final.revision||!equal(facts.current?.check,proof.final)||!Array.isArray(facts.current?.files)||
+     typeof facts.current?.measured?.satisfied!=="boolean"||facts.current.measured.satisfied!==proof.final.satisfied||
+     !equal(facts.actorReadbacks,proof.journal.filter(row=>row?.service==="skillMaintenanceEvidence"||row?.service==="authoringCompiler"))||!facts.actorObserved||
+     Object.entries(roles).some(([role,[service,method]])=>typeof facts.actorObserved[role]!=="boolean"||facts.actorObserved[role]!==proof.journal.some(row=>row?.service===service&&(method===null||row?.method===method)))||
+     typeof facts.coeditApplied!=="boolean"||typeof facts.protocol!=="string"||!facts.protocol.trim()||
+     facts.current.files.some(row=>!row||typeof row.path!=="string"||typeof row.text!=="string"))
+    throw Error("Skill maintenance review requires actual original/current source and retained compiler roles, separate from actor reads");
+ }
  if(world.kind==="panel-source-migration"){
   const facts=proof.nativeFacts;
   if(!facts||typeof facts!=="object"||!facts.destination||facts.destination.path!==proof.assignment?.destination||
