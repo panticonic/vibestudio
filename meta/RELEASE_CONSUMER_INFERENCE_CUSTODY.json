@@ -1,0 +1,22 @@
+{
+  "schema": "vibestudio.release-consumer-inference-custody/1",
+  "baseline": "0888c1979105dd2224fa622dead356aed3c80799",
+  "sharedFunction": "scripts/prebuild-release-userland.mjs:withReleaseConsumerSession",
+  "productionCallers": [
+    "build-server-npm-package.mjs:prepareServerTemplateRelease -> verifyStandaloneReleaseUserland -> withStandaloneReleaseSession",
+    "desktop prebuildReleaseUserland/verifyReleaseUserland -> withInstalledReleaseSession"
+  ],
+  "actualFault": "fresh consumer clean-env allowlist stripped immutable inference ceiling and hosted route; producer and owned deployment target already preserve them",
+  "fix": "forward ONLY VIBESTUDIO_NATIVE_REFERENCE_ONLY and VIBESTUDIO_HOSTED_MODEL_ROUTE alongside the existing bounded allowlist; private profiles/caches/credentials remain isolated",
+  "paidTeacherReachability": "no production collector/startup call to shared consumer helper found; paid nested target uses owned-deployment-target.mjs, which preserves hosted route and explicitly carries driver process native-reference mode",
+  "nativeTailCustody": [
+    "src/dev/runSystemTest.ts:399 passes native command classification to attachDeviceDrivers",
+    "src/dev/deviceExecutors.ts:91 sets owned terminal driver process mode1",
+    "remoteDeployment.ts -> openOwnedDeploymentTarget inherits this mode and sets nested target mode1"
+  ],
+  "actualTests": "pending vibe-native-package-consumer-policy-20261126a",
+  "inferenceProbesPerformed": false,
+  "forbiddenModelRequestsPerformed": false,
+  "source43FrozenEdited": false,
+  "packagePointerChangedInThisSharedBranch": false
+}

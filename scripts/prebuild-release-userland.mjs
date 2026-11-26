@@ -421,6 +421,10 @@ async function withReleaseConsumerSession(
           "NO_PROXY",
           "NODE_EXTRA_CA_CERTS",
           "VIBESTUDIO_MAX_CONCURRENT_BUILDS",
+          // These are process ceilings, not private profile/cache state. The
+          // fresh consumer must preserve its owner's inference restrictions.
+          "VIBESTUDIO_HOSTED_MODEL_ROUTE",
+          "VIBESTUDIO_NATIVE_REFERENCE_ONLY",
           "GOMEMLIMIT",
         ])
           if (process.env[key] !== undefined) inherited[key] = process.env[key];
