@@ -3070,6 +3070,7 @@ async function main() {
         const buildSystem = assertPresent(buildSystemInstance);
         return createBuildService({
           buildSystem,
+          prepareWorkerExecutable: (build, classes) => assertPresent(runtimeManagerForGateway).prepareWorkerExecutable(build, classes, { retention: "operation" }),
           compileProduct: input=>assertPresent(compilerOwner).compileProduct(input),
           getCallerContextId: (callerId) => callerBuildContextId(entityCache, callerId),
           resolveContextBuildSource: async (ctx, contextId) => {

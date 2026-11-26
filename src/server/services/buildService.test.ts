@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   panelMetadataSchema,
+  buildMethods,
   type BuildMetadataWire,
   type BuildPerformanceProfileWire,
 } from "@vibestudio/service-schemas/build";
@@ -206,6 +207,36 @@ function makeBuildSystem(): BuildSystemV2 {
 describe("build service extension diagnostics", () => {
   it("starts once the build system exists", () => {
     expect(BUILD_SERVICE_DEPENDENCIES).toEqual(["buildSystem"]);
+  });
+
+  it("retains the schema barrier in the strict RPC protocol without requiring it for ordinary builds", () => {
+    expect(buildMethods.getBuild.args.parse(["workers/example",undefined,{verifyWorkerSchemas:true}])).toEqual(["workers/example",undefined,{verifyWorkerSchemas:true}]);
+    expect(buildMethods.getBuild.args.parse(["panels/example",undefined,undefined])).toEqual(["panels/example",undefined,undefined]);
+  });
+
+  it("awaits exact built worker schema validation without contaminating compiler options", async () => {
+    const buildSystem=makeBuildSystem();
+    const build=storedBuildFixture({buildKey:"build-key",sourceStateHash:"state:exact",metadata:{...buildMetadata,kind:"worker",sourcePath:"workers/example",sourceStateHash:"state:exact"},artifactPath:"worker.js",content:"export {};",contentType:"text/javascript; charset=utf-8"});
+    vi.mocked(buildSystem.getBuild).mockResolvedValue(build);
+    vi.mocked(buildSystem.listBuildUnits).mockResolvedValue([{unitName:"example",unitPath:"workers/example",kind:"worker",stateHash:"state:exact",effectiveVersion:"ev-1",manifest:{durable:{classes:[{className:"ExampleDO"}]}}}]);
+    let release!:()=>void;const finished=new Promise<void>(resolve=>{release=resolve;});
+    const prepare=vi.fn(async()=>finished);
+    const service=createBuildService({buildSystem,prepareWorkerExecutable:prepare,listUnits:()=>[],getCallerContextId:()=>null});
+    let settled=false;
+    const result=service.handler({caller:createVerifiedCaller("shell","shell")},"getBuild",["workers/example","state:exact",{verifyWorkerSchemas:true}]).then(value=>{settled=true;return value;});
+    await vi.waitFor(()=>expect(prepare).toHaveBeenCalledWith(build,["ExampleDO"]));
+    expect(settled).toBe(false);
+    expect(buildSystem.getBuild).toHaveBeenCalledWith("workers/example","state:exact",{library:false});
+    expect(buildSystem.listBuildUnits).toHaveBeenCalledWith("state:exact",["worker"]);
+    release();await expect(result).resolves.toEqual(build);
+    const failure=new Error("actual native schema failure");prepare.mockRejectedValueOnce(failure);
+    await expect(service.handler({caller:createVerifiedCaller("shell","shell")},"getBuild",["workers/example","state:exact",{verifyWorkerSchemas:true}])).rejects.toBe(failure);
+    prepare.mockClear();
+    vi.mocked(buildSystem.getBuild).mockResolvedValueOnce({...build,metadata:{...build.metadata,kind:"panel"}});
+    await expect(service.handler({caller:createVerifiedCaller("shell","shell")},"getBuild",["panels/example",undefined,{verifyWorkerSchemas:true}])).resolves.toBeDefined();
+    expect(prepare).not.toHaveBeenCalled();
+    vi.mocked(buildSystem.listBuildUnits).mockResolvedValue([]);
+    await expect(service.handler({caller:createVerifiedCaller("shell","shell")},"getBuild",["workers/example","state:exact",{verifyWorkerSchemas:true}])).rejects.toThrow("exact built source catalog");
   });
 
   it("preserves the exact semantic ref and native dependency resources", async () => {

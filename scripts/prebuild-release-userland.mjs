@@ -365,6 +365,26 @@ export async function withStandaloneReleaseSession(appRoot, executable, ownershi
   );
 }
 
+/** Exact source-generation adapter for the same genuine serving verifier. */
+export function developmentReleaseConsumerOptions({appRoot, resources, generation, ownership, scratchParent, executable=process.execPath, env={}}) {
+  const selectedTemplates = {};
+  for (const key of ["VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES","VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE","VIBESTUDIO_PREPARE_WORKSPACE_TEMPLATES","VIBESTUDIO_WORKSPACE_SOURCES"])
+    if (env[key] !== undefined) selectedTemplates[key] = env[key];
+  return {
+    appRoot, resources, executable, ownership, scratchParent,
+    hostArtifactRoot: generation,
+    serverEntry: path.join(generation,"server.mjs"),
+    cliEntry: path.join(generation,"cli/client.mjs"),
+    environment: {...selectedTemplates,NODE_ENV:"development",VIBESTUDIO_WORKSPACE_RELEASE_ROOT:resources,VIBESTUDIO_NATIVE_REFERENCE_ONLY:"1"},
+  };
+}
+
+export async function verifyDevelopmentReleaseUserland(input) {
+  await verifyAndPublishSchemaEvidence(operation =>
+    withReleaseConsumerSession(developmentReleaseConsumerOptions(input), operation)
+  );
+}
+
 /**
  * Whether the exit code of a server this process asked to stop is a clean one.
  * An owned process is stopped by SIGTERM, which a server answers with its ordered
@@ -376,7 +396,7 @@ export function requestedStopExitedCleanly(code, platform = process.platform) {
 }
 
 async function withReleaseConsumerSession(
-  { appRoot, resources, executable, ownership, scratchParent, serverEntry, cliEntry, environment },
+  { appRoot, resources, executable, ownership, scratchParent, serverEntry, cliEntry, environment, hostArtifactRoot = path.join(appRoot,"dist") },
   operation
 ) {
   // The consumer's whole instance lives here, in a parent the caller keeps short
@@ -431,7 +451,7 @@ async function withReleaseConsumerSession(
           NODE_ENV: "production",
           ...environment,
           VIBESTUDIO_APP_ROOT: appRoot,
-          VIBESTUDIO_HOST_ARTIFACT_ROOT: path.join(appRoot, "dist"),
+          VIBESTUDIO_HOST_ARTIFACT_ROOT: hostArtifactRoot,
           VIBESTUDIO_INSTANCE_ROOT: path.join(scratch, "instance"),
           VIBESTUDIO_SHARED_DERIVED_CACHE_DIR: path.join(scratch, "derived"),
           XDG_CONFIG_HOME: path.join(scratch, "config"),
@@ -814,7 +834,7 @@ export async function verifyPreparedReleaseUserland(
     if (records.length === 0) throw new Error(`Release has no prepared artifacts for ${kind}`);
     for (const record of records)
       console.log(`[release-builds] Verifying ${kind}: ${record.source}`);
-    const capture = kind === "personal" ? schemaEvidence : undefined;
+    const capture = kind === kinds.at(-1) ? schemaEvidence : undefined;
     const batch = await runBuildBatch(
       records.map((record) => record.source),
       capture

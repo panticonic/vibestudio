@@ -17,7 +17,7 @@ type BuildOutcome =
 
 /** Join concurrent calls over one installed CLI identity and one RPC client. */
 export async function verifyReleaseBuildBatch(
-  getBuild: (source: string) => Promise<BuildResultWire | BuildBundleResult>,
+  getBuild: (source: string, options: { verifyWorkerSchemas: true }) => Promise<BuildResultWire | BuildBundleResult>,
   sources: readonly string[],
   signal?: AbortSignal
 ): Promise<BuildOutcome[]> {
@@ -30,7 +30,7 @@ export async function verifyReleaseBuildBatch(
         const index = next++;
         const source = sources[index]!;
         try {
-          const result = await getBuild(source);
+          const result = await getBuild(source, { verifyWorkerSchemas: true });
           const buildKey = "buildKey" in result ? result.buildKey : undefined;
           outcomes[index] = { status: "fulfilled", source, buildKey };
         } catch (error) {
@@ -123,7 +123,7 @@ async function run(inputPath: string): Promise<void> {
       throw cancellationFailure;
     }
     results.outcomes = await verifyReleaseBuildBatch(
-      (source) => client!.mainCall("build.getBuild", [source]),
+      (source, options) => client!.mainCall("build.getBuild", [source, undefined, options]),
       input.sources,
       cancellation.signal
     );
