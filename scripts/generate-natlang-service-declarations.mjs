@@ -19,6 +19,7 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import developmentTemplateConfig from "../src/dev/developmentTemplateConfig.cjs";
 import { renderAuthoredService } from "./lib/authored-natlang-services.mjs";
 import { docComment, renderMethod } from "./lib/json-schema-declarations.mjs";
+import { authoredServiceScopeFile } from "./lib/authored-service-scopes.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const OUTPUT = "packages/natlang-services/src/serviceDeclarations.generated.ts";
@@ -103,20 +104,13 @@ export async function renderServiceDeclarations(userlandRoot, checkouts) {
         if (
           !Array.isArray(selectors) ||
           selectors.some((selector) => {
-            if (typeof selector !== "string") return true;
-            const file = selector.endsWith("/**") ? selector.slice(0, -3) : selector;
-            return (
-              !file.endsWith(".nl") ||
-              path.isAbsolute(file) ||
-              file.startsWith("../") ||
-              file.includes("\\") ||
-              path.posix.normalize(file) !== file ||
-              !fs.statSync(path.join(directory, file), { throwIfNoEntry: false })?.isFile()
-            );
+            const file = authoredServiceScopeFile(selector);
+            return file === null ||
+              !fs.statSync(path.join(directory, file), { throwIfNoEntry: false })?.isFile();
           })
         ) {
           throw new Error(
-            `${template}/${relative} scopes ${service} outside existing relative .nl files`
+            `${template}/${relative} scopes ${service} outside existing relative .nl or .ts callable owners`
           );
         }
       }
