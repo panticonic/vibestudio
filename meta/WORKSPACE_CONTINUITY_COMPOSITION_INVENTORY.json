@@ -308,5 +308,47 @@
     },
     "literalObligationBinding": "Existing requestedReturnRequired/requestedAnswerRequired annotations must equal the Native proof clause; no new role is inferred when no literal annotation exists.",
     "phoneFactCustody": "actorObserved assignment/startup/provider/resume are independently recomputed from actual Native journal service/method entries; workspace/protocol fields must exist and the complete projection is deeply bound. Paired Phone source owned by Runtime parent, not part of this eight-family implementation."
+  },
+  "finalIntegration": {
+    "source48Preserved": true,
+    "readySuccessors": [
+      "Smoke/Wake a7f/ec1/005",
+      "goal-aware Phone07d/027",
+      "native review premises014/2b4/97"
+    ],
+    "welcomePublicValue": "WelcomeFindings: explanation, route and actually observed optional setup/tour/probe; no opaque staging plan/receipt echo",
+    "actual0082Findings": {
+      "config": "No stage call despite explicit private note request; original remains genuinely missing effect. Pure interpreter/authorization contracts clarified.",
+      "revision": "No edits; approval constructor overrequired signed documents restate user targets/format. Constructor corrected; native atomic guard retained.",
+      "intent": "Full installed guide was read/hash-bound but only truncated metadata exposed. Actual guide body now returned; original rejection remains preserved."
+    },
+    "passedBeforeFinalCoherence": {
+      "publicHierarchicalComposition": 8,
+      "nativeWorldReferences": 207,
+      "welcomeFindingsNative": 22,
+      "welcomeFindingsPublic": 1,
+      "intentFullGuideAndConfig": 57,
+      "hostMergedBeforePremiseMerge": 54
+    },
+    "canonicalDeclarationGenerationAndCheck": "vibe-continuity-declarations-20261126a PASS; four nullable-domain DTO updates generated; no SDK changes",
+    "remaining": "Live Native qualification not claimed. Full exporter159 run not qualified: plain Node cannot resolve selected source .js imports to .ts; unrelated project-profile synthetic fixtures also stale. Scoped shared binder/source-claim +actual optional/void-root cases38PASS. Broader coordinator/oracle census remains open.",
+    "finalChecks": {
+      "native": {
+        "passed": 227,
+        "unit": "vibe-continuity-final-native-20261126a"
+      },
+      "host": {
+        "passed": 38,
+        "unit": "vibe-continuity-scoped-host-20261126a"
+      },
+      "welcomePublic": {
+        "passed": 1,
+        "unit": "vibe-welcome-findings-public-20261126a"
+      },
+      "canonicalDeclarations": {
+        "passed": true,
+        "unit": "vibe-continuity-declarations-20261126a"
+      }
+    }
   }
 }
