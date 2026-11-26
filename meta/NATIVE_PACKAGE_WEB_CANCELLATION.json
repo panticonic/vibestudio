@@ -1,0 +1,11 @@
+{
+  "purpose": "Real published-default runtime successor, preserving eval execution-budget ABI1 and native-only/hard-Luna custody",
+  "previousHost": "4d2b7a5368e89371c7b73c738646c06b041839dd",
+  "previousBase": "e4a56c7e69d637880b952f973c63910dc4c44444",
+  "base": "bb40d4d66794ed0a7ae3dac3d5e9f74eb89ebb9f",
+  "personalSystem": "Unchanged actual published default pins",
+  "profileImport": false,
+  "publicPublication": false,
+  "validation": "Base 3 cancellation controls passed; canonical package stage, independent installation and actual loaded-engine consumer pending. Existing4d2/e4 readers remain unchanged.",
+  "admission": "LOW/yieldable after Source47 producer admission, reserve7.5; no paid gate"
+}
