@@ -1,3 +1,4 @@
+import {referenceReviewInput} from "./review-evidence-roles.mjs";
 import {isDeepStrictEqual as equal} from "node:util";
 import {createHash} from "node:crypto";
 /** Per-domain actual native evidence; no expected answer vocabulary enters review. */
@@ -357,6 +358,12 @@ export function observedContentNeedsReview(world){
  // Open user goals need meaning review of native effects even without a requested return.
  return observedContentKinds.has(world.kind)&&!(world.kind==="spectrolite"&&world.writablePath)&&!(world.kind==="google-runbook"&&world.action==="revise");
 }
+/** Private labels / actor copies remain in raw proof, never authoritative reference state. */
+export const nonAuthoritativeObservationFields={
+ "route-authority":["choice"],"workspace-claims":["choice"],"agent-capability":["decision"],
+ "deployed-interface":["decision"],"extension-dossier":["decision"],"workspace-share":["decision"],
+ "retained-memory":["plan"],
+};
 export function observedContentReviewInput(proof,world){
  if(world.kind==="spectrolite"&&world.writablePath||world.kind==="google-runbook"&&world.action==="revise")throw Error("Writable source content requires its retained edit-scope review");
  const fields=observedContentFields[world.kind],input=proof.semanticReviewInput;
@@ -455,9 +462,10 @@ export function observedContentReviewInput(proof,world){
        !(value.observedAfterContinuation===null||typeof value.observedAfterContinuation==="string"&&value.observedAfterContinuation===proof.continuation?.runId))))
     throw Error("Agent recovery review requires actual owner-bound retained value reads and explicit refusals");
  }
- if(!fields||typeof required!=="boolean"||proof.semanticReviewRequired!==true||
-    !equal(input?.actual,{goal:world.goal,observations:pick(fields[0]),artifacts:pick(fields[1]),requestedReturn:required?proof.actualResult??null:null})||
-    !equal(input.expected,{goal:world.goal,requestedReturnRequired:required})||typeof input.rubric!=="string"||!input.rubric.trim())
+ if(!fields||typeof required!=="boolean"||proof.semanticReviewRequired!==true||typeof input?.rubric!=="string"||!input.rubric.trim())
    throw Error("Content meaning review must bind the requested return, actual native observations and retained bytes");
+ const legacy={actual:{goal:world.goal,observations:pick(fields[0]),artifacts:pick(fields[1]),requestedReturn:required?proof.actualResult??null:null},expected:{goal:world.goal,requestedReturnRequired:required},rubric:input.rubric};
+ const reference=referenceReviewInput(legacy,{nonAuthoritativeKeys:nonAuthoritativeObservationFields[world.kind]??[]});
+ if(!equal(input,legacy)&&!equal(input,reference))throw Error("Content meaning review evidence roles differ from exact native state, attempted inputs or requested candidate");
  return input;
 }
