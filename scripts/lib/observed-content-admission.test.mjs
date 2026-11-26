@@ -443,3 +443,17 @@ test('adoption review binds actual reviewed/current roles and bytes without inve
   if(required){const bad=structuredClone(proof);bad.semanticReviewInput.actual.requestedReturn=null;assert.throws(()=>observedContentReviewInput(bad,world));}
  }
 });
+
+
+test("launch review binds actual native operation results while keeping submitted patch arguments as attempts",()=>{
+ const world={kind:"launch-state",goal:"Set the pins and preserve the operator label"};
+ const operation={service:"workspace-state",method:"slot.patchCurrentStateArgs",args:["owned-panel","basis",{settings:{pins:["north","east"]}}],result:{kind:"saved",state:{settings:{pins:["north","east"]}}}};
+ const proof={operations:[operation],outcomeContract:{returnedValue:{required:false}},semanticReviewRequired:true};
+ const pick=keys=>Object.fromEntries(keys.map(key=>[key,proof[key]??null]));const [observations,artifacts]=observedContentFields[world.kind];
+ proof.semanticReviewInput=referenceReviewInput({actual:{goal:world.goal,observations:pick(observations),artifacts:pick(artifacts),requestedReturn:null},expected:{goal:world.goal,requestedReturnRequired:false},rubric:"Actual native results establish effects; arguments establish attempts."});
+ assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
+ assert.equal(proof.semanticReviewInput.expected.observations.operations[0].args,undefined);
+ assert.deepEqual(proof.semanticReviewInput.actual.attemptedArguments[0].arguments,operation.args);
+ const changed=structuredClone(proof);changed.semanticReviewInput.expected.observations.operations[0].result.kind="invalid";
+ assert.throws(()=>observedContentReviewInput(changed,world));
+});

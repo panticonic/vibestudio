@@ -38,7 +38,7 @@ export const observedContentFields = {
   "extension-dossier": [["assignment", "review", "candidate", "history", "decision", "effects"], ["dossierText"]],
   "installed-package": [["effects", "assignment", "observed", "plan", "repair", "authorization"], []],
   "intent-discovery": [["notice", "capabilities", "evidence"], ["artifact"]],
-  "launch-state": [["index", "frames", "readback", "request", "witness", "effect", "companionReadbacks", "protectedCompanion"], ["artifact"]],
+  "launch-state": [["index", "frames", "readback", "request", "witness", "effect", "companionReadbacks", "protectedCompanion", "operations"], ["artifact"]],
   skillMaintenance: [["journal","observation","authoring","gate","proof","final","changedPaths","nativeFacts"], []],
   "panel-source-migration": [["assignment", "observed", "current", "move", "identity", "consumers", "effects", "nativeFacts"], []],
   "retained-memory": [["brief", "plan", "evidence"], ["artifact"]],
