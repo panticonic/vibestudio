@@ -574,7 +574,7 @@ test("installed session joins its server and listeners after operation and shutd
   );
 });
 
-test("installed verification keeps fresh state isolated while carrying the build budget", async () => {
+for (const nativeOnly of [undefined,"1"]) test(`installed verification isolates state and preserves process ceilings (native=${nativeOnly??"unset"})`, async () => {
   const root = await fixture();
   const appRoot = path.join(root, "app");
   const profileDir = path.join(root, "profile");
@@ -621,15 +621,20 @@ test("installed verification keeps fresh state isolated while carrying the build
      const readyArg = process.argv.indexOf("--ready-file");
      fs.writeFileSync(process.argv[readyArg + 1], ${JSON.stringify(JSON.stringify(ready))});
      fs.writeFileSync(process.env.VIBESTUDIO_INSTANCE_ROOT + "/build-concurrency", process.env.VIBESTUDIO_MAX_CONCURRENT_BUILDS ?? "missing");
-     fs.writeFileSync(process.env.VIBESTUDIO_INSTANCE_ROOT + "/consumer-environment", JSON.stringify({ derived: process.env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR, profile: process.env.VIBESTUDIO_PROFILE_ROOT ?? null, home: process.env.HOME, config: process.env.XDG_CONFIG_HOME }));
+     fs.writeFileSync(process.env.VIBESTUDIO_INSTANCE_ROOT + "/consumer-environment", JSON.stringify({ derived: process.env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR, profile: process.env.VIBESTUDIO_PROFILE_ROOT ?? null, nativeReference:process.env.VIBESTUDIO_NATIVE_REFERENCE_ONLY??null, hostedRoute:process.env.VIBESTUDIO_HOSTED_MODEL_ROUTE??null, home: process.env.HOME, config: process.env.XDG_CONFIG_HOME }));
      process.on("SIGTERM", () => process.exit(0));
      setInterval(() => {}, 1000);`
   );
   await fs.writeFile(
     cliEntry,
-    `console.log(JSON.stringify({ concurrency: process.env.VIBESTUDIO_MAX_CONCURRENT_BUILDS ?? "missing", derived: process.env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR, profile: process.env.VIBESTUDIO_PROFILE_ROOT ?? null, home: process.env.HOME, config: process.env.XDG_CONFIG_HOME }));`
+    `console.log(JSON.stringify({ concurrency: process.env.VIBESTUDIO_MAX_CONCURRENT_BUILDS ?? "missing", derived: process.env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR, profile: process.env.VIBESTUDIO_PROFILE_ROOT ?? null, nativeReference:process.env.VIBESTUDIO_NATIVE_REFERENCE_ONLY??null, hostedRoute:process.env.VIBESTUDIO_HOSTED_MODEL_ROUTE??null, home: process.env.HOME, config: process.env.XDG_CONFIG_HOME }));`
   );
 
+  const priorNative=process.env.VIBESTUDIO_NATIVE_REFERENCE_ONLY;
+  const priorRoute=process.env.VIBESTUDIO_HOSTED_MODEL_ROUTE;
+  const route=JSON.stringify({primary:"openai-codex:gpt-6-luna",fallback:null});
+  process.env.VIBESTUDIO_HOSTED_MODEL_ROUTE=route;
+  if(nativeOnly===undefined)delete process.env.VIBESTUDIO_NATIVE_REFERENCE_ONLY;else process.env.VIBESTUDIO_NATIVE_REFERENCE_ONLY=nativeOnly;
   const priorConcurrency = process.env.VIBESTUDIO_MAX_CONCURRENT_BUILDS;
   const priorDerived = process.env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR;
   const priorProfile = process.env.VIBESTUDIO_PROFILE_ROOT;
@@ -673,6 +678,8 @@ test("installed verification keeps fresh state isolated while carrying the build
         const expectedEnvironment = {
           derived: env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR,
           profile: null,
+          nativeReference:nativeOnly??null,
+          hostedRoute:route,
           home: env.HOME,
           config: env.XDG_CONFIG_HOME,
         };
@@ -689,6 +696,8 @@ test("installed verification keeps fresh state isolated while carrying the build
       }
     );
   } finally {
+    if(priorNative===undefined)delete process.env.VIBESTUDIO_NATIVE_REFERENCE_ONLY;else process.env.VIBESTUDIO_NATIVE_REFERENCE_ONLY=priorNative;
+    if(priorRoute===undefined)delete process.env.VIBESTUDIO_HOSTED_MODEL_ROUTE;else process.env.VIBESTUDIO_HOSTED_MODEL_ROUTE=priorRoute;
     if (priorConcurrency === undefined) delete process.env.VIBESTUDIO_MAX_CONCURRENT_BUILDS;
     else process.env.VIBESTUDIO_MAX_CONCURRENT_BUILDS = priorConcurrency;
     if (priorDerived === undefined) delete process.env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR;
