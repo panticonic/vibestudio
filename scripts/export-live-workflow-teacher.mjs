@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import {preparedProjectReviewInput} from "./lib/prepared-project-admission.mjs";
 import {gadNativeReturnContracts,gadNativeReturnEvidence} from "./lib/independent-invocation-outcomes.mjs";
-import {observedContentKinds,observedContentNeedsReview,observedContentReviewInput} from "./lib/observed-content-admission.mjs";
+import {observedContentNeedsReview,observedContentReviewInput} from "./lib/observed-content-admission.mjs";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -7236,7 +7236,7 @@ export function openOutcomeGoalEvidence(execution, exercise, _scenario, workflow
     requireEvidence(workflow.requiresReview===true,"Private project goal meaning review must be declared");
     return {world:worldBinding,checks:{...checks},evidence,reviewInput:preparedProjectReviewInput(proof,world)};
   }
-  if(observedContentKinds.has(world.kind)&&!(world.kind==="spectrolite"&&world.writablePath)){
+  if(observedContentNeedsReview(world)){
     const reviewInput=observedContentReviewInput(proof,world);
     requireEvidence((workflow.requiresReview===true)===Boolean(reviewInput),"Domain content meaning review must match the declared requested content");
     return {world:worldBinding,checks:{...checks},evidence,...(reviewInput?{reviewInput}:{})};
