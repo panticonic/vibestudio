@@ -201,3 +201,19 @@ test("publication review binds actual selected target, native packages and actua
  assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
  for(const mutate of [p=>p.semanticReviewInput.actual.observations.artifact.current="forged",p=>p.semanticReviewInput.actual.observations.selected.targetId="other",p=>p.actualResult={...actual,choice:{...actual.choice,targetId:"other"}},p=>p.semanticReviewRequired=false]){const p=JSON.parse(JSON.stringify(proof));mutate(p);assert.throws(()=>observedContentReviewInput(p,world));}
 });
+
+test("runbook query meaning is mandatory while writable runbooks retain their dedicated edit-scope binding",()=>{
+ const world={kind:"google-runbook",action:"held",goal:"Does the current appointment authorize changing this runbook?"};
+ const value={decision:{action:"held",path:null,approval:null,reason:"Current approval does not match the appointment."},write:null,attribution:null};
+ const proof={actualResult:value,productReview:{calls:[],bases:[],calendar:{passed:true},documents:[]},outcomeContract:{returnedValue:{required:true}},semanticReviewRequired:true};
+ proof.semanticReviewInput={actual:{goal:world.goal,observations:{productReview:proof.productReview},artifacts:{},requestedReturn:value},expected:{goal:world.goal,requestedReturnRequired:true},rubric:"Judge the requested answer from actual native evidence"};
+ assert.equal(observedContentNeedsReview(world),true);assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);
+ const changed=JSON.parse(JSON.stringify(proof));changed.semanticReviewInput.actual.observations.productReview.calendar.passed=false;assert.throws(()=>observedContentReviewInput(changed,world));
+ assert.equal(observedContentNeedsReview({...world,action:"revise"}),false);assert.throws(()=>observedContentReviewInput(proof,{...world,action:"revise"}),/edit-scope/);
+});
+
+test("terminal ordering review binds the actual completed-operation chronology",()=>{
+ const world={kind:"terminal-handoff",goal:"Only mark review after its Native check"};const value={answer:"The check completed before the review mark."};const proof={actualResult:value,outcomeContract:{returnedValue:{required:true}},semanticReviewRequired:true,events:[],journal:[{ordinal:0,operation:"suite.execute",resultSha256:"actual-check"},{ordinal:1,operation:"terminal.change",resultSha256:"actual-input"}]};
+ const pick=keys=>Object.fromEntries(keys.map(key=>[key,proof[key]??null]));proof.semanticReviewInput={actual:{goal:world.goal,observations:pick(observedContentFields[world.kind][0]),artifacts:pick(observedContentFields[world.kind][1]),requestedReturn:value},expected:{goal:world.goal,requestedReturnRequired:true},rubric:"Judge requested ordering from actual completed Native operations"};
+ assert.equal(observedContentReviewInput(proof,world),proof.semanticReviewInput);const forged=JSON.parse(JSON.stringify(proof));forged.semanticReviewInput.actual.observations.journal.reverse();assert.throws(()=>observedContentReviewInput(forged,world));
+});

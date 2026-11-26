@@ -110,6 +110,7 @@ export const observedContentFields = {
     ],
     []
   ],
+  "google-runbook": [["productReview"],[]],
   "publication": [["selected","observations","artifact","renderer","journal","reads"],[]],
   "unit-rollout": [
     [
@@ -305,7 +306,9 @@ export const observedContentFields = {
       "observedExit",
       "discovery",
       "checkPlan",
-      "checkResults"
+      "checkResults",
+      "journal",
+      "registry"
     ],
     [
       "stagedText"
@@ -338,10 +341,10 @@ export const observedContentFields = {
 export const observedContentKinds = new Set(Object.keys(observedContentFields));
 export function observedContentNeedsReview(world){
  // Open user goals need meaning review of native effects even without a requested return.
- return observedContentKinds.has(world.kind);
+ return observedContentKinds.has(world.kind)&&!(world.kind==="spectrolite"&&world.writablePath)&&!(world.kind==="google-runbook"&&world.action==="revise");
 }
 export function observedContentReviewInput(proof,world){
- if(world.kind==="spectrolite"&&world.writablePath)throw Error("Writable source content requires its retained edit-scope review");
+ if(world.kind==="spectrolite"&&world.writablePath||world.kind==="google-runbook"&&world.action==="revise")throw Error("Writable source content requires its retained edit-scope review");
  const fields=observedContentFields[world.kind],input=proof.semanticReviewInput;
  const pick=keys=>Object.fromEntries(keys.map(key=>[key,proof[key]??null]));
  const required=proof.outcomeContract?.returnedValue?.required;

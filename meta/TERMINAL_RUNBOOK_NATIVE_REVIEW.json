@@ -1,0 +1,64 @@
+{
+  "schema": "vibestudio.terminal-runbook-review/1",
+  "base": "5029c40eeb053a525f815e0ad5ea9fabdcbbab38",
+  "fields": {
+    "google-runbook": [
+      [
+        "productReview"
+      ],
+      []
+    ],
+    "terminal-handoff": [
+      [
+        "initial",
+        "opened",
+        "events",
+        "observedExit",
+        "discovery",
+        "checkPlan",
+        "checkResults",
+        "journal",
+        "registry"
+      ],
+      [
+        "stagedText"
+      ]
+    ]
+  },
+  "dedicatedWriteBinding": "Google action revise bypasses generic query review and retains workspaceEditReviewInput. Spectrolite writable bypass is also centralized, preserved.",
+  "actualReturn": "Canonical required actualResult equality unchanged; public Terminal value is meaningful answer only, no private Native IDs/status echoes.",
+  "validation": {
+    "publicComposition": {
+      "distinctPassed": 3,
+      "units": [
+        "vibe-terminal-findings-joint-20261126b",
+        "vibe-runbook-optional-attribution-joint-20261126c"
+      ],
+      "maxPeakGiB": 2.9,
+      "engines": "actual public ProgramLoader/Workerd evaluator with scripted gateway, exact Native callbacks; no provider"
+    },
+    "nativeComponents": {
+      "passed": 10,
+      "unit": "vibe-terminal-runbook-native-20261126i",
+      "peakMiB": 179.2,
+      "scope": "actual factory state/ownership/lifetime/ordering guards with injected PTY; actual memory-FS Runbook CAS/protected-write paths; Native docs/knowledge readback controls"
+    },
+    "hostBindings": {
+      "passed": 28,
+      "unit": "vibe-runbook-terminal-host-20261126d",
+      "scope": "actual generic admission + dedicated source-claim write bindings"
+    },
+    "declarations": {
+      "fresh": 380,
+      "unit": "vibe-terminal-runbook-declarations-20261126a"
+    },
+    "identity": {
+      "unit": "vibe-terminal-runbook-identity-20261126a",
+      "terminal": 38,
+      "runbook": 6,
+      "adjacentNewsUnchanged": 6,
+      "allOriginalFieldsUnchanged": true
+    },
+    "paidCalls": 0
+  }
+}
