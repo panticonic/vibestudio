@@ -38,7 +38,7 @@ export const observedContentFields = {
   "installed-package": [["effects", "assignment", "observed", "plan", "repair", "authorization"], []],
   "intent-discovery": [["notice", "capabilities", "evidence"], ["artifact"]],
   "launch-state": [["index", "frames", "readback", "request", "witness", "effect", "companionReadbacks", "protectedCompanion"], ["artifact"]],
-  "panel-source-migration": [["assignment", "observed", "current", "move", "identity", "consumers", "effects"], []],
+  "panel-source-migration": [["assignment", "observed", "current", "move", "identity", "consumers", "effects", "nativeFacts"], []],
   "retained-memory": [["brief", "plan", "evidence"], ["artifact"]],
   "route-authority": [["offer", "snapshots", "authority", "choice", "readback", "routeReadbacks"], ["artifact"]],
   "system-release": [["assignment", "runs", "cases", "effects", "handoffProtocol"], ["handoff", "handoffText"]],
@@ -374,6 +374,18 @@ export function observedContentReviewInput(proof,world){
      typeof facts.readProtocol!=="string"||!facts.readProtocol.trim()||typeof facts.evidenceProtocol!=="string"||!facts.evidenceProtocol.trim())throw Error("Phone meaning review requires actual actor observations and native workspace/protocol facts");
  }
 
+ if(world.kind==="panel-source-migration"){
+  const facts=proof.nativeFacts;
+  if(!facts||typeof facts!=="object"||!facts.destination||facts.destination.path!==proof.assignment?.destination||
+     facts.destination.browserPanel!==proof.current?.destinationPanel||facts.destination.browserPanel!==(facts.destination.kind==="panel")||
+     facts.original?.repository!==proof.assignment?.repository||!facts.original.manifest||!facts.original.entry||!facts.original.guide||
+     !facts.final?.manifest||!facts.final.entry||!facts.final.guide||typeof facts.coeditApplied!=="boolean"||
+     !Array.isArray(proof.effects)||!equal(facts.actorReadbacks,proof.effects.filter(row=>row?.service==="panelMigrationEvidence"))||
+     typeof facts.protocol!=="string"||!facts.protocol.trim()||
+     ["manifest","entry","guide"].some(key=>typeof facts.original[key]?.id!=="string"||typeof facts.original[key]?.text!=="string"||
+       facts.final[key]?.id!==facts.original[key].id||typeof facts.final[key]?.text!=="string"))
+    throw Error("Panel migration review requires actual source/destination eligibility, native bytes and truthful readback custody");
+ }
  if(world.kind==="local-reconciliation"){
   const facts=proof.nativeReconciliation;
   if(!facts||typeof facts!=="object"||!facts.opening||typeof facts.opening.head!=="string"||!Array.isArray(facts.opening.files)||
